@@ -479,6 +479,18 @@ struct ConvertOpConversion : public OpConversionPattern<deepgengraph::ConvertOp>
 
 };
 
+struct DynamicBlockforOpConversion : public OpConversionPattern<deepgengraph::DynamicBlockForOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(deepgengraph::DynamicBlockForOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    
+    return success();
+  }
+
+};
+
 
 struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::KernelOp> {
   using OpConversionPattern::OpConversionPattern;

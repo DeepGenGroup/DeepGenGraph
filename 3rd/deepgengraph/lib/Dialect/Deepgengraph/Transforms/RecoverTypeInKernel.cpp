@@ -115,6 +115,7 @@ SmallVector<Value> convertLeastElementType(SmallVector<Value> vals, OpBuilder &b
 
 void infer_type(Operation *op) {
   assert(isa<InferTypeOpInterface>(op));
+  llvm::outs() << "[d] inferType : "; op->print(llvm::outs()); llvm::outs().flush();
   auto type_infer = cast<InferTypeOpInterface>(op);
   SmallVector<Type> new_types;
   auto success = type_infer.inferReturnTypes(op->getContext(), op->getLoc(), op->getOperands(), op->getAttrDictionary(),
@@ -305,7 +306,7 @@ public:
         auto new_dot_op = builder.create<PreciseDotOp>(dot_op.getLoc(), newLhs, newRhs, acc_type);
         // llvm::outs() << "[D]---- recover 7  "<< new_dot_op <<"\n"; llvm::outs().flush();
         dot_op.getResult().replaceAllUsesWith(new_dot_op.getResult());
-        // dot_op->erase();
+        dot_op->erase();
         // llvm::outs() << "---after Dotop : \n" << new_dot_op << "\n";llvm::outs().flush();
       } else if (auto mask_op = dyn_cast<MaskOp>(op)) {
         for(auto user : mask_op.getResult().getUsers()){

@@ -255,7 +255,7 @@ def DotOp: Deepgengraph_Op<"dot", [Pure, /*SameOperandsAndResultElementType,*/ I
   }];
 
   let assemblyFormat =  "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
-
+  let hasCanonicalizer = 1;
   // let hasVerifier = 1;
 }
 

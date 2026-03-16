@@ -1,14 +1,26 @@
+#include <cstdint>
 #include <vector>
 #include "dbg.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeSupport.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphEnums.cpp.inc"
+#include "mlir/Support/LLVM.h"
 #define GET_ATTRDEF_CLASSES
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphAttrs.cpp.inc"
 #define GET_OP_CLASSES
@@ -18,8 +30,9 @@ namespace mlir::deepgengraph {
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphInterfaces.cpp.inc"
 }
 
-// move dialect def in this file to make compiler happy
+
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.cpp.inc"
+
 namespace mlir {
 namespace deepgengraph {
 void DeepgengraphDialect::initialize() {
@@ -530,6 +543,68 @@ LogicalResult BlockForOp::verify() {
     return emitOpError("iter number mismatch: ") << init_num << " != " << yield_iter_num;
   }
   return success();
+}
+
+// Dot op canoniclize pattern
+
+struct PromoteTypeConversionPattern : public OpRewritePattern<DotOp> {
+  using OpRewritePattern<DotOp>::OpRewritePattern;
+  
+  LogicalResult insertConversionOp(DotOp op, PatternRewriter& rewriter, TensorType& lhsType, TensorType& rhsType) const {
+    auto lhsElementBits = lhsType.getElementTypeBitWidth();
+    auto rhsElementBits = rhsType.getElementTypeBitWidth();
+    bool needWiderLhsType = false;
+    uint32_t widerBitwidth = lhsElementBits;
+    if(lhsElementBits < rhsElementBits){
+      // convert lhs to wider bitwidth type
+      needWiderLhsType = true;
+      widerBitwidth = rhsElementBits;
+    }
+    std::vector<int64_t> shape;
+    if(needWiderLhsType){
+      shape = lhsType.getShape();
+    }
+    else{
+      shape = rhsType.getShape();
+    }
+    mlir::Type newElementType;
+    switch (widerBitwidth) {
+      case 16 :
+        newElementType = rewriter.getF16Type();break;
+      case 32 :
+        newElementType = rewriter.getF32Type();break;
+      case 64 :
+        newElementType = rewriter.getF64Type();break;
+      default:
+        return emitError(op->getLoc(), "Unsupported bitwidth");
+    }
+    auto newTensorType = mlir::RankedTensorType::get(shape, newElementType);
+    deepgengraph::ConvertOp convOp;
+    if(needWiderLhsType){
+      convOp = rewriter.create<ConvertOp>(op->getLoc(), newTensorType,op.getLhs(), newElementType);
+      op.getLhsMutable().set(convOp->getResult(0));
+    }
+    else{
+      convOp = rewriter.create<ConvertOp>(op->getLoc(), newTensorType,op.getRhs(), newElementType);
+      op.getRhsMutable().set(convOp->getResult(0));
+    }
+    return llvm::success();
+  }
+
+  LogicalResult matchAndRewrite(DotOp op, PatternRewriter& rewriter) const override {
+    TensorType lhsType = mlir::cast<TensorType>(op.getLhs().getType());
+    TensorType rhsType = mlir::cast<TensorType>(op.getRhs().getType());
+    auto ret = llvm::success();
+    if(lhsType.getElementType() != rhsType.getElementType()){
+      rewriter.setInsertionPoint(op);
+      ret = insertConversionOp(op, rewriter, lhsType, rhsType);
+    }
+    return ret;
+  }
+};
+
+void DotOp::getCanonicalizationPatterns(mlir::RewritePatternSet& patterns, mlir::MLIRContext* context){
+  patterns.add<PromoteTypeConversionPattern>(context);
 }
 
 } // namespace deepgengraph

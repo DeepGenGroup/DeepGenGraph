@@ -14,10 +14,14 @@ class DeepgengraphTritonTypeDef<string name, string _mnemonic, list<Trait> trait
 def ASTT_PtrType : DeepgengraphTritonTypeDef<"Pointer", "ptr"> {
   let summary = "Pointer type";
   let description = [{}];
-  let parameters = (ins "RankedTensorType":$pointee_type);
+  let parameters = (ins 
+    "RankedTensorType":$pointee_type
+  );
 
   let builders = [
-    TypeBuilderWithInferredContext<(ins "RankedTensorType":$pointee_type), [{
+    TypeBuilderWithInferredContext<(ins 
+    "RankedTensorType":$pointee_type
+    ), [{
       return $_get(pointee_type.getContext(), pointee_type);
     }]>
   ];
