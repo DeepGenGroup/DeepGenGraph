@@ -1,9 +1,11 @@
 add_deepgengraph_library(ThreadImpIR
   ThreadImpOps.cpp
-
+  ThreadImpTypes.cpp
+  
   DEPENDS
   DeepgengraphTritonTableGen
   ThreadImpIncGen
+  ThreadImpTransformsIncGen
 
 
   LINK_LIBS PUBLIC

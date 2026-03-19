@@ -49,46 +49,43 @@ static int32_t blockThreads = 128 ;
 
 
 
-BlockDims2D getBlockDims(llvm::StringRef opName){
-  BlockDims2D ret = {32,4};
-  return ret;
-}
 
-struct BinaryOpConvertToThreadImp : public OpInterfaceConversionPattern<deepgengraph::BroadcastableBinaryOpInterface> {
-  using OpInterfaceConversionPattern::OpInterfaceConversionPattern;
 
-  LogicalResult matchAndRewrite(
-    BroadcastableBinaryOpInterface op,
-    ArrayRef<Value> operands,
-    ConversionPatternRewriter& rewriter) const override 
-  {
-    auto loc = op->getLoc();
-    llvm::outs() << "------------Interface : enter " << op << "\n"; llvm::outs().flush();
-    auto lhsBShape = op.getLhsBroadcastedShape();
-    auto rhsBShape = op.getRhsBroadcastedShape();
-    auto retShape = op.getExpectedResultShape();
+// struct BinaryOpConvertToThreadImp : public OpInterfaceConversionPattern<deepgengraph::BroadcastableBinaryOpInterface> {
+//   using OpInterfaceConversionPattern::OpInterfaceConversionPattern;
 
-    auto lhsElementType = mlir::cast<mlir::TensorType>(op.getLhs().getType()).getElementType();
-    auto rhsElementType = mlir::cast<mlir::TensorType>(op.getRhs().getType()).getElementType();
-    auto retElementType = mlir::cast<mlir::TensorType>(op.getResult().getType()).getElementType();
+//   LogicalResult matchAndRewrite(
+//     BroadcastableBinaryOpInterface op,
+//     ArrayRef<Value> operands,
+//     ConversionPatternRewriter& rewriter) const override 
+//   {
+//     auto loc = op->getLoc();
+//     llvm::outs() << "------------Interface : enter " << op << "\n"; llvm::outs().flush();
+//     auto lhsBShape = op.getLhsBroadcastedShape();
+//     auto rhsBShape = op.getRhsBroadcastedShape();
+//     auto retShape = op.getExpectedResultShape();
 
-    auto lhsMemrefType = mlir::MemRefType::get(lhsBShape, lhsElementType);
-    auto rhsMemrefType = mlir::MemRefType::get(rhsBShape, rhsElementType);
-    auto retMemrefType = mlir::MemRefType::get(retShape, retElementType);
+//     auto lhsElementType = mlir::cast<mlir::TensorType>(op.getLhs().getType()).getElementType();
+//     auto rhsElementType = mlir::cast<mlir::TensorType>(op.getRhs().getType()).getElementType();
+//     auto retElementType = mlir::cast<mlir::TensorType>(op.getResult().getType()).getElementType();
 
-    auto allocLhs = rewriter.create<mlir::memref::AllocOp>(loc, lhsMemrefType );
-    auto allocRhs = rewriter.create<mlir::memref::AllocOp>(loc, rhsMemrefType );
-    auto allocRet = rewriter.create<mlir::memref::AllocOp>(loc, retMemrefType );
+//     auto lhsMemrefType = mlir::MemRefType::get(lhsBShape, lhsElementType);
+//     auto rhsMemrefType = mlir::MemRefType::get(rhsBShape, rhsElementType);
+//     auto retMemrefType = mlir::MemRefType::get(retShape, retElementType);
 
-    allocRet->moveAfter(op);
+//     auto allocLhs = rewriter.create<mlir::memref::AllocOp>(loc, lhsMemrefType );
+//     auto allocRhs = rewriter.create<mlir::memref::AllocOp>(loc, rhsMemrefType );
+//     auto allocRet = rewriter.create<mlir::memref::AllocOp>(loc, retMemrefType );
 
-    auto th = getBlockDims(op->getName().getStringRef());
-    op->setAttr("thread.x", rewriter.getI32IntegerAttr(th.tx_count));
-    op->setAttr("thread.y", rewriter.getI32IntegerAttr(th.ty_count));
-    return success();
-  }
+//     allocRet->moveAfter(op);
 
-};
+//     auto th = getBlockDims(op->getName().getStringRef());
+//     op->setAttr("thread.x", rewriter.getI32IntegerAttr(th.tx_count));
+//     op->setAttr("thread.y", rewriter.getI32IntegerAttr(th.ty_count));
+//     return success();
+//   }
+
+// };
 
 
 
@@ -134,9 +131,9 @@ public:
     
     // target.addIllegalDialect<DeepgengraphDialect>();
     RewritePatternSet patterns0(context);
-    patterns0.add<
-      BinaryOpConvertToThreadImp
-      >(context);
+    // patterns0.add<
+    //   BinaryOpConvertToThreadImp
+    //   >(context);
     k->walk([&](mlir::deepgengraph::triton::DeviceKernelOp op){
       memoryUseAnalysis(op);
     });

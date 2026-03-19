@@ -1,5 +1,5 @@
-#ifndef DEEPGENGRAPH_PASSES
-#define DEEPGENGRAPH_PASSES
+#ifndef THREADIMP_PASSES
+#define THREADIMP_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -13,7 +13,7 @@ def DeepgengraphToThreadImp: Pass<"deepgengraph-convert-to-threadimp", "::mlir::
   let dependentDialects = [
     "mlir::deepgengraph::DeepgengraphDialect",
     "mlir::deepgengraph::triton::DeepgengraphTritonDialect",
-    "mlir::tilelang::TilelangDialect",
+    "mlir::threadimp::ThreadImpDialect",
   ];
 }
 

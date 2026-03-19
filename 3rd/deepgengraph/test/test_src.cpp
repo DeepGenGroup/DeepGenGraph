@@ -2,6 +2,7 @@
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
+#include "deepgengraph/Dialect/ThreadImp/IR/ThreadImpDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -46,6 +47,8 @@
 #include "mlir/InitAllPasses.h"
 
 #include "deepgengraph/Conversion/DeepgengraphTritonToThreadImp/Passes.h"
+#include "deepgengraph/Dialect/ThreadImp/Transforms/Passes.h"
+#include "deepgengraph/Analysis/ThreadAnalysis.h"
 
 using namespace mlir;
 
@@ -261,18 +264,20 @@ int readDeepgenGraphIRAndConvertToThreadsImp(int argc, char ** argv) {
     math::MathDialect,
     deepgengraph::DeepgengraphDialect,
     deepgengraph::triton::DeepgengraphTritonDialect,
-    tilelang::TilelangDialect
+    tilelang::TilelangDialect,
+    mlir::threadimp::ThreadImpDialect
     >();
 
   
   // 读入文件
   auto src = parseSourceFile<ModuleOp>(argv[1], ctx.get());
   // 简单的输出，在 debug 的时候常用
+  analyze::PointerTracer::getPointerInfo(*src);
   src->dump();
-
+  const auto& infoMap = analyze::PointerTracer::getMap();
   mlir::PassManager pm(ctx.get());
-  pm.addPass(deepgengraph::createConvertDeepgengraphTritonToThreadImpPass());
-
+  // pm.addPass(deepgengraph::createConvertDeepgengraphTritonToThreadImpPass());
+  pm.addPass(mlir::threadimp::createConvertDeepgengraphTritonToThreadImpPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();
   src->dump();

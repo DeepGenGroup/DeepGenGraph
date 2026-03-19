@@ -26,7 +26,9 @@ def ThreadImp_Dialect : Dialect {
   ];
   let useDefaultTypePrinterParser = 1;
   // let useDefaultAttributePrinterParser = 1;
-
+  let extraClassDeclaration = [{
+    void registerTypes();
+  }];
 }
 
 #endif // TILELANG_DIALECT
