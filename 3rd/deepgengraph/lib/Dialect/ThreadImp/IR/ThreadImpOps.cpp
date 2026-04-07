@@ -6,6 +6,9 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/LogicalResult.h"
+#include <algorithm>
+#include <cstdint>
+#include <vector>
 
 #define GET_OP_CLASSES
 #include "deepgengraph/Dialect/ThreadImp/IR/ThreadImpOps.cpp.inc"
@@ -26,18 +29,48 @@ void ThreadImpDialect::initialize() {
 
 }
 
-llvm::LogicalResult BlockCopyG2S::inferReturnTypes(::mlir::MLIRContext *context,
+// llvm::LogicalResult CopyGlobalToShm::inferReturnTypes(
+//   ::mlir::MLIRContext *context,
+//   std::optional<::mlir::Location> location,
+//   Adaptor adaptor,
+//   ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes)
+// {
+//   auto blockShape = adaptor.getBlockShape();
+//   auto elementType = mlir::cast<threadimp::PointerType>(adaptor.getSrcPointer().getType()).getElementType();
+//   auto retType = mlir::RankedTensorType::get(blockShape, elementType);
+//   inferredReturnTypes.push_back(retType);
+//   return mlir::success();
+// }
+
+
+llvm::LogicalResult ThreadElementwiseBinaryOp::inferReturnTypes(
+  ::mlir::MLIRContext *context,
   std::optional<::mlir::Location> location,
   Adaptor adaptor,
   ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes)
 {
-  auto dstType = mlir::cast<TensorType>(adaptor.getDstTensor().getType());
-  inferredReturnTypes.push_back(dstType);
-  return mlir::success();  
+  auto ltensor = mlir::cast<TensorType>(adaptor.getLhs().getType());
+  auto rtensor = mlir::cast<TensorType>(adaptor.getRhs().getType());
+  auto lshape = ltensor.getShape();
+  auto rshape = rtensor.getShape();
+  std::vector<int64_t> inferShape;
+  for(int i=0;i<lshape.size();++i){
+    inferShape.push_back(std::max(lshape[i], rshape[i]));
+  }
+  Type retElementType;
+  if(ltensor.getElementType().getIntOrFloatBitWidth() > rtensor.getElementTypeBitWidth()){
+    retElementType = ltensor.getElementType();
+  }
+  else{
+    retElementType = rtensor.getElementType();
+  }
+  auto retType = RankedTensorType::get(inferShape, retElementType);
+  inferredReturnTypes.push_back(retType);
+  return mlir::success();
 }
 
 // -- PreciseDotOp --
-LogicalResult PreciseDotOp::inferReturnTypes(::mlir::MLIRContext *context, std::optional<::mlir::Location> location,
+LogicalResult PreciseMatmulOp::inferReturnTypes(::mlir::MLIRContext *context, std::optional<::mlir::Location> location,
                                              Adaptor adaptor,
                                              ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
   auto lhs_type = cast<RankedTensorType>(adaptor.getLhs().getType());
@@ -89,6 +122,33 @@ LogicalResult PreciseDotOp::inferReturnTypes(::mlir::MLIRContext *context, std::
   }
   return success();
 }
+
+
+
+
+LogicalResult PointerToEmptyGlobalOp::inferReturnTypes(
+  ::mlir::MLIRContext *context, 
+  std::optional<::mlir::Location> location,
+  Adaptor adaptor,
+  ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) 
+{
+  auto rt = threadimp::PointerType::get(mlir::cast<TensorType>(adaptor.getTensorType()), threadimp::MemSpace::GM);
+  inferredReturnTypes.push_back(rt);
+  return mlir::success(); 
+}
+
+LogicalResult PointerToOp::inferReturnTypes(
+  ::mlir::MLIRContext *context, 
+  std::optional<::mlir::Location> location,
+  Adaptor adaptor,
+  ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) 
+{
+  auto eType = mlir::cast<TensorType>(adaptor.getSrcTensor().getType()).getElementType();
+  auto retType = threadimp::PointerType::get(eType, adaptor.getMemspace());
+  inferredReturnTypes.push_back(retType);
+  return mlir::success(); 
+}
+
 
 
 } // namespace deepgengraph::triton

@@ -277,10 +277,14 @@ int readDeepgenGraphIRAndConvertToThreadsImp(int argc, char ** argv) {
   const auto& infoMap = analyze::PointerTracer::getMap();
   mlir::PassManager pm(ctx.get());
   // pm.addPass(deepgengraph::createConvertDeepgengraphTritonToThreadImpPass());
-  pm.addPass(mlir::threadimp::createConvertDeepgengraphTritonToThreadImpPass());
+  pm.addNestedPass<deepgengraph::KernelOp>(mlir::threadimp::createInlineDevicekernelOpPass());
+  // pm.addNestedPass<deepgengraph::KernelOp>(threadimp::createConvertBlockCalcOpToThreadImpPass());
   pm.run(src->getOperation());
-  llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();
-  src->dump();
+  llvm::outs() << "\n---------- after createInlineDevicekernelOpPass ---------\n"; llvm::outs().flush();src->dump();
+  pm.addPass(mlir::threadimp::createConvertMemOpPass());
+  pm.addPass(mlir::createSymbolDCEPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
   return 0;
 }
 

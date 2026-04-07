@@ -5,6 +5,8 @@
 
 namespace analyze {
 
+int BlockThreads();
+
 struct PtrInfo {
   mlir::deepgengraph::triton::BlockPointerOfOp m_blockPtrOfOp;
   mlir::deepgengraph::triton::PointerOfOp m_pointerOfOp;

@@ -11,7 +11,9 @@ namespace mlir::threadimp {
 #define GEN_PASS_DECL
 #include "deepgengraph/Dialect/ThreadImp/Transforms/Passes.h.inc"
 
-std::unique_ptr<Pass> createConvertDeepgengraphTritonToThreadImpPass();
+std::unique_ptr<Pass> createConvertMemOpPass();
+std::unique_ptr<Pass> createInlineDevicekernelOpPass();
+std::unique_ptr<Pass> createConvertBlockCalcOpToThreadImpPass();
 
 } // namespace mlir::deepgengraph
 

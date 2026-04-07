@@ -7,6 +7,10 @@
 namespace analyze {
 using namespace mlir::deepgengraph::triton;
 
+int BlockThreads(){
+  return 128;
+}
+
 PtrInfoMapType PointerTracer::m_map = {};
 
 BlockPointerOfOp PointerTracer::findBlockPointerOfBlockLoadOp(BlockLoadOp op) {
@@ -17,8 +21,7 @@ BlockPointerOfOp PointerTracer::findBlockPointerOfBlockLoadOp(BlockLoadOp op) {
       op.getSrcPointer().getDefiningOp<mlir::deepgengraph::triton::BlockPointerOfOp>();
   if (blockPtrOfOp != nullptr) { // cast ok
     return blockPtrOfOp;
-  } else if (auto blockArg =
-                 mlir::dyn_cast<mlir::BlockArgument>(op.getSrcPointer())) { // op.getSrcPointer 来自 blockArg
+  } else if (auto blockArg = mlir::dyn_cast<mlir::BlockArgument>(op.getSrcPointer())) { // op.getSrcPointer 来自 blockArg
     // 1. 获取该参数属于哪个 Block
     mlir::Block *ownerBlock = blockArg.getOwner();
 
@@ -51,30 +54,8 @@ BlockPointerOfOp PointerTracer::findBlockPointerOfBlockLoadOp(BlockLoadOp op) {
 
 PointerOfOp PointerTracer::findPointerOfOp(mlir::deepgengraph::triton::BlockPointerOfOp op){
   using namespace mlir;
-  // auto baseptr = op.getBasePointer();
-  // if(auto blockArg = mlir::dyn_cast<BlockArgument>(baseptr)){
-  //   // 1. 获取该参数属于哪个 Block
-  //   mlir::Block *ownerBlock = blockArg.getOwner();
-  //   // 2. 获取是这个 Block 的第几个参数 (Index)
-  //   unsigned argNumber = blockArg.getArgNumber();
-  //   // 3. 获取拥有这个 Block 的上层 Operation (Parent Op)
-  //   mlir::Operation *parentOp = ownerBlock->getParentOp();
-  //   if(auto deviceKernelOp = mlir::dyn_cast<DeviceKernelOp>(parentOp)){
-  //     auto gridsize= deviceKernelOp.getGrid().size();
-  //     llvm::outs() << "gridsize=" << gridsize << "\n" << "argnum=" << argNumber << "\n"; llvm::outs().flush();
-  //     if (argNumber > 0) {
-  //       // 计算它是第几个 iter_arg
-  //       unsigned iterArgIdx = argNumber - 1;
-  //       llvm::outs() << "argCOunt = " << deviceKernelOp->getBlock()->getArguments().size() << "\n"; llvm::outs().flush();
-  //       mlir::Value v = deviceKernelOp->getBlock()->getArguments()[iterArgIdx];
-  //       auto ptrofOp = v.getDefiningOp<PointerOfOp>();
-  //       if(ptrofOp != nullptr){
-  //         return ptrofOp;
-  //       }
-  //     }
-  //   }
-  // }
-  return nullptr;
+  auto defOp = op.getBasePointer().getDefiningOp<deepgengraph::triton::PointerOfOp>();
+  return defOp;
 }
 
 void PointerTracer::getPointerInfo(mlir::ModuleOp mod) {

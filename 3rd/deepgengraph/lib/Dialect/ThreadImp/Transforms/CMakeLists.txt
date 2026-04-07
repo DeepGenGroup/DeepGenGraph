@@ -1,5 +1,8 @@
 add_deepgengraph_library(ThreadImpTransforms
-    DeepgengraphToThreadImp.cpp
+  CalculateOpConversion.cpp
+  MemOpConversion.cpp
+  InlineDeviceKernel.cpp
+    
   DEPENDS
     ThreadImpTransformsIncGen
 
