@@ -15,6 +15,12 @@ std::unique_ptr<Pass> createConvertMemOpPass();
 std::unique_ptr<Pass> createInlineDevicekernelOpPass();
 std::unique_ptr<Pass> createConvertBlockCalcOpToThreadImpPass();
 
+
+std::unique_ptr<Pass> createLayoutAnalyzePass();
+
+
+
+
 } // namespace mlir::deepgengraph
 
 #endif

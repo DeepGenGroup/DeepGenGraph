@@ -16,7 +16,6 @@ find_package(MLIR REQUIRED CONFIG)
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
-
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
@@ -27,6 +26,9 @@ set(LLVM_MAIN_SRC_DIR "${LLVM_BUILD_MAIN_SRC_DIR}")
 # add_definitions(${NO_RTTI})
 add_definitions("-fPIC")
 add_compile_options(-w)
+
+# 是否启用 lauoutinfer
+add_compile_definitions(ENABLE_LAYOUT_INFER=0)
 
 # add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/3rd/triton)
 

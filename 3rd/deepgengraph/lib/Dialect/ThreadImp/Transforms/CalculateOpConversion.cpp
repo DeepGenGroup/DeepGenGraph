@@ -9,6 +9,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/TransformOps/TensorTransformOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -104,10 +105,34 @@ struct BroadcastableBinaryOpConversionPattern :
   }
 };
 
+// 假设你的 Dialect namespace 是 deepgengraph_triton 和 deepgengraph
+struct GEMMLayoutAnalysisPattern : 
+  public mlir::OpRewritePattern<deepgengraph::PreciseDotOp> {
+  using OpRewritePattern<deepgengraph::PreciseDotOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(deepgengraph::PreciseDotOp op, PatternRewriter &rewriter) const override {
+    llvm::outs() << "--- GEMMLayoutAnalysisPattern\n"; llvm::outs().flush();
+
+    auto threads = analyze::BlockThreads();
+    if(op->hasAttr("TMxTN")){
+      return failure();
+    }
+    auto lhsShape = mlir::cast<TensorType>(op.getLhs().getType()).getShape();
+    auto rhsShape = mlir::cast<TensorType>(op.getRhs().getType()).getShape();
+    int bm = lhsShape[0];
+    int bn = rhsShape[1];
+    int tmxtn = bm * bn / threads;
+    rewriter.modifyOpInPlace(op, [&](){
+      op->setAttr("TMxTN", rewriter.getI32IntegerAttr(tmxtn));
+    });
+    return mlir::success();
+  }
+};
+
 
 class ConvertBlockOpToThreadLevelImp : public impl::ConvertBlockCalculateOpToThreadLevelImpBase<ConvertBlockOpToThreadLevelImp> {
 
   void runOnOperation() override {
+    llvm::outs() << "--- ConvertBlockOpToThreadLevelImp\n"; llvm::outs().flush();
     // 获取当前的顶层 Operation（通常是 ModuleOp 或 FuncOp）
     mlir::Operation *op = getOperation();
     mlir::MLIRContext *context = &getContext();
@@ -118,7 +143,10 @@ class ConvertBlockOpToThreadLevelImp : public impl::ConvertBlockCalculateOpToThr
     // ==========================================
     // 核心步骤：将你的 Interface Pattern 注册进来
     // ==========================================
-    patterns.add<BroadcastableBinaryOpConversionPattern>(context);
+    patterns.add<
+    BroadcastableBinaryOpConversionPattern,
+    GEMMLayoutAnalysisPattern
+    >(context);
 
     // 你也可以在这里混合注册其他的普通 OpRewritePattern
     // patterns.add<SomeOtherSpecificOpPattern>(context);
@@ -130,6 +158,7 @@ class ConvertBlockOpToThreadLevelImp : public impl::ConvertBlockCalculateOpToThr
   }
 };
 std::unique_ptr<Pass> createConvertBlockCalcOpToThreadImpPass(){
+  llvm::outs() << "--- createConvertBlockCalcOpToThreadImpPass\n"; llvm::outs().flush();
   return std::make_unique<ConvertBlockOpToThreadLevelImp>(); 
 }
 
