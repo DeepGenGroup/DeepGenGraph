@@ -3,7 +3,7 @@ add_deepgengraph_library(FriskIR
   FriskEnums.cpp
   FriskOps.cpp
   FriskOps_Reduce.cpp
-  # ../Utils/LayoutUtils.cpp
+  ../Utils/LayoutUtils.cpp
 
   DEPENDS
   FriskTableGen

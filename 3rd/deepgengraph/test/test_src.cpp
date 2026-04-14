@@ -1,5 +1,7 @@
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
+#include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "deepgengraph/Dialect/ThreadImp/IR/ThreadImpDialect.h"
@@ -288,11 +290,50 @@ int readDeepgenGraphIRAndConvertToThreadsImp(int argc, char ** argv) {
   return 0;
 }
 
+int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+  mlir::DialectRegistry registry;
+  mlir::registerAllExtensions(registry);
+  mlir::registerAllDialects(registry);
+  auto ctx = std::make_unique<mlir::MLIRContext>(registry);
+
+  // 首先，注册需要的 dialect
+  ctx->loadDialect<
+    func::FuncDialect, 
+    arith::ArithDialect,
+    tensor::TensorDialect,
+    linalg::LinalgDialect,
+    scf::SCFDialect,
+    affine::AffineDialect,
+    math::MathDialect,
+    deepgengraph::DeepgengraphDialect,
+    deepgengraph::triton::DeepgengraphTritonDialect,
+    frisk::FriskDialect
+    >();
+
+  
+  // 读入文件
+  auto src = parseSourceFile<ModuleOp>(argv[1], ctx.get());
+  // 简单的输出，在 debug 的时候常用
+  analyze::PointerTracer::getPointerInfo(*src);
+  src->dump();
+  mlir::PassManager pm(ctx.get());
+
+  pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
+  pm.run(src->getOperation());
+
+  llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
+  pm.addPass(frisk::createConvertDeepgenGraphToFriskPass());
+  pm.addPass(mlir::createSymbolDCEPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
+  return 0;
+}
+
 
 int main(int argc, char** argv) {
   // readDeepgenGraphIRAndConvert(argc, argv);
   // testUseTilelangDialect();
   // lowerDeepgengraphToAffine(argc,argv);
-  readDeepgenGraphIRAndConvertToThreadsImp(argc, argv);
+  readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
   return 0;
 }

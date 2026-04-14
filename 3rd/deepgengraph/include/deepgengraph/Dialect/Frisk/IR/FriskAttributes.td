@@ -45,6 +45,24 @@ def MemSliceAttr : AttrDef<Frisk_Dialect, "MemSlice"> {
     let assemblyFormat = "`<` $dims `,` $map `,` `ranges``=` $ranges `>`";
 }
 
+def FR_TensorEncodingAttr : AttrDef<Frisk_Dialect, "FriskTensorEncoding"> {
+    let cppNamespace = "::mlir::frisk";
+    let summary = "Encoding attribute for ThreadImp tensors.";
+    let description = [{
+        该属性用于 RankedTensorType 的 encoding 字段，
+        显式指定 Tensor 所处的硬件存储空间（Global, SHM, L0, UB 等）。
+    }];
+    let mnemonic = "tensor_encoding";
+
+    // 这里的参数类型使用的是你定义的 EnumAttr 的 C++ 类型名称
+    let parameters = (ins 
+        // 使用 EnumAttr 对应的 C++ 类型，并指定其作为参数
+        AttrParameter<"MemorySpaceAttr", "The target memory space">:$memSpace
+    );
+
+    // 定义打印和解析格式：#threadimp.tensor_encoding<shm>
+    let assemblyFormat = "`<` $memSpace `>`";
+}
 
 
 #endif // FRISK_ATTRIBUTES_TD

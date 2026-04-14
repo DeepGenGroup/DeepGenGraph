@@ -1,3 +1,4 @@
+#if ENABLE_LAYOUT_INFER
 #include "deepgengraph/Dialect/Frisk/Utils/LayoutUtils.h"
 
 #include <algorithm>
@@ -217,3 +218,4 @@ computeUsedExtentForDim(AffineMapAttr mapAttr, unsigned placeholderPos,
 }
 
 } // namespace mlir::frisk
+#endif

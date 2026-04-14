@@ -6,14 +6,14 @@
 namespace mlir::frisk {
 
 #define GEN_PASS_DECL
-#include "Dialect/Frisk/Transforms/Passes.h.inc"
+#include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"
 
-std::unique_ptr<Pass> createLayoutInferPass();
+std::unique_ptr<Pass> createDeepgenGraphSimplifyPass();
 
-
+std::unique_ptr<Pass> createConvertDeepgenGraphToFriskPass();
 
 #define GEN_PASS_REGISTRATION
-#include "Dialect/Frisk/Transforms/Passes.h.inc"
+#include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"
 
 } // namespace mlir::frisk
 

@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "C/C++ Debug (gdb Attach)",
+            "name": "run_kernel Debug",
             "type": "cppdbg",
             "request": "launch",
             "program": "/home/xushilong/anaconda3/envs/py310/bin/python",
@@ -21,7 +21,7 @@
             ],
         },
         {
-            "name": "C/C++ Debug (gdb Launch)",
+            "name": "C/C++ Debug (MyTest)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/3rd/deepgengraph/build/test/MyTest",
@@ -36,7 +36,9 @@
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true
                 }
-            ]
+            ],
+            "miDebuggerPath": "/home/xushilong/anaconda3/envs/py310/bin/gdb",
+            "preLaunchTask": ""
         },
         
         {
