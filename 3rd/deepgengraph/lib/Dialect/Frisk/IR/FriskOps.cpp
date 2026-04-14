@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
@@ -37,6 +39,8 @@ namespace frisk {
 
 namespace mlir {
 namespace frisk {
+
+#if ENABLE_LAYOUT_INFER
 
 class GemmOp;
 
@@ -89,6 +93,53 @@ static std::optional<TargetInfo> detectTargetInfo(Operation *op) {
     cur = cur->getParentOp();
   }
   return std::nullopt;
+}
+
+static std::string valueToString(OpAsmPrinter &p, Value v) {
+  std::string out;
+  llvm::raw_string_ostream os(out);
+  p.printOperand(v, os);
+  os.flush();
+  return out;
+}
+
+static std::string substituteDimsAndSymbols(AffineExpr expr,
+                                            ArrayRef<std::string> dimNames,
+                                            ArrayRef<std::string> symNames) {
+  std::string raw;
+  llvm::raw_string_ostream os(raw);
+  expr.print(os);
+  os.flush();
+
+  std::string result;
+  result.reserve(raw.size() + 32);
+  for (size_t i = 0; i < raw.size();) {
+    char c = raw[i];
+    if ((c == 'd' || c == 's') && i + 1 < raw.size() &&
+        std::isdigit(static_cast<unsigned char>(raw[i + 1]))) {
+      bool isDim = (c == 'd');
+      size_t j = i + 1;
+      int idx = 0;
+      while (j < raw.size() &&
+             std::isdigit(static_cast<unsigned char>(raw[j]))) {
+        idx = idx * 10 + (raw[j] - '0');
+        ++j;
+      }
+      if (isDim && idx >= 0 && static_cast<size_t>(idx) < dimNames.size()) {
+        result += dimNames[idx];
+      } else if (!isDim && idx >= 0 &&
+                 static_cast<size_t>(idx) < symNames.size()) {
+        result += symNames[idx];
+      } else {
+        result.append(raw, i, j - i);
+      }
+      i = j;
+      continue;
+    }
+    result.push_back(c);
+    ++i;
+  }
+  return result;
 }
 
 static std::optional<int64_t> inferThreadBlockSize(Operation *op) {
@@ -889,6 +940,8 @@ computeWarpPartition(attr::GemmWarpPolicy policy, int64_t M, int64_t N,
 
 } // namespace
 
+#endif
+
 //===----------------------------------------------------------------------===//
 // -- KernelOp --
 //===----------------------------------------------------------------------===//
@@ -1037,6 +1090,7 @@ void ParallelOp::print(OpAsmPrinter &p) {
   p.printRegion(getRegion(), /*printEntryBlockArgs=*/false, /*printBlockTerminators=*/false);
 }
 
+#if ENABLE_LAYOUT_INFER
 LogicalResult ParallelOp::inferLayout(OpBuilder &builder,
                                       DenseMap<Value, Attribute> &layoutMap) {
   bool updated = false;
@@ -1090,6 +1144,7 @@ LogicalResult ParallelOp::inferLayout(OpBuilder &builder,
     return failure();
   return success(updated);
 }
+#endif
 
 //===----------------------------------------------------------------------===//
 // -- BlockOp --
@@ -1256,6 +1311,166 @@ void ForOp::print(OpAsmPrinter &p) {
   }
   p << " ";
   p.printRegion(getRegion(), /*printEntryBlockArgs=*/false, /*printBlockTerminators=*/false);
+}
+
+//===----------------------------------------------------------------------===//
+// -- IfOp --
+//===----------------------------------------------------------------------===//
+LogicalResult IfOp::verify() {
+  IntegerSet set = getCondition();
+  if (getOperands().size() != set.getNumInputs()) {
+    return emitOpError("expects ")
+           << set.getNumInputs() << " condition operands ("
+           << set.getNumDims() << " dims + " << set.getNumSymbols()
+           << " symbols), but got " << getOperands().size();
+  }
+  return success();
+}
+
+ParseResult IfOp::parse(OpAsmParser &parser, OperationState &result) {
+  Builder &builder = parser.getBuilder();
+  IntegerSetAttr conditionAttr;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> dimOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> symbolOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
+
+  // Syntax:
+  //   frisk.ifop #set(%d0, %d1)[%s0] { ... } else { ... }
+  if (parser.parseAttribute(conditionAttr))
+    return failure();
+  result.addAttribute("condition", conditionAttr);
+
+  if (parser.parseOperandList(dimOperands, OpAsmParser::Delimiter::Paren))
+    return failure();
+
+  if (succeeded(parser.parseOptionalLSquare())) {
+    if (parser.parseOperandList(symbolOperands) || parser.parseRSquare())
+      return failure();
+  }
+
+  IntegerSet set = conditionAttr.getValue();
+  if (dimOperands.size() != set.getNumDims()) {
+    return parser.emitError(parser.getCurrentLocation())
+           << "expected " << set.getNumDims()
+           << " dim operands for IntegerSet, but got " << dimOperands.size();
+  }
+  if (symbolOperands.size() != set.getNumSymbols()) {
+    return parser.emitError(parser.getCurrentLocation())
+           << "expected " << set.getNumSymbols()
+           << " symbol operands for IntegerSet, but got "
+           << symbolOperands.size();
+  }
+
+  allOperands.append(dimOperands.begin(), dimOperands.end());
+  allOperands.append(symbolOperands.begin(), symbolOperands.end());
+  if (parser.resolveOperands(allOperands, builder.getIndexType(), result.operands))
+    return failure();
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  Region *thenRegion = result.addRegion();
+  if (parser.parseRegion(*thenRegion))
+    return failure();
+
+  if (succeeded(parser.parseOptionalKeyword("else"))) {
+    Region *elseRegion = result.addRegion();
+    if (parser.parseRegion(*elseRegion))
+      return failure();
+  } else {
+    result.addRegion();
+  }
+
+  return success();
+}
+
+void IfOp::print(OpAsmPrinter &p) {
+  IntegerSet set = getCondition();
+  auto operands = getOperands();
+  const unsigned numDims = set.getNumDims();
+  const unsigned numSymbols = set.getNumSymbols();
+
+  auto valueToStringLocal = [&](Value v) {
+    std::string out;
+    llvm::raw_string_ostream os(out);
+    p.printOperand(v, os);
+    os.flush();
+    return out;
+  };
+  auto substituteLocal = [&](AffineExpr expr,
+                             ArrayRef<std::string> dimNames,
+                             ArrayRef<std::string> symNames) {
+    std::string raw;
+    llvm::raw_string_ostream os(raw);
+    expr.print(os);
+    os.flush();
+
+    std::string result;
+    result.reserve(raw.size() + 32);
+    for (size_t i = 0; i < raw.size();) {
+      char c = raw[i];
+      if ((c == 'd' || c == 's') && i + 1 < raw.size() &&
+          std::isdigit(static_cast<unsigned char>(raw[i + 1]))) {
+        bool isDim = (c == 'd');
+        size_t j = i + 1;
+        int idx = 0;
+        while (j < raw.size() &&
+               std::isdigit(static_cast<unsigned char>(raw[j]))) {
+          idx = idx * 10 + (raw[j] - '0');
+          ++j;
+        }
+        if (isDim && idx >= 0 && static_cast<size_t>(idx) < dimNames.size()) {
+          result += dimNames[idx];
+        } else if (!isDim && idx >= 0 &&
+                   static_cast<size_t>(idx) < symNames.size()) {
+          result += symNames[idx];
+        } else {
+          result.append(raw, i, j - i);
+        }
+        i = j;
+        continue;
+      }
+      result.push_back(c);
+      ++i;
+    }
+    return result;
+  };
+
+  SmallVector<std::string, 4> dimNames;
+  SmallVector<std::string, 4> symNames;
+  dimNames.reserve(numDims);
+  symNames.reserve(numSymbols);
+  for (Value v : operands.take_front(numDims))
+    dimNames.push_back(valueToStringLocal(v));
+  for (Value v : operands.drop_front(numDims).take_front(numSymbols))
+    symNames.push_back(valueToStringLocal(v));
+
+  p << " (";
+  auto constraints = set.getConstraints();
+  auto eqFlags = set.getEqFlags();
+  if (constraints.empty()) {
+    p << "true";
+  } else {
+    for (size_t i = 0; i < constraints.size(); ++i) {
+      if (i)
+        p << " && ";
+      p << substituteLocal(constraints[i], dimNames, symNames)
+        << (eqFlags[i] ? " == 0" : " >= 0");
+    }
+  }
+  p << ")";
+
+  p.printOptionalAttrDict((*this)->getAttrs(), {"condition"});
+  p << " ";
+  p.printRegion(getThenRegion(),
+                /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/false);
+  if (hasElse()) {
+    p << " else ";
+    p.printRegion(getElseRegion(),
+                  /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/false);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1446,6 +1661,142 @@ LogicalResult GemmOp::inferLayout(OpBuilder &builder,
 //   state.addTypes(memrefType);
 // }
 
+// LogicalResult AllocBufferOp::verify() {
+//   auto resultType = getResult().getType();
+  
+//   // 检查结果类型是否是 memref
+//   if (!isa<MemRefType>(resultType)) {
+//     return emitOpError("result must be a memref type");
+//   }
+  
+//   auto memrefType = cast<MemRefType>(resultType);
+//   // 检查属性与结果类型是否一致
+//   auto attrShape = getShape();
+//   auto attrElementType = getElementType();
+//   auto attrMemorySpace = getMemorySpace();
+//   if (memrefType.getShape() != attrShape) {
+//     return emitOpError("shape attribute must match result memref shape");
+//   }
+//   if (memrefType.getElementType() != attrElementType) {
+//     return emitOpError("elementType attribute must match result memref element type");
+//   }
+
+//   unsigned resultMemorySpace = memrefType.getMemorySpaceAsInt();
+//   if (resultMemorySpace != static_cast<unsigned>(attrMemorySpace)) {
+//     return emitOpError("memorySpace attribute must match result memref memory space");
+//   }
+//   // 检查对齐值是否有效
+//   int64_t alignment = getAlignment();
+//   if (alignment < 0) {
+//     return emitOpError("alignment must be non-negative");
+//   }
+//   // 检查对齐值是否是 2 的幂（可选，但推荐）
+//   if (alignment > 0 && (alignment & (alignment - 1)) != 0) {
+//     return emitOpError("alignment must be a power of 2");
+//   }
+//   // 检查 memorySpace 是否有效
+//   switch (attrMemorySpace) {
+//     case ::mlir::frisk::attr::MemorySpace::Local:
+//       break;
+//     case ::mlir::frisk::attr::MemorySpace::Global:
+//       break;
+//     case ::mlir::frisk::attr::MemorySpace::Shared:
+//       break;
+//     default:
+//       return emitOpError("memorySpace must be Local, Global, or Shared");
+//   }
+//   return success();
+// }
+
+// ParseResult AllocBufferOp::parse(OpAsmParser &parser, OperationState &result) {
+//   // 直接解析属性字典
+//   if (parser.parseOptionalAttrDict(result.attributes))
+//     return failure();
+//   // 解析结果类型: -> memref<32x128xf32>
+//   if (parser.parseArrow())
+//     return failure();
+//   Type resultType;
+//   if (parser.parseType(resultType))
+//     return failure();
+//   // 检查结果类型是否是 memref
+//   if (!isa<MemRefType>(resultType)) {
+//     return parser.emitError(parser.getCurrentLocation(), "expected memref type for result");
+//   }
+//   auto memrefType = cast<MemRefType>(resultType);
+//   // 从结果类型提取 shape 和 elementType
+//   auto shape = memrefType.getShape();
+//   auto elementType = memrefType.getElementType();
+//   auto memorySpace = memrefType.getMemorySpace();
+//   // 添加结果类型
+//   result.addTypes(resultType);
+//   // 添加必要的属性（如果属性字典中没有）
+//   auto &builder = parser.getBuilder();
+//   if (!result.attributes.get("shape")) {
+//     result.addAttribute("shape", builder.getDenseI64ArrayAttr(shape));
+//   }
+//   if (!result.attributes.get("elementType")) {
+//     result.addAttribute("elementType", TypeAttr::get(elementType));
+//   }
+//   if (!result.attributes.get("memorySpace")) {
+//     result.addAttribute("memorySpace", memorySpace);
+//   }
+//   return success();
+// }
+
+// // 自定义汇编格式打印
+// void AllocBufferOp::print(OpAsmPrinter &p) {
+//   // 打印属性字典
+//   p << " {";
+//   auto memorySpace = getMemorySpace();
+//   p << "scope = \"";
+//   switch (memorySpace) {
+//     case ::mlir::frisk::attr::MemorySpace::Local:
+//       p << "local";
+//       break;
+//     case ::mlir::frisk::attr::MemorySpace::Global:
+//       p << "global";
+//       break;
+//     case ::mlir::frisk::attr::MemorySpace::Shared:
+//       p << "shared";
+//       break;
+//     default:
+//       p << "unknown";
+//       break;
+//   }
+//   p << "\"";
+//   // 打印 alignment（如果不是默认值）
+//   if (getAlignment() != 0)
+//     p << ", alignment = " << getAlignment();
+//   p << "}";
+//   // 打印结果类型
+//   p << " -> " << getResult().getType();
+// }
+
+void AllocBufferOp::build(OpBuilder &builder, OperationState &state,
+                          ArrayRef<int64_t> shape, Type elementType) {
+  build(builder, state, shape, elementType, /*alignment=*/0, /*memorySpace=*/0);
+}
+
+void AllocBufferOp::build(OpBuilder &builder, OperationState &state,
+                          ArrayRef<int64_t> shape, Type elementType, 
+                          int64_t alignment) {
+  build(builder, state, shape, elementType, alignment, /*memorySpace=*/0);
+}
+
+void AllocBufferOp::build(OpBuilder &builder, OperationState &state,
+                          ArrayRef<int64_t> shape, Type elementType,
+                          int64_t alignment, int64_t memorySpace) {
+  // 创建 memref 类型
+  auto memrefType = MemRefType::get(shape, elementType, /*layout=*/{}, memorySpace);
+  // 添加属性
+  state.addAttribute("shape", builder.getDenseI64ArrayAttr(shape));
+  state.addAttribute("elementType", TypeAttr::get(elementType));
+  state.addAttribute("alignment", builder.getI64IntegerAttr(alignment));
+  state.addAttribute("memorySpace", builder.getI64IntegerAttr(memorySpace));
+  // 添加结果类型
+  state.addTypes(memrefType);
+}
+
 LogicalResult AllocBufferOp::verify() {
   auto resultType = getResult().getType();
   
@@ -1454,42 +1805,44 @@ LogicalResult AllocBufferOp::verify() {
     return emitOpError("result must be a memref type");
   }
   
-  auto memrefType = cast<MemRefType>(resultType);
-  // 检查属性与结果类型是否一致
-  auto attrShape = getShape();
-  auto attrElementType = getElementType();
-  auto attrMemorySpace = getMemorySpace();
-  if (memrefType.getShape() != attrShape) {
-    return emitOpError("shape attribute must match result memref shape");
-  }
-  if (memrefType.getElementType() != attrElementType) {
-    return emitOpError("elementType attribute must match result memref element type");
-  }
+  // auto memrefType = cast<MemRefType>(resultType);
+  // // 检查属性与结果类型是否一致
+  // auto attrShape = getShape();
+  // auto attrElementType = getElementType();
+  // auto attrMemorySpace = getMemorySpace();
+  // if (memrefType.getShape() != attrShape) {
+  //   return emitOpError("shape attribute must match result memref shape");
+  // }
+  // if (memrefType.getElementType() != attrElementType) {
+  //   return emitOpError("elementType attribute must match result memref element type");
+  // }
 
-  unsigned resultMemorySpace = memrefType.getMemorySpaceAsInt();
-  if (resultMemorySpace != static_cast<unsigned>(attrMemorySpace)) {
-    return emitOpError("memorySpace attribute must match result memref memory space");
-  }
-  // 检查对齐值是否有效
-  int64_t alignment = getAlignment();
-  if (alignment < 0) {
-    return emitOpError("alignment must be non-negative");
-  }
-  // 检查对齐值是否是 2 的幂（可选，但推荐）
-  if (alignment > 0 && (alignment & (alignment - 1)) != 0) {
-    return emitOpError("alignment must be a power of 2");
-  }
-  // 检查 memorySpace 是否有效
-  switch (attrMemorySpace) {
-    case ::mlir::frisk::attr::MemorySpace::Local:
-      break;
-    case ::mlir::frisk::attr::MemorySpace::Global:
-      break;
-    case ::mlir::frisk::attr::MemorySpace::Shared:
-      break;
-    default:
-      return emitOpError("memorySpace must be Local, Global, or Shared");
-  }
+  // unsigned resultMemorySpace = memrefType.getMemorySpaceAsInt();
+  // if (resultMemorySpace != static_cast<unsigned>(attrMemorySpace)) {
+  //   return emitOpError("memorySpace attribute must match result memref memory space");
+  // }
+  // // 检查对齐值是否有效
+  // int64_t alignment = getAlignment();
+  // if (alignment < 0) {
+  //   return emitOpError("alignment must be non-negative");
+  // }
+  // // 检查对齐值是否是 2 的幂（可选，但推荐）
+  // if (alignment > 0 && (alignment & (alignment - 1)) != 0) {
+  //   return emitOpError("alignment must be a power of 2");
+  // }
+  // // 检查 memorySpace 是否有效
+  // switch (attrMemorySpace) {
+  //   case 0:
+  //     break;
+  //   case 1:
+  //     break;
+  //   case 3:
+  //     break;
+  //   case 5:
+  //     break;
+  //   default:
+  //     return emitOpError("memorySpace must be Local, Global, or Shared");
+  // }
   return success();
 }
 
@@ -1535,14 +1888,17 @@ void AllocBufferOp::print(OpAsmPrinter &p) {
   auto memorySpace = getMemorySpace();
   p << "scope = \"";
   switch (memorySpace) {
-    case ::mlir::frisk::attr::MemorySpace::Local:
+    case 0:
       p << "local";
       break;
-    case ::mlir::frisk::attr::MemorySpace::Global:
+    case 1:
       p << "global";
       break;
-    case ::mlir::frisk::attr::MemorySpace::Shared:
+    case 3:
       p << "shared";
+      break;
+    case 5:
+      p << "local";
       break;
     default:
       p << "unknown";
@@ -1555,6 +1911,147 @@ void AllocBufferOp::print(OpAsmPrinter &p) {
   p << "}";
   // 打印结果类型
   p << " -> " << getResult().getType();
+}
+
+//===----------------------------------------------------------------------===//
+// -- BufferViewOp --
+//===----------------------------------------------------------------------===//
+void BufferViewOp::build(OpBuilder &builder, OperationState &state,
+                         Value source, ValueRange indices, AffineMap indexMap,
+                         ArrayRef<int64_t> ranges) {
+  auto srcType = dyn_cast<MemRefType>(source.getType());
+  SmallVector<int64_t> viewShape;
+  for (int64_t r : ranges)
+    viewShape.push_back(r);
+
+  Type elemType = srcType ? srcType.getElementType() : builder.getNoneType();
+  Attribute memSpace = srcType ? srcType.getMemorySpace() : Attribute{};
+  auto viewType = MemRefType::get(viewShape, elemType, AffineMap(), memSpace);
+
+  state.addOperands(source);
+  state.addOperands(indices);
+  state.addAttribute("indexMap", AffineMapAttr::get(indexMap));
+  state.addAttribute("ranges", builder.getDenseI64ArrayAttr(ranges));
+  state.addTypes(viewType);
+}
+
+void BufferViewOp::build(OpBuilder &builder, OperationState &state,
+                         Value source, ValueRange indices, AffineMapAttr indexMap,
+                         DenseI64ArrayAttr ranges) {
+  build(builder, state, source, indices, indexMap.getValue(), ranges.asArrayRef());
+}
+
+LogicalResult BufferViewOp::verify() {
+  auto srcType = dyn_cast<MemRefType>(getSource().getType());
+  auto viewType = dyn_cast<MemRefType>(getView().getType());
+  if (!srcType || !viewType)
+    return emitOpError("source and result must be memref types");
+
+  if (srcType.getElementType() != viewType.getElementType())
+    return emitOpError("result element type must match source element type");
+
+  if (srcType.getMemorySpace() != viewType.getMemorySpace())
+    return emitOpError("result memory space must match source memory space");
+
+  auto ranges = getRanges();
+  auto map = getIndexMap();
+  auto indices = getIndices();
+
+  if (map.getNumInputs() != indices.size()) {
+    return emitOpError("indices size (")
+           << indices.size() << ") must match map input count ("
+           << map.getNumInputs() << ")";
+  }
+  if (map.getNumResults() != static_cast<unsigned>(srcType.getRank())) {
+    return emitOpError("index map result count (")
+           << map.getNumResults() << ") must match source rank ("
+           << srcType.getRank() << ")";
+  }
+
+  if (viewType.getRank() != static_cast<int64_t>(ranges.size())) {
+    return emitOpError("result rank (")
+           << viewType.getRank() << ") must match slice ranges size ("
+           << ranges.size() << ")";
+  }
+  for (int64_t i = 0; i < viewType.getRank(); ++i) {
+    if (viewType.getDimSize(i) != ranges[i]) {
+      return emitOpError("result shape at dim ")
+             << i << " (" << viewType.getDimSize(i)
+             << ") must equal range (" << ranges[i] << ")";
+    }
+  }
+
+  return success();
+}
+
+ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand source;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> indices;
+  SmallVector<int64_t, 4> ranges;
+  Type sourceType, viewType;
+
+  if (parser.parseOperand(source) || parser.parseLSquare() ||
+      parser.parseOperandList(indices) || parser.parseRSquare() ||
+      parser.parseComma() || parser.parseKeyword("ranges") ||
+      parser.parseEqual() || parser.parseLSquare())
+    return failure();
+
+  if (parser.parseCommaSeparatedList([&]() {
+        int64_t v = 0;
+        if (parser.parseInteger(v))
+          return failure();
+        ranges.push_back(v);
+        return success();
+      }) ||
+      parser.parseRSquare() || parser.parseColonType(sourceType) ||
+      parser.parseArrowTypeList(result.types))
+    return failure();
+
+  if (result.types.size() != 1)
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected exactly one result type");
+  viewType = result.types.front();
+
+  if (!isa<MemRefType>(sourceType) || !isa<MemRefType>(viewType))
+    return parser.emitError(parser.getCurrentLocation(),
+                            "source and result types must be memref");
+
+  auto srcMemRef = cast<MemRefType>(sourceType);
+  if (indices.size() != static_cast<size_t>(srcMemRef.getRank())) {
+    return parser.emitError(parser.getCurrentLocation())
+           << "expected " << srcMemRef.getRank()
+           << " indices for source rank, but got " << indices.size();
+  }
+
+  if (parser.resolveOperand(source, sourceType, result.operands))
+    return failure();
+  if (parser.resolveOperands(indices, parser.getBuilder().getIndexType(), result.operands))
+    return failure();
+
+  auto identity = AffineMap::getMultiDimIdentityMap(indices.size(),
+                                                     parser.getContext());
+  result.addAttribute("indexMap", AffineMapAttr::get(identity));
+  result.addAttribute("ranges", parser.getBuilder().getDenseI64ArrayAttr(ranges));
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+void BufferViewOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << "[";
+  llvm::interleaveComma(getIndices(), p);
+  p << "], ranges = [";
+  auto ranges = getRanges();
+  for (size_t i = 0; i < ranges.size(); ++i) {
+    if (i)
+      p << ", ";
+    p << ranges[i];
+  }
+  p << "]";
+  p.printOptionalAttrDict((*this)->getAttrs(), {"indexMap", "ranges"});
+  p << " : " << getSource().getType() << " -> " << getView().getType();
 }
 
 

@@ -32,6 +32,7 @@
 // #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.cpp.inc"
 
 namespace mlir {
+
 namespace frisk {
 
 namespace {
@@ -215,6 +216,7 @@ static LogicalResult checkLayoutCompatibility(ReduceOp op,
 
 LogicalResult ReduceOp::inferLayout(OpBuilder &builder,
                                     DenseMap<Value, Attribute> &layoutMap) {
+#if 0 
   auto srcType = dyn_cast<MemRefType>(getSrc().getType());
   auto dstType = dyn_cast<MemRefType>(getDst().getType());
   if (!srcType || !dstType)
@@ -355,6 +357,7 @@ LogicalResult ReduceOp::inferLayout(OpBuilder &builder,
   }
 
   layoutMap.try_emplace(getDst(), dstLayout);
+  #endif
   return success(true);
 } 
 
