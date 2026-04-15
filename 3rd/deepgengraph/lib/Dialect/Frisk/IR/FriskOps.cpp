@@ -1481,9 +1481,8 @@ LogicalResult GemmOp::verify() {
   auto BType = dyn_cast<MemRefType>(getB().getType());
   auto CType = dyn_cast<MemRefType>(getC().getType());
   // 基础类型检查
-  if (AType.getElementType() != BType.getElementType() ||
-      AType.getElementType() != CType.getElementType()) {
-      return emitOpError("all operands must have the same element type");
+  if (AType.getElementType() != BType.getElementType()) {
+      return emitOpError("A and B operands must have the same element type");
   }
   // 维度兼容性检查
   if (AType.getDimSize(1) != BType.getDimSize(0)) {
@@ -2041,7 +2040,10 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void BufferViewOp::print(OpAsmPrinter &p) {
   p << " " << getSource() << "[";
-  llvm::interleaveComma(getIndices(), p);
+  // llvm::interleaveComma(getIndices(), p);
+  if (AffineMapAttr mapAttr = (*this)->getAttrOfType<AffineMapAttr>("indexMap")) {
+    p.printAffineMapOfSSAIds(mapAttr, getIndices());
+  }
   p << "], ranges = [";
   auto ranges = getRanges();
   for (size_t i = 0; i < ranges.size(); ++i) {

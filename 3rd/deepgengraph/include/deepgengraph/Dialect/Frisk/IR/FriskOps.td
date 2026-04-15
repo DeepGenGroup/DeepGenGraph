@@ -140,7 +140,7 @@ def Frisk_ParallelOp : Frisk_Op<"parallel", [Pure, HasParent<"KernelOp">, Implic
 }
 
 // blockOp
-def Frisk_BlockOp : Frisk_Op<"block", [Pure, ImplicitFriskTerminator]> {
+def Frisk_BlockOp : Frisk_Op<"block", [Pure, ImplicitFriskTerminator, AffineScope]> {
   let summary = "block opeartion";
   let description = [{
     block

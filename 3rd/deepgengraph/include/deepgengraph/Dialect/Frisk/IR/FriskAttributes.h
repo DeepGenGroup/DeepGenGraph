@@ -5,6 +5,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/IR/AttributeSupport.h"
 #include "mlir/IR/Attributes.h"
 
