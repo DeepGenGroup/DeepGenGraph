@@ -135,24 +135,8 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
     if (operands.size() != 2)
       return failure();
 
-    auto materializeRankedTensorToMemRef = [&](Value v) -> FailureOr<Value> {
-      if (isa<MemRefType>(v.getType()))
-        return v;
-      auto rankedTensorTy = dyn_cast<RankedTensorType>(v.getType());
-      if (!rankedTensorTy)
-        return failure();
-      auto memTy = MemRefType::get(rankedTensorTy.getShape(), rankedTensorTy.getElementType());
-      return rewriter.create<UnrealizedConversionCastOp>(op->getLoc(), memTy, v).getResult(0);
-    };
-
-    auto memLhsOr = materializeRankedTensorToMemRef(operands[0]);
-    if (failed(memLhsOr))
-      return failure();
-    Value memLhs = *memLhsOr;
-    auto memRhsOr = materializeRankedTensorToMemRef(operands[1]);
-    if (failed(memRhsOr))
-      return failure();
-    Value memRhs = *memRhsOr;
+    Value memLhs = operands[0];
+    Value memRhs = operands[1];
 
     auto resultTensorType = dyn_cast<RankedTensorType>(op.getResult().getType());
     if (!resultTensorType)
@@ -270,6 +254,93 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
   }
 };
 
+struct Exp2OpConversionPattern : public OpConversionPattern<dg::Exp2Op> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::Exp2Op op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    auto loc = op->getLoc();
+    auto operandType = mlir::dyn_cast<MemRefType>(adaptor.getOperand().getType());
+    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType());
+    auto blockOp = rewriter.create<frisk::BlockOp>(loc, operandType.getShape(), nullptr);
+    {
+      RewriterBase::InsertionGuard g{rewriter};
+      rewriter.setInsertionPointToStart(blockOp.getBody(0));
+      std::vector<Value> indices = {blockOp.getBody(0)->getArguments().begin(), blockOp.getBody(0)->getArguments().end()};
+      auto val = rewriter.create<affine::AffineLoadOp>(loc, adaptor.getOperand(), indices);
+      auto ret = rewriter.create<math::Exp2Op>(loc, val);
+      auto store = rewriter.create<affine::AffineStoreOp>(loc, ret, buffer, indices);
+    }
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
+struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::ReduceOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    // %42 = deepgengraph.reduce(%40, init = %32), dim = 1, op =  ADD, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+    auto loc = op->getLoc();
+    auto outMemTy = mlir::dyn_cast<MemRefType>( getTypeConverter()->convertType(op.getType()));
+    auto inMemTy = mlir::dyn_cast<MemRefType>( adaptor.getOperand().getType());
+    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType());
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value src, ::mlir::Value dst, ::mlir::StringAttr kind, ::mlir::IntegerAttr dim);
+    std::string kind;
+    switch (op.getReduceType()) {
+      case dg::ReduceType::ADD: kind = "add";break;
+      case dg::ReduceType::MUL: kind = "mul";break;
+      case dg::ReduceType::ANY: kind = "any";break;
+      default: assert(false); break;
+    }
+    auto reduce = rewriter.create<frisk::ReduceOp>(loc, adaptor.getOperand(), buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
+struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::MaskOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    auto loc = op->getLoc();
+    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getSizes(), op.getElementType(), 16, int64_t(frisk::attr::MemorySpace::Shared));
+    auto newOp = rewriter.create<frisk::BlockOp>(loc, op.getSizes(), nullptr);
+    auto *newBody = newOp.getBody(0);
+    auto starts = adaptor.getStarts();
+    auto ivs = newBody->getArguments();
+    if (starts.size() != ivs.size())
+      return failure();
+
+    SmallVector<Value, 4> shiftedIndices;
+    shiftedIndices.reserve(ivs.size());
+    {
+      RewriterBase::InsertionGuard guard{rewriter};
+      rewriter.setInsertionPointToStart(newBody);
+      for (int64_t i = 0; i < static_cast<int64_t>(ivs.size()); ++i) {
+        shiftedIndices.push_back(rewriter.create<arith::AddIOp>(loc, ivs[i], starts[i]));
+      }
+    }
+
+    // Replace source block arguments at inline time, avoiding RAUW on IVs.
+    rewriter.inlineBlockBefore(op.getBody(0), newBody, newBody->getTerminator()->getIterator(), shiftedIndices);
+
+    SmallVector<dg::MaskYieldOp, 2> yields;
+    newOp->walk([&](dg::MaskYieldOp yield) { yields.push_back(yield); });
+    for (dg::MaskYieldOp yield : yields) {
+      RewriterBase::InsertionGuard guard{rewriter};
+      rewriter.setInsertionPoint(yield);
+      rewriter.create<memref::StoreOp>(loc, yield->getOperand(0), buffer, shiftedIndices);
+      rewriter.eraseOp(yield);
+    }
+
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
 class CalcOpToFrisk : public impl::CalculateOpToFriskBase<CalcOpToFrisk> {
 public:
   void runOnOperation() override {
@@ -293,13 +364,18 @@ public:
                            dgt::DeepgengraphTritonDialect, arith::ArithDialect, math::MathDialect,
                            scf::SCFDialect, tensor::TensorDialect>();
 
-    target.addIllegalOp<dg::AddOp, dg::SubOp, dg::MulOp, dg::DivOp, dg::PowOp, dg::CmpOp, dg::PreciseDotOp>();
+    target.addIllegalOp<dg::AddOp, dg::SubOp, dg::MulOp, 
+      dg::DivOp, dg::PowOp, dg::CmpOp, dg::PreciseDotOp, dg::MaskOp,
+      dg::Exp2Op, dg::ReduceOp
+    >();
 
     RewritePatternSet ps(ctx);
     ps.add<
-      MatmulOpConversionPattern,
-      BinaryOpConversionPattern
+      MatmulOpConversionPattern,BinaryOpConversionPattern, 
+      MaskOpConversionPattern,Exp2OpConversionPattern,
+      ReduceOpConversionPattern
     >(tc, ctx);
+
 
     if (failed(applyPartialConversion(op, target, std::move(ps)))) {
       signalPassFailure();

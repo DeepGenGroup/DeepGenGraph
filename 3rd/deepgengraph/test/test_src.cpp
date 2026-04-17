@@ -5,6 +5,7 @@
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "deepgengraph/Dialect/ThreadImp/IR/ThreadImpDialect.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -325,6 +326,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.addPass(frisk::createConvertKernelOpToFriskPass());
   pm.addPass(frisk::createConvertMemOpPass());
   pm.addNestedPass<frisk::KernelOp>(frisk::createConvertCalcOpPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   // pm.addNestedPass<frisk::KernelOp>(mlir::createCanonicalizerPass());
   // pm.addNestedPass<frisk::KernelOp>(mlir::createCSEPass());
   pm.run(src->getOperation());

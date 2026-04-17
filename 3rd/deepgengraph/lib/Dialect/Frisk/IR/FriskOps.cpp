@@ -2154,8 +2154,24 @@ LogicalResult ReduceOp::verify() {
   auto srcShape = srcType.getShape();
   auto dstShape = dstType.getShape();
   if (srcType.getRank() != dstType.getRank() + 1) {  // 目标 rank 应该比源 rank 少 1
-    return emitOpError("destination rank must be one less than source rank. Got: ")
-           << dstType.getRank() << " vs " << srcType.getRank();
+    if(srcType.getRank() == dstType.getRank()){
+      auto srcShape = srcType.getShape();
+      auto dstShape = dstType.getShape();
+      bool hasOne = false;
+      for(int i=0;i<dstShape.size();++i){
+        if(dstShape[i] == 1){
+          hasOne = true; break;
+        }
+      }
+      if(!hasOne){
+        return emitOpError("src dst rank same, dst shape must contains 1. Got: ")
+               << srcShape << " vs " << dstShape;
+      }
+    }
+    else{
+      return emitOpError("destination rank must be one less than source rank. Got: ")
+             << dstType.getRank() << " vs " << srcType.getRank();
+    }
   }
   for (int64_t i = 0, j = 0; i < srcType.getRank(); ++i) {  // 检查非归约维度是否匹配
     if (i == dim) continue; // 跳过归约维度
