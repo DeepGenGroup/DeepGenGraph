@@ -1028,6 +1028,17 @@ void KernelOp::print(OpAsmPrinter &p) {
 //===----------------------------------------------------------------------===//
 // -- ParallelOp --
 //===----------------------------------------------------------------------===//
+void ParallelOp::getAsmBlockArgumentNames(::mlir::Region &region,
+                                          ::mlir::OpAsmSetValueNameFn setNameFn) {
+  if (&region != &getRegion() || region.empty())
+    return;
+  static constexpr const char *kNames[] = {"bz", "by", "bx"};
+  unsigned count = std::min<unsigned>(region.front().getNumArguments(),
+                                      std::size(kNames));
+  for (unsigned i = 0; i < count; ++i)
+    setNameFn(region.front().getArgument(i), kNames[i]);
+}
+
 void ParallelOp::build(OpBuilder &builder, OperationState &state,
                       llvm::ArrayRef<int64_t> ranges, int64_t thread_num) {
   state.addAttribute("threads", builder.getI64IntegerAttr(thread_num));
@@ -2216,6 +2227,15 @@ LogicalResult InitBarrierOp::verify() {
 //   p << " : " << getSrc().getType() << ", " << getDst().getType();
 // }
 
+// -- ConvertOp --
+LogicalResult ConvertOp::inferReturnTypes(::mlir::MLIRContext *context, std::optional<::mlir::Location> location,
+                                          Adaptor adaptor, ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+  auto dst_type = adaptor.getDstType();
+  auto operand_type = cast<MemRefType>(adaptor.getOperand().getType());
+  auto ret_type = MemRefType::get(operand_type.getShape(), dst_type);
+  inferredReturnTypes.push_back(ret_type);
+  return success();
+}
 
 
 } // namespace frisk

@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "*.inc": "cpp",
+        "*.td" : "tablegen",
         "ostream": "cpp",
         "array": "cpp",
         "deque": "cpp",
@@ -48,5 +49,20 @@
         "titleBar.inactiveBackground": "#ff3d0099",
         "titleBar.inactiveForeground": "#e7e7e799"
     },
-    "peacock.remoteColor": "#ff3d00"
+    "peacock.remoteColor": "#ff3d00",
+    "mlir.server_path": "/home/xushilong/rocm-llvm-install/bin/mlir-lsp-server",
+    "mlir.pdll_server_path": "/home/xushilong/rocm-llvm-install/bin/mlir-pdll-lsp-server",
+    "mlir.tablegen_server_path": "/home/xushilong/rocm-llvm-install/bin/tblgen-lsp-server",
+    "mlir.tablegen_compilation_databases": [
+        "/home/xushilong/rocm-llvm-project/build/tablegen_compile_commands.yml",
+        "/home/xushilong/DeepGenGraph/3rd/deepgengraph/build/tablegen_compile_commands.yml"
+    ],
+    "mlir.pdll_compilation_databases": [
+        "/home/xushilong/rocm-llvm-project/build/pdll_compile_commands.yml"
+    ],
+    "tablegen-lsp.includePath": [
+        "/home/xushilong/rocm-llvm-install/include",
+        "/home/xushilong/DeepGenGraph/3rd/deepgengraph/build/include",
+        "/home/xushilong/DeepGenGraph/3rd/deepgengraph/include",
+    ]
 }

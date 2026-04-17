@@ -10,8 +10,9 @@ namespace mlir::frisk {
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"
 
 std::unique_ptr<Pass> createDeepgenGraphSimplifyPass();
-
-std::unique_ptr<Pass> createConvertDeepgenGraphToFriskPass();
+std::unique_ptr<Pass> createConvertKernelOpToFriskPass();
+std::unique_ptr<Pass> createConvertMemOpPass();
+std::unique_ptr<Pass> createConvertCalcOpPass();
 
 std::unique_ptr<Pass> createOverlapPass();
 

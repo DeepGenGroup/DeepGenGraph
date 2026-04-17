@@ -322,8 +322,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.run(src->getOperation());
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
-  pm.addPass(frisk::createConvertDeepgenGraphToFriskPass());
-  pm.addPass(mlir::createSymbolDCEPass());
+  pm.addPass(frisk::createConvertKernelOpToFriskPass());
+  pm.addPass(frisk::createConvertMemOpPass());
+  pm.addNestedPass<frisk::KernelOp>(frisk::createConvertCalcOpPass());
+  // pm.addNestedPass<frisk::KernelOp>(mlir::createCanonicalizerPass());
+  // pm.addNestedPass<frisk::KernelOp>(mlir::createCSEPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
   return 0;

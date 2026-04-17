@@ -28,7 +28,7 @@ class Frisk_Op<string mnemonic, list<Trait> traits = []> :
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
 
 // KernelOp
-def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator]> {
+def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator, IsolatedFromAbove]> {
     let summary = "Kernel operation";
   let description = [{
     A simple kernel operation that represents a compute kernel.
@@ -79,7 +79,11 @@ def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator]> {
 }
 
 // parallelOp
-def Frisk_ParallelOp : Frisk_Op<"parallel", [Pure, HasParent<"KernelOp">, ImplicitFriskTerminator]> {
+def Frisk_ParallelOp : Frisk_Op<"parallel", [
+  HasParent<"KernelOp">,
+  ImplicitFriskTerminator,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>
+]> {
   let summary = "parallel opeartion";
   let description = [{
     parallel
@@ -591,5 +595,18 @@ def Frisk_BarrierArriveExpectTx: Frisk_Op<"barrier_arrive_expect_tx", []> {
 
   let assemblyFormat = "$barrier attr-dict `:` type($barrier)";
 }
+
+def Frisk_ConvertOp: Frisk_Op<"convert", [Pure, InferTypeOpAdaptor]> {
+  let summary = "convert";
+  let description = [{}];
+  let arguments = (ins
+    AnyMemRef:$operand,
+    TypeAttr:$dst_type
+  );
+
+  let results = (outs AnyMemRef:$result);
+  let assemblyFormat = "$operand `,` `type` `=` $dst_type attr-dict `:` functional-type(operands, results)";
+}
+
 
 #endif // FRISK_OPS

@@ -20,12 +20,42 @@ def DeepgengraphSimplify: Pass<"deepgengraph-simplify", "::mlir::deepgengraph::K
   ];
 }
 
-def DeepgengraphToFrisk: Pass<"deepgengraph-convert-to-frisk", "::mlir::ModuleOp"> {
-  let summary = "Deepgengraph convert to Frisk";
+def KernelOpToFrisk: Pass<"kernelop-convert-to-frisk", "::mlir::ModuleOp"> {
+  let summary = "Deepgengraph kernelop convert to Frisk";
   let description = [{
   }];
 
-  let constructor = "mlir::frisk::createConvertDeepgenGraphToFriskPass()";
+  let constructor = "mlir::frisk::createConvertKernelOpToFriskPass()";
+
+  let dependentDialects = [
+    "mlir::deepgengraph::DeepgengraphDialect",
+    "mlir::deepgengraph::triton::DeepgengraphTritonDialect",
+    "mlir::frisk::FriskDialect",
+    "gpu::GPUDialect"
+  ];
+}
+
+def MemOpToFrisk: Pass<"memop-convert-to-frisk", "::mlir::ModuleOp"> {
+  let summary = "Deepgengraph memop convert to Frisk";
+  let description = [{
+  }];
+
+  let constructor = "mlir::frisk::createConvertMemOpPass()";
+
+  let dependentDialects = [
+    "mlir::deepgengraph::DeepgengraphDialect",
+    "mlir::deepgengraph::triton::DeepgengraphTritonDialect",
+    "mlir::frisk::FriskDialect",
+    "gpu::GPUDialect"
+  ];
+}
+
+def CalculateOpToFrisk: Pass<"calculateop-convert-to-frisk", "frisk::KernelOp"> {
+  let summary = "Deepgengraph calculate op convert to frisk.blockOp";
+  let description = [{
+  }];
+
+  let constructor = "mlir::frisk::createConvertCalcOpPass()";
 
   let dependentDialects = [
     "mlir::deepgengraph::DeepgengraphDialect",

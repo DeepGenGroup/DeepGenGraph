@@ -291,7 +291,10 @@ public:
     op->setAttr("stride", blockPtrOf.getStrideAttr());
     op->setAttr("order", blockPtrOf.getOrderAttr());
     op->setAttr("offset", blockPtrOf.getOffsetAttr());
+    // 表示与参数列表中 global mem 的对应关系
     op->setAttr("argId", rewriter.getI32IntegerAttr(argId)); 
+    // 表示其对应的blockptrof 需要滑动，来取得 gm中的不同数据
+    blockPtrOf->setAttr("move", rewriter.getBoolAttr(true));
     return mlir::success();
   }
 };
