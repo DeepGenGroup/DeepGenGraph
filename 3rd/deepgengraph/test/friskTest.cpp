@@ -28,42 +28,67 @@
 #include "mlir/InitAllDialects.h"
 
 #include <cmath>
+#include <cassert>
 #include <math.h>
 #include <stdio.h>
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
-#include "deepgengraph/Dialect/Frisk/IR/FriskOps.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
+#include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 
 using namespace mlir;
 
-int main() {
-  DialectRegistry registry;
-  registerAllExtensions(registry);
-  registerAllDialects(registry);
-  auto ctx = std::make_unique<MLIRContext>(registry);
-  
-  ctx->loadDialect<frisk::FriskDialect,
-                  affine::AffineDialect,
-                  func::FuncDialect,
-                  arith::ArithDialect,
-                  math::MathDialect>();
-
-  OpBuilder builder(ctx.get());
+ModuleOp createFriskInitBarrierTest(MLIRContext &ctx) {
+  OpBuilder builder(&ctx);
   auto loc = builder.getUnknownLoc();
 
-  // create module
   auto mod = builder.create<ModuleOp>(loc);
   builder.setInsertionPointToStart(mod.getBody());
 
-  // Common test values.
+  auto kernelType = builder.getFunctionType(TypeRange{}, TypeRange{});
+  auto kernel = builder.create<frisk::KernelOp>(loc, "init_barrier_test", kernelType);
+  Block *kernelEntry = kernel.addEntryBlock();
+  builder.setInsertionPointToStart(kernelEntry);
+
+  constexpr int64_t kBarrierNum = 3;
+  auto initBarrier = builder.create<frisk::InitBarrierOp>(loc, kBarrierNum);
+
+  assert(initBarrier.getNum() == kBarrierNum && "init_barrier num attr mismatch");
+  assert(static_cast<int64_t>(initBarrier.getBarriers().size()) == kBarrierNum &&
+         "init_barrier result size mismatch");
+  for (Value barrier : initBarrier.getBarriers()) {
+    assert(isa<frisk::BarrierType>(barrier.getType()) &&
+           "init_barrier result must be frisk.barrier");
+  }
+
+  Value barrier0 = initBarrier.getBarriers().front();
+  builder.create<frisk::BarrierArrive>(loc, barrier0);
+  builder.create<frisk::BarrierArriveExpectTx>(loc, barrier0, builder.getI64IntegerAttr(4096));
+
+  builder.create<frisk::ForOp>(loc, 0, 8, 1, [&](Value iv) {
+    auto c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    auto c2 = builder.create<arith::ConstantIndexOp>(loc, 2);
+    auto add = builder.create<arith::AddIOp>(loc, iv, c1);
+    auto mul = builder.create<arith::MulIOp>(loc, add, c2);
+    auto div = builder.create<arith::DivSIOp>(loc, mul, c2);
+    auto phase = builder.create<arith::XOrIOp>(loc, div, c1);
+    builder.create<frisk::BarrierWait>(loc, barrier0, phase);
+  });
+
+  return mod;
+}
+
+template<int64_t BM=128, int64_t BN=128>
+ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int64_t d) {
+  OpBuilder builder(&ctx);
+  auto loc = builder.getUnknownLoc();
   auto f32 = builder.getF32Type();
   auto f16 = builder.getF16Type();
-  int64_t b = 1, h = 32, s = 2048, d = 128;
-  int64_t BM = 128, BN = 128;
-  auto arg_type = MemRefType::get({b, h, s, d}, f16, {}, static_cast<unsigned>(1));
-
+  // create module
+  auto mod = builder.create<ModuleOp>(loc);
+  builder.setInsertionPointToStart(mod.getBody());
   // module -> frisk.kernel
+  auto arg_type = MemRefType::get({b, h, s, d}, f16, {}, static_cast<unsigned>(1));
   auto kernelType = builder.getFunctionType(TypeRange{arg_type, arg_type, arg_type, arg_type}, TypeRange{});
   auto kernel = builder.create<frisk::KernelOp>(loc, "attn", kernelType);
   Block *kernelEntry = kernel.addEntryBlock();
@@ -72,7 +97,6 @@ int main() {
   auto K = kernelEntry->getArgument(1);
   auto V = kernelEntry->getArgument(2);
   auto O = kernelEntry->getArgument(3);
-
   // kernel body -> frisk.parallel
   auto parallel = builder.create<frisk::ParallelOp>(loc, ArrayRef<int64_t>{1, 32, s/BM}, 128);
   Block *parallelEntry = parallel.addEntryBlock();
@@ -80,13 +104,11 @@ int main() {
   auto bz = parallelEntry->getArgument(0);
   auto by = parallelEntry->getArgument(1);
   auto bx = parallelEntry->getArgument(2);
-
   // shared memory
   auto smemQ = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, d}, f16, 128, 3);
   auto smemK = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BN, d}, f16, 128, 3);
   auto smemV = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BN, d}, f16, 128, 3);
   auto smemO = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, d}, f16, 128, 3);
-
   // regsiters memory
   auto acc_s = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, BN}, f32, 0, 0);
   auto acc_s_cast = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, BN}, f16, 0, 0);
@@ -96,20 +118,18 @@ int main() {
   auto scores_scale = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM}, f32, 0, 0);
   auto scores_sum = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM}, f32, 0, 0);
   auto logsum = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM}, f32, 0, 0);
-
   // init
   auto zore = builder.getAffineConstantExpr(0);
   auto d0 = builder.getAffineDimExpr(0);
   auto d1 = builder.getAffineDimExpr(1);
   auto d2 = builder.getAffineDimExpr(2);
-  auto mapQO = AffineMap::get(3, 0, ArrayRef<AffineExpr>{d0, d1, d2 * BM, zore}, ctx.get());
-  auto mapKV = AffineMap::get(3, 0, ArrayRef<AffineExpr>{d0, d1, d2, zore}, ctx.get());
+  auto mapQO = AffineMap::get(3, 0, ArrayRef<AffineExpr>{d0, d1, d2 * BM, zore}, &ctx);
+  auto mapKV = AffineMap::get(3, 0, ArrayRef<AffineExpr>{d0, d1, d2, zore}, &ctx);
   auto Q_view = builder.create<frisk::BufferViewOp>(loc, Q, ValueRange({bz, by, bx}), mapQO, ArrayRef<int64_t>{1, 1, BM, d});
   builder.create<frisk::CopyOp>(loc, Q_view, smemQ.getResult());
   builder.create<frisk::FillOp>(loc, acc_o.getResult(), builder.getF32FloatAttr(0.0f));
   builder.create<frisk::FillOp>(loc, logsum.getResult(), builder.getF32FloatAttr(0.0f));
   builder.create<frisk::FillOp>(loc, scores_max.getResult(), builder.getF32FloatAttr(-INFINITY));
-
   // for
   builder.create<frisk::ForOp>(loc, 0, s, BN, [&](Value iv) {
     auto K_view = builder.create<frisk::BufferViewOp>(loc, K, ValueRange({bz, by, iv}), mapKV, ArrayRef<int64_t>{1, 1, BN, d});
@@ -118,7 +138,7 @@ int main() {
     builder.create<frisk::GemmOp>(loc, smemQ, smemK, acc_s, false, true);
     // ====== softmax ======
     // copy perv_max to max
-    builder.create<frisk::CopyOp>(loc, scores_max_prev, scores_max);
+    builder.create<frisk::CopyOp>(loc, scores_max, scores_max_prev);
     // fill max
     builder.create<frisk::FillOp>(loc, scores_max, builder.getF32FloatAttr(-INFINITY));
     // reduce max
@@ -144,7 +164,7 @@ int main() {
       auto elem2 = builder.create<affine::AffineLoadOp>(loc, scores_max, ValueRange({blockIvs[0]}));
       auto sub_elem = builder.create<arith::SubFOp>(loc, elem1, elem2);
       auto exp2 = builder.create<math::ExpOp>(loc, sub_elem);
-      builder.create<affine::AffineStoreOp>(loc, exp2, scores_max, ValueRange({blockIvs[0]}));
+      builder.create<affine::AffineStoreOp>(loc, exp2, acc_s, blockIvs);
     });
     // reduce sum
     builder.create<frisk::ReduceOp>(loc, acc_s, scores_sum, "add", 1);
@@ -185,35 +205,34 @@ int main() {
   // copy smemo to O
   auto O_view = builder.create<frisk::BufferViewOp>(loc, O, ValueRange({bz, by, bx}), mapQO, ArrayRef<int64_t>{1, 1, BM, d});
   builder.create<frisk::CopyOp>(loc, smemO, O_view);
+  return mod;
+}
 
+int main() {
+  DialectRegistry registry;
+  registerAllExtensions(registry);
+  registerAllDialects(registry);
+  MLIRContext ctx(registry);
+  ctx.loadDialect<frisk::FriskDialect,
+                  affine::AffineDialect,
+                  func::FuncDialect,
+                  arith::ArithDialect,
+                  math::MathDialect>();
 
+  auto init_barrier_mod = createFriskInitBarrierTest(ctx);
+  auto attn_mod = createFriskAttn(ctx, 1, 32, 2048, 128);
 
-  
-  // // ifOp test (IntegerSet embedded condition).
-  // auto d0 = getAffineDimExpr(0, ctx.get());
-  // auto d1 = getAffineDimExpr(1, ctx.get());
-  // auto s0 = getAffineSymbolExpr(0, ctx.get());
-  // IntegerSet condSet = IntegerSet::get(/*dimCount=*/2, /*symbolCount=*/1, ArrayRef<AffineExpr>{d0 + s0 - d1}, ArrayRef<bool>{false});
-  // auto symN = builder.create<arith::ConstantIndexOp>(loc, 16);
-  // auto ifOp = builder.create<frisk::IfOp>(loc, condSet, ValueRange{parallelEntry->getArgument(0), parallelEntry->getArgument(1), symN});
-
-  // {
-  //   auto *thenBlock = new Block();
-  //   ifOp.getThenRegion().push_back(thenBlock);
-  //   OpBuilder thenBuilder = OpBuilder::atBlockBegin(thenBlock);
-  //   thenBuilder.create<frisk::GemmWaitOp>(loc, c.getResult());
-  //   thenBuilder.create<frisk::EndOp>(loc);
-  // }
-  // {
-  //   auto *elseBlock = new Block();
-  //   ifOp.getElseRegion().push_back(elseBlock);
-  //   OpBuilder elseBuilder = OpBuilder::atBlockBegin(elseBlock);
-  //   elseBuilder.create<frisk::FillOp>(loc, c.getResult(), builder.getF32FloatAttr(2.0f));
-  //   elseBuilder.create<frisk::EndOp>(loc);
+  // PassManager pm(&ctx);
+  // pm.enableVerifier(true);
+  // pm.addNestedPass<frisk::KernelOp>(frisk::createOverlapPass());
+  // if (failed(pm.run(attn_mod))) {
+  //   llvm::errs() << "failed to run OverlapPass\n";
+  //   return 1;
   // }
 
-  mod->print(llvm::outs());
+  init_barrier_mod->print(llvm::outs());
   llvm::outs() << "\n";
-
+  attn_mod->print(llvm::outs());
+  llvm::outs() << "\n";
   return 0;
 }

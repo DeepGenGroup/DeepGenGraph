@@ -65,6 +65,7 @@ std::string layoutDebugString(LayoutAttr layout) {
 }
 
 void FriskDialect::initialize() {
+  registerTypes();
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.cpp.inc"

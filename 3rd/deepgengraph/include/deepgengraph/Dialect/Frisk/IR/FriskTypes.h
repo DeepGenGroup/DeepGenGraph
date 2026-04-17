@@ -6,6 +6,6 @@
 #include "mlir/IR/Types.h"
 
 #define GET_TYPEDEF_CLASSES
-#include "frisk/Dialect/Frisk/IR/FriskTypes.h.inc"
+#include "deepgengraph/Dialect/Frisk/IR/FriskTypes.h.inc"
 
 #endif // FRISK_TYPES_H_

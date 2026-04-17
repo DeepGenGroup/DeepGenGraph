@@ -4,6 +4,7 @@
 include "deepgengraph/Dialect/Frisk/IR/FriskDialect.td"
 include "deepgengraph/Dialect/Frisk/IR/FriskEnums.td"
 include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.td"
+include "deepgengraph/Dialect/Frisk/IR/FriskTypes.td"
 // include "Dialect/Frisk/IR/FriskInterfaces.td"
 
 include "mlir/IR/OpBase.td"
@@ -518,6 +519,77 @@ def Frisk_ReduceOp: Frisk_Op<"reduce", [MemoryEffects<[MemWrite]>, MemoryEffects
   let hasVerifier = 1;
   // let hasCustomAssemblyFormat = 1;
   let assemblyFormat = "$src `,` $dst attr-dict `:` type($src) `,` type($dst)";
+}
+
+// init_barrier
+def Frisk_InitBarrierOp: Frisk_Op<"init_barrier", [Pure]> {
+  let summary = "Initialize barriers";
+  let description = [{
+    Create a list of barrier handles.
+    The `num` attribute specifies how many barriers to create.
+    The op returns `num` results, each of which is a `frisk.barrier` handle.
+  }];
+
+  let arguments = (ins
+    I64Attr:$num
+  );
+
+  let results = (outs
+    Variadic<Frisk_BarrierType>:$barriers
+  );
+
+  let builders = [
+    OpBuilder<(ins "int64_t":$num)>
+  ];
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = "attr-dict `:` type($barriers)";
+}
+
+// barrier_arrive
+def Frisk_BarrierArrive: Frisk_Op<"barrier_arrive", []> {
+  let summary = "Arrive at a barrier";
+  let description = [{
+    Signal arrival at a synchronization barrier.
+  }];
+
+  let arguments = (ins
+    Frisk_BarrierType:$barrier
+  );
+
+  let assemblyFormat = "$barrier attr-dict `:` type($barrier)";
+}
+
+// barrier_wait
+def Frisk_BarrierWait: Frisk_Op<"barrier_wait", []> {
+  let summary = "Wait on a barrier";
+  let description = [{
+    Wait on a synchronization barrier with an index-typed phase value.
+  }];
+
+  let arguments = (ins
+    Frisk_BarrierType:$barrier,
+    Index:$phase
+  );
+
+  let assemblyFormat = "$barrier `,` $phase attr-dict `:` type($barrier) `,` type($phase)";
+}
+
+// barrier_arrive_expect_tx
+def Frisk_BarrierArriveExpectTx: Frisk_Op<"barrier_arrive_expect_tx", []> {
+  let summary = "Arrive at a barrier with expected transfer size";
+  let description = [{
+    Signal arrival at a synchronization barrier and provide expected transfer
+    size in bytes.
+  }];
+
+  let arguments = (ins
+    Frisk_BarrierType:$barrier,
+    I64Attr:$expected_tx_bytes
+  );
+
+  let assemblyFormat = "$barrier attr-dict `:` type($barrier)";
 }
 
 #endif // FRISK_OPS

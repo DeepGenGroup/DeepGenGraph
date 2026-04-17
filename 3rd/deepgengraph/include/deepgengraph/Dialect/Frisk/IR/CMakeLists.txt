@@ -18,6 +18,10 @@ set(LLVM_TARGET_DEFINITIONS FriskAttributes.td)
 mlir_tablegen(FriskAttributes.h.inc -gen-attrdef-decls -dialect=frisk)
 mlir_tablegen(FriskAttributes.cpp.inc -gen-attrdef-defs -dialect=frisk)
 
+set(LLVM_TARGET_DEFINITIONS FriskTypes.td)
+mlir_tablegen(FriskTypes.h.inc -gen-typedef-decls)
+mlir_tablegen(FriskTypes.cpp.inc -gen-typedef-defs)
+
 # mlir_tablegen(FriskInterfaces.h.inc -gen-op-interface-decls)
 # mlir_tablegen(FriskInterfaces.cpp.inc -gen-op-interface-defs)
 

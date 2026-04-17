@@ -23,6 +23,7 @@
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h.inc"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskTypes.h"
 
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 

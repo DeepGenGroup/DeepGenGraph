@@ -2,6 +2,7 @@
 #define FRISK_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
+#include <memory>
 
 namespace mlir::frisk {
 
@@ -11,6 +12,8 @@ namespace mlir::frisk {
 std::unique_ptr<Pass> createDeepgenGraphSimplifyPass();
 
 std::unique_ptr<Pass> createConvertDeepgenGraphToFriskPass();
+
+std::unique_ptr<Pass> createOverlapPass();
 
 #define GEN_PASS_REGISTRATION
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"

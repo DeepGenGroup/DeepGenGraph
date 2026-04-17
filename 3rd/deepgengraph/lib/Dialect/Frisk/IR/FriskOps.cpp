@@ -2161,6 +2161,30 @@ LogicalResult ReduceOp::verify() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// -- InitBarrierOp --
+//===----------------------------------------------------------------------===//
+void InitBarrierOp::build(OpBuilder &builder, OperationState &state, int64_t num) {
+  state.addAttribute("num", builder.getI64IntegerAttr(num));
+  if (num <= 0)
+    return;
+  SmallVector<Type> resultTypes(static_cast<size_t>(num),
+                                BarrierType::get(builder.getContext()));
+  state.addTypes(resultTypes);
+}
+
+LogicalResult InitBarrierOp::verify() {
+  int64_t num = getNum();
+  if (num < 0)
+    return emitOpError("num must be non-negative");
+  if (static_cast<int64_t>(getBarriers().size()) != num) {
+    return emitOpError("result count (")
+           << getBarriers().size()
+           << ") must match num attribute (" << num << ")";
+  }
+  return success();
+}
+
 // // 自定义汇编格式解析
 // ParseResult ReduceOp::parse(OpAsmParser &parser, OperationState &result) {
 //   OpAsmParser::UnresolvedOperand srcOperand, dstOperand;

@@ -35,4 +35,17 @@ def DeepgengraphToFrisk: Pass<"deepgengraph-convert-to-frisk", "::mlir::ModuleOp
   ];
 }
 
+def friskOverlap: Pass<"frisk-overlap", "::mlir::frisk::KernelOp"> {
+  let summary = "frisk overlap ";
+  let description = [{
+    overlap
+  }];
+
+  let constructor = "mlir::frisk::createOverlapPass()";
+
+  let dependentDialects = [
+    "mlir::frisk::FriskDialect",
+  ];
+}
+
 #endif // FRISK_PASSES
