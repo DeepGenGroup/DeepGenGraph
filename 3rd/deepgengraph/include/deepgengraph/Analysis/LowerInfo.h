@@ -20,10 +20,10 @@ struct LowerInfo {
   Value buffer;
   int64_t thread_bound;
 
-  llvm::SmallVector<AffineExpr, 2> warp_indices;  // tid / warp_size
-  llvm::SmallVector<AffineExpr, 2> thread_indices;  // tid % warp_size
-  llvm::SmallVector<int64_t, 2> warp_layout;
-  llvm::SmallVector<int64_t, 2> block_layout;
+  llvm::SmallVector<AffineExpr, 2> warp_indices;  // warp_id: [(tid / 32) / block_layout[1], (tid / 32) % block_layout[1]]
+  llvm::SmallVector<AffineExpr, 2> thread_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]
+  llvm::SmallVector<int64_t, 2> warp_layout;  // lane
+  llvm::SmallVector<int64_t, 2> block_layout;  // warp
 
   llvm::SmallVector<int64_t, 2> warp_repeat;
   llvm::SmallVector<int64_t, 2> block_repeat;
@@ -95,9 +95,9 @@ struct LowerInfo {
     llvm::SmallVector<AffineExpr, 2> indices;
     if (type.getMemorySpaceAsInt() == 0 || type.getMemorySpaceAsInt() == 5) {  // local
       for(size_t i=0; i<thread_widths.size(); ++i) {
-        auto ib = b.getAffineDimExpr(i*3+1);
-        auto iw = b.getAffineDimExpr(i*3+2);
-        auto it = b.getAffineDimExpr(i*3+3);
+        auto ib = b.getAffineDimExpr(i*3+1);  // block_repeat: [bm_ / (block_layout[0] * warp_layout[0] * thread_widths[0]), ...]
+        auto iw = b.getAffineDimExpr(i*3+2);  // warp_repeat：[2, mma_k/(warp_layout[1] * thread_widths[1])]
+        auto it = b.getAffineDimExpr(i*3+3);  // thread_widths: [1, 2]
         AffineExpr expr = ib * (warp_repeat[i] * thread_widths[i]) + iw * thread_widths[i] + it;
         indices.push_back(expr);
       }
