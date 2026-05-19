@@ -81,7 +81,7 @@ def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator, IsolatedFromAb
 // parallelOp
 def Frisk_ParallelOp : Frisk_Op<"parallel", [
   HasParent<"KernelOp">,
-  ImplicitFriskTerminator,
+  ImplicitFriskTerminator, AffineScope, 
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>
 ]> {
   let summary = "parallel opeartion";

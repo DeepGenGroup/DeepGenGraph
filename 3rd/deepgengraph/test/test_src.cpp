@@ -249,48 +249,6 @@ int testUseTilelangDialect(){
 }
 #endif
 
-
-int readDeepgenGraphIRAndConvertToThreadsImp(int argc, char ** argv) {
-  mlir::DialectRegistry registry;
-  mlir::registerAllExtensions(registry);
-  mlir::registerAllDialects(registry);
-  auto ctx = std::make_unique<mlir::MLIRContext>(registry);
-
-  // 首先，注册需要的 dialect
-  ctx->loadDialect<
-    func::FuncDialect, 
-    arith::ArithDialect,
-    tensor::TensorDialect,
-    linalg::LinalgDialect,
-    scf::SCFDialect,
-    affine::AffineDialect,
-    math::MathDialect,
-    deepgengraph::DeepgengraphDialect,
-    deepgengraph::triton::DeepgengraphTritonDialect,
-    tilelang::TilelangDialect,
-    mlir::threadimp::ThreadImpDialect
-    >();
-
-  
-  // 读入文件
-  auto src = parseSourceFile<ModuleOp>(argv[1], ctx.get());
-  // 简单的输出，在 debug 的时候常用
-  analyze::PointerTracer::getPointerInfo(*src);
-  src->dump();
-  const auto& infoMap = analyze::PointerTracer::getMap();
-  mlir::PassManager pm(ctx.get());
-  // pm.addPass(deepgengraph::createConvertDeepgengraphTritonToThreadImpPass());
-  pm.addNestedPass<deepgengraph::KernelOp>(mlir::threadimp::createInlineDevicekernelOpPass());
-  pm.run(src->getOperation());
-  llvm::outs() << "\n---------- after createInlineDevicekernelOpPass ---------\n"; llvm::outs().flush();src->dump();
-  pm.addPass(mlir::threadimp::createConvertMemOpPass());
-  pm.addPass(threadimp::createConvertBlockCalcOpToThreadImpPass());
-  pm.addPass(mlir::createSymbolDCEPass());
-  pm.run(src->getOperation());
-  llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
-  return 0;
-}
-
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);
@@ -322,9 +280,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
   pm.run(src->getOperation());
 
+
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
+  pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after scfForConversion ---------\n"; llvm::outs().flush();src->dump();
+
   pm.addPass(frisk::createConvertKernelOpToFriskPass());
-  pm.addPass(frisk::createConvertMemOpPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createConvertKernelOpToFriskPass ---------\n"; llvm::outs().flush();src->dump();
+  
+  pm.addNestedPass<frisk::KernelOp>(frisk::createConvertMemOpPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createConvertMemOpPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<frisk::KernelOp>(frisk::createConvertCalcOpPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   // pm.addNestedPass<frisk::KernelOp>(mlir::createCanonicalizerPass());

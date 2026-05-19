@@ -1,6 +1,7 @@
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonTypes.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
@@ -12,7 +13,10 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
@@ -31,12 +35,15 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
+#include <limits>
 #include <map>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 #include "deepgengraph/Analysis/ThreadAnalysis.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/IR/AffineMap.h"
 
 namespace mlir::frisk {
 
@@ -294,7 +301,7 @@ public:
     // 表示与参数列表中 global mem 的对应关系
     op->setAttr("argId", rewriter.getI32IntegerAttr(argId)); 
     // 表示其对应的blockptrof 需要滑动，来取得 gm中的不同数据
-    blockPtrOf->setAttr("move", rewriter.getBoolAttr(true));
+    blockPtrOf->setAttr("will_move", rewriter.getBoolAttr(true));
     return mlir::success();
   }
 };

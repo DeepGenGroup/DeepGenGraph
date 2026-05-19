@@ -35,7 +35,7 @@ def KernelOpToFrisk: Pass<"kernelop-convert-to-frisk", "::mlir::ModuleOp"> {
   ];
 }
 
-def MemOpToFrisk: Pass<"memop-convert-to-frisk", "::mlir::ModuleOp"> {
+def MemOpToFrisk: Pass<"memop-convert-to-frisk", "frisk::KernelOp"> {
   let summary = "Deepgengraph memop convert to Frisk";
   let description = [{
   }];

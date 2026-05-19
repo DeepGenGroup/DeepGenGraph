@@ -2248,7 +2248,8 @@ LogicalResult ConvertOp::inferReturnTypes(::mlir::MLIRContext *context, std::opt
                                           Adaptor adaptor, ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
   auto dst_type = adaptor.getDstType();
   auto operand_type = cast<MemRefType>(adaptor.getOperand().getType());
-  auto ret_type = MemRefType::get(operand_type.getShape(), dst_type);
+
+  auto ret_type = MemRefType::get(operand_type.getShape(), dst_type, AffineMap{}, operand_type.getMemorySpaceAsInt());
   inferredReturnTypes.push_back(ret_type);
   return success();
 }

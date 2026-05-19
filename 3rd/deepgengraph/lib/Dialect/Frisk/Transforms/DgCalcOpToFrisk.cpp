@@ -15,10 +15,12 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -29,6 +31,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -66,6 +69,29 @@ static Value getKernelArgById(Operation *op, int64_t argId) {
 
 // ---------- patterns -----------------
 
+static void AppendMemspaceToMemrefValue(Value& v, frisk::attr::MemorySpace ms){
+  if(mlir::isa<MemRefType>(v.getType())){
+    auto _ty = mlir::cast<MemRefType>(v.getType());
+    auto tA = MemRefType::get(_ty.getShape(), _ty.getElementType(), AffineMap{}, int(ms));
+    v.setType(tA);
+  }
+}
+
+template<typename OpTy>
+static Operation* getOuterMostOp(mlir::Operation* op){
+  mlir::Operation* currOp = op;
+  while (true) {
+    auto parentForOp = currOp->getParentOfType<OpTy>();
+    if(parentForOp == nullptr){
+      break;
+    }
+    else{
+      currOp = parentForOp;
+    }
+  }
+  return currOp;
+}
+
 struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> {
   using OpConversionPattern::OpConversionPattern;
   
@@ -74,7 +100,9 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
     ConversionPatternRewriter &rewriter) const override 
   {
     auto memA = adaptor.getLhs();
+    AppendMemspaceToMemrefValue(memA, frisk::attr::MemorySpace::Shared);
     auto memB = adaptor.getRhs();
+    AppendMemspaceToMemrefValue(memB, frisk::attr::MemorySpace::Shared);
     auto shapeA = mlir::cast<MemRefType>(memA.getType()).getShape();
     auto shapeB = mlir::cast<MemRefType>(memB.getType()).getShape();
     int sizeM = shapeA[0];
@@ -82,7 +110,16 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
     int sizeK = shapeB[0];
 
     std::vector<int64_t> cshape = {sizeM, sizeN};
-    auto memC = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), cshape, op.getAccType());
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp memC {} ;
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      memC = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), cshape, op.getAccType(), 16, int(frisk::attr::MemorySpace::Shared));
+    }
+
     std::vector<int64_t> ranges = {sizeM, sizeN};
     auto block = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
     {
@@ -93,17 +130,28 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
       auto zero = rewriter.create<arith::ConstantIndexOp>(loc,0);
       auto step_one = rewriter.create<arith::ConstantIndexOp>(loc,1);
       auto k = rewriter.create<arith::ConstantIndexOp>(loc, sizeK);
-      auto forOp = rewriter.create<scf::ForOp>(block->getLoc(), zero,k, step_one );
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ValueRange lbOperands, AffineMap lbMap, ValueRange ubOperands, AffineMap ubMap, int64_t step = 1, ValueRange iterArgs = std::nullopt, function_ref<void(OpBuilder &, Location, Value, ValueRange)> bodyBuilder = nullptr);
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, int64_t lowerBound, int64_t upperBound, int64_t step = 1, ValueRange iterArgs = std::nullopt, function_ref<void(OpBuilder &, Location, Value, ValueRange)> bodyBuilder = nullptr);
+
+      auto forOp = rewriter.create<affine::AffineForOp>(block->getLoc(), 0, sizeK, 1);
       rewriter.setInsertionPointToStart(forOp.getBody(0));
       auto iter_k = forOp.getInductionVar();
       auto i = block.getBody(0)->getArgument(0);
       auto j = block.getBody(0)->getArgument(1);
-      std::vector<Value> indiceA = {i,iter_k};
-      std::vector<Value> indiceB = {iter_k, j};
-      std::vector<Value> indiceC = {i, j};
-      auto a = rewriter.create<memref::LoadOp>(loc, memA, indiceA);
-      auto b = rewriter.create<memref::LoadOp>(loc, memB, indiceB);
-      auto acc  = rewriter.create<memref::LoadOp>(loc, memC, indiceC);
+      std::vector<Value> indices = {i,j,iter_k};
+
+      // {i,j,k} : [i,k] [k,j] [i,j]
+      auto ctx = op->getContext();
+      auto dimI = mlir::getAffineDimExpr(0, ctx);
+      auto dimJ = mlir::getAffineDimExpr(1, ctx);
+      auto dimK = mlir::getAffineDimExpr(2, ctx);
+      auto affineMapA= AffineMap::get(3, 0, {dimI, dimK}, ctx); 
+      auto affineMapB= AffineMap::get(3, 0, {dimK, dimJ}, ctx); 
+      auto affineMapC= AffineMap::get(3, 0, {dimI, dimJ}, ctx); 
+      auto a = rewriter.create<affine::AffineLoadOp>(loc, memA, affineMapA, indices);
+      auto b = rewriter.create<affine::AffineLoadOp>(loc, memB, affineMapB, indices);
+      auto acc = rewriter.create<affine::AffineLoadOp>(loc, memC, affineMapC, indices);
+
       Value prod = rewriter.create<arith::MulFOp>(loc, a, b);
       if (prod.getType() != acc.getType()) {
         if (!isa<FloatType>(prod.getType()) || !isa<FloatType>(acc.getType()))
@@ -117,7 +165,8 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
         }
       }
       auto added = rewriter.create<arith::AddFOp>(loc, prod, acc);
-      auto store = rewriter.create<memref::StoreOp>(loc, added, memC, indiceC);
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value valueToStore, Value memref, AffineMap map, ValueRange mapOperands);
+      rewriter.create<affine::AffineStoreOp>(loc, added, memC, affineMapC, indices);
     }
     rewriter.replaceOp(op, memC);
     return success();
@@ -136,7 +185,9 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
       return failure();
 
     Value memLhs = operands[0];
+    // AppendMemspaceToMemrefValue(memLhs, frisk::attr::MemorySpace::Shared);
     Value memRhs = operands[1];
+    // AppendMemspaceToMemrefValue(memRhs, frisk::attr::MemorySpace::Shared);
 
     auto resultTensorType = dyn_cast<RankedTensorType>(op.getResult().getType());
     if (!resultTensorType)
@@ -144,7 +195,15 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
     auto resultShape = resultTensorType.getShape();
 
     auto convertedResultType = MemRefType::get(resultShape, resultTensorType.getElementType());
-    auto alloc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), convertedResultType.getShape(), convertedResultType.getElementType());
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp alloc {} ;
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      alloc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), convertedResultType.getShape(), convertedResultType.getElementType(), 16, int(frisk::attr::MemorySpace::Shared));
+    }
     std::vector<int64_t> ranges(resultShape.begin(), resultShape.end());
     auto blockOp = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
     {
@@ -186,11 +245,13 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
       if (failed(lhsIndicesOr))
         return failure();
       auto rhsIndicesOr = buildOperandIndices(memRhs, op.getRhs());
-      if (failed(rhsIndicesOr))
+      if (failed(rhsIndicesOr)){
         return failure();
+      }
 
-      auto lhs = rewriter.create<memref::LoadOp>(blockOp->getLoc(), memLhs, *lhsIndicesOr);
-      auto rhs = rewriter.create<memref::LoadOp>(blockOp->getLoc(), memRhs, *rhsIndicesOr);
+
+      auto lhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memLhs, *lhsIndicesOr);
+      auto rhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memRhs, *rhsIndicesOr);
 
       Value ret;
       Type lhsType = lhs.getType();
@@ -247,7 +308,7 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
         return failure();
       }
 
-      rewriter.create<memref::StoreOp>(blockOp->getLoc(), ret, alloc, indices);
+      rewriter.create<affine::AffineStoreOp>(blockOp->getLoc(), ret, alloc, indices);
     }
     rewriter.replaceOp(op, alloc.getResult());
     return success();
@@ -261,13 +322,24 @@ struct Exp2OpConversionPattern : public OpConversionPattern<dg::Exp2Op> {
   {
     auto loc = op->getLoc();
     auto operandType = mlir::dyn_cast<MemRefType>(adaptor.getOperand().getType());
-    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType());
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp buffer {};
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType(), 16, int(frisk::attr::MemorySpace::Shared));
+    }
+
     auto blockOp = rewriter.create<frisk::BlockOp>(loc, operandType.getShape(), nullptr);
     {
       RewriterBase::InsertionGuard g{rewriter};
       rewriter.setInsertionPointToStart(blockOp.getBody(0));
       std::vector<Value> indices = {blockOp.getBody(0)->getArguments().begin(), blockOp.getBody(0)->getArguments().end()};
-      auto val = rewriter.create<affine::AffineLoadOp>(loc, adaptor.getOperand(), indices);
+      auto operand = adaptor.getOperand();
+      AppendMemspaceToMemrefValue(operand, frisk::attr::MemorySpace::Shared);
+      auto val = rewriter.create<affine::AffineLoadOp>(loc, operand, indices);
       auto ret = rewriter.create<math::Exp2Op>(loc, val);
       auto store = rewriter.create<affine::AffineStoreOp>(loc, ret, buffer, indices);
     }
@@ -285,7 +357,14 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
     auto loc = op->getLoc();
     auto outMemTy = mlir::dyn_cast<MemRefType>( getTypeConverter()->convertType(op.getType()));
     auto inMemTy = mlir::dyn_cast<MemRefType>( adaptor.getOperand().getType());
-    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType());
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp buffer {};
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType(), 16, int(frisk::attr::MemorySpace::Shared));
+    }
       // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value src, ::mlir::Value dst, ::mlir::StringAttr kind, ::mlir::IntegerAttr dim);
     std::string kind;
     switch (op.getReduceType()) {
@@ -294,7 +373,9 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
       case dg::ReduceType::ANY: kind = "any";break;
       default: assert(false); break;
     }
-    auto reduce = rewriter.create<frisk::ReduceOp>(loc, adaptor.getOperand(), buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
+    auto operand = adaptor.getOperand();
+    AppendMemspaceToMemrefValue(operand, frisk::attr::MemorySpace::Shared);
+    auto reduce = rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
     rewriter.replaceOp(op, buffer);
     return success();
   }
@@ -332,7 +413,7 @@ struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
     for (dg::MaskYieldOp yield : yields) {
       RewriterBase::InsertionGuard guard{rewriter};
       rewriter.setInsertionPoint(yield);
-      rewriter.create<memref::StoreOp>(loc, yield->getOperand(0), buffer, shiftedIndices);
+      rewriter.create<affine::AffineStoreOp>(loc, yield->getOperand(0), buffer, shiftedIndices);
       rewriter.eraseOp(yield);
     }
 
@@ -350,10 +431,15 @@ public:
     TypeConverter tc;
     tc.addConversion([](Type type) -> std::optional<Type> {
       if (auto rankedTensorTy = dyn_cast<RankedTensorType>(type)) {
-        return MemRefType::get(rankedTensorTy.getShape(), rankedTensorTy.getElementType());
+        return MemRefType::get(rankedTensorTy.getShape(), rankedTensorTy.getElementType(), AffineMap{});
       }
       if (auto unrankedTensorTy = dyn_cast<UnrankedTensorType>(type)) {
-        return UnrankedMemRefType::get(unrankedTensorTy.getElementType(), 0);
+        return UnrankedMemRefType::get(unrankedTensorTy.getElementType(), int(frisk::attr::MemorySpace::Shared));
+      }
+      if (auto memref = dyn_cast<MemRefType>(type)) {
+        if(memref.getMemorySpaceAsInt() <= 0){
+          return MemRefType::get(memref.getShape(), memref.getElementType());
+        }
       }
       return type;
     });
