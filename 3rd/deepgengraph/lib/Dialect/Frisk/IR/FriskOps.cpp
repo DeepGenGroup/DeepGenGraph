@@ -1485,6 +1485,60 @@ void IfOp::print(OpAsmPrinter &p) {
 }
 
 //===----------------------------------------------------------------------===//
+// -- WarpGroupOp --
+//===----------------------------------------------------------------------===//
+void WarpGroupOp::build(OpBuilder &builder,
+                        OperationState &state,
+                        uint64_t warpGroupNum) {
+  state.addAttribute(
+      getWarpGroupNumAttrName(state.name),
+      builder.getI64IntegerAttr(warpGroupNum));
+
+  Region *region = state.addRegion();
+  Block *body = new Block();
+  region->push_back(body);
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(body);
+  builder.create<frisk::EndOp>(state.location);
+}
+
+LogicalResult WarpGroupOp::verify() {
+  if (getWarpGroupNum() <= 0)
+    return emitOpError("expects warpGroupNum to be positive");
+
+  if (getRegion().empty())
+    return emitOpError("expects non-empty region");
+
+  return success();
+}
+
+ParseResult WarpGroupOp::parse(OpAsmParser &parser,
+                               OperationState &result) {
+  Builder &builder = parser.getBuilder();
+
+  int64_t warpGroupNum = 0;
+  if (parser.parseInteger(warpGroupNum))
+    return failure();
+
+  result.addAttribute(
+      getWarpGroupNumAttrName(result.name),
+      builder.getI64IntegerAttr(warpGroupNum));
+
+  Region *region = result.addRegion();
+  if (parser.parseRegion(*region))
+    return failure();
+
+  return success();
+}
+
+void WarpGroupOp::print(OpAsmPrinter &printer) {
+  printer << " " << getWarpGroupNum();
+  printer << " ";
+  printer.printRegion(getRegion());
+}
+
+//===----------------------------------------------------------------------===//
 // -- GemmOp --
 //===----------------------------------------------------------------------===//
 LogicalResult GemmOp::verify() {

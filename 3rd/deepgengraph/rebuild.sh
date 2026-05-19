@@ -3,8 +3,8 @@ set -x
 PROJECT_FOLDER=$(dirname $(readlink -f "$0"))
 BUILD=${PROJECT_FOLDER}/build
 
-MLIR_DIR=/home/xushilong/rocm-llvm-install/lib/cmake/mlir 
-LLVM_BUILD=/home/xushilong/rocm-llvm-project/build
+MLIR_DIR=/data0/xiebaokang/rocm-llvm-project/build/lib/cmake/mlir
+LLVM_BUILD=/data0/xiebaokang/rocm-llvm-project/build
 export CMAKE_PREFIX_PATH=$MLIR_DIR:$CMAKE_PREFIX_PATH
 
 # triton: https://github.com/triton-lang/triton/pull/3325
@@ -63,4 +63,4 @@ cmake ..  \
   -DSTABLEHLO_ENABLE_BINDINGS_PYTHON=OFF \
   -DTRITON_BUILD_PYTHON_MODULE=OFF \
   -DTRITON_CODEGEN_BACKENDS="nvidia;amd" \
-  -DMLIR_DIR="/home/xushilong/rocm-llvm-install/lib/cmake/mlir" 
+  -DMLIR_DIR="/data0/xiebaokang/rocm-llvm-project/build/lib/cmake/mlir" 

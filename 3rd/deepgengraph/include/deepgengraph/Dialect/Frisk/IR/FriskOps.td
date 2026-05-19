@@ -298,6 +298,28 @@ def Frisk_IfOp : Frisk_Op<"if", [Pure, ImplicitFriskTerminator]> {
   let hasCustomAssemblyFormat = 1;
 }
 
+// WarpGroupOp
+def Frisk_WarpGroupOp : Frisk_Op<"warp_group", [Pure, ImplicitFriskTerminator]> {
+  let summary = "warpgroup operation";
+  let description = [{
+    warp group operation.
+  }];
+
+  let arguments = (ins I64Attr:$warpGroupNum);
+  let regions = (region SizedRegion<1>:$region);
+
+  let builders = [
+    OpBuilder<(ins "uint64_t":$warpGroupNum)>
+  ];
+  
+  let extraClassDeclaration = [{
+
+  }];
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
 // gemmwaitOp
 def Frisk_GemmWaitOp : Frisk_Op<"gemm_wait", [MemoryEffects<[MemRead]>]> {
   let summary = "wait for gemm write completion";
@@ -515,6 +537,8 @@ def Frisk_ReduceOp: Frisk_Op<"reduce", [MemoryEffects<[MemWrite]>, MemoryEffects
   let extraClassDeclaration = [{
     MemRefType getSrcType() { return cast<MemRefType>(getSrc().getType()); }
     MemRefType getDstType() { return cast<MemRefType>(getDst().getType()); }
+    // Value getSrcValue() { return getSrc(); }
+    // Value getDstValue() { return getDst(); }
 
     ::mlir::LogicalResult inferLayout(::mlir::OpBuilder &builder,
                                       llvm::DenseMap<::mlir::Value, ::mlir::Attribute> &layoutMap);

@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/AffineExpr.h"
@@ -35,6 +36,7 @@
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
+#include "deepgengraph/Conversion/FriskToBase/Passes.h"
 
 using namespace mlir;
 
@@ -78,7 +80,7 @@ ModuleOp createFriskInitBarrierTest(MLIRContext &ctx) {
   return mod;
 }
 
-template<int64_t BM=128, int64_t BN=128>
+template<int64_t BM=128, int64_t BN=128, int64_t THREAD_NUM=128>
 ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int64_t d) {
   OpBuilder builder(&ctx);
   auto loc = builder.getUnknownLoc();
@@ -98,7 +100,7 @@ ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int6
   auto V = kernelEntry->getArgument(2);
   auto O = kernelEntry->getArgument(3);
   // kernel body -> frisk.parallel
-  auto parallel = builder.create<frisk::ParallelOp>(loc, ArrayRef<int64_t>{1, 32, s/BM}, 128);
+  auto parallel = builder.create<frisk::ParallelOp>(loc, ArrayRef<int64_t>{1, 32, s/BM}, THREAD_NUM);
   Block *parallelEntry = parallel.addEntryBlock();
   builder.setInsertionPointToStart(parallelEntry);
   auto bz = parallelEntry->getArgument(0);
@@ -208,31 +210,102 @@ ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int6
   return mod;
 }
 
+template<int64_t BM=128, int64_t BN=128, int64_t BK=16, int64_t THREAD_NUM=128>
+ModuleOp createFriskMatmul(MLIRContext &ctx, int64_t M, int64_t N, int64_t K) {
+  OpBuilder builder(&ctx);
+  auto loc = builder.getUnknownLoc();
+  auto f32 = builder.getF32Type();
+  // create module
+  auto mod = builder.create<ModuleOp>(loc);
+  builder.setInsertionPointToStart(mod.getBody());
+  // module -> frisk.kernel
+  auto Aarg_type = MemRefType::get({M, K}, f32, {}, static_cast<unsigned>(1));
+  auto Barg_type = MemRefType::get({K, N}, f32, {}, static_cast<unsigned>(1));
+  auto Carg_type = MemRefType::get({M, N}, f32, {}, static_cast<unsigned>(1));
+  auto kernelType = builder.getFunctionType(TypeRange{Aarg_type, Barg_type, Carg_type}, TypeRange{});
+  auto kernel = builder.create<frisk::KernelOp>(loc, "Matmul", kernelType);
+  Block *kernelEntry = kernel.addEntryBlock();
+  builder.setInsertionPointToStart(kernelEntry);
+  auto A = kernelEntry->getArgument(0);
+  auto B = kernelEntry->getArgument(1);
+  auto C = kernelEntry->getArgument(2);
+  // kernel body -> frisk.parallel
+  auto parallel = builder.create<frisk::ParallelOp>(loc, ArrayRef<int64_t>{M/BM, N/BN}, THREAD_NUM);
+  Block *parallelEntry = parallel.addEntryBlock();
+  builder.setInsertionPointToStart(parallelEntry);
+  auto by = parallelEntry->getArgument(0);
+  auto bx = parallelEntry->getArgument(1);
+  // shared memory
+  auto smemA = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, BK}, f32, 128, 3);
+  auto smemB = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BK, BN}, f32, 128, 3);
+  // regsiters memory
+  auto acc = builder.create<frisk::AllocBufferOp>(loc, ArrayRef<int64_t>{BM, BN}, f32, 0, 0);
+  // affine map
+  auto zore = builder.getAffineConstantExpr(0);
+  auto d0 = builder.getAffineDimExpr(0);
+  auto d1 = builder.getAffineDimExpr(1);
+  auto mapA = AffineMap::get(2, 0, ArrayRef<AffineExpr>{d0 * BM, d1}, &ctx);
+  auto mapB = AffineMap::get(2, 0, ArrayRef<AffineExpr>{d1, d0 * BN}, &ctx);
+  auto mapC = AffineMap::get(2, 0, ArrayRef<AffineExpr>{d0 * BM, d1 * BN}, &ctx);
+  builder.create<frisk::FillOp>(loc, acc.getResult(), builder.getF32FloatAttr(0.0f));
+  // for
+  builder.create<frisk::ForOp>(loc, 0, K, BK, [&](Value iv) {
+    auto A_view = builder.create<frisk::BufferViewOp>(loc, A, ValueRange({by, iv}), mapA, ArrayRef<int64_t>{BM, BK});
+    builder.create<frisk::CopyOp>(loc, A_view, smemA.getResult());
+    auto B_view = builder.create<frisk::BufferViewOp>(loc, B, ValueRange({bx, iv}), mapB, ArrayRef<int64_t>{BK, BN});
+    builder.create<frisk::CopyOp>(loc, B_view, smemB.getResult());
+    // gemm
+    builder.create<frisk::GemmOp>(loc, smemA, smemB, acc, false, false);
+  });
+  auto C_view = builder.create<frisk::BufferViewOp>(loc, C, ValueRange({by, bx}), mapC, ArrayRef<int64_t>{BM, BN});
+  builder.create<frisk::CopyOp>(loc, acc, C_view);
+  return mod;
+}
+
 int main() {
   DialectRegistry registry;
   registerAllExtensions(registry);
   registerAllDialects(registry);
   MLIRContext ctx(registry);
   ctx.loadDialect<frisk::FriskDialect,
-                  affine::AffineDialect,
-                  func::FuncDialect,
                   arith::ArithDialect,
-                  math::MathDialect>();
+                  affine::AffineDialect,
+                  math::MathDialect,
+                  func::FuncDialect,
+                  memref::MemRefDialect,
+                  scf::SCFDialect,
+                  gpu::GPUDialect>();
 
-  auto init_barrier_mod = createFriskInitBarrierTest(ctx);
+  // auto init_barrier_mod = createFriskInitBarrierTest(ctx);
   auto attn_mod = createFriskAttn(ctx, 1, 32, 2048, 128);
+  // auto matmul_mod = createFriskMatmul(ctx, 2048, 2048, 2048);
+  // print
+  // init_barrier_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
+  // attn_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
+  // matmul_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
 
-  // PassManager pm(&ctx);
-  // pm.enableVerifier(true);
-  // pm.addNestedPass<frisk::KernelOp>(frisk::createOverlapPass());
-  // if (failed(pm.run(attn_mod))) {
-  //   llvm::errs() << "failed to run OverlapPass\n";
-  //   return 1;
+  // lowering pass
+  PassManager pm(&ctx);
+  pm.enableVerifier(true);
+  pm.addPass(frisk::createConvertFriskToBasePass());
+  if (failed(pm.run(attn_mod))) {
+    llvm::errs() << "failed to run LoweringPass\n";
+    return 1;
+  }
+  // if (failed(pm.run(matmul_mod))) {
+    // llvm::errs() << "failed to run LoweringPass\n";
+    // return 1;
   // }
 
-  init_barrier_mod->print(llvm::outs());
-  llvm::outs() << "\n";
-  attn_mod->print(llvm::outs());
-  llvm::outs() << "\n";
+  // print
+  // init_barrier_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
+  // attn_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
+  // matmul_mod->print(llvm::outs());
+  // llvm::outs() << "\n";
   return 0;
 }
