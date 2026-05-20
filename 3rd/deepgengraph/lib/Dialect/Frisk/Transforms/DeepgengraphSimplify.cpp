@@ -15,6 +15,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -31,6 +32,7 @@
 
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -92,9 +94,9 @@ struct InlineDeviceKernelPattern : public mlir::OpRewritePattern<deepgengraph::t
     // mlir::Value gridX = rewriter.create<gpu::BlockIdOp>(loc, /*dim=*/0); 
     // mlir::Value gridY = rewriter.create<gpu::BlockIdOp>(loc, /*dim=*/1);
     // mlir::Value gridZ = rewriter.create<gpu::BlockIdOp>(loc, /*dim=*/2);
-    replacements.push_back(gridX);
-    replacements.push_back(gridY);
     replacements.push_back(gridZ);
+    replacements.push_back(gridY);
+    replacements.push_back(gridX);
 
     // 2b. 替换指针参数 (%arg6, %arg7, %arg8, %arg9)
     // 直接将 device_kernel 接收的 args ([%0, %1, %2, %3]) 传入
@@ -343,8 +345,65 @@ public:
   }
 };
 
+// 为kernelOp的输入输出参数添加permute信息。用于计算affineMap的索引
+struct AddKernelargPermuteInfoPass : public PassWrapper<AddKernelargPermuteInfoPass, OperationPass<ModuleOp>> {
+  
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AddKernelargPermuteInfoPass)
+
+  StringRef getArgument() const final { return "add-kernel-arg-info"; }
+  StringRef getDescription() const final { return "Add kernel args permute info"; }
+
+  void runOnOperation() override {
+    if(!mlir::isa<ModuleOp>(getOperation())){
+      return;
+    }
+    mlir::ModuleOp moduleOp = getOperation();
+    auto ctx = moduleOp->getContext();
+    auto originFuncs = moduleOp.getBody()->getOps<func::FuncOp>();
+    if(originFuncs.empty()){
+      return;
+    }
+    auto kernelOps = moduleOp.getOps<deepgengraph::KernelOp>();
+    if(kernelOps.empty()){
+      return;
+    }
+
+    auto originFuncOp = *originFuncs.begin();
+    std::map<int, DenseI64ArrayAttr> argPermuteInfoMap;
+    
+    auto argCount = originFuncOp.getBody().getNumArguments();
+    originFuncOp->walk([&](deepgengraph::PermuteOp permute){
+      if(auto arg = mlir::dyn_cast<BlockArgument>(permute.getOperand())){
+        auto id = arg.getArgNumber();
+        argPermuteInfoMap.insert(std::make_pair(id, permute.getDimsAttr()));
+      }
+      if(permute.getResult().hasOneUse()){
+        auto users = permute.getResult().getUsers();
+        for(auto user : users){
+          if(mlir::isa<func::ReturnOp>(user)){
+            argPermuteInfoMap.insert(std::make_pair(argCount, permute.getDimsAttr()));
+            argCount++;
+          }
+        }
+      }
+    });
+    auto kernelOp = *kernelOps.begin();
+    std::vector<Attribute> permutes;
+    for(int i=0;i<argPermuteInfoMap.size();++i){
+      Attribute attr = argPermuteInfoMap[i];
+      permutes.push_back(attr);
+    }
+    kernelOp->setAttr("arg_permutes", ArrayAttr::get(ctx,  permutes));
+  }
+};
+
+
 std::unique_ptr<Pass> createDeepgenGraphSimplifyPass(){
   return std::make_unique<DeepgengraphSimplifyPass>(); 
+}
+
+std::unique_ptr<Pass> createAddKernelargPermuteInfoPass(){
+  return std::make_unique<AddKernelargPermuteInfoPass>(); 
 }
 
 } // namespace mlir::deepgengraph

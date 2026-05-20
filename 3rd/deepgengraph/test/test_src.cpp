@@ -278,6 +278,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::PassManager pm(ctx.get());
 
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
+  pm.addPass(frisk::createAddKernelargPermuteInfoPass());
   pm.run(src->getOperation());
 
 

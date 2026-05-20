@@ -37,6 +37,7 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -247,12 +248,44 @@ static std::vector<ArgIdViewBuffer*>  s_argId_bufferInfo;
 
 // ----------------- Patterns ----------
 
+static std::vector<std::vector<int64_t>> permuteInfo;
+
 struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::KernelOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(deepgengraph::KernelOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     auto gridAttr = op->getAttr("grid");
+    auto permuteAttr = op->getAttr("arg_permutes");
+    
+    // Parse `arg_permutes` attribute into `permuteInfo`.
+    // Expected form: [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, ...]
+    permuteInfo.clear();
+    if (permuteAttr) {
+      if (auto arr = mlir::dyn_cast<mlir::ArrayAttr>(permuteAttr)) {
+        for (auto a : arr.getValue()) {
+          if (auto darr = mlir::dyn_cast<mlir::DenseI64ArrayAttr>(a)) {
+            std::vector<int64_t> v;
+            for (auto x : darr.asArrayRef())
+              v.push_back(x);
+            permuteInfo.push_back(std::move(v));
+          } else if (auto de = mlir::dyn_cast<mlir::DenseIntElementsAttr>(a)) {
+            std::vector<int64_t> v;
+            for (auto ap : de.getValues<llvm::APInt>())
+              v.push_back(ap.getSExtValue());
+            permuteInfo.push_back(std::move(v));
+          } else if (auto iattr = mlir::dyn_cast<mlir::IntegerAttr>(a)) {
+            permuteInfo.push_back(std::vector<int64_t>{iattr.getInt()});
+          }
+        }
+      } else if (auto darr = mlir::dyn_cast<mlir::DenseI64ArrayAttr>(permuteAttr)) {
+        std::vector<int64_t> v;
+        for (auto x : darr.asArrayRef()){
+          v.push_back(x);
+        }
+        permuteInfo.push_back(std::move(v));
+      }
+    }
     auto loc = op->getLoc();
     auto oldFuncType = op.getFunctionType();
     auto converter = getTypeConverter();
@@ -287,6 +320,7 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
 
     auto newKernelOp = rewriter.create<frisk::KernelOp>(loc, op.getName(), newFuncType);
     newKernelOp->setAttr("grid", gridAttr);
+    newKernelOp->setAttr("arg_permutes", permuteAttr);
     rewriter.inlineRegionBefore(op->getRegion(0), newKernelOp.getRegion(), newKernelOp.getRegion().end());
     // 3. replace deepgengraph.return with frisk.end
     auto oldReturn = newKernelOp->getRegion(0).front().getOps<deepgengraph::ReturnOp>().begin();
@@ -363,7 +397,7 @@ struct BlockPointerOfConversionPattern
     auto info = new ArgIdViewBuffer{};
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     auto memTy = mlir::dyn_cast<MemRefType>(resTy);
-    auto newOp = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), memTy.getShape(), memTy.getElementType(), 16, memTy.getMemorySpaceAsInt());
+    auto newOp = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), memTy.getShape(), memTy.getElementType(), 16, int64_t(frisk::attr::MemorySpace::Shared));
     info->shmbuffer = newOp;
 
     // 根据 baseOffset, order, stride, 得到 baseOffset的计算map 以及 mapOperands. 
@@ -377,10 +411,38 @@ struct BlockPointerOfConversionPattern
     auto stride = op.getStride();
     auto order = op.getOrder();
 
-    auto baseoffset_x = expr_baseOffset.floorDiv(stride[order[0]]);
-    auto baseoffset_y = expr_baseOffset.floorDiv(stride[order[1]]);
+    std::vector<int64_t>* permute = nullptr;
+    if(!permuteInfo.empty()){
+      permute = &permuteInfo[argId];
+    }
+    
+    auto basePtrType = mlir::dyn_cast<MemRefType>(adaptor.getBasePointer().getType());
+    auto basePtrOldShape = basePtrType.getShape();  // basePtr 名义上的形状（即参数列表里的形状）
+    std::vector<int64_t> basePtrPermutedShape;
+    for(int i=0;i<basePtrOldShape.size();++i){
+      int id = i;
+      if(permute){
+        id = permute->at(i);
+      }
+      basePtrPermutedShape.push_back(basePtrOldShape[id]);
+    }
 
-    std::vector<AffineExpr> resExprArray = {baseoffset_x, baseoffset_y};
+    // auto baseoffset_x = expr_baseOffset.floorDiv(stride[order[0]]);
+    // auto baseoffset_y = expr_baseOffset.floorDiv(stride[order[1]]);
+    // TODO : 存疑。先按照底层存储方式 <1,32,4096,128> 计算offsetxy. 如果遇到转置的，再做讨论 
+    auto baseoffset_x = expr_baseOffset.floorDiv(basePtrPermutedShape.back());
+    auto baseoffset_y = expr_baseOffset % basePtrPermutedShape.back();
+    
+    std::vector<AffineExpr> resExprArray = { baseoffset_y, baseoffset_x};
+    int32_t product = 1;
+    for(int i=basePtrPermutedShape.size()-1;i>=0;--i){
+      product *= basePtrPermutedShape[i];
+      if(i < basePtrPermutedShape.size() - 2){
+        resExprArray.push_back(expr_baseOffset.floorDiv(product));
+      }
+    }
+    std::reverse(resExprArray.begin(), resExprArray.end());
+
     auto baseOffsetMap = AffineMap::get(dims.size(), 0, resExprArray, op->getContext());
 
     // save info
@@ -432,6 +494,7 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       // 本质原因 : asuka block_ptr_of 中没有包含 permute 的信息. <1,4096,32,128> 四维 != attr中的[128, 128] 二维信息
       auto globalMemTy = mlir::cast<MemRefType>(globalBuffers[argId].getType());
       std::vector<AffineExpr> newExprs;
+      
       for(int i=0; i < (globalMemTy.getShape().size() - indexExprs.size()); ++i){
         newExprs.push_back(mlir::getAffineConstantExpr(0, op.getContext()));
       }
@@ -533,7 +596,13 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       // 表达式构建 ：loop = iv0/step0 + iv1/step1 * ub0 + iv2/step2 * (ub0 * ub1) + (iv3/step3) * (ub0*ub1*ub2)
       // [base_x + loop * offset_x, base_y + loop * offset_y] 
       for(int i=0;i < indexExprs.size(); ++i){
-        auto newexpr = indexExprs[i] + offset[i] * loop_expr; 
+        AffineExpr newexpr;
+        if(i >= indexExprs.size() - 2){
+          newexpr = indexExprs[i] + offset[i-(indexExprs.size() - 2)] * loop_expr; 
+        }
+        else{
+          newexpr = indexExprs[i]; 
+        }
         newExprs.push_back(newexpr);
       }
       // newMap dim增加，symbol不变，expr重建
@@ -751,6 +820,73 @@ struct ArithTensorConversionPattern : public OpConversionPattern<arith::Constant
   }
 };
 
+// 
+struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::AffineForOp> {
+  using OpConversionPattern<affine::AffineForOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(affine::AffineForOp op, OpAdaptor adaptor, 
+                                ConversionPatternRewriter &rewriter) const override 
+  {
+    // 如果本来就没有 inits，说明不需要这个 pattern 处理
+    if (op.getInits().empty()) {
+      return failure();
+    }
+
+    auto loc = op->getLoc();
+    std::vector<Value> newResults;
+    for(auto initVal : op.getInits()){
+      auto defOp = initVal.getDefiningOp();
+      newResults.push_back(defOp->getResult(0));
+    }
+    llvm::outs() << "op.getNumIterOperands() = " << op.getNumIterOperands() << "\n";llvm::outs().flush();
+    for(int i=0;i<op.getNumIterOperands();++i){
+      auto to = newResults[i];
+      auto from = op.getRegionIterArgs()[i];
+      rewriter.replaceAllUsesExcept(from, to, op);
+    }
+
+    auto vr = ValueRange{};
+
+    // 1. 创建新的 AffineForOp，并为其生成带有正确参数（仅感应变量 Index）的空 Body 
+    auto newForOp = rewriter.create<affine::AffineForOp>(
+      loc, 
+      op.getLowerBoundOperands(), op.getLowerBoundMap(),
+      op.getUpperBoundOperands(), op.getUpperBoundMap(),
+      op.getStepAsInt(),
+      /*iterArgs=*/vr, // 清空最后的 iterArgs
+      [&](OpBuilder &b, Location nestedLoc, Value iv, ValueRange args) {
+        // 此时新 Block 的参数只有 iv（索引变量）
+      }
+    );
+
+    // 2. 将旧循环体中的所有操作克隆/移动到新循环体的末尾
+    // 注意：此时 newForOp 已经拥有一个合法的、带有一个 iv 参数的 Block
+    Block *oldBlock = op.getBody();
+    Block *newBlock = newForOp.getBody();
+
+    // 3. 设置参数映射：旧循环体的第一个参数（IV）映射到新循环体的 IV
+    // 旧循环体的后续 iter_args 参数在最终结果中会被废弃（因为我们要删掉它们）
+    IRMapping mapping;
+    mapping.map(oldBlock->getArgument(0), newBlock->getArgument(0));
+
+    // 4. 将旧 Block 中的操作（除了最后的 Terminator 以外）全部克隆到新 Block 中
+    rewriter.setInsertionPointToStart(newBlock);
+    for (auto &nestedOp : oldBlock->without_terminator()) {
+      rewriter.clone(nestedOp, mapping);
+    }
+
+    // 5. 单独处理旧的 Terminator (AffineYieldOp)，创建没有任何操作数的新 YieldOp
+    auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(oldBlock->getTerminator());
+    rewriter.create<affine::AffineYieldOp>(oldYieldOp.getLoc());
+
+    // 6. 用新 Op 替代旧 Op，并返回成功
+    
+    rewriter.replaceAllUsesWith(op->getResults(), newResults);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 class ConvertKernelOpToFrisk : public impl::KernelOpToFriskBase<ConvertKernelOpToFrisk> {
@@ -783,6 +919,9 @@ public:
     }
   }
 };
+
+
+
 
 class ConvertMemOpToFrisk : public impl::MemOpToFriskBase<ConvertMemOpToFrisk> {
 public:
@@ -868,6 +1007,17 @@ public:
     RewritePatternSet p2(ctx);
     p2.add<ArithTensorConversionPattern>(tc,ctx);
     applyPartialConversion(op, t2, std::move(p2));
+    
+    // stage 4 : 删除 affineFor 的 initArgs 和 yield
+    ConversionTarget t3(*ctx);
+    t3.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op){
+      return op.getInits().empty();
+    });
+    t3.markUnknownOpDynamicallyLegal([](mlir::Operation* op){return true;});
+    RewritePatternSet p3(ctx);
+    p3.add<AffineForEmptyInitsAndYieldPattern>(tc,ctx);
+    applyPartialConversion(op, t3, std::move(p3));
+
   }
 };
 
