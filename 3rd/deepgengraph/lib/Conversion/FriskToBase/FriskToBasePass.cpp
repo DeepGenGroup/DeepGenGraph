@@ -74,7 +74,7 @@ struct ParallelOpConversion : public OpConversionPattern<ParallelOp> {
       bids.push_back(bidOp);
     }
     // create gpu threadIdx
-    auto tidOp = rewriter.create<gpu::ThreadIdOp>(parallelOp.getLoc(), dims[0]);
+    auto tidOp = rewriter.create<gpu::ThreadIdOp>(parallelOp.getLoc(), gpu::Dimension::x);
     tidOp->setAttr("range", rewriter.getI32IntegerAttr(parallelOp.getThreadNum()));
     // set kernelOp
     Operation *op = parallelOp->getParentOp();
