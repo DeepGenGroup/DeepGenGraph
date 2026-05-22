@@ -131,10 +131,10 @@ void LowerInfoAnalysis::run() {
       ic.block_widths = LowerInfo::getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
       ic.block_repeat = {bm_ / ic.block_widths[0], bn_ / ic.block_widths[1]};
       ic.warp_indices = LowerInfo::getWarpIndices(b, ic.block_layout);
-      ic.thread_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
+      ic.lane_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
       buf_info_maps[C] = ic;
       // A lowerInfo no tran
-      auto zore = b.getAffineConstantExpr(0);
+      auto zero = b.getAffineConstantExpr(0);
       buf_info_maps[A] = ic;
       buf_info_maps[A].buffer = A;
       buf_info_maps[A].thread_widths[1] = 0;
@@ -142,8 +142,8 @@ void LowerInfoAnalysis::run() {
       buf_info_maps[A].warp_repeat[1] = 0;
       buf_info_maps[A].block_widths[1] = mma_k;
       buf_info_maps[A].block_repeat[1] = bk_ / mma_k;
-      buf_info_maps[A].warp_indices[1] = zore;
-      buf_info_maps[A].thread_indices[1] = zore;
+      buf_info_maps[A].warp_indices[1] = zero;
+      buf_info_maps[A].lane_indices[1] = zero;
       // B lowerInfo no tran
       buf_info_maps[B] = ic;
       buf_info_maps[B].buffer = B;
@@ -152,8 +152,8 @@ void LowerInfoAnalysis::run() {
       buf_info_maps[B].warp_repeat[0] = 0;
       buf_info_maps[B].block_widths[0] = mma_k;
       buf_info_maps[B].block_repeat[0] = bk_ / mma_k;
-      buf_info_maps[B].warp_indices[0] = zore;
-      buf_info_maps[B].thread_indices[0] = zore;
+      buf_info_maps[B].warp_indices[0] = zero;
+      buf_info_maps[B].lane_indices[0] = zero;
       return true;
     }
     // others operation
@@ -315,13 +315,13 @@ void LowerInfoAnalysis::run() {
           ic.block_repeat = {bm_ / ic.block_widths[0], info.block_repeat[1]};
         }
         ic.warp_indices = LowerInfo::getWarpIndices(b, ic.block_layout);
-        ic.thread_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
+        ic.lane_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
         buf_info_maps[C] = ic;
       } else {  // C exsit
         ic = buf_info_maps[C];
       }
       // AB lowerinfo
-      auto zore = b.getAffineConstantExpr(0);
+      auto zero = b.getAffineConstantExpr(0);
       if (buf_info_maps.count(A)) {
         buf_info_maps[B] = ic;
         buf_info_maps[B].buffer = B;
@@ -330,8 +330,8 @@ void LowerInfoAnalysis::run() {
         buf_info_maps[B].warp_repeat[0] = 0;
         buf_info_maps[B].block_widths[0] = mma_k;
         buf_info_maps[B].block_repeat[0] = bk_ / mma_k;
-        buf_info_maps[B].warp_indices[0] = zore;
-        buf_info_maps[B].thread_indices[0] = zore;
+        buf_info_maps[B].warp_indices[0] = zero;
+        buf_info_maps[B].lane_indices[0] = zero;
       }
       if (buf_info_maps.count(B)) {
         buf_info_maps[A] = ic;
@@ -341,8 +341,8 @@ void LowerInfoAnalysis::run() {
         buf_info_maps[A].warp_repeat[1] = 0;
         buf_info_maps[A].block_widths[1] = mma_k;
         buf_info_maps[A].block_repeat[1] = bk_ / mma_k;
-        buf_info_maps[A].warp_indices[1] = zore;
-        buf_info_maps[A].thread_indices[1] = zore;
+        buf_info_maps[A].warp_indices[1] = zero;
+        buf_info_maps[A].lane_indices[1] = zero;
       }
       return true;
     } else if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
@@ -365,7 +365,7 @@ void LowerInfoAnalysis::run() {
 
       // 沿 dim 归约后，dst 仅保留非归约维度对应的 lower 信息。
       if (!erase_dim_func(dstInfo.warp_indices) ||
-          !erase_dim_func(dstInfo.thread_indices) ||
+          !erase_dim_func(dstInfo.lane_indices) ||
           !erase_dim_func(dstInfo.warp_layout) ||
           !erase_dim_func(dstInfo.block_layout) ||
           !erase_dim_func(dstInfo.warp_repeat) ||

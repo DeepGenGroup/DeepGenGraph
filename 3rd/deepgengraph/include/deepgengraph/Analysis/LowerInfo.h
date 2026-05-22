@@ -12,23 +12,34 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
+#include <vector>
+#include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 
 namespace mlir::frisk {
+
+#define TID  "tid"
+#define BID  "bid"
+#define IV_WARP_X  "iv_warpx"
+
 
 struct LowerInfo {
 
   Value buffer;
   int64_t thread_bound;
+  AffineMap affine_map;
+  // mapOperands的含义。此外还需要统一管理 affineDimExpr
+  std::vector<const char*> mapOperandsName;
+  std::vector<AffineDimExpr> affineDims;
 
   llvm::SmallVector<AffineExpr, 2> warp_indices;  // warp_id: [(tid / 32) / block_layout[1], (tid / 32) % block_layout[1]]
-  llvm::SmallVector<AffineExpr, 2> thread_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]
+  llvm::SmallVector<AffineExpr, 2> lane_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]
   llvm::SmallVector<int64_t, 2> warp_layout;  // lane
   llvm::SmallVector<int64_t, 2> block_layout;  // warp
 
   llvm::SmallVector<int64_t, 2> warp_repeat;
   llvm::SmallVector<int64_t, 2> block_repeat;
 
-  llvm::SmallVector<int64_t, 2> thread_widths;
+  llvm::SmallVector<int64_t, 2> thread_widths;  // 一个thread计算的元素个数 [tx,ty]
   llvm::SmallVector<int64_t, 2> warp_widths;
   llvm::SmallVector<int64_t, 2> block_widths;
 
@@ -76,7 +87,7 @@ struct LowerInfo {
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
 
     printExprVec("warp_indices", warp_indices);
-    printExprVec("thread_indices", thread_indices);
+    printExprVec("thread_indices", lane_indices);
     printI64Vec("warp_layout", warp_layout);
     printI64Vec("block_layout", block_layout);
     printI64Vec("warp_repeat", warp_repeat);
@@ -102,14 +113,14 @@ struct LowerInfo {
         AffineExpr expr = ib * (warp_repeat[i] * thread_widths[i]) + iw * thread_widths[i] + it;
         indices.push_back(expr);
       }
-    } else if (type.getMemorySpaceAsInt() == 5) {  // shared
-      for(size_t i=0; i<thread_widths.size(); ++i) {
-        auto ib = b.getAffineDimExpr(i*3+1);
-        auto iw = b.getAffineDimExpr(i*3+2);
-        auto it = b.getAffineDimExpr(i*3+3);
+    } else if (type.getMemorySpaceAsInt() == int(MemorySpace::Shared)) {  // shared
+      for(size_t i=0; i<thread_widths.size(); ++i) {  // 0:tidx, 1:iv_bx, iv_wx , iv_tx ,iv_by, iv_wy, iv_ty
+        auto ib = b.getAffineDimExpr(i*3+1);  // iv_bx
+        auto iw = b.getAffineDimExpr(i*3+2);  // iv_wx
+        auto it = b.getAffineDimExpr(i*3+3);  // iv_tx
         AffineExpr expr = ib * block_widths[i] + 
                           warp_indices[i] * (warp_repeat[i] * warp_widths[i]) + iw * warp_widths[i] + 
-                          thread_indices[i] * thread_widths[i] + it;
+                          lane_indices[i] * thread_widths[i] + it;
         indices.push_back(expr);
       }
     }
@@ -177,6 +188,10 @@ public:
       llvm::outs() << "\n";
       it.second.show();
     }
+  }
+
+  LowerInfo getInfo(const Value& buffer){
+    return buf_info_maps.at(buffer);
   }
 
 private:

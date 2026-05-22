@@ -157,25 +157,6 @@ public:
     if (failed(applyPartialConversion(mod, target, std::move(patterns)))){
       return signalPassFailure();
     }
-    // NOTE: printing very large modules here can hide real crashes during debugging.
-    // llvm::outs() << mod << "\n";
-
-    // infer lowerInfo
-
-    // func::FuncOp kernelOp = nullptr;
-    // for (auto funcOp : mod.getOps<func::FuncOp>()) {
-    //   kernelOp = funcOp;
-    //   break;
-    // }
-    // if (!kernelOp) {
-    //   mod.emitError("LowerInfoAnalysis requires at least one func.func after conversion");
-    //   return signalPassFailure();
-    // }
-    // LowerInfoAnalysis lia(kernelOp);
-    // lia.run();
-    // lia.getTest();
-    // lia.showAllInfo();
-    
   }
 };
 
