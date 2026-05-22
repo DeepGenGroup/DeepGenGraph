@@ -36,6 +36,7 @@
 #include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
+#include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 
 #include <algorithm>
 #include <cassert>
@@ -93,7 +94,7 @@ static bool isTritonPointerLike(Type type) {
   return isa<deepgengraph::triton::PointerType, deepgengraph::triton::BlockPointerType>(type);
 }
 
-static void AppendMemspaceToMemrefValue(Value& v, frisk::attr::MemorySpace ms){
+static void AppendMemspaceToMemrefValue(Value& v, int ms){
   if(mlir::isa<MemRefType>(v.getType())){
     auto _ty = mlir::cast<MemRefType>(v.getType());
     auto tA = MemRefType::get(_ty.getShape(), _ty.getElementType(), AffineMap{}, int(ms));
@@ -101,7 +102,7 @@ static void AppendMemspaceToMemrefValue(Value& v, frisk::attr::MemorySpace ms){
   }
 }
 
-static Type ModifyMemrefType(Type t, frisk::attr::MemorySpace ms){
+static Type ModifyMemrefType(Type t, int ms){
   if(mlir::isa<MemRefType>(t)){
     auto _ty = mlir::cast<MemRefType>(t);
     auto tA = MemRefType::get(_ty.getShape(), _ty.getElementType(), AffineMap{}, int(ms));
@@ -392,13 +393,16 @@ struct BlockPointerOfConversionPattern
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockPointerOfOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
   {
-    // 建立 allocBufferOp
+    // 根据是否有read属性，建立 allocBufferOp （read：后续有loadOp读取指针指向的数据。 write：后续有storeOp 向指针指向的内存写入数据）
     auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
     auto info = new ArgIdViewBuffer{};
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     auto memTy = mlir::dyn_cast<MemRefType>(resTy);
-    auto newOp = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), memTy.getShape(), memTy.getElementType(), 16, int64_t(frisk::attr::MemorySpace::Shared));
-    info->shmbuffer = newOp;
+    frisk::AllocBufferOp newOp = nullptr;
+    if(op->hasAttr("read")){
+      newOp = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), memTy.getShape(), memTy.getElementType(), 16, int64_t(frisk::attr::MemorySpace::Shared));
+      info->shmbuffer = newOp;
+    }
 
     // 根据 baseOffset, order, stride, 得到 baseOffset的计算map 以及 mapOperands. 
     std::map<std::string, AffineExpr> dims;
@@ -450,7 +454,16 @@ struct BlockPointerOfConversionPattern
     info->baseOffsetMapOperands = vr_baseOffset;
     info->blockShape = op.getBlockShape();
     s_argId_bufferInfo[argId] = info;
-    rewriter.replaceOp(op, newOp);
+    if(newOp){
+      // 含read，需要创建buffer存数据
+      rewriter.replaceOp(op, newOp);
+    }
+    else{
+      // write，将所有使用op结果的位置替换为 globalMem，之后删除op
+      auto kernelOp = op->getParentOfType<frisk::KernelOp>();
+      rewriter.replaceAllUsesExcept(op, kernelOp.getArgument(argId), op);
+      rewriter.eraseOp(op);
+    }
     return success();
   }
 };
@@ -629,10 +642,21 @@ struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::tr
   {
     auto src = adaptor.getValue();
     auto dst = adaptor.getDstPointer();
-    AppendMemspaceToMemrefValue(src, frisk::attr::MemorySpace::Shared);
-    AppendMemspaceToMemrefValue(dst, frisk::attr::MemorySpace::Global);
-    auto newOp = rewriter.create<frisk::CopyOp>(op->getLoc(), src, dst);
-    rewriter.replaceOp(op, newOp);
+    auto dstMemref = mlir::dyn_cast<MemRefType>(dst.getType());
+    auto srcMemref = mlir::dyn_cast<MemRefType>(src.getType());
+
+    if(dstMemref.getRank() > srcMemref.getRank() || dstMemref.getShape() != srcMemref.getShape()){
+      // 从shm拷贝到global
+      auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
+      auto& offsetMap = s_argId_bufferInfo[argId]->baseOffsetMap;
+      auto& mapOperands = s_argId_bufferInfo[argId]->baseOffsetMapOperands;
+      auto newOp = rewriter.create<frisk::CopyOp>(op->getLoc(), src,dst, mapOperands, offsetMap);
+      rewriter.replaceOp(op, newOp);
+    }
+    else{
+      auto newOp = rewriter.create<frisk::CopyOp>(op->getLoc(), src, dst);
+      rewriter.replaceOp(op, newOp);
+    }
     return success();
   }
 };
@@ -661,7 +685,9 @@ struct ZeroOpConversionPattern
   {
     // %16 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
     auto loc = op->getLoc();
-    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getShape(), op.getElementType(), 16, int(frisk::attr::MemorySpace::Shared));
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
+
+    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getShape(), op.getElementType(), 16, outMs);
     mlir::Attribute valueAttr;
     auto eleTy = op.getElementType();
     if(eleTy.isFloat()){
@@ -685,17 +711,31 @@ struct ConvertOpConversionPattern
   using OpConversionPattern::OpConversionPattern;
 
 
+  // %23 = deepgengraph.convert %22, type = f16 : (tensor<128x128xf32>) -> tensor<128x128xf16> 替换为 allocBuffer + frisk.copy 
   LogicalResult matchAndRewrite(dg::ConvertOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
   {
-    // %16 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef()[0];
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
     auto loc = op->getLoc();
     auto operand = adaptor.getOperand();
-    AppendMemspaceToMemrefValue( operand , frisk::attr::MemorySpace::Shared);
+    AppendMemspaceToMemrefValue( operand , inMs);
     auto dstType = adaptor.getDstType();
-    ModifyMemrefType(dstType, frisk::attr::MemorySpace::Shared);
-    auto newOp = rewriter.create<frisk::ConvertOp>(loc, operand, dstType);
-    rewriter.replaceOp(op, newOp);
+    ModifyMemrefType(dstType, outMs);
+    
+    auto convertedTy = getTypeConverter()->convertType(op.getResult().getType());
+    auto newMemTy = mlir::dyn_cast<MemRefType>(convertedTy);
+    
+    auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp allocBuffer {};
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(outerMostFor);
+      allocBuffer = rewriter.create<frisk::AllocBufferOp>(loc, newMemTy.getShape(), newMemTy.getElementType(), 16, outMs);
+    }
+    auto copyOp = rewriter.create<frisk::CopyOp>(loc, adaptor.getOperand(), allocBuffer);
+    
+    rewriter.replaceOp(op, allocBuffer);
     return success();
   }
 };
@@ -753,6 +793,10 @@ struct ForTypeConversionPattern : public OpConversionPattern<affine::AffineForOp
     }
 
     // 5. 替换旧 Op 的结果
+    rewriter.modifyOpInPlace(newForOp, [&](){
+      newForOp->setAttr(IN_MEMSPACE, op->getAttr(IN_MEMSPACE));
+      newForOp->setAttr(OUT_MEMSPACE, op->getAttr(OUT_MEMSPACE));
+    });
     rewriter.replaceOp(op, newForOp.getResults());
     return success();
   }
@@ -789,7 +833,7 @@ struct ArithTensorConversionPattern : public OpConversionPattern<arith::Constant
     auto retType = op.getResult().getType();
     if(mlir::isa<TensorType>(retType)){
       auto tensorTy = mlir::dyn_cast<TensorType>(retType);
-      MemRefType memrefTy = MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{}, int(frisk::attr::MemorySpace::Shared));
+      MemRefType memrefTy = MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{}, int(frisk::attr::MemorySpace::Local));
 
       if(!memrefTy){
         return failure();
@@ -943,7 +987,7 @@ public:
       return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{});
     });
     tc.addConversion([](TensorType ty){
-      return MemRefType::get(ty.getShape(), ty.getElementType());
+      return MemRefType::get(ty.getShape(), ty.getElementType(), AffineMap{});
     });
     addMaterializations(tc);
 
@@ -1089,7 +1133,7 @@ struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
 };
 
 
-// 定义 Pass，继承自 OperationPass 并且作用于 func::FuncOp
+// scf.for -> affine.for
 struct ConvertSCFForToAffineForPass 
     : public PassWrapper<ConvertSCFForToAffineForPass, OperationPass<deepgengraph::KernelOp>> {
     
@@ -1111,6 +1155,8 @@ struct ConvertSCFForToAffineForPass
 
     }
 };
+
+
 
 std::unique_ptr<Pass> createConvertScfForOpPass() {
   return std::make_unique<ConvertSCFForToAffineForPass>();

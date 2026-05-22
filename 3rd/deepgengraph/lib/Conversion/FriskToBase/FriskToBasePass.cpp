@@ -63,7 +63,7 @@ struct ParallelOpConversion : public OpConversionPattern<ParallelOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(ParallelOp parallelOp, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
-    constexpr gpu::Dimension dims[] = {gpu::Dimension::x, gpu::Dimension::y, gpu::Dimension::z};
+    constexpr gpu::Dimension dims[] = {gpu::Dimension::z, gpu::Dimension::y, gpu::Dimension::x};
     SmallVector<Value, 4> bids;
     // create gpu blockidx
     auto grid = parallelOp.getGrid();
@@ -161,19 +161,20 @@ public:
     // llvm::outs() << mod << "\n";
 
     // infer lowerInfo
-    func::FuncOp kernelOp = nullptr;
-    for (auto funcOp : mod.getOps<func::FuncOp>()) {
-      kernelOp = funcOp;
-      break;
-    }
-    if (!kernelOp) {
-      mod.emitError("LowerInfoAnalysis requires at least one func.func after conversion");
-      return signalPassFailure();
-    }
-    LowerInfoAnalysis lia(kernelOp);
-    lia.run();
-    lia.getTest();
-    lia.showAllInfo();
+
+    // func::FuncOp kernelOp = nullptr;
+    // for (auto funcOp : mod.getOps<func::FuncOp>()) {
+    //   kernelOp = funcOp;
+    //   break;
+    // }
+    // if (!kernelOp) {
+    //   mod.emitError("LowerInfoAnalysis requires at least one func.func after conversion");
+    //   return signalPassFailure();
+    // }
+    // LowerInfoAnalysis lia(kernelOp);
+    // lia.run();
+    // lia.getTest();
+    // lia.showAllInfo();
     
   }
 };

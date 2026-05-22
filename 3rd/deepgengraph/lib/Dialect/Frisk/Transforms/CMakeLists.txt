@@ -3,6 +3,7 @@ add_deepgengraph_library(FriskTransforms
     DeepgengraphSimplify.cpp
     DgCalcOpToFrisk.cpp
     overlap.cpp
+    DgDataflowAnalyze.cpp
     
     DEPENDS FriskTransformsIncGen
 

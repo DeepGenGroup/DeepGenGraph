@@ -1,12 +1,17 @@
 #ifndef FRISK_UTILS_H_
 #define FRISK_UTILS_H_
 
+#include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
+#include "mlir/IR/AttributeSupport.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/Verifier.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir::frisk {
 
@@ -92,6 +97,61 @@ private:
 };
 
 } // namespace
+
+// 比较memspace层级大小（）
+static inline int compareMemspace(frisk::attr::MemorySpace lhs, frisk::attr::MemorySpace rhs){
+  auto toInt = [](frisk::attr::MemorySpace ms){
+    switch (ms) {
+      case mlir::frisk::attr::MemorySpace::Global: return 2; 
+      case mlir::frisk::attr::MemorySpace::Shared: return 1; 
+      case mlir::frisk::attr::MemorySpace::Local: return 0;
+      default: return -1; 
+    }
+  };
+  // 数字越大，层级越高，速度越慢
+  if(toInt(lhs) > toInt(rhs)){
+    return 1;
+  }
+  if(toInt(lhs) < toInt(rhs)){
+    return -1;
+  }
+  return 0;
+}
+
+static inline void AppendMemspaceToMemrefValue(Value& v, int ms){
+  if(mlir::isa<MemRefType>(v.getType())){
+    auto _ty = mlir::cast<MemRefType>(v.getType());
+    auto tA = MemRefType::get(_ty.getShape(), _ty.getElementType(), AffineMap{}, int(ms));
+    v.setType(tA);
+  }
+}
+
+template<typename OpTy>
+Operation* getOuterMostOp(mlir::Operation* op){
+  mlir::Operation* currOp = op;
+  while (true) {
+    auto parentForOp = currOp->getParentOfType<OpTy>();
+    if(parentForOp == nullptr){
+      break;
+    }
+    else{
+      currOp = parentForOp;
+    }
+  }
+  return currOp;
+}
+
+#define IN_MEMSPACE "inMs"
+#define OUT_MEMSPACE "outMs"
+
+static inline DenseI32ArrayAttr getOpInputMemspaceAttr(mlir::Operation* op){
+  return op->getAttrOfType<DenseI32ArrayAttr>(IN_MEMSPACE);
+}
+
+static inline DenseI32ArrayAttr getOpOutputMemspaceAttr(mlir::Operation* op){
+  return op->getAttrOfType<DenseI32ArrayAttr>(OUT_MEMSPACE);
+}
+
 
 }
 

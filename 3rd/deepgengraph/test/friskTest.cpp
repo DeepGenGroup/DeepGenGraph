@@ -290,6 +290,8 @@ int main() {
   // lowering pass
   PassManager pm(&ctx);
   pm.enableVerifier(true);
+
+  llvm::outs() << "------- sample attn_mod ----\n" << attn_mod << "\n"; llvm::outs().flush();
   pm.addPass(frisk::createConvertFriskToBasePass());
   if (failed(pm.run(attn_mod))) {
     llvm::errs() << "failed to run LoweringPass\n";

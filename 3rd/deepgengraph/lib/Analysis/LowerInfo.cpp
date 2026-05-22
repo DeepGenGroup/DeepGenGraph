@@ -36,6 +36,7 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
   llvm::outs() << "}\n";
 }
 
+#define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
 void LowerInfoAnalysis::run() {
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation* op) {
@@ -92,12 +93,14 @@ void LowerInfoAnalysis::run() {
       MemRefType _c = gemmOp.getC().getType();
       // ab有一个不是shared memroy
       if (_a.getMemorySpaceAsInt() != 3 || _b.getMemorySpaceAsInt() != 3) {
+        LLVM_OUT_MSG("ab有一个不是shared memroy");
         return false;
       }
       // warpgroup 数量和布局
       int warpgroup_num = thread_num / 128;
       auto [y, x] = square_func(warpgroup_num);  // warpgroup layout
       if (warpgroup_num <= 0 || y <= 0 || x <= 0) {  
+        LLVM_OUT_MSG("warpgroup layout err");
         return false;
       }
       auto shapeC = _c.getShape();
@@ -182,8 +185,14 @@ void LowerInfoAnalysis::run() {
         all_in = false; count++;
       }
     }
-    if (all_in) return true;  // buf已全部推断
-    if (!all_in && count == memrefsToCheck.size()) return false;        // 无已推断buf
+    if (all_in){ // buf已全部推断
+      LLVM_OUT_MSG("buf已全部推断");
+      return true;
+    }  
+    if (!all_in && count == memrefsToCheck.size()) { // 无已推断buf
+      LLVM_OUT_MSG("无已推断buf");
+      return false;
+    }        
     // 进入推断
     if (auto copyOp = dyn_cast<CopyOp>(op)) {  // copyOp
       Value dst = copyOp.getDstMemRef();
@@ -197,6 +206,7 @@ void LowerInfoAnalysis::run() {
         buf_info_maps[dst].buffer = dst;
         return true;
       }
+      LLVM_OUT_MSG("---- inferError 0");
       return false;
     } else if (auto blockOp = dyn_cast<BlockOp>(op)) {  // blockOp
       Value store_buf;
@@ -226,6 +236,7 @@ void LowerInfoAnalysis::run() {
           }
           if (is_shape_equl) return true;
         }
+        LLVM_OUT_MSG("---- inferError 1");
         return false;
       };
 
@@ -240,8 +251,10 @@ void LowerInfoAnalysis::run() {
         info = &buf_info_maps[store_buf];
       }
       // 判断是否info是否有值
-      if (info == nullptr) return false;
-
+      if (info == nullptr) {
+        LLVM_OUT_MSG("---- inferError 3");
+        return false;
+      }
       load_bufs.push_back(store_buf);
       for (const Value& buf: load_bufs) {
         if (!buf_info_maps.count(buf)) {
@@ -337,6 +350,7 @@ void LowerInfoAnalysis::run() {
       Value src = reduceOp.getSrc();
       uint64_t dim = reduceOp.getDim();
       if (!buf_info_maps.count(src)) {  // unexsit 
+        LLVM_OUT_MSG("---- inferError 4");
         return false;
       }
       buf_info_maps[dst] = buf_info_maps[src];
@@ -359,17 +373,24 @@ void LowerInfoAnalysis::run() {
           !erase_dim_func(dstInfo.thread_widths) ||
           !erase_dim_func(dstInfo.warp_widths) ||
           !erase_dim_func(dstInfo.block_widths)) {
+        LLVM_OUT_MSG("---- inferError 5");
         return false;
       }
       return true;
     } else {
       assert(false && "the operation can not be recognized.");
+      LLVM_OUT_MSG("---- inferError 6");
       return false;
     }
   };
 
   // 直接推断
-  // llvm::outs() << "[DDD]need_infer_ops or size: " << need_infer_ops.size() << "\n";
+  llvm::outs() << "[DDD]need_infer_ops or size: " << need_infer_ops.size() << "\n";
+  for(auto op : need_infer_ops){
+    llvm::outs() << "need_infer: " << op->getName().getStringRef() << "\n";
+  }
+  llvm::outs().flush();
+
   bool exsit_dircet_infer_op = false;
   for (size_t i=0; i<need_infer_ops.size(); ++i) {
     if (dircet_infer_func(need_infer_ops[i])) {
@@ -399,7 +420,7 @@ void LowerInfoAnalysis::run() {
     if (!progress) {
       llvm::errs() << "[LowerInfo] infer failed: unresolved ops remain (" << pendingOps.size() << ")\n";
       for (Operation *op : pendingOps) {
-        llvm::errs() << "  unresolved op: " << *op << "\n";
+        llvm::errs() << "[E] unresolved op: " << *op << "\n";
       }
       assert(false && "LowerInfo infer failed.");
     }

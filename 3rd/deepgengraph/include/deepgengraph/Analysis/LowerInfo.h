@@ -90,7 +90,8 @@ struct LowerInfo {
 
   llvm::SmallVector<AffineExpr, 2> getAffineMap() const {
     // 根据上述信息，生成不同层面的索引
-    OpBuilder b(buffer.getDefiningOp());
+    // OpBuilder b(buffer.getDefiningOp());
+    OpBuilder b {buffer.getContext()};
     MemRefType type = dyn_cast<MemRefType>(buffer.getType());
     llvm::SmallVector<AffineExpr, 2> indices;
     if (type.getMemorySpaceAsInt() == 0 || type.getMemorySpaceAsInt() == 5) {  // local

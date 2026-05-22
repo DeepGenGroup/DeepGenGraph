@@ -52,6 +52,8 @@
 #include "deepgengraph/Conversion/DeepgengraphTritonToThreadImp/Passes.h"
 #include "deepgengraph/Dialect/ThreadImp/Transforms/Passes.h"
 #include "deepgengraph/Analysis/ThreadAnalysis.h"
+#include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "deepgengraph/Analysis/LowerInfo.h"
 
 using namespace mlir;
 
@@ -284,6 +286,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
+  pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDataflowAnalyzePass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after scfForConversion ---------\n"; llvm::outs().flush();src->dump();
 
@@ -300,6 +303,27 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // pm.addNestedPass<frisk::KernelOp>(mlir::createCSEPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
+  pm.addPass(frisk::createConvertFriskToBasePass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
+
+  // infer lowerInfo
+  
+  func::FuncOp kernelOp = nullptr;
+  for (auto funcOp : src->getOps<func::FuncOp>()) {
+    if(funcOp->hasAttr("thread_num")){
+      kernelOp = funcOp;
+      break;
+    }
+  }
+  if(!kernelOp){
+    assert(false);
+  }
+  mlir::frisk::LowerInfoAnalysis lia(kernelOp);
+  lia.run();
+  lia.getTest();
+  lia.showAllInfo();
+
   return 0;
 }
 

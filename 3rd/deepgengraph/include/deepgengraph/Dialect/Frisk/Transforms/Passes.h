@@ -16,6 +16,7 @@ std::unique_ptr<Pass> createConvertMemOpPass();
 std::unique_ptr<Pass> createConvertCalcOpPass();
 std::unique_ptr<Pass> createDeepgenGraphMemspaceAnalyzePass();
 std::unique_ptr<Pass> createConvertScfForOpPass();
+std::unique_ptr<Pass> createDataflowAnalyzePass();
 std::unique_ptr<Pass> createOverlapPass();
 
 #define GEN_PASS_REGISTRATION

@@ -16,6 +16,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -222,6 +223,7 @@ public:
     blockLoadOp->setAttr("offset", blockPtrOf.getOffsetAttr());
     blockLoadOp->setAttr("argId", rewriter.getI32IntegerAttr(argId)); 
     blockPtrOf->setAttr("argId", rewriter.getI32IntegerAttr(argId));
+    blockPtrOf->setAttr("read", rewriter.getBoolAttr(true));
     pointerOfOp->setAttr("argId", rewriter.getI32IntegerAttr(argId));
     return mlir::success();
   }
@@ -262,6 +264,7 @@ public:
     blockStoreOp->setAttr("offset", blockPtrOf.getOffsetAttr());
     blockStoreOp->setAttr("argId", rewriter.getI32IntegerAttr(argId)); 
     blockPtrOf->setAttr("argId", rewriter.getI32IntegerAttr(argId));
+    blockPtrOf->setAttr("write", rewriter.getBoolAttr(true));
     pointerOfOp->setAttr("argId", rewriter.getI32IntegerAttr(argId));
     return mlir::success();
   }

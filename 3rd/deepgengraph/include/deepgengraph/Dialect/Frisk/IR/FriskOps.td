@@ -469,34 +469,55 @@ def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [Pure]> {
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
 }
-
-// copyOp
-def Frisk_CopyOp: Frisk_Op<"copy", [MemoryEffects<[MemWrite]>, MemoryEffects<[MemRead]>]> {
-  let summary = "copy";
-  let description = [{ 
-    copy
+def Frisk_CopyOp : Frisk_Op<"copy", [
+    MemoryEffects<[MemRead, MemWrite]>,
+    DeclareOpInterfaceMethods<OpAsmOpInterface>
+]> {
+  let summary = "copy data with affine-based destination offset";
+  let description = [{
+    The `copy` operation performs a memory copy from a source memref to a destination memref.
+    The destination address is calculated using an affine map applied to the provided 
+    map_operands.
+    
+    Example:
+      frisk.copy %src to %dst at (%i, %j) [affine_map<(d0, d1) -> (0, 0, d0, d1)>] 
+        : memref<64x32xf32>, memref<1x32x1024x128xf32>
   }];
 
   let arguments = (ins 
-    Arg<AnyMemRef, "", [MemRead]>:$src,
-    Arg<AnyMemRef, "", [MemWrite]>:$dst
+    Arg<AnyMemRef>:$src,
+    Arg<AnyMemRef>:$dst,
+    Variadic<Index>:$map_operands,
+    AffineMapAttr:$offset_map
   );
+
+  let builders = [
+    // 构造器 1: 默认构造器，自动生成全零偏移映射
+    OpBuilder<(ins "Value":$src, "Value":$dst), [{
+      auto dstType = cast<MemRefType>(dst.getType());
+      auto offsetMap = AffineMap::getConstantMap(dstType.getRank(), $_builder.getContext());
+      build($_builder, $_state, src, dst, ValueRange{}, offsetMap);
+    }]>
+    // ,
+    // // 构造器 2: 全参数构造器
+    // OpBuilder<(ins "Value":$src, "Value":$dst, "ValueRange":$map_operands, "AffineMap":$offset_map), [{
+    //   $_state.addOperands({src, dst});
+    //   $_state.addOperands(map_operands);
+    //   $_state.addAttribute("offset_map", AffineMapAttr::get(offset_map));
+    // }]>
+  ];
+
+  let assemblyFormat = [{
+    $src `to` $dst (`at` `(` $map_operands^ `)`)? `[` $offset_map `]` attr-dict 
+    `:` type($src) `,` type($dst)
+  }];
+
+  let hasVerifier = 1;
 
   let extraClassDeclaration = [{
     Value getSrcMemRef() { return getOperand(0); }
     Value getDstMemRef() { return getOperand(1); }
-
-    MemRefType getSrcMemRefType() { 
-      return cast<MemRefType>(getSrcMemRef().getType()); 
-    }
-    MemRefType getDstMemRefType() { 
-      return cast<MemRefType>(getDstMemRef().getType()); 
-    }
-
   }];
-
-  let hasVerifier = 1;
-  let assemblyFormat = " $src `to` $dst attr-dict `:` type($src) `,` type($dst)";
 }
 
 // fillOp
@@ -618,18 +639,6 @@ def Frisk_BarrierArriveExpectTx: Frisk_Op<"barrier_arrive_expect_tx", []> {
   );
 
   let assemblyFormat = "$barrier attr-dict `:` type($barrier)";
-}
-
-def Frisk_ConvertOp: Frisk_Op<"convert", [Pure, InferTypeOpAdaptor]> {
-  let summary = "convert";
-  let description = [{}];
-  let arguments = (ins
-    AnyMemRef:$operand,
-    TypeAttr:$dst_type
-  );
-
-  let results = (outs AnyMemRef:$result);
-  let assemblyFormat = "$operand `,` `type` `=` $dst_type attr-dict `:` functional-type(operands, results)";
 }
 
 
