@@ -104,7 +104,6 @@ target_link_libraries(deepgengraph_ffi PRIVATE
 
   DeepgengraphIR
   DeepgengraphTritonIR
-  ThreadImpIR
 )
 
 add_subdirectory(test)

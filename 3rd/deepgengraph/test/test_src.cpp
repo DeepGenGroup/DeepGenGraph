@@ -4,7 +4,6 @@
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
-#include "deepgengraph/Dialect/ThreadImp/IR/ThreadImpDialect.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -49,8 +48,6 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/InitAllPasses.h"
 
-#include "deepgengraph/Conversion/DeepgengraphTritonToThreadImp/Passes.h"
-#include "deepgengraph/Dialect/ThreadImp/Transforms/Passes.h"
 #include "deepgengraph/Analysis/ThreadAnalysis.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Analysis/LowerInfo.h"

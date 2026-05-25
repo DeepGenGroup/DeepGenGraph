@@ -23,6 +23,5 @@ target_link_libraries(MyTest PRIVATE
   DeepgengraphIR
   DeepgengraphTritonIR
   TilelangIR
-  ThreadImpIR
   FriskIR
 )

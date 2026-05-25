@@ -1,5 +1,4 @@
 add_subdirectory(Deepgengraph)
 add_subdirectory(DeepgengraphTriton)
 add_subdirectory(TL)
-add_subdirectory(ThreadImp)
 add_subdirectory(Frisk)
