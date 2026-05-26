@@ -267,27 +267,8 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       load_bufs.push_back(store_buf);
       for (const Value& buf: load_bufs) {
         if (!buf_info_maps.count(buf)) {
-          auto shape = mlir::cast<MemRefType>(buf.getType()).getShape();
-          int len = 1;
-          for(auto s : shape){
-            len *= s;
-          }
-          if(len <= 1){
-            LowerInfo _info;
-            _info.buffer = buf;
-            _info.thread_widths[1] = 1;
-            _info.warp_widths[1] = 1;
-            _info.warp_repeat[1] = 1;
-            _info.block_widths[1] = 1;
-            _info.block_repeat[1] = 1;
-            _info.warp_indices[1] = zero;
-            _info.lane_indices[1] = zero;
-          }
-          else{
-            buf_info_maps[buf] = *info;
-            buf_info_maps[buf].buffer = buf;
-          }
-          
+          buf_info_maps[buf] = *info;
+          buf_info_maps[buf].buffer = buf;
         }
       }
       return true;
