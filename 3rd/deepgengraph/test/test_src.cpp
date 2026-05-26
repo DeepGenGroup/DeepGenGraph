@@ -301,25 +301,28 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
   pm.addPass(frisk::createConvertFriskToBasePass());
+  pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
-
-  // infer lowerInfo
   
-  func::FuncOp kernelOp = nullptr;
-  for (auto funcOp : src->getOps<func::FuncOp>()) {
-    if(funcOp->hasAttr("thread_num")){
-      kernelOp = funcOp;
-      break;
-    }
-  }
-  if(!kernelOp){
-    assert(false);
-  }
-  mlir::frisk::LowerInfoAnalysis lia(kernelOp);
-  lia.run();
-  lia.getTest();
-  lia.showAllInfo();
+  // pm.run(src->getOperation());
+  // llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
+  // // infer lowerInfo
+  
+  // func::FuncOp kernelOp = nullptr;
+  // for (auto funcOp : src->getOps<func::FuncOp>()) {
+  //   if(funcOp->hasAttr("thread_num")){
+  //     kernelOp = funcOp;
+  //     break;
+  //   }
+  // }
+  // if(!kernelOp){
+  //   assert(false);
+  // }
+  // mlir::frisk::LowerInfoAnalysis lia(kernelOp);
+  // lia.run();
+  // lia.getTest();
+  // lia.showAllInfo();
 
   return 0;
 }

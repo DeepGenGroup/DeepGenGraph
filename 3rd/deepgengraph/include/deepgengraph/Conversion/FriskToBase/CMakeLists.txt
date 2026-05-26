@@ -1,3 +1,3 @@
 set(LLVM_TARGET_DEFINITIONS Passes.td)
-mlir_tablegen(Passes.h.inc -gen-pass-decls -name FriskToBase)
+mlir_tablegen(Passes.h.inc -gen-pass-decls -name FriskToBasePasses)
 add_public_tablegen_target(FriskToBaseConversionPassIncGen)

@@ -1,6 +1,7 @@
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
@@ -38,7 +39,15 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 
 #define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
-void LowerInfoAnalysis::run() {
+
+
+DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
+  DenseMap<Value, LowerInfo> buf_info_maps{};
+  SmallVector<Operation*, 5> need_infer_ops{};
+  auto _kernelOp = mlir::dyn_cast<func::FuncOp>(kernelOp);
+  if(!_kernelOp){
+    assert(false);
+  }
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation* op) {
     if (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op)) {
       need_infer_ops.push_back(op);
@@ -126,16 +135,16 @@ void LowerInfoAnalysis::run() {
       ic.thread_widths = {1, 32 / static_cast<int64_t>(in_elem_width)};
       ic.warp_layout = {8, 4};
       ic.block_layout = {y * 4, x};
-      ic.warp_widths = LowerInfo::getWarpWidths(ic.thread_widths, ic.warp_layout);
+      ic.warp_widths = ic.getWarpWidths(ic.thread_widths, ic.warp_layout);
       ic.warp_repeat = {2, mma_n / ic.warp_widths[1]};
-      ic.block_widths = LowerInfo::getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
+      ic.block_widths = ic.getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
       ic.block_repeat = {bm_ / ic.block_widths[0], bn_ / ic.block_widths[1]};
-      ic.warp_indices = LowerInfo::getWarpIndices(b, ic.block_layout);
-      ic.lane_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
+      ic.warp_indices = ic.getWarpIndices(b, ic.block_layout);
+      ic.lane_indices = ic.getThreadIndices(b, ic.warp_layout);
       buf_info_maps[C] = ic;
       // A lowerInfo no tran
       auto zero = b.getAffineConstantExpr(0);
-      buf_info_maps[A] = ic;
+      buf_info_maps[A] = LowerInfo(ic);
       buf_info_maps[A].buffer = A;
       buf_info_maps[A].thread_widths[1] = 0;
       buf_info_maps[A].warp_widths[1] = 0;
@@ -145,7 +154,7 @@ void LowerInfoAnalysis::run() {
       buf_info_maps[A].warp_indices[1] = zero;
       buf_info_maps[A].lane_indices[1] = zero;
       // B lowerInfo no tran
-      buf_info_maps[B] = ic;
+      buf_info_maps[B] = LowerInfo(ic);
       buf_info_maps[B].buffer = B;
       buf_info_maps[B].thread_widths[0] = 0;
       buf_info_maps[B].warp_widths[0] = 0;
@@ -258,8 +267,26 @@ void LowerInfoAnalysis::run() {
       load_bufs.push_back(store_buf);
       for (const Value& buf: load_bufs) {
         if (!buf_info_maps.count(buf)) {
-          buf_info_maps[buf] = *info;
-          buf_info_maps[buf].buffer = buf;
+          auto shape = mlir::cast<MemRefType>(buf.getType()).getShape();
+          int len = 1;
+          for(auto s : shape){
+            len *= s;
+          }
+          if(len <= 1){
+            LowerInfo _info;
+            _info.buffer = buf;
+            _info.thread_widths[1] = 1;
+            _info.warp_widths[1] = 1;
+            _info.warp_repeat[1] = 1;
+            _info.block_widths[1] = 1;
+            _info.block_repeat[1] = 1;
+            _info.warp_indices[1] = zero;
+            _info.lane_indices[1] = zero;
+          }
+          else{
+            buf_info_maps[buf] = *info;
+            buf_info_maps[buf].buffer = buf;
+          }
           
         }
       }
@@ -303,19 +330,19 @@ void LowerInfoAnalysis::run() {
         ic.block_layout = info.block_layout;
         if (buf_info_maps.count(A)) {
           ic.thread_widths = {info.thread_widths[0], 32 / static_cast<int64_t>(in_elem_width)};
-          ic.warp_widths = LowerInfo::getWarpWidths(ic.thread_widths, ic.warp_layout);
+          ic.warp_widths = ic.getWarpWidths(ic.thread_widths, ic.warp_layout);
           ic.warp_repeat = {info.warp_repeat[0], mma_n / ic.warp_widths[1]};
-          ic.block_widths = LowerInfo::getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
+          ic.block_widths = ic.getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
           ic.block_repeat = {info.block_repeat[0], bn_ / ic.block_widths[1]};
         } else {
           ic.thread_widths = {1, info.thread_widths[1]};
-          ic.warp_widths = LowerInfo::getWarpWidths(ic.thread_widths, ic.warp_layout);
+          ic.warp_widths = ic.getWarpWidths(ic.thread_widths, ic.warp_layout);
           ic.warp_repeat = {2, info.warp_repeat[1]};
-          ic.block_widths = LowerInfo::getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
+          ic.block_widths = ic.getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
           ic.block_repeat = {bm_ / ic.block_widths[0], info.block_repeat[1]};
         }
-        ic.warp_indices = LowerInfo::getWarpIndices(b, ic.block_layout);
-        ic.lane_indices = LowerInfo::getThreadIndices(b, ic.warp_layout);
+        ic.warp_indices = ic.getWarpIndices(b, ic.block_layout);
+        ic.lane_indices = ic.getThreadIndices(b, ic.warp_layout);
         buf_info_maps[C] = ic;
       } else {  // C exsit
         ic = buf_info_maps[C];
@@ -426,6 +453,7 @@ void LowerInfoAnalysis::run() {
     }
     need_infer_ops.swap(pendingOps);
   }
+  return buf_info_maps;
 }
 
 }

@@ -141,6 +141,23 @@ Operation* getOuterMostOp(mlir::Operation* op){
   return currOp;
 }
 
+static inline Operation* getOuterMostOpWithName(mlir::Operation* op, const char* name){
+  mlir::Operation* currOp = op;
+  while (true) {
+    auto parentOp = currOp->getParentOp();
+    if(parentOp == nullptr){
+      return nullptr;
+    }
+    else{
+      if(parentOp->getName().getStringRef() == name){
+        return parentOp;
+      }
+      currOp = parentOp;
+    }
+  }
+  return currOp;
+}
+
 #define IN_MEMSPACE "inMs"
 #define OUT_MEMSPACE "outMs"
 
