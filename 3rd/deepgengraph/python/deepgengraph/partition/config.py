@@ -185,7 +185,8 @@ class PartitionConfig:
       path = f.name
       f.write(py_str)
     print(f"path: {path}", flush=True)
-    out = subprocess.run(["python3", path], capture_output=True)
+    import sys
+    out = subprocess.run([sys.executable, path], capture_output=True)
     print(f"profiling...", flush=True)
     if out.returncode != 0:
       print(out.stderr)

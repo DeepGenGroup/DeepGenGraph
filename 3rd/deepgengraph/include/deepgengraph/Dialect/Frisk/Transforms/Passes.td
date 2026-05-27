@@ -35,12 +35,12 @@ def KernelOpToFrisk: Pass<"kernelop-convert-to-frisk", "::mlir::ModuleOp"> {
   ];
 }
 
-def MemOpToFrisk: Pass<"memop-convert-to-frisk", "frisk::KernelOp"> {
-  let summary = "Deepgengraph memop convert to Frisk";
+def MemAndCalcOpToFrisk: Pass<"dg-convert-to-frisk", "frisk::KernelOp"> {
+  let summary = "Deepgengraph memop and calcop convert to Frisk";
   let description = [{
   }];
 
-  let constructor = "mlir::frisk::createConvertMemOpPass()";
+  let constructor = "mlir::frisk::createConvertMemAndCalcOpPass()";
 
   let dependentDialects = [
     "mlir::deepgengraph::DeepgengraphDialect",
@@ -50,12 +50,13 @@ def MemOpToFrisk: Pass<"memop-convert-to-frisk", "frisk::KernelOp"> {
   ];
 }
 
-def CalculateOpToFrisk: Pass<"calculateop-convert-to-frisk", "frisk::KernelOp"> {
-  let summary = "Deepgengraph calculate op convert to frisk.blockOp";
+
+def FriskCanonicalize: Pass<"frisk-canonicalize", "frisk::KernelOp"> {
+  let summary = "对firsk 中的某些结构进行化简";
   let description = [{
   }];
 
-  let constructor = "mlir::frisk::createConvertCalcOpPass()";
+  let constructor = "mlir::frisk::createFriskCanonicalizePass()";
 
   let dependentDialects = [
     "mlir::deepgengraph::DeepgengraphDialect",

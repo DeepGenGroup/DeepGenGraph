@@ -19,6 +19,7 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
@@ -43,16 +44,37 @@
 #include <vector>
 
 namespace mlir::frisk {
-
+  
 #define GEN_PASS_DEF_KERNELOPTOFRISK
-#define GEN_PASS_DEF_MEMOPTOFRISK
+#define GEN_PASS_DEF_MEMANDCALCOPTOFRISK
+
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"
+namespace dg = deepgengraph ;
+namespace dgt = deepgengraph::triton;
+
+// lower options
+struct CalcOpToFriskOption {
+  static bool useTensorCore ;
+  static bool useTMA ;
+};
+
+bool CalcOpToFriskOption::useTensorCore = true;
+bool CalcOpToFriskOption::useTMA = true;
 
 namespace {
 
 namespace dg = deepgengraph ;
 namespace dgt = deepgengraph::triton;
 
+// =================== static helper functions =================
+static Value getKernelArgById(Operation *op, int64_t argId) {
+  auto kernelOp = op->getParentOfType<frisk::KernelOp>();
+  if (!kernelOp)
+    return {};
+  if (argId < 0 || argId >= static_cast<int64_t>(kernelOp.getNumArguments()))
+    return {};
+  return kernelOp.getArgument(argId);
+}
 
 static Type convertPointerType(deepgengraph::triton::PointerType ptrType) {
   auto tensorTy = ptrType.getPointeeType();
@@ -75,15 +97,6 @@ static void addMaterializations(TypeConverter &tc) {
       [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
         return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
       });
-}
-
-static Value getKernelArgById(Operation *op, int64_t argId) {
-  auto kernelOp = op->getParentOfType<frisk::KernelOp>();
-  if (!kernelOp)
-    return {};
-  if (argId < 0 || argId >= static_cast<int64_t>(kernelOp.getNumArguments()))
-    return {};
-  return kernelOp.getArgument(argId);
 }
 
 static bool isTritonPointerLike(Type type) {
@@ -243,9 +256,11 @@ struct ArgIdViewBuffer {
 // 存放 argId : { arg对应的initView ， arg开辟view时建立的shm buffer }
 static std::vector<ArgIdViewBuffer*>  s_argId_bufferInfo;
 
-// ----------------- Patterns ----------
-
+// 存放 arg 的permute 信息，用于计算全局offset
 static std::vector<std::vector<int64_t>> permuteInfo;
+
+// =============== Op Conversion Patterns =============
+
 
 struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::KernelOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -657,10 +672,7 @@ struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::tr
   }
 };
 
-
-
-struct BlockAdvanceConversionPattern
-    : public OpConversionPattern<deepgengraph::triton::BlockAdvanceOp> {
+struct BlockAdvanceConversionPattern : public OpConversionPattern<deepgengraph::triton::BlockAdvanceOp> {
   using OpConversionPattern::OpConversionPattern;
   // 直接删除
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockAdvanceOp op, OpAdaptor adaptor,
@@ -671,8 +683,7 @@ struct BlockAdvanceConversionPattern
   }
 };
 
-struct ZeroOpConversionPattern
-    : public OpConversionPattern<dg::ZeroOp> {
+struct ZeroOpConversionPattern : public OpConversionPattern<dg::ZeroOp> {
   using OpConversionPattern::OpConversionPattern;
 
 
@@ -702,15 +713,13 @@ struct ZeroOpConversionPattern
 };
 
 
-struct ConvertOpConversionPattern
-    : public OpConversionPattern<dg::ConvertOp> {
+struct ConvertOpConversionPattern : public OpConversionPattern<dg::ConvertOp> {
   using OpConversionPattern::OpConversionPattern;
-
-
   // %23 = deepgengraph.convert %22, type = f16 : (tensor<128x128xf32>) -> tensor<128x128xf16> 替换为 allocBuffer + frisk.copy 
   LogicalResult matchAndRewrite(dg::ConvertOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
   {
+    llvm::outs() << "enter ConvertOpConversionPattern : " << op << "\n"; llvm::outs().flush();
     auto inMs = getOpInputMemspaceAttr(op).asArrayRef()[0];
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
     auto loc = op->getLoc();
@@ -720,22 +729,36 @@ struct ConvertOpConversionPattern
     ModifyMemrefType(dstType, outMs);
     
     auto convertedTy = getTypeConverter()->convertType(op.getResult().getType());
-    auto newMemTy = mlir::dyn_cast<MemRefType>(convertedTy);
-    
-    auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
-    frisk::AllocBufferOp allocBuffer {};
-    {
-      RewriterBase::InsertionGuard ig{rewriter};
-      rewriter.setInsertionPoint(outerMostFor);
-      allocBuffer = rewriter.create<frisk::AllocBufferOp>(loc, newMemTy.getShape(), newMemTy.getElementType(), 16, outMs);
+    if(mlir::isa<MemRefType>(convertedTy)){
+      auto newMemTy = mlir::dyn_cast<MemRefType>(convertedTy);
+      auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
+      frisk::AllocBufferOp allocBuffer {};
+      {
+        RewriterBase::InsertionGuard ig{rewriter};
+        rewriter.setInsertionPoint(outerMostFor);
+        allocBuffer = rewriter.create<frisk::AllocBufferOp>(loc, newMemTy.getShape(), newMemTy.getElementType(), 16, outMs);
+      }
+      auto copyOp = rewriter.create<frisk::CopyOp>(loc, adaptor.getOperand(), allocBuffer);
+      
+      rewriter.replaceOp(op, allocBuffer);
     }
-    auto copyOp = rewriter.create<frisk::CopyOp>(loc, adaptor.getOperand(), allocBuffer);
-    
-    rewriter.replaceOp(op, allocBuffer);
+    else{
+      // %16 = "deepgengraph.convert"(%5) <{dst_type = f16}> {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<1xf32>) -> tensor<1xf16>
+      // 转换为 arith.truncf %
+      auto srcWidth = mlir::cast<FloatType>(adaptor.getOperand().getType()).getWidth();
+      auto dstWitdth = mlir::cast<FloatType>(convertedTy).getWidth();
+      mlir::Operation* newOp {};
+      if(srcWidth > dstWitdth){
+        newOp = rewriter.create<arith::TruncFOp>(op->getLoc(), adaptor.getDstType(), adaptor.getOperand());
+      }
+      else{
+        newOp = rewriter.create<arith::ExtFOp>(op->getLoc(), adaptor.getDstType(), adaptor.getOperand());
+      }
+      rewriter.replaceOp(op, newOp);
+    }
     return success();
   }
 };
-
 
 struct ForTypeConversionPattern : public OpConversionPattern<affine::AffineForOp> {
   using OpConversionPattern<affine::AffineForOp>::OpConversionPattern;
@@ -819,9 +842,8 @@ struct YieldTypeConversionPattern : public OpConversionPattern<affine::AffineYie
   }
 };
 
-
-// %cst = arith.constant dense<0.127531052> : tensor<1xf32> loc(#loc)
-struct ArithTensorConversionPattern : public OpConversionPattern<arith::ConstantOp> {
+// %cst = arith.constant dense<0.127531052> : tensor<1xf32> loc(#loc) 转换到 arith.constant 0.127531052 : f32
+struct ArithSingleElementTensorConversionPattern : public OpConversionPattern<arith::ConstantOp> {
   using OpConversionPattern<arith::ConstantOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(arith::ConstantOp op,OpAdaptor adaptor,
@@ -829,12 +851,14 @@ struct ArithTensorConversionPattern : public OpConversionPattern<arith::Constant
     auto retType = op.getResult().getType();
     if(mlir::isa<TensorType>(retType)){
       auto tensorTy = mlir::dyn_cast<TensorType>(retType);
-      MemRefType memrefTy = MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{}, int(frisk::attr::MemorySpace::Local));
-
-      if(!memrefTy){
-        return failure();
+      auto shape = tensorTy.getShape();
+      int len = 1;
+      for(auto s : shape){
+        len *= s;
       }
-      auto allocOp = rewriter.create<memref::AllocOp>(op->getLoc(), memrefTy);
+      if(len > 1){
+        return failure();  // 暂不支持以长度大于1的denseElements数组进行赋值
+      }
       auto val = mlir::cast<DenseFPElementsAttr>(op.getValue());
       float v = 0;
       if(!val){
@@ -845,13 +869,7 @@ struct ArithTensorConversionPattern : public OpConversionPattern<arith::Constant
         v = it.convertToFloat();
       }
       auto constVal = rewriter.create<arith::ConstantOp>(op->getLoc(), rewriter.getF32FloatAttr(v));
-      auto zero = rewriter.create<arith::ConstantOp>(op->getLoc(), rewriter.getIndexAttr(0));
-      std::vector<Value> indices;
-      for(auto dim : memrefTy.getShape()){
-        indices.push_back(zero);
-      }
-      auto newOp = rewriter.create<affine::AffineStoreOp>(op->getLoc(), constVal ,allocOp, indices);
-      rewriter.replaceOp(op, allocOp);
+      rewriter.replaceOp(op, constVal);
       return success();
     }
     else{
@@ -860,7 +878,7 @@ struct ArithTensorConversionPattern : public OpConversionPattern<arith::Constant
   }
 };
 
-// 
+// 清空affineFor的Inits和 yield 返回值
 struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::AffineForOp> {
   using OpConversionPattern<affine::AffineForOp>::OpConversionPattern;
 
@@ -927,143 +945,8 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
   }
 };
 
-} // namespace
 
-class ConvertKernelOpToFrisk : public impl::KernelOpToFriskBase<ConvertKernelOpToFrisk> {
-public:
-  void runOnOperation() override {
-    auto *ctx = getOperation()->getContext();
-    Operation *op = getOperation();
-
-    TypeConverter tc;
-    tc.addConversion([](Type type) { return type; });
-    tc.addConversion([](TensorType tensorTy) {
-      return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType());
-    });
-    tc.addConversion([](deepgengraph::triton::PointerType ptrType) { return convertPointerType(ptrType); });
-    tc.addConversion(
-        [](deepgengraph::triton::BlockPointerType blockPtrType) { return convertBlockPointerType(blockPtrType); });
-    addMaterializations(tc);
-
-    ConversionTarget target(*ctx);
-    target.addLegalDialect<FriskDialect, memref::MemRefDialect, func::FuncDialect, deepgengraph::DeepgengraphDialect,
-                           deepgengraph::triton::DeepgengraphTritonDialect, arith::ArithDialect, 
-                           tensor::TensorDialect>();
-    target.addIllegalOp<deepgengraph::KernelOp>();
-
-    RewritePatternSet ps(ctx);
-    ps.add<KernelOpConversionPattern>(tc, ctx);
-
-    if (failed(applyPartialConversion(op, target, std::move(ps)))) {
-      signalPassFailure();
-    }
-  }
-};
-
-
-
-
-class ConvertMemOpToFrisk : public impl::MemOpToFriskBase<ConvertMemOpToFrisk> {
-public:
-  void runOnOperation() override {
-    auto *ctx = getOperation()->getContext();
-    Operation *op = getOperation();
-
-    TypeConverter tc;
-    // typeconversion rules :
-    // tensor -> memref ; dgt.ptr -> memref ; dgt.block_ptr -> memref
-    tc.addConversion([](Type type) { return type; });
-    tc.addConversion([](deepgengraph::triton::PointerType ptrType) { 
-      auto tensorTy = ptrType.getPointeeType();
-      return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{});
-    });
-    tc.addConversion(
-    [](deepgengraph::triton::BlockPointerType blockPtrType) { 
-      auto tensorTy = blockPtrType.getPointeeType();
-      return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{});
-    });
-    tc.addConversion([](TensorType ty){
-      return MemRefType::get(ty.getShape(), ty.getElementType(), AffineMap{});
-    });
-    addMaterializations(tc);
-
-    ConversionTarget target(*ctx);
-    target.addLegalDialect<FriskDialect, memref::MemRefDialect, func::FuncDialect, deepgengraph::DeepgengraphDialect,
-                           deepgengraph::triton::DeepgengraphTritonDialect, arith::ArithDialect, scf::SCFDialect, affine::AffineDialect,
-                           tensor::TensorDialect>();
-
-
-    // stage 1 : 转化指针定义op -> memref buffer
-    ConversionTarget t0 = target;
-    t0.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp>();
-
-    RewritePatternSet ps0(ctx);
-    ps0.add<PointerOfConversionPattern, BlockPointerOfConversionPattern>(tc, ctx);
-    applyPartialConversion(op, t0, std::move(ps0));
-    
-    // stage 2 : 指针读写op -> memref 读写
-    RewritePatternSet ps1(ctx);
-    ps1.add<BlockLoadConversionPattern,
-      BlockStoreConversionPattern,ZeroOpConversionPattern ,ConvertOpConversionPattern,
-       ForTypeConversionPattern, YieldTypeConversionPattern
-    >(tc, ctx);
-    ConversionTarget t1 = target;
-    t1.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp,
-      dgt::BlockLoadOp, dgt::BlockStoreOp,
-      dgt::TensorFromOp, dg::ZeroOp, dg::ConvertOp,
-      dgt::BlockAdvanceOp >();
-    t1.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp forOp) {
-      for (Value initArg : forOp.getInits()) {
-        if (isTritonPointerLike(initArg.getType())){
-          return false;
-        }
-      }
-      for (Type resultType : forOp.getResultTypes()) {
-        if (isTritonPointerLike(resultType)){
-          return false;
-        }
-      }
-      return true;
-    });
-
-    t1.addDynamicallyLegalOp<affine::AffineYieldOp>([](affine::AffineYieldOp yieldOp) {
-      for (Value operand : yieldOp.getOperands()) {
-        if (isTritonPointerLike(operand.getType())){
-          return false;
-        }
-      }
-      return true;
-    });
-
-    applyPartialConversion(op, t1, std::move(ps1));
-
-    
-    // stage 3 ：constant 分配的tensor 改为 分配memref
-    ConversionTarget t2(*ctx);
-    t2.addDynamicallyLegalOp<arith::ConstantOp>([](arith::ConstantOp op){
-      return !mlir::isa<TensorType>(op.getResult().getType());
-    });
-    t2.markUnknownOpDynamicallyLegal([](mlir::Operation* op){return true;});
-    RewritePatternSet p2(ctx);
-    p2.add<ArithTensorConversionPattern>(tc,ctx);
-    applyPartialConversion(op, t2, std::move(p2));
-    
-    // stage 4 : 删除 affineFor 的 initArgs 和 yield
-    ConversionTarget t3(*ctx);
-    t3.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op){
-      return op.getInits().empty();
-    });
-    t3.markUnknownOpDynamicallyLegal([](mlir::Operation* op){return true;});
-    RewritePatternSet p3(ctx);
-    p3.add<AffineForEmptyInitsAndYieldPattern>(tc,ctx);
-    applyPartialConversion(op, t3, std::move(p3));
-
-  }
-};
-
-
-
-
+// scf.for -> affine.for
 struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
   using OpConversionPattern<scf::ForOp>::OpConversionPattern;
 
@@ -1128,6 +1011,532 @@ struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
   }
 };
 
+struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> {
+  using OpConversionPattern::OpConversionPattern;
+  
+  LogicalResult matchAndRewrite(dg::PreciseDotOp op, 
+    OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override 
+  {
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
+    auto memA = adaptor.getLhs();
+    AppendMemspaceToMemrefValue(memA, inMs[0]);
+    auto memB = adaptor.getRhs();
+    AppendMemspaceToMemrefValue(memB, inMs[1]);
+    auto shapeA = mlir::cast<MemRefType>(memA.getType()).getShape();
+    auto shapeB = mlir::cast<MemRefType>(memB.getType()).getShape();
+    int sizeM = shapeA[0];
+    int sizeN = shapeB[1];
+    int sizeK = shapeB[0];
+
+    std::vector<int64_t> cshape = {sizeM, sizeN};
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp memC {} ;
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      memC = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), cshape, op.getAccType(), 16, outMs[0]);
+    }
+    if(CalcOpToFriskOption::useTensorCore){
+      // tensorcore 计算 gemm
+      auto friskGEMM = rewriter.create<frisk::GemmOp>(op->getLoc(), adaptor.getLhs(), adaptor.getRhs(), memC, false,false);
+    }
+    else{
+      // cudacore 计算 gemm
+      std::vector<int64_t> ranges = {sizeM, sizeN};
+      auto block = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
+      auto loc = block->getLoc();
+      RewriterBase::InsertionGuard guard{rewriter};
+      rewriter.setInsertionPointToStart(block.getBody(0));
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value lowerBound, Value upperBound, Value step, ValueRange initArgs = std::nullopt, function_ref<void(OpBuilder &, Location, Value, ValueRange)> odsArg4 = nullptr);
+      auto zero = rewriter.create<arith::ConstantIndexOp>(loc,0);
+      auto step_one = rewriter.create<arith::ConstantIndexOp>(loc,1);
+      auto k = rewriter.create<arith::ConstantIndexOp>(loc, sizeK);
+
+      auto forOp = rewriter.create<affine::AffineForOp>(block->getLoc(), 0, sizeK, 1);
+      rewriter.setInsertionPointToStart(forOp.getBody(0));
+      auto iter_k = forOp.getInductionVar();
+      auto i = block.getBody(0)->getArgument(0);
+      auto j = block.getBody(0)->getArgument(1);
+      std::vector<Value> indices = {i,j,iter_k};
+
+      // {i,j,k} : [i,k] [k,j] [i,j]
+      auto ctx = op->getContext();
+      auto dimI = mlir::getAffineDimExpr(0, ctx);
+      auto dimJ = mlir::getAffineDimExpr(1, ctx);
+      auto dimK = mlir::getAffineDimExpr(2, ctx);
+      auto affineMapA= AffineMap::get(3, 0, {dimI, dimK}, ctx); 
+      auto affineMapB= AffineMap::get(3, 0, {dimK, dimJ}, ctx); 
+      auto affineMapC= AffineMap::get(3, 0, {dimI, dimJ}, ctx); 
+      auto a = rewriter.create<affine::AffineLoadOp>(loc, memA, affineMapA, indices);
+      auto b = rewriter.create<affine::AffineLoadOp>(loc, memB, affineMapB, indices);
+      auto acc = rewriter.create<affine::AffineLoadOp>(loc, memC, affineMapC, indices);
+
+      Value prod = rewriter.create<arith::MulFOp>(loc, a, b);
+      if (prod.getType() != acc.getType()) {
+        if (!isa<FloatType>(prod.getType()) || !isa<FloatType>(acc.getType()))
+          return failure();
+        auto prodFloatTy = cast<FloatType>(prod.getType());
+        auto accFloatTy = cast<FloatType>(acc.getType());
+        if (prodFloatTy.getWidth() < accFloatTy.getWidth()) {
+          prod = rewriter.create<arith::ExtFOp>(loc, acc.getType(), prod);
+        } else if (prodFloatTy.getWidth() > accFloatTy.getWidth()) {
+          prod = rewriter.create<arith::TruncFOp>(loc, acc.getType(), prod);
+        }
+      }
+      auto added = rewriter.create<arith::AddFOp>(loc, prod, acc);
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value valueToStore, Value memref, AffineMap map, ValueRange mapOperands);
+      rewriter.create<affine::AffineStoreOp>(loc, added, memC, affineMapC, indices);
+    }
+    rewriter.replaceOp(op, memC);
+    return success();
+  }
+};
+
+struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::BroadcastableBinaryOpInterface> {
+  using OpInterfaceConversionPattern::OpInterfaceConversionPattern;
+  
+  virtual LogicalResult
+  matchAndRewrite(dg::BroadcastableBinaryOpInterface op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override
+  {
+    if (operands.size() != 2){
+      return failure();
+    }
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
+    Value memLhs = operands[0];
+    AppendMemspaceToMemrefValue(memLhs, inMs[0]);
+    Value memRhs = operands[1];
+    AppendMemspaceToMemrefValue(memRhs, inMs[1]);
+
+    auto resultTensorType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultTensorType)
+      return failure();
+    auto resultShape = resultTensorType.getShape();
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入), 插入结果buffer的alloc
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp alloc {} ;
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      alloc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), resultShape, resultTensorType.getElementType(), 16, outMs[0]);
+    }
+    std::vector<int64_t> ranges(resultShape.begin(), resultShape.end());
+    auto blockOp = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
+    {
+      PatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(blockOp.getBody(0));
+      SmallVector<Value, 4> indices(blockOp.getBody(0)->getArguments().begin(),
+                                    blockOp.getBody(0)->getArguments().end());
+      auto zero = rewriter.create<arith::ConstantIndexOp>(blockOp->getLoc(), 0);
+      auto buildOperandIndices = [&](Value mem, Value originalTensorVal) -> FailureOr<SmallVector<Value, 4>> {
+        auto memTy = dyn_cast<MemRefType>(mem.getType());
+        if (!memTy)
+          return failure();
+        auto srcTy = dyn_cast<RankedTensorType>(originalTensorVal.getType());
+        if (!srcTy)
+          return failure();
+        int64_t operandRank = memTy.getRank();
+        int64_t resultRank = static_cast<int64_t>(indices.size());
+        if (operandRank > resultRank)
+          return failure();
+        if (srcTy.getRank() != operandRank)
+          return failure();
+
+        int64_t offset = resultRank - operandRank;
+        SmallVector<Value, 4> operandIndices;
+        operandIndices.reserve(operandRank);
+        for (int64_t i = 0; i < operandRank; ++i) {
+          int64_t dim = offset + i;
+          // Broadcasted dimensions always read index 0 from the source tensor.
+          if (srcTy.getShape()[i] == 1) {
+            operandIndices.push_back(zero);
+          } else {
+            operandIndices.push_back(indices[dim]);
+          }
+        }
+        return operandIndices;
+      };
+      Value lhs {}, rhs {};
+      if(mlir::isa<MemRefType>(memLhs.getType())){
+        auto lhsIndicesOr = buildOperandIndices(memLhs, op.getLhs());
+        if (failed(lhsIndicesOr)){
+          return failure();
+        }
+        lhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memLhs, *lhsIndicesOr);
+      }
+      else{
+        lhs = memLhs;
+      }
+      if(mlir::isa<MemRefType>(memRhs.getType())){
+        auto rhsIndicesOr = buildOperandIndices(memRhs, op.getRhs());
+        if (failed(rhsIndicesOr)){
+          return failure();
+        }
+        rhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memRhs, *rhsIndicesOr);
+      }
+      else{
+        rhs = memRhs;
+      }
+
+      Value ret;
+      Type lhsType = lhs.getType();
+      if (isa<dg::AddOp>(op.getOperation())) {
+        if (isa<FloatType>(lhsType))
+          ret = rewriter.create<arith::AddFOp>(blockOp->getLoc(), lhs, rhs);
+        else
+          ret = rewriter.create<arith::AddIOp>(blockOp->getLoc(), lhs, rhs);
+      } else if (isa<dg::SubOp>(op.getOperation())) {
+        if (isa<FloatType>(lhsType))
+          ret = rewriter.create<arith::SubFOp>(blockOp->getLoc(), lhs, rhs);
+        else
+          ret = rewriter.create<arith::SubIOp>(blockOp->getLoc(), lhs, rhs);
+      } else if (isa<dg::MulOp>(op.getOperation())) {
+        if (isa<FloatType>(lhsType))
+          ret = rewriter.create<arith::MulFOp>(blockOp->getLoc(), lhs, rhs);
+        else
+          ret = rewriter.create<arith::MulIOp>(blockOp->getLoc(), lhs, rhs);
+      } else if (isa<dg::DivOp>(op.getOperation())) {
+        if (isa<FloatType>(lhsType))
+          ret = rewriter.create<arith::DivFOp>(blockOp->getLoc(), lhs, rhs);
+        else
+          ret = rewriter.create<arith::DivSIOp>(blockOp->getLoc(), lhs, rhs);
+      } else if (isa<dg::PowOp>(op.getOperation())) {
+        if (isa<FloatType>(lhsType))
+          ret = rewriter.create<math::PowFOp>(blockOp->getLoc(), lhs, rhs);
+        else if (isa<IntegerType>(lhsType))
+          ret = rewriter.create<math::IPowIOp>(blockOp->getLoc(), lhs, rhs);
+        else
+          return failure();
+      } else if (auto cmpOp = dyn_cast<dg::CmpOp>(op.getOperation())) {
+        Value pred;
+        if (isa<FloatType>(lhsType)) {
+          arith::CmpFPredicate fpred =
+              cmpOp.getCmpType() == dg::CmpType::GT ? arith::CmpFPredicate::OGT : arith::CmpFPredicate::OGE;
+          pred = rewriter.create<arith::CmpFOp>(blockOp->getLoc(), fpred, lhs, rhs);
+        } else if (isa<IntegerType, IndexType>(lhsType)) {
+          arith::CmpIPredicate ipred =
+              cmpOp.getCmpType() == dg::CmpType::GT ? arith::CmpIPredicate::sgt : arith::CmpIPredicate::sge;
+          pred = rewriter.create<arith::CmpIOp>(blockOp->getLoc(), ipred, lhs, rhs);
+        } else {
+          return failure();
+        }
+
+        Type outElemTy = resultTensorType.getElementType();
+        if (pred.getType() == outElemTy) {
+          ret = pred;
+        } else if (isa<IntegerType>(outElemTy)) {
+          ret = rewriter.create<arith::ExtUIOp>(blockOp->getLoc(), outElemTy, pred);
+        } else {
+          return failure();
+        }
+      } else {
+        return failure();
+      }
+
+      rewriter.create<affine::AffineStoreOp>(blockOp->getLoc(), ret, alloc, indices);
+    }
+    rewriter.replaceOp(op, alloc.getResult());
+    return success();
+  }
+};
+
+struct Exp2OpConversionPattern : public OpConversionPattern<dg::Exp2Op> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::Exp2Op op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    auto loc = op->getLoc();
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
+    auto operandType = mlir::dyn_cast<MemRefType>(adaptor.getOperand().getType());
+
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp buffer {};
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType(), 16, outMs[0]);
+    }
+
+    auto blockOp = rewriter.create<frisk::BlockOp>(loc, operandType.getShape(), nullptr);
+    {
+      RewriterBase::InsertionGuard g{rewriter};
+      rewriter.setInsertionPointToStart(blockOp.getBody(0));
+      std::vector<Value> indices = {blockOp.getBody(0)->getArguments().begin(), blockOp.getBody(0)->getArguments().end()};
+      auto operand = adaptor.getOperand();
+      AppendMemspaceToMemrefValue(operand, inMs[0]);
+      auto val = rewriter.create<affine::AffineLoadOp>(loc, operand, indices);
+      auto ret = rewriter.create<math::Exp2Op>(loc, val);
+      auto store = rewriter.create<affine::AffineStoreOp>(loc, ret, buffer, indices);
+    }
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
+struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::ReduceOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    // %42 = deepgengraph.reduce(%40, init = %32), dim = 1, op =  ADD, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+    auto loc = op->getLoc();
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
+    auto outMemTy = mlir::dyn_cast<MemRefType>( getTypeConverter()->convertType(op.getType()));
+    auto inMemTy = mlir::dyn_cast<MemRefType>( adaptor.getOperand().getType());
+    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
+    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
+    frisk::AllocBufferOp buffer {};
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      rewriter.setInsertionPoint(currOp);
+      buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType(), 16, outMs[0]);
+    }
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value src, ::mlir::Value dst, ::mlir::StringAttr kind, ::mlir::IntegerAttr dim);
+    std::string kind;
+    switch (op.getReduceType()) {
+      case dg::ReduceType::ADD: kind = "add";break;
+      case dg::ReduceType::MUL: kind = "mul";break;
+      case dg::ReduceType::ANY: kind = "any";break;
+      default: assert(false); break;
+    }
+    auto operand = adaptor.getOperand();
+    AppendMemspaceToMemrefValue(operand, inMs[0]);
+    auto reduce = rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
+struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(dg::MaskOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const override
+  {
+    auto loc = op->getLoc();
+    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
+    auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
+    frisk::AllocBufferOp buffer = nullptr;
+    {
+      RewriterBase::InsertionGuard ig{rewriter};
+      auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
+      rewriter.setInsertionPoint(outerMostFor);
+      buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getSizes(), op.getElementType(), 16, outMs[0]);
+    }
+    auto newOp = rewriter.create<frisk::BlockOp>(loc, op.getSizes(), nullptr);
+    auto *newBody = newOp.getBody(0);
+    auto starts = adaptor.getStarts();
+    auto ivs = newBody->getArguments();
+    if (starts.size() != ivs.size())
+      return failure();
+
+    SmallVector<Value, 4> shiftedIndices;
+    shiftedIndices.reserve(ivs.size());
+    {
+      RewriterBase::InsertionGuard guard{rewriter};
+      rewriter.setInsertionPointToStart(newBody);
+      for (int64_t i = 0; i < static_cast<int64_t>(ivs.size()); ++i) {
+        shiftedIndices.push_back(rewriter.create<arith::AddIOp>(loc, ivs[i], starts[i]));
+      }
+    }
+
+    // Replace source block arguments at inline time, avoiding RAUW on IVs.
+    rewriter.inlineBlockBefore(op.getBody(0), newBody, newBody->getTerminator()->getIterator(), shiftedIndices);
+
+    SmallVector<dg::MaskYieldOp, 2> yields;
+    newOp->walk([&](dg::MaskYieldOp yield) { yields.push_back(yield); });
+    for (dg::MaskYieldOp yield : yields) {
+      RewriterBase::InsertionGuard guard{rewriter};
+      rewriter.setInsertionPoint(yield);
+      rewriter.create<affine::AffineStoreOp>(loc, yield->getOperand(0), buffer, shiftedIndices);
+      rewriter.eraseOp(yield);
+    }
+
+    rewriter.replaceOp(op, buffer);
+    return success();
+  }
+};
+
+} // namespace of patterns ends
+
+// =================== Pass Implement ===============
+
+class ConvertMemAndCalcOpToFrisk : public impl::MemAndCalcOpToFriskBase<ConvertMemAndCalcOpToFrisk> {
+public:
+  void runOnOperation() override {
+    auto *ctx = getOperation()->getContext();
+    Operation *op = getOperation();
+    
+    // ===== 1. Lower mem相关的op ==========
+    {
+      TypeConverter tc;
+      // typeconversion rules :
+      // tensor -> memref ; dgt.ptr -> memref ; dgt.block_ptr -> memref
+      tc.addConversion([](Type type) { return type; });
+      tc.addConversion([](deepgengraph::triton::PointerType ptrType) { 
+        auto tensorTy = ptrType.getPointeeType();
+        return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{});
+      });
+      tc.addConversion(
+      [](deepgengraph::triton::BlockPointerType blockPtrType) { 
+        auto tensorTy = blockPtrType.getPointeeType();
+        return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType(), AffineMap{});
+      });
+      tc.addConversion([](TensorType ty) -> Type {
+        int64_t len = 1;
+        for(auto s : ty.getShape()){
+          len *= s;
+        }
+        if(len > 1){
+          return MemRefType::get(ty.getShape(), ty.getElementType(), AffineMap{});
+        }
+        else{
+          return ty.getElementType();
+        }
+      });
+      addMaterializations(tc);
+      ConversionTarget target(*ctx);
+      target.addLegalDialect<FriskDialect, memref::MemRefDialect, func::FuncDialect, deepgengraph::DeepgengraphDialect,
+        deepgengraph::triton::DeepgengraphTritonDialect, arith::ArithDialect, scf::SCFDialect, affine::AffineDialect,
+        tensor::TensorDialect>();
+  
+      // stage 1 : 转化指针定义op -> memref buffer
+      ConversionTarget t0 = target;
+      t0.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp>();
+  
+      RewritePatternSet ps0(ctx);
+      ps0.add<PointerOfConversionPattern, BlockPointerOfConversionPattern>(tc, ctx);
+      applyPartialConversion(op, t0, std::move(ps0));
+      
+      // stage 2 : 指针读写op -> memref 读写
+      RewritePatternSet ps1(ctx);
+      ps1.add<BlockLoadConversionPattern,
+        BlockStoreConversionPattern,ZeroOpConversionPattern ,ConvertOpConversionPattern,
+        ForTypeConversionPattern, YieldTypeConversionPattern
+      >(tc, ctx);
+      ConversionTarget t1 = target;
+      t1.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp,
+        dgt::BlockLoadOp, dgt::BlockStoreOp,
+        dgt::TensorFromOp, dg::ZeroOp, dg::ConvertOp,
+        dgt::BlockAdvanceOp >();
+      t1.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp forOp) {
+        for (Value initArg : forOp.getInits()) {
+          if (isTritonPointerLike(initArg.getType())){
+            return false;
+          }
+        }
+        for (Type resultType : forOp.getResultTypes()) {
+          if (isTritonPointerLike(resultType)){
+            return false;
+          }
+        }
+        return true;
+      });
+  
+      t1.addDynamicallyLegalOp<affine::AffineYieldOp>([](affine::AffineYieldOp yieldOp) {
+        for (Value operand : yieldOp.getOperands()) {
+          if (isTritonPointerLike(operand.getType())){
+            return false;
+          }
+        }
+        return true;
+      });
+  
+      applyPartialConversion(op, t1, std::move(ps1));
+  
+      // stage 3 ：constant 分配的tensor 改为 分配memref
+      ConversionTarget t2(*ctx);
+      t2.addDynamicallyLegalOp<arith::ConstantOp>([](arith::ConstantOp op){
+        return !mlir::isa<TensorType>(op.getResult().getType());
+      });
+      t2.markUnknownOpDynamicallyLegal([](mlir::Operation* op){return true;});
+      RewritePatternSet p2(ctx);
+      p2.add<ArithSingleElementTensorConversionPattern>(tc,ctx);
+      applyPartialConversion(op, t2, std::move(p2));
+      
+      // stage 4 : 删除 affineFor 的 initArgs 和 yield
+      ConversionTarget t3(*ctx);
+      t3.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op){
+        return op.getInits().empty();
+      });
+      t3.markUnknownOpDynamicallyLegal([](mlir::Operation* op){return true;});
+      RewritePatternSet p3(ctx);
+      p3.add<AffineForEmptyInitsAndYieldPattern>(tc,ctx);
+      applyPartialConversion(op, t3, std::move(p3));
+
+    }
+
+    // ========== 2. lower calcuate op
+    {
+      TypeConverter tc;
+      tc.addConversion([](Type type) -> std::optional<Type> {
+        auto memSpaceInt = int(frisk::attr::MemorySpace::Local);
+        if (auto rankedTensorTy = dyn_cast<RankedTensorType>(type)) {
+          int64_t len = 1;
+          for(auto s : rankedTensorTy.getShape()){
+            len *= s;
+          }
+          if(len > 1){
+            return MemRefType::get(rankedTensorTy.getShape(), rankedTensorTy.getElementType(), AffineMap{}, memSpaceInt);
+          }
+          else{
+            return rankedTensorTy.getElementType();
+          }
+        }
+        if (auto unrankedTensorTy = dyn_cast<UnrankedTensorType>(type)) {
+          return UnrankedMemRefType::get(unrankedTensorTy.getElementType(), memSpaceInt);
+        }
+        if (auto memref = dyn_cast<MemRefType>(type)) {
+          int64_t len = 1;
+          for(auto s : memref.getShape()){
+            len *= s;
+          }
+          if(len > 1){
+            if(memref.getMemorySpaceAsInt() <= 0){
+              return MemRefType::get(memref.getShape(), memref.getElementType(), AffineMap{}, memSpaceInt ) ;
+            }
+          }
+          else{
+            return memref.getElementType();
+          }
+        }
+        return type;
+      });
+      addMaterializations(tc);
+
+      ConversionTarget target(*ctx);
+      target.addLegalDialect<FriskDialect, affine::AffineDialect, memref::MemRefDialect, func::FuncDialect, dg::DeepgengraphDialect,
+                            dgt::DeepgengraphTritonDialect, arith::ArithDialect, math::MathDialect,
+                            scf::SCFDialect, tensor::TensorDialect>();
+
+      target.addIllegalOp<dg::AddOp, dg::SubOp, dg::MulOp, 
+        dg::DivOp, dg::PowOp, dg::CmpOp, dg::PreciseDotOp, dg::MaskOp,
+        dg::Exp2Op, dg::ReduceOp
+      >();
+
+      RewritePatternSet ps(ctx);
+      ps.add<
+        MatmulOpConversionPattern,BinaryOpConversionPattern, 
+        MaskOpConversionPattern,Exp2OpConversionPattern,
+        ReduceOpConversionPattern
+      >(tc, ctx);
+
+      if (failed(applyPartialConversion(op, target, std::move(ps)))) {
+        signalPassFailure();
+      }
+    }
+
+
+  }
+};
 
 // scf.for -> affine.for
 struct ConvertSCFForToAffineForPass 
@@ -1152,7 +1561,40 @@ struct ConvertSCFForToAffineForPass
     }
 };
 
+// dg.kernel -> frisk.kernel
+class ConvertKernelOpToFrisk : public impl::KernelOpToFriskBase<ConvertKernelOpToFrisk> {
+public:
+  void runOnOperation() override {
+    auto *ctx = getOperation()->getContext();
+    Operation *op = getOperation();
 
+    TypeConverter tc;
+    tc.addConversion([](Type type) { return type; });
+    tc.addConversion([](TensorType tensorTy) {
+      return MemRefType::get(tensorTy.getShape(), tensorTy.getElementType());
+    });
+    tc.addConversion([](deepgengraph::triton::PointerType ptrType) { return convertPointerType(ptrType); });
+    tc.addConversion(
+        [](deepgengraph::triton::BlockPointerType blockPtrType) { return convertBlockPointerType(blockPtrType); });
+    addMaterializations(tc);
+
+    ConversionTarget target(*ctx);
+    target.addLegalDialect<FriskDialect, memref::MemRefDialect, func::FuncDialect, deepgengraph::DeepgengraphDialect,
+                           deepgengraph::triton::DeepgengraphTritonDialect, arith::ArithDialect, 
+                           tensor::TensorDialect>();
+    target.addIllegalOp<deepgengraph::KernelOp>();
+
+    RewritePatternSet ps(ctx);
+    ps.add<KernelOpConversionPattern>(tc, ctx);
+
+    if (failed(applyPartialConversion(op, target, std::move(ps)))) {
+      signalPassFailure();
+    }
+  }
+};
+
+
+// ============ Pass Creator ============
 
 std::unique_ptr<Pass> createConvertScfForOpPass() {
   return std::make_unique<ConvertSCFForToAffineForPass>();
@@ -1162,11 +1604,9 @@ std::unique_ptr<Pass> createConvertKernelOpToFriskPass() {
   return std::make_unique<ConvertKernelOpToFrisk>();
 }
 
-std::unique_ptr<Pass> createConvertMemOpPass() {
-  return std::make_unique<ConvertMemOpToFrisk>();
+std::unique_ptr<Pass> createConvertMemAndCalcOpPass() {
+  return std::make_unique<ConvertMemAndCalcOpToFrisk>();
 }
-
-
 
 
 } // namespace mlir::frisk

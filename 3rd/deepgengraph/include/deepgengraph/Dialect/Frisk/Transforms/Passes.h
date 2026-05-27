@@ -12,11 +12,12 @@ namespace mlir::frisk {
 std::unique_ptr<Pass> createDeepgenGraphSimplifyPass();
 std::unique_ptr<Pass> createAddKernelargPermuteInfoPass();
 std::unique_ptr<Pass> createConvertKernelOpToFriskPass();
-std::unique_ptr<Pass> createConvertMemOpPass();
-std::unique_ptr<Pass> createConvertCalcOpPass();
+std::unique_ptr<Pass> createConvertMemAndCalcOpPass();
+// std::unique_ptr<Pass> createConvertCalcOpPass();
 std::unique_ptr<Pass> createDeepgenGraphMemspaceAnalyzePass();
 std::unique_ptr<Pass> createConvertScfForOpPass();
 std::unique_ptr<Pass> createDataflowAnalyzePass();
+std::unique_ptr<Pass> createFriskCanonicalizePass();
 std::unique_ptr<Pass> createOverlapPass();
 
 #define GEN_PASS_REGISTRATION
