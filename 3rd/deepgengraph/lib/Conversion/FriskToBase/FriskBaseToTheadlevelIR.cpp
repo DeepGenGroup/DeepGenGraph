@@ -9,17 +9,21 @@
 
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -63,55 +67,63 @@ static std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
     int64_t lowerBound = 0;
     int64_t step = 1;
     auto ub = upperBounds[i];
-    // // ---- 情况 1：ub == 0 (循环不执行) ----
-    // if (ub <= 0) {
-    //   // 放入一个空值/虚值占位，防止外部按索引访问 outIvs 时越界
-    //   outIvs.push_back(mlir::Value());
-    //   // 插入点保持不变，后续的内层循环会直接平铺在当前层（虽然逻辑上内层也不会被执行）
-    //   continue; 
-    // }
-
-    // // ---- 情况 2：ub == 1 (循环只执行一次，退化为常数 0) ----
-    // if (ub == 1) {
-    //   // 创建一个常数 0 作为当前层的伪迭代变量 (IV)
-    //   mlir::Value constantZero = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
-    //   outIvs.push_back(constantZero);
-      
-    //   // 注意：这里不需要 builder.setInsertionPointToStart(...)
-    //   // 因为没有生成新的 block，接下来的内层循环直接依附在当前 block 中
-    //   continue;
-    // }
-    // if(ub >= 2){
-    if(ub >= 0){
-      // 2. 创建当前层的 AffineForOp
-      auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
-      // 3. 如果提供了对应的 label，则为其添加 StringAttr 属性
-      if (i < labels.size() && labels[i] != nullptr) {
-        forOp->setAttr("iterLabel", builder.getStringAttr(labels[i]));
-      }
-      mlir::Value iv = forOp.getInductionVar();
-      // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
-      outIvs.push_back(iv);
-      loops.push_back(forOp);
-      // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
-      builder.setInsertionPointToStart(forOp.getBody());
+    // 2. 创建当前层的 AffineForOp
+    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
+    // 3. 如果提供了对应的 label，则为其添加 StringAttr 属性
+    if (i < labels.size() && labels[i] != nullptr) {
+      forOp->setAttr("iterLabel", builder.getStringAttr(labels[i]));
     }
+    mlir::Value iv = forOp.getInductionVar();
+    // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
+    outIvs.push_back(iv);
+    loops.push_back(forOp);
+    // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
+    builder.setInsertionPointToStart(forOp.getBody());
   }
 
   return loops;
 }
 
+struct WgmmaMNKLoopInfo {
+  int mLoopNum;
+  int nLoopNum;
+  int kLoopNum;
+  int kLoopStep;
+
+};
+
+// 计算：k轴循环次数，Y和X方向迭代次数（=blockRepeat）
+static WgmmaMNKLoopInfo GetWgmmaInfo(const LowerInfo& C, int bk){
+  WgmmaMNKLoopInfo info {};
+  auto ctype = mlir::cast<MemRefType>(C.buffer.getType());
+  auto mma_k =  WgmmaConfig::mma_k_bytes * 8 / ctype.getElementTypeBitWidth();
+  info.mLoopNum = C.get_block_repeat()[0];
+  info.nLoopNum = C.get_block_repeat()[1];
+  info.kLoopNum = bk / mma_k;
+  info.kLoopStep = mma_k;
+  return info;
+}
 
 // frisk.gemm(%7, %10) to %13 {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x128xf16, 3>, memref<128x128xf32>
+/**
+
+%acc = alloc_buffer(local, infoC.get_thread_total_widths())
+tma_wait %smA
+tma_wait %smB
+for(i=0;i < BM; i+= infoA.blockWidths[0]){
+  for(int j=0;j < BN; j+= infoB.blockWidths[1]){
+    for(k=0;k< BK; k+=mma_k) {
+      wgmma(%smA[i,k], %smB[k,j], %acc)
+    }
+  }
+}
+
+ */
 class GemmOpConversion : public OpConversionPattern<frisk::GemmOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(GemmOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
-    // llvm::outs() << "\n --op \n"; op.dump();
-    // llvm::outs() << "\n --opParent \n"; op->getParentOp()->dump();
-    // llvm::outs() << "\n --opParentParent \n"; op->getParentOp()->getParentOp()->dump();
-    llvm::outs() << "-- enter GemmOpConversion \n";llvm::outs().flush();
     auto kernel = getOuterMostOpWithName(op, func::FuncOp::getOperationName().data());
     assert(kernel->hasAttr("thread_num"));
     auto funcOp = mlir::cast<func::FuncOp>(kernel);
@@ -122,97 +134,94 @@ public:
       }
     });
     assert(tidx != nullptr);
-    // funcOp->dump();
-    // 3. 在 Rewrite 过程中，推荐安全地获取缓存，防止野指针崩溃
-    llvm::outs() << "-- start getinfo \n";llvm::outs().flush();
+
     auto infoA = s_info.at(op.getA());
     auto infoB = s_info.at(op.getB());
     auto infoC = s_info.at(op.getC());
+    infoA.show("A");
+    infoB.show("B");
+    infoC.show("C");
     
-    /** 
-    A B from shm, C is local. 
-    %localA, %localB, %localC = frisk.alloc_buffer(Local,) 
-    frisk.copy(%shmA, %localA), frisk.copy(%shmB, %localB)
-    frisk.fill(%localC, 0)
-    for(i,j,k){
-      %a = affine.load %localA[i,k] 
-      %b = affine.load %localB[k,j]
-      %c = affine.load %localC[i,j]
-      %c += %a * %b
-      affine.store(%c, %localC[i,j])
+    assert(infoA.get_block_repeat()[1] == infoB.get_block_repeat()[0]);  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
+    
+    auto typeA = mlir::cast<MemRefType>(adaptor.getA().getType());
+    auto typeB = mlir::cast<MemRefType>(adaptor.getB().getType());
+    bool is_ss = true;
+    if(typeA.getMemorySpaceAsInt() == int(friskMs::Local)){
+      is_ss = false;
     }
-    frisk.copy(%localC, %shmC)
-    */
+    assert(typeB.getMemorySpaceAsInt() == int(friskMs::Shared));
 
-    auto addCopyFromShmToRegInNestedForOp = [&](LowerInfo& li, mlir::Value val, bool fromShmToLocal){
-      RewriterBase::InsertionGuard ig{rewriter};
-      auto mapExprs = li.getAffineMap();
-      auto shmBuffer = li.buffer;
-      auto localShape = li.get_thread_total_widths();
-      auto eleType = mlir::dyn_cast<MemRefType>(shmBuffer.getType()).getElementType();
-      mlir::Value localReg{};
-      {
-        // 分配local buffer
-        RewriterBase::InsertionGuard ig{rewriter};
-        rewriter.setInsertionPointAfter(shmBuffer.getDefiningOp());
-        localReg = rewriter.create<frisk::AllocBufferOp>(shmBuffer.getLoc(), localShape, eleType, 16, int(friskMs::Local));
-      }
-      std::vector<Value> mapOperands {tidx};
-      auto indiceMap = AffineMap::get(li.get_dimcount(), 0, mapExprs, op->getContext());
-      std::vector<Value> ivs;
-      // 嵌套for loop，设置插入点到最内侧loop
-      auto loops = createNestedAffineFor(rewriter, op->getLoc(), li.getItervarUbs(), ivs, li.getIterVarLabels());
-      for(auto v : ivs){
-        if(v != nullptr){
-          mapOperands.push_back(v);
-        }
-      }
-      // copy数据
-      Value &src = fromShmToLocal ? shmBuffer : localReg;
-      Value &dst = fromShmToLocal ? localReg : shmBuffer;
-      // auto copyData = rewriter.create<frisk::CopyOp>(op->getLoc(), src, dst);
-      auto copyData = rewriter.create<frisk::CopyOp>(op->getLoc(), src, dst,  mapOperands, indiceMap);
-      return copyData;
-    };
-    llvm::outs() << "-- start copyInA \n";llvm::outs().flush();
-    auto copyInA = addCopyFromShmToRegInNestedForOp(infoA, op.getA(), true);
-    llvm::outs() << "-- start copyInB \n";llvm::outs().flush();
-    auto copyInB = addCopyFromShmToRegInNestedForOp(infoB, op.getB(), true);
-    auto localA = copyInA.getDst();
-    auto localB = copyInB.getDst();
+    // mma_k 和乘数有关
+    auto mma_k =  WgmmaConfig::mma_k_bytes * 8 / mlir::cast<MemRefType>(infoB.buffer.getType()).getElementTypeBitWidth();
+
+    auto shapeSmA = typeA.getShape();
+    auto shapeSmB = typeB.getShape();
+    auto BM = shapeSmA[0];
+    auto BK = shapeSmA[1];
+    auto BN = shapeSmB[1];
+
+    mlir::Value localAcc {};
     {
-      int m = localA.getType().getShape()[0];
-      int k = localA.getType().getShape()[1];
-      int n = localB.getType().getShape()[1];
-      std::vector<int> gemmUbs = {m,n,k};
-      std::vector<mlir::Value> outIvs;
-      std::vector<const char*> looplabels = {"m","n","k"};
       RewriterBase::InsertionGuard ig{rewriter};
-      createNestedAffineFor(rewriter, op->getLoc(), gemmUbs, outIvs,looplabels);
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value memref, AffineMap map, ValueRange mapOperands);
-      auto dimM = mlir::getAffineDimExpr(0, op->getContext());
-      auto dimN = mlir::getAffineDimExpr(1, op->getContext());
-      auto dimK = mlir::getAffineDimExpr(2, op->getContext());
-      llvm::SmallVector<AffineExpr,3> _mapA = {dimM,dimK};
-      llvm::SmallVector<AffineExpr,3> _mapB = {dimK,dimN};
-
-      auto affineMapA = AffineMap::get(3,0,_mapA, op->getContext());
-      auto affineMapB = AffineMap::get(3,0,_mapB, op->getContext());
-      std::vector<Value> vr;
-      for(auto iv : outIvs){
-        if(iv != nullptr){
-          vr.push_back(iv);
-        }
-      }
-      auto a = rewriter.create<affine::AffineLoadOp>(op->getLoc(), localA, affineMapA, vr); 
-      auto b = rewriter.create<affine::AffineLoadOp>(op->getLoc(), localB, affineMapB, vr); 
-      auto ab = rewriter.create<arith::MulFOp>(op->getLoc(), a,b);
-      
+      auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
+      rewriter.setInsertionPoint(outerMostFor);
+      auto shape = infoC.get_thread_total_widths();
+      auto eTy = mlir::cast<MemRefType>(infoC.buffer.getType()).getElementType();
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, MemRefType memrefType, IntegerAttr alignment = IntegerAttr());
+      auto memTy = MemRefType::get(shape,eTy, AffineMap{}, int(friskMs::Local));
+      localAcc = rewriter.create<memref::AllocaOp>(op->getLoc(), memTy);
+      // localAcc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), shape, eTy, 16, int64_t(friskMs::Local));
     }
-    llvm::outs() << "-- start copyOutC \n";llvm::outs().flush();
-    auto copyOutC = addCopyFromShmToRegInNestedForOp(infoC, op.getC(), false);
+    
+    auto ctx = op->getContext();
+
+    if(is_ss){
+      auto ivM = getAffineDimExpr(0, ctx);
+      auto ivN = getAffineDimExpr(1, ctx);
+      auto ivK = getAffineDimExpr(2, ctx);
+      RewriterBase::InsertionGuard ig{rewriter};
+      auto loopBK = rewriter.create<affine::AffineForOp>(op->getLoc(), 0, BK, mma_k);
+      rewriter.setInsertionPointToStart(loopBK.getBody());
+      
+      auto loopBM = rewriter.create<affine::AffineForOp>(op->getLoc(), 0, BM , infoA.get_block_widths()[0]);
+      rewriter.setInsertionPointToStart(loopBM.getBody());
+      
+      auto loopBN = rewriter.create<affine::AffineForOp>(op->getLoc(), 0, BN, infoB.get_block_widths()[1]);
+      rewriter.setInsertionPointToStart(loopBN.getBody());
+      
+      SmallVector<AffineExpr,2> indiceA = { ivM, ivK };
+      SmallVector<AffineExpr,2> indiceB = {ivK, ivN};
+      SmallVector<mlir::Value> iterVars { loopBM.getInductionVar(), loopBN.getInductionVar(), loopBK.getInductionVar() };
+    
+      auto mapA = AffineMap::get(3, 0, indiceA, ctx);
+      auto mapB = AffineMap::get(3, 0, indiceB, ctx);
+      // now insertion point is inside innermost forOp
+      std::vector<int64_t> mnk = {WgmmaConfig::mma_m, infoB.get_block_widths()[1] ,mma_k};
+      rewriter.create<WgMmaAsyncSSOp>(op->getLoc(), adaptor.getA(), adaptor.getB(), localAcc, mapA, iterVars, mapB, iterVars, mnk);
+      // copy local to smC (不必要)
+    }
+    else{
+      auto ivN = getAffineDimExpr(0, ctx);
+      auto ivK = getAffineDimExpr(1, ctx);
+      RewriterBase::InsertionGuard ig{rewriter}; 
+      auto loopBK = rewriter.create<affine::AffineForOp>(op->getLoc(), 0, BK, mma_k);
+      rewriter.setInsertionPointToStart(loopBK.getBody());
+      
+      auto loopBN = rewriter.create<affine::AffineForOp>(op->getLoc(), 0, BN, infoB.get_block_widths()[1]);
+      rewriter.setInsertionPointToStart(loopBN.getBody());
+      
+      SmallVector<AffineExpr,2> indiceB = {ivK, ivN};
+      SmallVector<mlir::Value> iterVars { loopBN.getInductionVar(), loopBK.getInductionVar() };
+    
+      auto mapB = AffineMap::get(2, 0, indiceB, ctx);
+      // now insertion point is inside innermost forOp
+      std::vector<int64_t> mnk = {WgmmaConfig::mma_m, infoB.get_block_widths()[1] ,mma_k};
+      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value localA, ::mlir::Value smB, ::mlir::Value localAcc, ::mlir::AffineMap smBMap, ::mlir::ValueRange smBMapOperands, ::llvm::ArrayRef<int64_t> mnk);
+      rewriter.create<WgMmaAsyncLSOp>(op->getLoc(), infoA.buffer, adaptor.getB(), localAcc, mapB, iterVars, mnk);
+      // copy local to smC (不必要)
+    }
     rewriter.eraseOp(op);
-    llvm::outs() << "-- exit gemmopconversion \n";llvm::outs().flush();
     return success();
   }
 };
@@ -225,6 +234,13 @@ public:
     %26 = arith.addf %24, %25 : f32
     affine.store %26, %19[%arg5, %arg6] : memref<128x128xf32>
   } 
+  转化为线程级别的实现：
+  1.loadOp 的srcMem，如果为block级别大小的local，将其切成thread-level-size local
+  （ 新建 alloc_local_buffer, 之后用新的replace旧的的allUses。最后删除旧的 ）
+  2.storeOp dstMem 同理
+  3.blockOp的 blockArgs, 改变映射范围为 thread-level-size，创建两重forOp。
+  4.blockOp内的Op，搬运到 nestedFor里。改变 blockArg映射
+  5.删除 blockOp
  */
 class BlockOpConversion : public OpConversionPattern<frisk::BlockOp> {
 public:
@@ -241,8 +257,8 @@ public:
         tidx = tidOp;
       }
     });
-    // 如果没找到线程 ID，直接返回匹配失败
     assert(tidx != nullptr);
+    // 寻找内部所有 load store ops
     std::vector<affine::AffineStoreOp> storeOps {};
     std::vector<affine::AffineLoadOp> loadOps {}; 
     op->walk([&](Operation* childOp){
@@ -256,27 +272,82 @@ public:
     assert(!storeOps.empty());
     std::vector<AllocBufferOp> threadLocalForStoreOps;
     std::vector<AllocBufferOp> threadLocalForLoadOps;
-    // 根据 load 和 storeOps，创建其 thread级别的 localBuffer
-    {
-      RewriterBase::InsertionGuard ig{rewriter};
-      auto outMostFor = getOuterMostOp<affine::AffineForOp>(op);
-      if(outMostFor != nullptr){
-        rewriter.setInsertionPoint(outMostFor);
-      }
-      for(auto storeOp : storeOps){
-        auto info = s_info.at(storeOp.getMemref()); 
-        info.show();
-        auto threadLocal = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), info.get_thread_total_widths(), storeOp.getMemref().getType().getElementType(), 16, int(friskMs::Local));
-        threadLocalForStoreOps.push_back(threadLocal);
-      }
-      for(auto loadOp : loadOps){
-        auto info = s_info.at(loadOp.getMemref());
-        info.show();
-        auto threadLocal = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), info.get_thread_total_widths(), loadOp.getMemref().getType().getElementType(), 16, int(friskMs::Local));
-        threadLocalForLoadOps.push_back(threadLocal);
-      }
+    SmallVector<int64_t,2> threadLevelSize;
+  // 收集所有需要替换的 local AllocBufferOp，去重
+    llvm::DenseMap<AllocBufferOp, SmallVector<int64_t, 2>> allocsToReplace;
+
+    for (auto loadOp : loadOps) {
+      auto srcValue = loadOp.getMemref();
+      // if (srcValue.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
+        auto srcDefOp = srcValue.getDefiningOp<AllocBufferOp>();
+        if (srcDefOp != nullptr && !allocsToReplace.count(srcDefOp)) {
+          allocsToReplace[srcDefOp] = s_info.at(srcValue).get_thread_total_widths();
+          auto i = s_info.at(srcValue);
+          i.show("block_load");
+        }
+      // }
     }
+
+    for (auto storeOp : storeOps) {
+      auto dstVal = storeOp.getMemref();
+      // if (dstVal.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
+        auto srcDefOp = dstVal.getDefiningOp<AllocBufferOp>();
+        if (srcDefOp != nullptr && !allocsToReplace.count(srcDefOp)) {
+          allocsToReplace[srcDefOp] = s_info.at(dstVal).get_thread_total_widths();
+          auto i = s_info.at(dstVal);
+          i.show("block_store");
+        }
+      // }
+    }
+    IRMapping mapper;
+    // 统一替换，每个 AllocBufferOp 只处理一次
+    for (auto &[srcDefOp, sz] : allocsToReplace) {
+      rewriter.setInsertionPoint(srcDefOp);
+      auto ty = MemRefType::get(sz, srcDefOp.getElementType(), AffineMap{}, srcDefOp.getMemorySpace());
+      if(srcDefOp.getMemorySpace() == int(friskMs::Local)){
+        auto newAlloc = rewriter.create<memref::AllocaOp>(srcDefOp->getLoc(), ty);
+        mapper.map(srcDefOp->getResult(0), newAlloc->getResult(0));
+      }
+      // 同步更新 threadLevelSize，供后续 createNestedAffineFor 使用
+      threadLevelSize = sz;
+    }
+    rewriter.setInsertionPoint(op);
+    // frisk.blocOp 根据newbuffer的size，生成 nestedFor
+    std::vector<mlir::Value> newIvs {};
+    std::vector<const char* > labels {};
+    std::vector<int> thread_level_sz { threadLevelSize.begin(), threadLevelSize.end() };
+    for(auto _ : thread_level_sz){
+      labels.push_back(nullptr);
+    }
+    createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, newIvs, labels);
     
+    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), newIvs)){
+      mapper.map(oldIndex,newIter);
+    }
+    // 根据映射规则，将frisk.blockOp 内的全部op 搬运到 nestedFOr的最内层 （createNestedAffineFor 之后，insertionPoint已经在最内侧了，不用动）
+    // 将 blockOp body 内的所有 op 按序 clone 到当前 insertionPoint（nestedFor 最内层）
+    // 跳过 block terminator（frisk.yield 或类似）
+    Block *body = op.getBody();
+    for (auto &childOp : body->without_terminator()) {
+      rewriter.clone(childOp, mapper);
+    }
+    // blockOp body 外部（blockOp 之后）可能还有对旧 alloc 的 use（如 copy-out 等）
+    // 用 replaceAllUsesExcept 只替换 blockOp 外部的 use
+    for (auto &[srcDefOp, sz] : allocsToReplace) {
+      auto temp = mapper.lookupOrNull(srcDefOp->getResult(0));
+      if(temp == nullptr){
+        continue;
+      }
+      auto newAlloc = temp.getDefiningOp<memref::AllocaOp>();
+      // 只替换 blockOp 之外还残留的 use
+      srcDefOp->getResult(0).replaceAllUsesExcept(
+          newAlloc->getResult(0),
+          SmallPtrSet<Operation *, 1>{op});
+      rewriter.eraseOp(srcDefOp);
+    }
+    // 删除原 blockOp（连同其 body 一起消除）
+    rewriter.eraseOp(op);
+
     return success();
   }
 };
@@ -290,13 +361,30 @@ public:
   void runOnOperation(){
     MLIRContext *context = &getContext();
     auto kernel = getOperation();
+    OpBuilder builder{context};
     if(!kernel->hasAttr("thread_num")){
       return;
     }
     s_info = LowerInfoAnalysis::run(kernel);
     llvm::outs() << "-- lowerinfo analyze done\n";llvm::outs().flush();
-    ConversionTarget target(*context);
+    
+    kernel->walk([&](Operation* childOp){
+      if(mlir::isa<frisk::GemmOp>(childOp)){
+        // attr::
+        // childOp->setAttr("dev", frisk::attr::DevKind::CCore);
+        childOp->setAttr("dev", frisk::DevKindAttr::get(context, ::mlir::frisk::attr::DevKind::TCore));
+      }
+      else if(mlir::isa<frisk::CopyOp>(childOp)){
+        auto concreteOp = mlir::cast<frisk::CopyOp>(childOp);
+        auto srcTy = concreteOp.getSrc().getType();
+        if(srcTy.getMemorySpaceAsInt() == int(friskMs::Global)){
+          childOp->setAttr("dev", frisk::DevKindAttr::get(context, ::mlir::frisk::attr::DevKind::TMA));
+        }
+      }
+    });
 
+    ConversionTarget target(*context);
+  
     // clang-format off
     target.addLegalDialect<
       frisk::FriskDialect,
@@ -309,11 +397,11 @@ public:
       gpu::GPUDialect>();
 
     target.addIllegalOp<KernelOp,ParallelOp,ForOp,
-      GemmOp, BlockOp
+      BlockOp, GemmOp
     >();
     RewritePatternSet patterns(context);
     patterns.add<
-      GemmOpConversion, BlockOpConversion
+      BlockOpConversion, GemmOpConversion
     >(context);
     llvm::outs() << "-- lowerinfo partialconversion\n";llvm::outs().flush();
     if (failed(applyPartialConversion(kernel, target, std::move(patterns)))){

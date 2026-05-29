@@ -17,8 +17,6 @@ namespace mlir::frisk {
 
 namespace {
 
-using MemorySpace = ::mlir::frisk::attr::MemorySpace;
-
 class OpBuilderWithLoc {   // 封装了 OpBuilder IR 构建器
 public:
   OpBuilderWithLoc(MLIRContext *context) {
@@ -98,6 +96,8 @@ private:
 
 } // namespace
 
+using friskMs = ::mlir::frisk::attr::MemorySpace;
+
 // 比较memspace层级大小（）
 static inline int compareMemspace(frisk::attr::MemorySpace lhs, frisk::attr::MemorySpace rhs){
   auto toInt = [](frisk::attr::MemorySpace ms){
@@ -169,6 +169,10 @@ static inline DenseI32ArrayAttr getOpOutputMemspaceAttr(mlir::Operation* op){
   return op->getAttrOfType<DenseI32ArrayAttr>(OUT_MEMSPACE);
 }
 
+struct WgmmaConfig {
+  static int mma_m ;
+  static int mma_k_bytes ;
+};
 
 }
 

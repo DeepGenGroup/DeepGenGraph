@@ -9,6 +9,10 @@ def MemorySpaceAttr : EnumAttr<Frisk_Dialect, MemorySpaceEnum, "memory_space"> {
     let cppNamespace = "::mlir::frisk";
 }
 
+def DeviceKindAttr : EnumAttr<Frisk_Dialect, DeviceKindEnum, "device"> {
+    let cppNamespace = "::mlir::frisk";
+}
+
 def GemmWarpPolicyAttr : EnumAttr<Frisk_Dialect, GemmWarpPolicyEnum, "gemm_warp_policy"> {
     let cppNamespace = "::mlir::frisk";
     let summary = "GEMM warp partitioning policy";

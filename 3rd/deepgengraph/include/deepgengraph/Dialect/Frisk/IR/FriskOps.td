@@ -370,62 +370,7 @@ def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [Pure]> {
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
 }
-
-// allocOp
-// def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [Pure]> {
-//   let summary = "allocate buffer operation";
-//   let description = [{ 
-//     Allocates a buffer with the specified shape, element type and optional attributes.
-//   }];
-
-//   let arguments = (ins 
-//     DenseI64ArrayAttr:$shape,
-//     TypeAttr:$elementType,
-//     DefaultValuedAttr<I64Attr, "0">:$alignment,
-//     // DefaultValuedAttr<I64Attr, "0">:$memorySpace
-//     DefaultValuedAttr<MemorySpaceAttr, "::mlir::frisk::attr::MemorySpace::Local">:$memorySpace
-//   );
-
-//   let results = (outs 
-//     Res<AnyMemRef>:$result
-//   );
-
-//   let builders = [
-//     OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Type":$elementType)>,
-//     // OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Type":$elementType, "int64_t":$alignment)>,
-//     // OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Type":$elementType, "int64_t":$alignment, "int64_t":$memorySpace)>
-//     OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Type":$elementType, "Attribute":$memorySpace)>
-//   ];
-
-//   let extraClassDeclaration = [{
-//     MemRefType getMemRefType() { 
-//       return cast<MemRefType>(getResult().getType()); 
-//     }
-//     // ArrayRef<int64_t> getShape() { return getShapeAttr().asArrayRef(); }
-//     // Type getElementType() { return getElementTypeAttr().getValue(); }
-//     // int64_t getAlignment() { return getAlignmentAttr().getInt(); }
-//     // int64_t getMemorySpace() { return getMemorySpaceAttr().getInt(); }
-    
-//     // 根据 memorySpace 获取 scope
-//     StringRef getScope() {
-//       switch (getMemorySpace()) {
-//         case ::mlir::frisk::attr::MemorySpace::Local:
-//           return "local";
-//         case ::mlir::frisk::attr::MemorySpace::Global:
-//           return "global";
-//         case ::mlir::frisk::attr::MemorySpace::Shared:
-//           return "shared";
-//         // case 0: return "local";
-//         // case 1: return "global"; 
-//         // case 3: return "shared";
-//         // default: return "unknown";
-//       }
-//     }
-//   }];
-
-//   let hasVerifier = 1;
-//   let hasCustomAssemblyFormat = 1;
-// }
+// alloc buffer
 def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [Pure]> {
   let summary = "allocate buffer operation";
   let description = [{ 
@@ -469,6 +414,8 @@ def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [Pure]> {
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
 }
+
+// copy
 def Frisk_CopyOp : Frisk_Op<"copy", [
     MemoryEffects<[MemRead, MemWrite]>,
     DeclareOpInterfaceMethods<OpAsmOpInterface>
@@ -641,5 +588,178 @@ def Frisk_BarrierArriveExpectTx: Frisk_Op<"barrier_arrive_expect_tx", []> {
   let assemblyFormat = "$barrier attr-dict `:` type($barrier)";
 }
 
+// async copy
+def Frisk_AsyncCopy : Frisk_Op<"async_copy", []> {
+  let summary = "Async copy buffer using TMA with affine coordinates";
+  let description = [{
+    使用 TMA (Tensor Memory Accelerator) 异步拷贝数据。
+    该操作通过 AffineMap 及其操作数（MapOperands）计算出在全局内存中的坐标，
+    并将数据异步搬运到共享内存（dst_smem）中。传输完成后触发指定的 Barrier。
+
+    示例:
+    ```mlir
+    // 对应伪代码中的 coords=[0, %by*128]
+    #map = affine_map<(d0) -> (0, d0 * 128)>
+    
+    frisk.async_copy %smem, %tma_desc [%by]
+      map: #map, barrier: %barrier
+      : memref<1x128xf32, 3>, type(%tma_desc), type(%barrier)
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<AnyMemRef, "Destination shared memory buffer", [MemWrite]>:$dst_smem,
+    Frisk_TmaDescType:$tma_desc,
+    Variadic<Index>:$map_operands,     // 计算坐标所需的输入变量（如伪代码中的 %by）
+    AffineMapAttr:$coordinate_map,    // 用于映射出多维坐标的 AffineMap 属性
+    Frisk_BarrierType:$barrier
+  );
+
+  // 语法格式化，使其接近标准的 Affine 风格
+  let assemblyFormat = [{
+    $dst_smem `,` $tma_desc `[` $map_operands `]` 
+    `map` `:` $coordinate_map `,` `barrier` `:` $barrier
+    attr-dict `:` type($dst_smem) `,` type($tma_desc) `,` type($barrier)
+  }];
+
+  // 可以在此处添加验证器（Verifier）来确保 map 的输出维度符合 TMA 的要求
+  let hasVerifier = 1;
+}
+
+// get global tma descriptor
+def Frisk_GetGlobalDescOp : Frisk_Op<"get_global_desc", [Pure]> {
+  let summary = "Create a TMA descriptor from a global memref";
+  let description = [{
+    该操作通过绑定一个全局内存的 `memref` 来创建并初始化一个 TMA 描述符。
+    输入的 `memref` 代表全局内存的完整张量结构，`box_size` 指定了未来通过该描述符
+    进行 TMA 异步搬运时的基本块（Tile）大小。
+
+    示例:
+    ```mlir
+    // 将一个 2048x2048 的全局内存绑定为 TMA 描述符，指定每次搬运 128x128 的块
+    %tma_desc = frisk.get_global_desc %global_mem
+      box_size = [128, 128]
+      : (memref<2048x2048xf16>) -> !frisk.tma_desc<memref<2048x2048xf16>>
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<AnyMemRef, "Global memory buffer to be mapped">:$global_mem,
+    DenseI64ArrayAttr:$box_size // 硬件 TMA 需要知道高维切片每个维度的基本大小 (Tile Size)
+  );
+
+  let results = (outs
+    Frisk_TmaDescType:$tma_desc
+  );
+
+  // 语法格式化
+  let assemblyFormat = [{
+    $global_mem `box_size` `=` $box_size attr-dict `:` `(` type($global_mem) `)` `->` type($tma_desc)
+  }];
+
+  // 验证器：确保输出的 TmaDescType 内部携带的类型与输入的 global_mem 类型完全一致
+  let hasVerifier = 1;
+}
+
+// wgMMA (Warpgroup Matrix Multiply Accumulate)
+def Frisk_WgMmaAsyncSSOp : Frisk_Op<"wgmma_ss_async", [AttrSizedOperandSegments]> {
+  let summary = "Warpgroup-level asynchronous matrix multiply-accumulate";
+  let description = [{
+    执行 Warpgroup 级别的异步矩阵乘法累加操作 (D = A * B + C)。
+    该操作由整个 Warpgroup (128 threads) 协同完成。
+    AB 必须位于 shared , Acc 必须位于 local
+
+    smAMap / smBMap 是 AffineMap，描述如何从 smAMapOperands / smBMapOperands
+    （动态 SSA 值，如 tile 索引、warpgroup id 等）计算出 smA / smB 在
+    shared memory 中的线性 byte offset，供 wgmma.fence / wgmma.async 使用。
+
+    典型用法：
+      smAMap = affine_map<(d0, d1)[s0] -> (d0 * s0 + d1)>
+      smAMapOperands = [%row, %col, %stride]
+  }];
+
+  let arguments = (ins
+    // ── Matrix buffers ──────────────────────────────────────────────
+    Arg<AnyMemRef, "Matrix A in shared memory", [MemRead]>:$smA,
+    Arg<AnyMemRef, "Matrix B in shared memory", [MemRead]>:$smB,
+    Arg<AnyMemRef, "Accumulator C in local (register) memory", [MemRead, MemWrite]>:$localAcc,
+
+    // ── Offset affine maps for smA ───────────────────────────────────
+    // AffineMapAttr 描述 smA 的 offset 计算公式
+    AffineMapAttr:$smAMap,
+    // 对应 smAMap 中 dim / symbol 的动态 SSA 操作数
+    Variadic<Index>:$smAMapOperands,
+
+    // ── Offset affine maps for smB ───────────────────────────────────
+    AffineMapAttr:$smBMap,
+    Variadic<Index>:$smBMapOperands,
+
+    // ── Shape descriptor ─────────────────────────────────────────────
+    DenseI64ArrayAttr:$mnk   // [M, N, K]
+  );
+
+  let results = (outs
+  );
+
+  let assemblyFormat = [{
+    $smA `[` $smAMap
+      ( `(` $smAMapOperands^ `)` )?
+    `]`
+    $smB `[` $smBMap
+      ( `(` $smBMapOperands^ `)` )?
+    `]`
+    $localAcc
+    `mnk` `=` $mnk
+    attr-dict
+    `:` type($smA) `,` type($smB) `,` type($localAcc)
+  }];
+  // let hasVerifier = 1;
+}
+
+// wgMMA (Warpgroup Matrix Multiply Accumulate)
+def Frisk_WgMmaAsyncLSOp : Frisk_Op<"wgmma_ls_async", []> {
+  let summary = "Warpgroup-level asynchronous matrix multiply-accumulate";
+  let description = [{
+    执行 Warpgroup 级别的异步矩阵乘法累加操作 (D = A * B + C)。
+    该操作由整个 Warpgroup (128 threads) 协同完成。
+    B 必须位于 shared , A & Acc 必须位于 local
+
+    smBMap 是 AffineMap，描述如何从 smBMapOperands
+    （动态 SSA 值，如 tile 索引、warpgroup id 等）计算出  smB 在
+    shared memory 中的线性 byte offset，供 wgmma.fence / wgmma.async 使用。
+
+    典型用法：
+      smBMap = affine_map<(d0, d1)[s0] -> (d0 * s0 + d1)>
+      smBMapOperands = [%row, %col, %stride]
+  }];
+
+  let arguments = (ins
+    // ── Matrix buffers ──────────────────────────────────────────────
+    Arg<AnyMemRef, "matrix A data in lcoal memory", [MemRead]>:$localA,
+    Arg<AnyMemRef, "Matrix B in shared memory", [MemRead]>:$smB,
+    Arg<AnyMemRef, "Accumulator C in local (register) memory", [MemRead, MemWrite]>:$localAcc,
+
+    // ── Offset affine maps for smB ───────────────────────────────────
+    AffineMapAttr:$smBMap,
+    Variadic<Index>:$smBMapOperands,
+
+    // ── Shape descriptor ─────────────────────────────────────────────
+    DenseI64ArrayAttr:$mnk   // [M, N, K]
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $localA 
+    $smB `[` $smBMap
+      ( `(` $smBMapOperands^ `)` )?
+    `]`
+    $localAcc
+    `mnk` `=` $mnk
+    attr-dict
+    `:` type($localA) `,` type($smB) `,` type($localAcc)
+  }];
+  // let hasVerifier = 1;
+}
 
 #endif // FRISK_OPS

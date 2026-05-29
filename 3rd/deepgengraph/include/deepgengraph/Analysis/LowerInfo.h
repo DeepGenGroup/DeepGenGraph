@@ -24,6 +24,11 @@ static const char* THREAD_LABELS[] = {"iv_threadX", "iv_threadY"};
 static const char* BLOCK_LABELS[] = {"iv_blockX", "iv_blockY"};
 
 class LowerInfoAnalysis ;
+/**
+ * @brief LowerInfo
+ * 其表示了 在block层面的一块buffer，在降低到线程层面后，线程如何从 block-level的buffer里 根据自己的tid 去RW 该buffer里的数据（即索引[x,y]）
+[x,y] 可通过不同级别的 loop_iv （block_repeat, warp_repeat, thread_width） 配合 wid laneid 算出来
+ */
 class LowerInfo {
   friend LowerInfoAnalysis;
 public:
@@ -65,7 +70,7 @@ public:
     return ivUpperBounds;
   }
 
-  void show() {
+  void show(const char* label = nullptr) {
     auto printI64Vec = [&](const char *name, const llvm::SmallVector<int64_t, 2> &vec) {
       llvm::outs() << name << ": [";
       for (size_t i = 0; i < vec.size(); ++i) {
@@ -85,8 +90,11 @@ public:
       }
       llvm::outs() << "]\n";
     };
-
-    llvm::outs() << "=== LowerInfo ===\n";
+    const char* _label = " ";
+    if(label != nullptr){
+      _label = label;
+    }
+    llvm::outs() << "=== LowerInfo "<< _label <<" ===\n";
     llvm::outs() << "buffer: ";
     if (buffer) {
       buffer.print(llvm::outs());
@@ -153,7 +161,7 @@ public:
         ivUpperBounds.push_back(warp_repeat[i]);
         ivUpperBounds.push_back(thread_widths[i]);
       }
-    } else if (type.getMemorySpaceAsInt() == int(MemorySpace::Shared)) { // shared
+    } else if (type.getMemorySpaceAsInt() == int(friskMs::Shared)) { // shared
       for (size_t i = 0; i < thread_widths.size(); ++i) { // 0:tidx, 1:iv_bx, iv_wx , iv_tx ,iv_by, iv_wy, iv_ty
         auto ib = b.getAffineDimExpr(i * 3 + 1);          // iv_bx
         auto iw = b.getAffineDimExpr(i * 3 + 2);          // iv_wx

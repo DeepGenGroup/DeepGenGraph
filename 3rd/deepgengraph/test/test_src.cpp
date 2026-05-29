@@ -292,19 +292,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertKernelOpToFriskPass ---------\n"; llvm::outs().flush();src->dump();
   
   pm.addNestedPass<frisk::KernelOp>(frisk::createConvertMemAndCalcOpPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertMemAndCalcOpPass ---------\n"; llvm::outs().flush();src->dump();
-  // pm.addNestedPass<frisk::KernelOp>(frisk::createConvertCalcOpPass());
-  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-  // pm.addNestedPass<frisk::KernelOp>(mlir::createCanonicalizerPass());
-  // pm.addNestedPass<frisk::KernelOp>(mlir::createCSEPass());
-  pm.run(src->getOperation());
-  llvm::outs() << "\n---------- after conversion ---------\n"; llvm::outs().flush();src->dump();
+
   pm.addPass(frisk::createConvertFriskToBasePass());
-  pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
-
+  pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  // pm.addPass(mlir::createSymbolDCEPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
 
   return 0;
 }

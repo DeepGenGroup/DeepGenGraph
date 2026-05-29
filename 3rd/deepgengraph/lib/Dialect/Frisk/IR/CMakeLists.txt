@@ -5,6 +5,7 @@ add_deepgengraph_library(FriskIR
   FriskOps_Reduce.cpp
   FriskTypes.cpp
   ../Utils/LayoutUtils.cpp
+  ../Utils/Utils.cpp
 
   DEPENDS
   FriskTableGen

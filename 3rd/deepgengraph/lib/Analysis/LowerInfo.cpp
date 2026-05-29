@@ -40,7 +40,14 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 #define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
 
-
+/**
+ * @brief lowinfo 推断
+ 目的：以kernel中的首个gemm为出发点，向两侧推断线程应该持有的寄存器buffer形状。尽可能减少算子之间 local->shm 的写回
+ block中，block_layout 和 warp_layout 按照 H100 gemm tensorcore 的计算规则固定
+ * 
+ * @param kernelOp 
+ * @return DenseMap<Value, LowerInfo> 
+ */
 DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
   DenseMap<Value, LowerInfo> buf_info_maps{};
   SmallVector<Operation*, 5> need_infer_ops{};
@@ -53,7 +60,8 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       need_infer_ops.push_back(op);
     }
   });
-
+  
+  // 将n因式分解为 x*y,  x y 尽可能接近
   auto square_func = [](int n) -> std::pair<int, int> {
     int a = static_cast<int>(std::sqrt(n));
     while (a >= 1) {
@@ -88,7 +96,8 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
     }
     return thread_num;
   };
-
+  
+  // 直接推断gemmOp的lowerInfo ABC，存入 buf_info_map
   auto dircet_infer_func = [&](Operation *op) ->bool {
     // get region thread num
     OpBuilder b(op);
@@ -101,8 +110,9 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       MemRefType _b = gemmOp.getB().getType();
       MemRefType _c = gemmOp.getC().getType();
       // ab有一个不是shared memroy
-      if (_a.getMemorySpaceAsInt() != 3 || _b.getMemorySpaceAsInt() != 3) {
-        LLVM_OUT_MSG("ab有一个不是shared memroy");
+      // if (_a.getMemorySpaceAsInt() != 3 || _b.getMemorySpaceAsInt() != 3) {
+      if ( _b.getMemorySpaceAsInt() != 3) {
+        LLVM_OUT_MSG("b必须为shared memroy");
         return false;
       }
       // warpgroup 数量和布局
@@ -114,27 +124,27 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       }
       auto shapeC = _c.getShape();
       auto shapeA = _a.getShape();
-      unsigned in_elem_width = _a.getElementTypeBitWidth();
+      unsigned in_elem_bitwidth = _a.getElementTypeBitWidth();
       int64_t bm_ = shapeC[0];
       int64_t bn_ = shapeC[1];
       int64_t bk_ = gemmOp.getTransA() ? shapeA[1] : shapeA[0];
       assert(bm_ % 64 == 0 && "BM must great more than MMA_M");
       assert(bn_ % 8 == 0 && "BN must great more than min MMA_N");
-      assert(in_elem_width * bk_ % 32 == 0 && "BK must great more than MMA_K");
+      assert(in_elem_bitwidth * bk_ % 32 == 0 && "BK must great more than MMA_K");
       // must memory
       assert((_c.getMemorySpaceAsInt() == 0 || _c.getMemorySpaceAsInt() == 5) &&
              "C must be local buffer.");
       // 任意精度的计算规模
       int mma_n = bn_ >= 256 ? 256 : bn_;
       int mma_m = 64;
-      int mma_k = 32 / in_elem_width;
+      int mma_k = 32 * 8 / in_elem_bitwidth;  // wgmma中 mma_k 固定为32Bytes = 32*8 bits
       // C LowerInfo
       LowerInfo ic;
       ic.buffer = C;
       ic.thread_bound = thread_num;
-      ic.thread_widths = {1, 32 / static_cast<int64_t>(in_elem_width)};
-      ic.warp_layout = {8, 4};
-      ic.block_layout = {y * 4, x};
+      ic.thread_widths = {1, 32 / static_cast<int64_t>(in_elem_bitwidth)};  // ptxas 手册中已经固定
+      ic.warp_layout = {8, 4};  // ptxas 手册中已经固定
+      ic.block_layout = {y * 4, x};  // ptxas 手册中已经固定
       ic.warp_widths = ic.getWarpWidths(ic.thread_widths, ic.warp_layout);
       ic.warp_repeat = {2, mma_n / ic.warp_widths[1]};
       ic.block_widths = ic.getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
@@ -144,15 +154,18 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       buf_info_maps[C] = ic;
       // A lowerInfo no tran
       auto zero = b.getAffineConstantExpr(0);
+
       buf_info_maps[A] = LowerInfo(ic);
       buf_info_maps[A].buffer = A;
-      buf_info_maps[A].thread_widths[1] = 0;
+      // BK方向，lowINfo和 loopBK循环有关。其描述了单次 mma_k 的wgmma中 线程持有的 shmA中的元素访问规则
+      buf_info_maps[A].thread_widths[1] = 32 / in_elem_bitwidth;
       buf_info_maps[A].warp_widths[1] = 0;
-      buf_info_maps[A].warp_repeat[1] = 0;
+      buf_info_maps[A].warp_repeat[1] = mma_k / buf_info_maps[A].warp_layout[1] / buf_info_maps[A].thread_widths[1];
       buf_info_maps[A].block_widths[1] = mma_k;
       buf_info_maps[A].block_repeat[1] = bk_ / mma_k;
       buf_info_maps[A].warp_indices[1] = zero;
       buf_info_maps[A].lane_indices[1] = zero;
+      
       // B lowerInfo no tran
       buf_info_maps[B] = LowerInfo(ic);
       buf_info_maps[B].buffer = B;
@@ -176,7 +189,9 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
     // BlockOp 需要额外检查其内部 affine load/store 的 memref。
     llvm::SmallVector<Value, 8> memrefsToCheck;
     for (const auto &opd : op->getOperands()) {
-      if (isa<MemRefType>(opd.getType())) memrefsToCheck.push_back(opd);
+      if (isa<MemRefType>(opd.getType())) {
+        memrefsToCheck.push_back(opd);
+      }
     }
     if (auto blockOp = dyn_cast<BlockOp>(op)) {
       blockOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *nestedOp) {
@@ -199,11 +214,11 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       return true;
     }  
     if (!all_in && count == memrefsToCheck.size()) { // 无已推断buf
-      LLVM_OUT_MSG("无已推断buf");
+      LLVM_OUT_MSG("无已推断buf, 需要gemmOp做锚点");
       return false;
     }        
     // 进入推断
-    if (auto copyOp = dyn_cast<CopyOp>(op)) {  // copyOp
+    if (auto copyOp = dyn_cast<CopyOp>(op)) {  // copyOp ：直接根据 src dst 的已知一方推断未知的另一方
       Value dst = copyOp.getDstMemRef();
       Value src = copyOp.getSrcMemRef();
       if (buf_info_maps.count(dst)) {
@@ -265,6 +280,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
         return false;
       }
       load_bufs.push_back(store_buf);
+      // 将一个buffer的已知lowerInfo 传播到blockOp内的其他 buffer上
       for (const Value& buf: load_bufs) {
         if (!buf_info_maps.count(buf)) {
           buf_info_maps[buf] = *info;
@@ -283,13 +299,13 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       // datas
       auto shapeC = _c.getShape();
       auto shapeA = _a.getShape();
-      unsigned in_elem_width = _a.getElementTypeBitWidth();
+      unsigned in_elem_bitwidth = _a.getElementTypeBitWidth();
       int64_t bm_ = shapeC[0];
       int64_t bn_ = shapeC[1];
       int64_t bk_ = gemmOp.getTransA() ? shapeA[1] : shapeA[0];
       assert(bm_ % 64 == 0 && "BM must great more than MMA_M");
       assert(bn_ % 8 == 0 && "BN must great more than min MMA_N");
-      assert(in_elem_width * bk_ % 32 == 0 && "BK must great more than MMA_K");
+      assert(in_elem_bitwidth * bk_ % (32*8) == 0 && "BK must great more than MMA_K");
       // must memory
       assert((_c.getMemorySpaceAsInt() == 0 || _c.getMemorySpaceAsInt() == 5) &&
              "C must be local buffer.");
@@ -297,7 +313,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       // 任意精度的计算规模 
       int mma_n = bn_ >= 256 ? 256 : bn_;
       int mma_m = 64;
-      int mma_k = 32 / in_elem_width;
+      int mma_k = 32 * 8 / in_elem_bitwidth;
 
       LowerInfo ic;
       if (buf_info_maps.count(A) || buf_info_maps.count(B)) {
@@ -310,7 +326,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
         ic.warp_layout = info.warp_layout;
         ic.block_layout = info.block_layout;
         if (buf_info_maps.count(A)) {
-          ic.thread_widths = {info.thread_widths[0], 32 / static_cast<int64_t>(in_elem_width)};
+          ic.thread_widths = {info.thread_widths[0], 32 / static_cast<int64_t>(in_elem_bitwidth)};
           ic.warp_widths = ic.getWarpWidths(ic.thread_widths, ic.warp_layout);
           ic.warp_repeat = {info.warp_repeat[0], mma_n / ic.warp_widths[1]};
           ic.block_widths = ic.getBlockWidths(ic.warp_widths, ic.warp_repeat, ic.block_layout);
@@ -333,7 +349,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       if (buf_info_maps.count(A)) {
         buf_info_maps[B] = ic;
         buf_info_maps[B].buffer = B;
-        buf_info_maps[B].thread_widths[0] = 0;
+        buf_info_maps[B].thread_widths[0] = 0;  // for 循环迭代方向。不推断
         buf_info_maps[B].warp_widths[0] = 0;
         buf_info_maps[B].warp_repeat[0] = 0;
         buf_info_maps[B].block_widths[0] = mma_k;
@@ -344,7 +360,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       if (buf_info_maps.count(B)) {
         buf_info_maps[A] = ic;
         buf_info_maps[A].buffer = A;
-        buf_info_maps[A].thread_widths[1] = 0;
+        buf_info_maps[A].thread_widths[1] = 0;  // for 循环迭代方向。不推断
         buf_info_maps[A].warp_widths[1] = 0;
         buf_info_maps[A].warp_repeat[1] = 0;
         buf_info_maps[A].block_widths[1] = mma_k;
@@ -357,11 +373,11 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
       Value dst = reduceOp.getDst();
       Value src = reduceOp.getSrc();
       uint64_t dim = reduceOp.getDim();
-      if (!buf_info_maps.count(src)) {  // unexsit 
+      if (!buf_info_maps.count(src)) {  // src 存在时才能推断 dst 
         LLVM_OUT_MSG("---- inferError 4");
         return false;
       }
-      buf_info_maps[dst] = buf_info_maps[src];
+      buf_info_maps[dst] = buf_info_maps[src];  // dst 推断为和src 相同，之后去除reduce轴方向的info信息
       LowerInfo &dstInfo = buf_info_maps[dst];
       dstInfo.buffer = dst;
 

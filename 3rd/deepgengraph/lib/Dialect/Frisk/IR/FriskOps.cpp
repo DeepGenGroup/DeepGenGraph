@@ -12,6 +12,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/LogicalResult.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
@@ -2266,47 +2267,13 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
-// // 自定义汇编格式解析
-// ParseResult ReduceOp::parse(OpAsmParser &parser, OperationState &result) {
-//   OpAsmParser::UnresolvedOperand srcOperand, dstOperand;
-//   Type srcType, dstType;
-//   // 解析操作数: %src, %dst
-//   if (parser.parseOperand(srcOperand) || parser.parseComma() || parser.parseOperand(dstOperand))
-//     return failure();
-//   if (parser.parseOptionalAttrDict(result.attributes))// 解析属性字典: {dim=0, clear=1, kind="max"}
-//     return failure();
-//   // 解析类型: : memref<1xf16>, memref<1024xf16>
-//   if (parser.parseColon() || parser.parseType(srcType) || parser.parseComma() || parser.parseType(dstType))
-//     return failure();
-//   // 解析操作数
-//   if (parser.resolveOperand(srcOperand, srcType, result.operands) || 
-//       parser.resolveOperand(dstOperand, dstType, result.operands))
-//     return failure();
-//   return success();
-// }
+LogicalResult AsyncCopy::verify(){
+  return success();
+}
 
-// // 自定义汇编格式打印
-// void ReduceOp::print(OpAsmPrinter &p) {
-//   p << " " << getSrc() << ", " << getDst();
-//   // 打印属性字典
-//   p << " {";
-//   p << "dim = " << getDim();
-//   p << ", clear = " << getClear();
-//   p << ", kind = \"" << getKind() << "\"";
-//   p << "}";
-//   p << " : " << getSrc().getType() << ", " << getDst().getType();
-// }
-
-// -- ConvertOp --
-// LogicalResult ConvertOp::inferReturnTypes(::mlir::MLIRContext *context, std::optional<::mlir::Location> location,
-//                                           Adaptor adaptor, ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
-//   auto dst_type = adaptor.getDstType();
-//   auto operand_type = cast<MemRefType>(adaptor.getOperand().getType());
-
-//   auto ret_type = MemRefType::get(operand_type.getShape(), dst_type, AffineMap{}, operand_type.getMemorySpaceAsInt());
-//   inferredReturnTypes.push_back(ret_type);
-//   return success();
-// }
+LogicalResult GetGlobalDescOp::verify(){
+  return success();
+}
 
 
 } // namespace frisk
