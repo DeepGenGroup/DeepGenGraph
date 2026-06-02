@@ -104,6 +104,37 @@ static WgmmaMNKLoopInfo GetWgmmaInfo(const LowerInfo& C, int bk){
   return info;
 }
 
+// frisk.copy 转换为 cudacore的copy 或 tma copy
+class CopyOpConversion : public OpConversionPattern<frisk::CopyOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(frisk::CopyOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    auto srcMemref = mlir::cast<MemRefType>(adaptor.getSrc().getType());
+    auto dstMemref = mlir::cast<MemRefType>(adaptor.getDst().getType());
+    if(srcMemref.getElementType() != dstMemref.getElementType()){
+      // src dst的元素类型不同。lower为 arith.extf 或 truncf
+    }
+    else{
+      // tma
+      if(op->hasAttr("dev")){
+        auto attr = op->getAttrOfType<frisk::DevKindAttr>("dev");
+        if(attr.getValue() == attr::DevKind::TMA){
+
+        }
+        else{
+          assert(false);
+        }
+      }
+      else{
+        // cudacore copy
+
+      }
+    }
+    return success();
+  }
+};
+
 // frisk.gemm(%7, %10) to %13 {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x128xf16, 3>, memref<128x128xf32>
 /**
 
@@ -368,10 +399,15 @@ public:
     s_info = LowerInfoAnalysis::run(kernel);
     llvm::outs() << "-- lowerinfo analyze done\n";llvm::outs().flush();
     
+    auto warpLayout = s_info.begin()->getSecond().get_warp_layout();
+    auto blockLayout = s_info.begin()->getSecond().get_block_layout();
+
+    kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, warpLayout));
+    kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
+
+    // 标记 tensorcore和tma设备
     kernel->walk([&](Operation* childOp){
       if(mlir::isa<frisk::GemmOp>(childOp)){
-        // attr::
-        // childOp->setAttr("dev", frisk::attr::DevKind::CCore);
         childOp->setAttr("dev", frisk::DevKindAttr::get(context, ::mlir::frisk::attr::DevKind::TCore));
       }
       else if(mlir::isa<frisk::CopyOp>(childOp)){

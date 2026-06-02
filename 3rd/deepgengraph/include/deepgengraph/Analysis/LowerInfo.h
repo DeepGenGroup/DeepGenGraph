@@ -37,6 +37,12 @@ public:
   int get_dimcount() const {
     return dimCount;
   }
+  const llvm::SmallVector<int64_t, 2>& get_warp_layout() const {
+    return warp_layout;
+  }
+  const llvm::SmallVector<int64_t, 2>& get_block_layout() const {
+    return block_layout;
+  }
   const llvm::SmallVector<int64_t, 2>& get_warp_repeat() const {
     return warp_repeat;
   }

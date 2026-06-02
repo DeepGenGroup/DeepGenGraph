@@ -155,9 +155,12 @@ static void FirstAnalyze(mlir::Operation* op, OpBuilder& rewriter, std::vector<O
     out_ms = {ms_local};
     op->setAttr(OUT_MEMSPACE, rewriter.getDenseI32ArrayAttr(out_ms)); 
   }
-  else if(mlir::isa<dg::BroadcastableBinaryOpInterface, dg::ExpOp, dg::Exp2Op, dg::ReduceOp, dg::ConvertOp>(op)){
-    // llvm::outs() << "[analyze] " << op->getName().getStringRef() << "\n"; llvm::outs().flush();
-    
+  else if(auto reduceOp = mlir::dyn_cast<dg::ReduceOp>(op)){
+    in_ms = {ms_shared, ms_local};  // operand, init
+    out_ms = {ms_shared};  // outputmem
+    op->setAttr(OUT_MEMSPACE, rewriter.getDenseI32ArrayAttr(out_ms)); 
+  }
+  else if(mlir::isa<dg::BroadcastableBinaryOpInterface, dg::ExpOp, dg::Exp2Op, dg::ConvertOp>(op)){
     for(auto operand : op->getOperands()){
       auto ms = GetOperandMemspace(operand);
       in_ms.push_back(ms);
@@ -242,7 +245,7 @@ struct DataflowAnalyzePass : public PassWrapper<DataflowAnalyzePass, OperationPa
     while(!pendingOps.empty()){
       maxIter--;
       if(maxIter < 0){
-        assert(false);
+        assert(false && "[error] max iter exceeds");
       }
       _pendingOps.clear();
       for(auto pendingOp : pendingOps){

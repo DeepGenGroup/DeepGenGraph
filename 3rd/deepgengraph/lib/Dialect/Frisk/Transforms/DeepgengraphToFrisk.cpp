@@ -40,6 +40,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -131,6 +132,7 @@ static AffineExpr GetExprOfValue(
 {
   auto defOp = v.getDefiningOp();
   if(defOp == nullptr){
+    llvm::outs() << "[def] null\n" ;llvm::outs().flush();
     if(auto blockarg = mlir::dyn_cast<BlockArgument>(v)){
       auto argId = blockarg.getArgNumber();
       auto parentOp = blockarg.getParentRegion()->getParentOp();
@@ -146,6 +148,27 @@ static AffineExpr GetExprOfValue(
         }
         return dims[labels[argId]];
       }
+      else if(auto dgmaskOp = mlir::dyn_cast<dg::MaskOp>(parentOp)){
+        if(argId > 2){
+          assert(false);
+        }
+        auto v = dgmaskOp.getStart(argId);
+        return GetExprOfValue(v, dims, arglist);
+      }
+      else if(auto affineforOp = mlir::dyn_cast<affine::AffineForOp>(parentOp)){
+        if(argId == 0){
+          // 为 iterVar
+          auto id = dims.size();
+          auto newDim = mlir::getAffineDimExpr(id, v.getContext());
+          arglist.insert(std::make_pair(id, blockarg));
+          dims.insert(std::make_pair(std::string("iv") + std::to_string(id), newDim));
+          return newDim;
+        }
+        else{
+          auto v = affineforOp.getBody()->getArgument(argId);
+          return GetExprOfValue(v, dims, arglist);
+        }
+      }
       else{
         assert(false);
       }
@@ -153,6 +176,9 @@ static AffineExpr GetExprOfValue(
     else{
       assert(false);
     }
+  }
+  else{
+    llvm::outs() << "[def] " << defOp->getName().getStringRef() << "\n";llvm::outs().flush();
   }
   if(mlir::isa<arith::AddIOp>(defOp)){
     auto lhs = defOp->getOperand(0);
@@ -240,9 +266,20 @@ static AffineExpr GetExprOfValue(
         assert(false);
     }
   }
+  else if(auto forOp = mlir::dyn_cast<affine::AffineForOp>(defOp)){
+    if(v == forOp.getInductionVar()){
+      // 为 iterVar
+      auto id = dims.size();
+      auto newDim = mlir::getAffineDimExpr(id, v.getContext());
+      arglist.insert(std::make_pair(id, v));
+      dims.insert(std::make_pair(std::string("iv") + std::to_string(id), newDim));
+    }
+    else{
+      assert(false && "不支持forOp带有返回值的expr推导");
+    }
+  }
   // not supported op
-
-  assert(false);
+  assert(false && "not supported op");
 }
 
 // 
@@ -1316,6 +1353,21 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
   }
 };
 
+
+/*
+  %27 = deepgengraph.mask starts = [%8, %arg4], sizes = [128, 128], type = f32 {
+  ^bb0(%arg9: index, %arg10: index):
+    %36 = arith.addi %arg9, %c1 : index
+    %37 = arith.cmpi ule, %36, %arg10 : index
+    %38 = scf.if %37 -> (f32) {
+      scf.yield %cst_0 : f32
+    } else {
+      scf.yield %cst : f32
+    }
+    deepgengraph.mask_yield %38 : f32
+  } {inMs = array<i32>, outMs = array<i32: 0>} : (index, index) -> tensor<128x128xf32>
+  将yield换为 affine.store, starts 解析为affineExpr
+*/
 struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(dg::MaskOp op, OpAdaptor adaptor,
@@ -1331,32 +1383,72 @@ struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
       rewriter.setInsertionPoint(outerMostFor);
       buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getSizes(), op.getElementType(), 16, outMs[0]);
     }
+    auto starts = op.getStarts();
+    
     auto newOp = rewriter.create<frisk::BlockOp>(loc, op.getSizes(), nullptr);
     auto *newBody = newOp.getBody(0);
-    auto starts = adaptor.getStarts();
     auto ivs = newBody->getArguments();
-    if (starts.size() != ivs.size())
+    if (starts.size() != ivs.size()){
       return failure();
+    }
+    
+    // starts 转为 affineExpr，与 blockOp的arg结合，构成 shiftedIndices
+    rewriter.setInsertionPointToStart(newBody);
+    SmallVector<Value, 2> shiftedIndices;
+    for(int i=0;i<starts.size();++i){
+      std::map<std::string, AffineExpr> dims{}; std::map<int, Value> arglist {};
+      AffineExpr indiceExpr = GetExprOfValue(starts[i], dims, arglist);
+      int dimCount = dims.size();
+      indiceExpr = indiceExpr + getAffineDimExpr(dimCount, op->getContext());
+      arglist[dimCount] = ivs[i];
+      std::vector<AffineExpr> exprs = {indiceExpr};
 
-    SmallVector<Value, 4> shiftedIndices;
-    shiftedIndices.reserve(ivs.size());
-    {
-      RewriterBase::InsertionGuard guard{rewriter};
-      rewriter.setInsertionPointToStart(newBody);
-      for (int64_t i = 0; i < static_cast<int64_t>(ivs.size()); ++i) {
-        shiftedIndices.push_back(rewriter.create<arith::AddIOp>(loc, ivs[i], starts[i]));
+      SmallVector<Value,4> mapOperands {};
+      for(int i=0;i<arglist.size();++i){
+        mapOperands.push_back(arglist.at(i));
       }
+      auto newIndex = rewriter.create<affine::AffineApplyOp>(op->getLoc(), exprs, mapOperands);
+      shiftedIndices.push_back(newIndex);
     }
 
     // Replace source block arguments at inline time, avoiding RAUW on IVs.
+    // 用全局的shiftIndice 替换原有的blockArg
     rewriter.inlineBlockBefore(op.getBody(0), newBody, newBody->getTerminator()->getIterator(), shiftedIndices);
+
+    // 查找mask 内的scf.if else 语句块，获取true false两个值
+    std::vector<scf::IfOp> ifOPs{};
+    newBody->walk([&](scf::IfOp ifOp){
+      ifOPs.push_back(ifOp);
+    });
+    // 替换 scf.if else 为 arith.select
+    for(auto ifOp : ifOPs){
+      mlir::Value cond{};
+      mlir::Value thenYield {};
+      mlir::Value elseYield {};
+      cond = ifOp.getCondition();
+      ifOp.getThenRegion().walk([&](scf::YieldOp yield){
+        thenYield = yield->getOperand(0);
+      });
+      ifOp.getElseRegion().walk([&](scf::YieldOp yield){
+        elseYield = yield->getOperand(0);
+      });
+      rewriter.setInsertionPoint(ifOp);
+      auto select = rewriter.create<arith::SelectOp>(op->getLoc(), cond, thenYield, elseYield);
+      rewriter.replaceOp(ifOp, select);
+    }
 
     SmallVector<dg::MaskYieldOp, 2> yields;
     newOp->walk([&](dg::MaskYieldOp yield) { yields.push_back(yield); });
     for (dg::MaskYieldOp yield : yields) {
       RewriterBase::InsertionGuard guard{rewriter};
       rewriter.setInsertionPoint(yield);
-      rewriter.create<affine::AffineStoreOp>(loc, yield->getOperand(0), buffer, shiftedIndices);
+      if(outMs[0] == int(friskMs::Local)){
+        // 对maskOp，若 dst为local，只需要考虑线程自己持有的数据即可。不需要全局的shiftIndice
+        rewriter.create<affine::AffineStoreOp>(loc, yield->getOperand(0), buffer, newBody->getArguments());
+      }
+      else{
+        assert(false && "dg::maskOp 的dst只能是local!检查前面的推断代码是否有错");
+      }
       rewriter.eraseOp(yield);
     }
 
