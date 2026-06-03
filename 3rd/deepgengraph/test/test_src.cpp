@@ -283,7 +283,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
-  pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDataflowAnalyzePass());
+  pm.addNestedPass<deepgengraph::KernelOp>(frisk::createMemspaceAnalyzePass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after scfForConversion ---------\n"; llvm::outs().flush();src->dump();
 
@@ -295,6 +295,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertMemAndCalcOpPass ---------\n"; llvm::outs().flush();src->dump();
+  
+  pm.addNestedPass<frisk::KernelOp>(frisk::createFriskFuseBlockOpsPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createFriskFuseBlockOpsPass ---------\n"; llvm::outs().flush();src->dump();
+
+  pm.addNestedPass<frisk::KernelOp>(frisk::createFuseBlockOpWithDTypeConvertOpPass());
+  pm.run(src->getOperation());
+  llvm::outs() << "\n---------- after createFuseBlockOpWithDTypeConvertOpPass ---------\n"; llvm::outs().flush();src->dump();
 
   pm.addPass(frisk::createConvertFriskToBasePass());
   pm.run(src->getOperation());

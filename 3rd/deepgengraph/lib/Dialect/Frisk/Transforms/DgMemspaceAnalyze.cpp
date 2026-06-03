@@ -313,7 +313,7 @@ struct DataflowAnalyzePass : public PassWrapper<DataflowAnalyzePass, OperationPa
 };
 } // namespace
 
-std::unique_ptr<Pass> createDataflowAnalyzePass() {
+std::unique_ptr<Pass> createMemspaceAnalyzePass() {
   return std::make_unique<DataflowAnalyzePass>();
 }
 

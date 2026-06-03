@@ -409,11 +409,11 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp){
   };
 
   // 直接推断
-  llvm::outs() << "[DDD]need_infer_ops or size: " << need_infer_ops.size() << "\n";
-  for(auto op : need_infer_ops){
-    llvm::outs() << "need_infer: " << op->getName().getStringRef() << "\n";
-  }
-  llvm::outs().flush();
+  // llvm::outs() << "[DDD]need_infer_ops or size: " << need_infer_ops.size() << "\n";
+  // for(auto op : need_infer_ops){
+  //   llvm::outs() << "need_infer: " << op->getName().getStringRef() << "\n";
+  // }
+  // llvm::outs().flush();
 
   bool exsit_dircet_infer_op = false;
   for (size_t i=0; i<need_infer_ops.size(); ++i) {

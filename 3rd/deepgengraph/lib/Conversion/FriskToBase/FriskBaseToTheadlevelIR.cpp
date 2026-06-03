@@ -169,9 +169,9 @@ public:
     auto infoA = s_info.at(op.getA());
     auto infoB = s_info.at(op.getB());
     auto infoC = s_info.at(op.getC());
-    infoA.show("A");
-    infoB.show("B");
-    infoC.show("C");
+    // infoA.show("A");
+    // infoB.show("B");
+    // infoC.show("C");
     
     assert(infoA.get_block_repeat()[1] == infoB.get_block_repeat()[0]);  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
     
@@ -260,14 +260,23 @@ public:
 /**
   frisk.block (%arg5, %arg6) to (128, 128) {
     %c0_2 = arith.constant 0 : index
-    %24 = affine.load %8[%arg5, %arg6] : memref<128x128xf32>
+    %24 = affine.load %8[%arg5, %arg6] : memref<128x128xf32, 3>
     %25 = affine.load %18[%arg5, %arg6] : memref<128x128xf32>
     %26 = arith.addf %24, %25 : f32
-    affine.store %26, %19[%arg5, %arg6] : memref<128x128xf32>
+    affine.store %26, %19[%arg5, %arg6] : memref<128x128xf32, 3>
+  }
+    ->  
+  for (%itwx, %itwy) to (TWX, TWY) {
+    %c0_2 = arith.constant 0 : index
+    %24 = affine.load %8[%arg5, %arg6] : memref<128x128xf32, 3>
+    %25 = affine.load %18[%arg5, %arg6] : memref<128x128xf32>
+    %26 = arith.addf %24, %25 : f32
+    affine.store %26, %19[%arg5, %arg6] : memref<128x128xf32, 3>
   } 
   转化为线程级别的实现：
-  1.loadOp 的srcMem，如果为block级别大小的local，将其切成thread-level-size local
+  1.loadOp 的 srcMem，如果为block级别大小的local，将其切成thread-level-size local
   （ 新建 alloc_local_buffer, 之后用新的replace旧的的allUses。最后删除旧的 ）
+    若为 shm，则不用新建 alloc_local_buffer
   2.storeOp dstMem 同理
   3.blockOp的 blockArgs, 改变映射范围为 thread-level-size，创建两重forOp。
   4.blockOp内的Op，搬运到 nestedFor里。改变 blockArg映射
@@ -304,15 +313,15 @@ public:
     std::vector<AllocBufferOp> threadLocalForStoreOps;
     std::vector<AllocBufferOp> threadLocalForLoadOps;
     SmallVector<int64_t,2> threadLevelSize;
-  // 收集所有需要替换的 local AllocBufferOp，去重
-    llvm::DenseMap<AllocBufferOp, SmallVector<int64_t, 2>> allocsToReplace;
+    // 收集所有需要替换的 local AllocBufferOp，去重
+    llvm::DenseMap<AllocBufferOp, SmallVector<int64_t, 2>> allocLocalsToReplace;
 
     for (auto loadOp : loadOps) {
       auto srcValue = loadOp.getMemref();
       // if (srcValue.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
         auto srcDefOp = srcValue.getDefiningOp<AllocBufferOp>();
-        if (srcDefOp != nullptr && !allocsToReplace.count(srcDefOp)) {
-          allocsToReplace[srcDefOp] = s_info.at(srcValue).get_thread_total_widths();
+        if (srcDefOp != nullptr && !allocLocalsToReplace.count(srcDefOp)) {
+          allocLocalsToReplace[srcDefOp] = s_info.at(srcValue).get_thread_total_widths();
           auto i = s_info.at(srcValue);
           i.show("block_load");
         }
@@ -323,8 +332,8 @@ public:
       auto dstVal = storeOp.getMemref();
       // if (dstVal.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
         auto srcDefOp = dstVal.getDefiningOp<AllocBufferOp>();
-        if (srcDefOp != nullptr && !allocsToReplace.count(srcDefOp)) {
-          allocsToReplace[srcDefOp] = s_info.at(dstVal).get_thread_total_widths();
+        if (srcDefOp != nullptr && !allocLocalsToReplace.count(srcDefOp)) {
+          allocLocalsToReplace[srcDefOp] = s_info.at(dstVal).get_thread_total_widths();
           auto i = s_info.at(dstVal);
           i.show("block_store");
         }
@@ -332,12 +341,15 @@ public:
     }
     IRMapping mapper;
     // 统一替换，每个 AllocBufferOp 只处理一次
-    for (auto &[srcDefOp, sz] : allocsToReplace) {
+    for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
       rewriter.setInsertionPoint(srcDefOp);
       auto ty = MemRefType::get(sz, srcDefOp.getElementType(), AffineMap{}, srcDefOp.getMemorySpace());
       if(srcDefOp.getMemorySpace() == int(friskMs::Local)){
         auto newAlloc = rewriter.create<memref::AllocaOp>(srcDefOp->getLoc(), ty);
         mapper.map(srcDefOp->getResult(0), newAlloc->getResult(0));
+      }
+      else{
+        mapper.map(srcDefOp->getResult(0), srcDefOp->getResult(0));
       }
       // 同步更新 threadLevelSize，供后续 createNestedAffineFor 使用
       threadLevelSize = sz;
@@ -364,17 +376,19 @@ public:
     }
     // blockOp body 外部（blockOp 之后）可能还有对旧 alloc 的 use（如 copy-out 等）
     // 用 replaceAllUsesExcept 只替换 blockOp 外部的 use
-    for (auto &[srcDefOp, sz] : allocsToReplace) {
+    for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
       auto temp = mapper.lookupOrNull(srcDefOp->getResult(0));
       if(temp == nullptr){
         continue;
       }
       auto newAlloc = temp.getDefiningOp<memref::AllocaOp>();
       // 只替换 blockOp 之外还残留的 use
-      srcDefOp->getResult(0).replaceAllUsesExcept(
-          newAlloc->getResult(0),
-          SmallPtrSet<Operation *, 1>{op});
-      rewriter.eraseOp(srcDefOp);
+      if(newAlloc != nullptr){
+        srcDefOp->getResult(0).replaceAllUsesExcept(
+            newAlloc->getResult(0),
+            SmallPtrSet<Operation *, 1>{op});
+        rewriter.eraseOp(srcDefOp);
+      }
     }
     // 删除原 blockOp（连同其 body 一起消除）
     rewriter.eraseOp(op);

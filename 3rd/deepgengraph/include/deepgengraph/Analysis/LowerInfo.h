@@ -90,7 +90,7 @@ public:
       for (size_t i = 0; i < vec.size(); ++i) {
         vec[i].print(llvm::outs());
         auto& raw = vec[i];
-        llvm::outs() << " simplified:[ " << mlir::simplifyAffineExpr(raw, dimCount, 0) << "] ";
+        // llvm::outs() << " simplified:[ " << mlir::simplifyAffineExpr(raw, dimCount, 0) << "] ";
         if (i + 1 < vec.size()) llvm::outs() << ", ";
 
       }

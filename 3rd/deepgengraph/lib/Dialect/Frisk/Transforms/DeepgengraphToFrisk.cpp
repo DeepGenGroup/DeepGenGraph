@@ -27,11 +27,13 @@
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 
@@ -689,6 +691,9 @@ struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::tr
                                 ConversionPatternRewriter &rewriter) const override 
   {
     auto src = adaptor.getValue();
+    auto temp = mlir::cast<MemRefType>(src.getType());
+    auto newSrcTy = MemRefType::get(temp.getShape(), temp.getElementType(), AffineMap{}, int(friskMs::Shared));
+    src.setType(newSrcTy);
     auto dst = adaptor.getDstPointer();
     auto dstMemref = mlir::dyn_cast<MemRefType>(dst.getType());
     auto srcMemref = mlir::dyn_cast<MemRefType>(src.getType());
@@ -929,8 +934,21 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
 
     auto loc = op->getLoc();
     std::vector<Value> newResults;
+    int initIdx = 0;
     for(auto initVal : op.getInits()){
       auto defOp = initVal.getDefiningOp();
+      rewriter.modifyOpInPlace(defOp, [&](){
+        defOp->setAttr("initIdx", rewriter.getIndexAttr(initIdx));
+      });
+      // 标记initVal的所有消费者
+      for(auto use : initVal.getUsers()){
+        use->setAttr("initIdx", rewriter.getIndexAttr(initIdx));
+      }
+      // 标记affineYield的所有消费者
+      for(auto u : op->getResults()[initIdx].getUsers()){
+        u->setAttr("initIdx", rewriter.getIndexAttr(initIdx));
+      }
+      initIdx++;
       newResults.push_back(defOp->getResult(0));
     }
     llvm::outs() << "op.getNumIterOperands() = " << op.getNumIterOperands() << "\n";llvm::outs().flush();
@@ -1554,6 +1572,7 @@ public:
       p2.add<ArithSingleElementTensorConversionPattern>(tc,ctx);
       applyPartialConversion(op, t2, std::move(p2));
       
+      llvm::outs() << " ---- before AffineForEmptyInitsAndYieldPattern :\n" << getOperation() << "\n"; llvm::outs().flush();
       // stage 4 : 删除 affineFor 的 initArgs 和 yield
       ConversionTarget t3(*ctx);
       t3.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op){
@@ -1563,8 +1582,9 @@ public:
       RewritePatternSet p3(ctx);
       p3.add<AffineForEmptyInitsAndYieldPattern>(tc,ctx);
       applyPartialConversion(op, t3, std::move(p3));
-
+      // 改为在Pass中分析，直接给op setattr。在pattern使用前
     }
+    llvm::outs() << " ---- after lower memref Op :\n" << getOperation() << "\n"; llvm::outs().flush();
 
     // ========== 2. lower calcuate op
     {
@@ -1624,9 +1644,38 @@ public:
       if (failed(applyPartialConversion(op, target, std::move(ps)))) {
         signalPassFailure();
       }
+
+      // ======== 3. remove unused ops
+      while(true){
+        bool hasChanged = false;
+        SmallVector<Operation*> dumpOps {};
+        op->walk<WalkOrder::PostOrder>([&](Operation* childOp){
+          if(!childOp->getResults().empty()){
+            bool isDump = true;
+            for(auto res : childOp->getResults()){
+              isDump = isDump && res.getUsers().empty();
+            }
+            if(isDump){
+              dumpOps.push_back(childOp);
+            }
+          }
+          else{
+            if(auto storeOp = mlir::dyn_cast<affine::AffineStoreOp>(childOp)){
+              if(storeOp.getMemref().getUsers().empty()){
+                dumpOps.push_back(childOp);
+              }
+            }
+          }
+        });
+        for(auto unused : dumpOps){
+          unused->erase();
+          hasChanged = true;
+        }
+        if(!hasChanged){
+          break;
+        }
+      }
     }
-
-
   }
 };
 
