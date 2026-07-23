@@ -41,4 +41,16 @@ def DeviceKindEnum : I32EnumAttr<"DevKind",
   let cppNamespace = "::mlir::frisk::attr";
 }
 
+def GPUTargetSpace_SHM : I32EnumAttrCase<"SHM", 0, "shm">;
+def GPUTargetSpace_WarpThread : I32EnumAttrCase<"WarpThread", 1, "warp_thread">;
+def GPUTargetSpace_WGMMAAcc : I32EnumAttrCase<"WGMMAAcc", 2, "wgmma_acc">;
+
+def GPUTargetSpaceEnum : I32EnumAttr<"GPUTargetSpace",
+    "GPU layout target space",
+    [GPUTargetSpace_SHM,
+     GPUTargetSpace_WarpThread,
+     GPUTargetSpace_WGMMAAcc]> {
+  let cppNamespace = "::mlir::frisk::attr";
+}
+
 #endif // FRISK_ENUMS_TD

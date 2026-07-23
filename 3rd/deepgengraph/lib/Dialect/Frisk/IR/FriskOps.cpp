@@ -1973,6 +1973,10 @@ void AllocBufferOp::print(OpAsmPrinter &p) {
   // 打印 alignment（如果不是默认值）
   if (getAlignment() != 0)
     p << ", alignment = " << getAlignment();
+  if (auto gpuLayout = (*this)->getAttr("gpu_layout")) {
+    p << ", gpu_layout = ";
+    p.printAttribute(gpuLayout);
+  }
   p << "}";
   // 打印结果类型
   p << " -> " << getResult().getType();

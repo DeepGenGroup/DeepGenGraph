@@ -63,4 +63,4 @@ cmake ..  \
   -DSTABLEHLO_ENABLE_BINDINGS_PYTHON=OFF \
   -DTRITON_BUILD_PYTHON_MODULE=OFF \
   -DTRITON_CODEGEN_BACKENDS="nvidia;amd" \
-  -DMLIR_DIR="/data0/xiebaokang/rocm-llvm-project/build/lib/cmake/mlir" 
+  -DMLIR_DIR="/data2/xsl/install/lib/cmake/mlir" 
