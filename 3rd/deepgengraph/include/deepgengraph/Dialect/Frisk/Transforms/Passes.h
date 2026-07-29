@@ -22,6 +22,7 @@ std::unique_ptr<Pass> createFriskCanonicalizePass();
 std::unique_ptr<Pass> createFriskFuseBlockOpsPass();
 std::unique_ptr<Pass> createFuseBlockOpWithDTypeConvertOpPass();
 std::unique_ptr<Pass> createOverlapPass();
+std::unique_ptr<Pass> createFriskLayoutInferPass();
 
 #define GEN_PASS_REGISTRATION
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h.inc"

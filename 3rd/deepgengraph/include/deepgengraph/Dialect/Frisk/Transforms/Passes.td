@@ -66,6 +66,21 @@ def FriskCanonicalize: Pass<"frisk-canonicalize", "frisk::KernelOp"> {
   ];
 }
 
+def FriskLayoutInfer: Pass<"frisk-layout-infer", "func::FuncOp"> {
+  let summary = "对firsk 内的memref类型添加 gpulayout 属性";
+  let description = [{
+  }];
+
+  let constructor = "mlir::frisk::createFriskLayoutInferPass()";
+
+  let dependentDialects = [
+    "mlir::deepgengraph::DeepgengraphDialect",
+    "mlir::deepgengraph::triton::DeepgengraphTritonDialect",
+    "mlir::frisk::FriskDialect",
+    "gpu::GPUDialect"
+  ];
+}
+
 def friskOverlap: Pass<"frisk-overlap", "::mlir::frisk::KernelOp"> {
   let summary = "frisk overlap ";
   let description = [{

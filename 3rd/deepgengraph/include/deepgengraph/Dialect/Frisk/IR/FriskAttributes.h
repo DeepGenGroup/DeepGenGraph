@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/IR/AttributeSupport.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributeInterfaces.h"
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 

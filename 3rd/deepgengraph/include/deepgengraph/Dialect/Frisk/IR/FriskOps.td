@@ -145,7 +145,7 @@ def Frisk_ParallelOp : Frisk_Op<"parallel", [
 }
 
 // blockOp
-def Frisk_BlockOp : Frisk_Op<"block", [Pure, ImplicitFriskTerminator, AffineScope]> {
+def Frisk_BlockOp : Frisk_Op<"block", [RecursiveMemoryEffects, ImplicitFriskTerminator, AffineScope]> {
   let summary = "block opeartion";
   let description = [{
     block
@@ -195,7 +195,7 @@ def Frisk_BlockOp : Frisk_Op<"block", [Pure, ImplicitFriskTerminator, AffineScop
 }
 
 // forOp
-def Frisk_ForOp : Frisk_Op<"for", [Pure, ImplicitFriskTerminator]> {
+def Frisk_ForOp : Frisk_Op<"for", [RecursiveMemoryEffects, ImplicitFriskTerminator]> {
   let summary = "for opeartion";
   let description = [{
     for
@@ -281,7 +281,7 @@ def Frisk_GemmOp: Frisk_Op<"gemm", [MemoryEffects<[MemWrite]>, MemoryEffects<[Me
 }
 
 // ifOp
-def Frisk_IfOp : Frisk_Op<"if", [Pure, ImplicitFriskTerminator]> {
+def Frisk_IfOp : Frisk_Op<"if", [RecursiveMemoryEffects, ImplicitFriskTerminator]> {
   let summary = "if branch operation";
   let description = [{
     if-else branch operation with IntegerSet condition.
@@ -299,7 +299,7 @@ def Frisk_IfOp : Frisk_Op<"if", [Pure, ImplicitFriskTerminator]> {
 }
 
 // WarpGroupOp
-def Frisk_WarpGroupOp : Frisk_Op<"warp_group", [Pure, ImplicitFriskTerminator]> {
+def Frisk_WarpGroupOp : Frisk_Op<"warp_group", [RecursiveMemoryEffects, ImplicitFriskTerminator]> {
   let summary = "warpgroup operation";
   let description = [{
     warp group operation.
@@ -337,7 +337,7 @@ def Frisk_GemmWaitOp : Frisk_Op<"gemm_wait", [MemoryEffects<[MemRead]>]> {
 }
 
 // bufferViewOp
-def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [Pure]> {
+def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [MemoryEffects<[MemRead]>]> {
   let summary = "create a memref view from source buffer and slice";
   let description = [{
     Create a view memref from a source memref using dynamic indices, an affine
@@ -467,7 +467,28 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   }];
 }
 
-// fillOp
+// convert layout op
+def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite]>]> {
+  let summary = "layout conversion";
+  let description = [{ 
+    layout convert
+  }];
+
+  let arguments = (ins 
+    Arg<AnyMemRef, "", [MemWrite]>:$memref,
+    AnyAttr:$value
+  );
+
+  let extraClassDeclaration = [{
+    MemRefType getMemType() { return cast<MemRefType>(getMemref().getType()); }
+  }];
+
+  // let hasVerifier = 1;
+  // let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "$memref attr-dict `:` type($memref)";
+}
+
+// 
 def Frisk_FillOp: Frisk_Op<"fill", [MemoryEffects<[MemWrite]>]> {
   let summary = "fill";
   let description = [{ 

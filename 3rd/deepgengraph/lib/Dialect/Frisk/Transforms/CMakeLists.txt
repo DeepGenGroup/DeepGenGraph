@@ -3,6 +3,7 @@ add_deepgengraph_library(FriskTransforms
     DeepgengraphSimplify.cpp
     DgMemspaceAnalyze.cpp
     FriskCanonicalize.cpp
+    FriskLayoutInfer.cpp
     overlap.cpp
     
     DEPENDS FriskTransformsIncGen
@@ -10,5 +11,6 @@ add_deepgengraph_library(FriskTransforms
     LINK_LIBS PUBLIC
     MLIRPass
     MLIRTransformUtils
+    DeepgengraphAnalysis
     FriskIR
 )

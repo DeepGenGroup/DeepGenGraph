@@ -1,4 +1,5 @@
 #include <cassert>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -312,9 +313,9 @@ public:
     assert(!storeOps.empty());
     std::vector<AllocBufferOp> threadLocalForStoreOps;
     std::vector<AllocBufferOp> threadLocalForLoadOps;
-    SmallVector<int64_t,2> threadLevelSize;
+    std::array<int64_t, 2> threadLevelSize;
     // 收集所有需要替换的 local AllocBufferOp，去重
-    llvm::DenseMap<AllocBufferOp, SmallVector<int64_t, 2>> allocLocalsToReplace;
+    llvm::DenseMap<AllocBufferOp, std::array<int64_t, 2>> allocLocalsToReplace;
 
     for (auto loadOp : loadOps) {
       auto srcValue = loadOp.getMemref();

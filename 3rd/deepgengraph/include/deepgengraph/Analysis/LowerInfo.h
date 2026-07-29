@@ -1,6 +1,7 @@
 #ifndef FRISK_ANALYSIS_INFERLOWERINFO_H
 #define FRISK_ANALYSIS_INFERLOWERINFO_H
 
+#include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/AffineExpr.h"
@@ -11,9 +12,13 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
+#include <array>
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
+
+struct HWSpecification;
 
 namespace mlir::frisk {
 
@@ -33,37 +38,40 @@ class LowerInfo {
   friend LowerInfoAnalysis;
 public:
   Value buffer;
+  int warp_threads;
 public:
+  explicit LowerInfo(int _warp_threads);
+
   int get_dimcount() const {
     return dimCount;
   }
-  const llvm::SmallVector<int64_t, 2>& get_warp_layout() const {
+  const std::array<int64_t, 2>& get_warp_layout() const {
     return warp_layout;
   }
-  const llvm::SmallVector<int64_t, 2>& get_block_layout() const {
+  const std::array<int64_t, 2>& get_block_layout() const {
     return block_layout;
   }
-  const llvm::SmallVector<int64_t, 2>& get_warp_repeat() const {
+  const std::array<int64_t, 2>& get_warp_repeat() const {
     return warp_repeat;
   }
-  const llvm::SmallVector<int64_t, 2>& get_block_repeat() const {
+  const std::array<int64_t, 2>& get_block_repeat() const {
     return block_repeat;
   }
-  const llvm::SmallVector<int64_t, 2>& get_thread_widths() const {
+  const std::array<int64_t, 2>& get_thread_widths() const {
     return thread_widths;
   } 
-  llvm::SmallVector<int64_t, 2> get_thread_total_widths() const {
-    llvm::SmallVector<int64_t, 2> ret;
+  std::array<int64_t, 2> get_thread_total_widths() const {
+    std::array<int64_t, 2> ret;
     for(int i=0;i<2;++i){
-      ret.push_back(thread_widths[i] * warp_repeat[i] * block_repeat[i]);
+      ret[i] = (thread_widths[i] * warp_repeat[i] * block_repeat[i]);
     }
     return ret;
   }
 
-  const llvm::SmallVector<int64_t, 2>& get_warp_widths() const {
+  const std::array<int64_t, 2>& get_warp_widths() const {
     return warp_widths;
   }
-  const llvm::SmallVector<int64_t, 2>& get_block_widths() const {
+  const std::array<int64_t, 2>& get_block_widths() const {
     return block_widths;
   }
   const auto& getOperandLabels() const {
@@ -77,7 +85,7 @@ public:
   }
 
   void show(const char* label = nullptr) {
-    auto printI64Vec = [&](const char *name, const llvm::SmallVector<int64_t, 2> &vec) {
+    auto printI64Vec = [&](const char *name, const std::array<int64_t, 2> &vec) {
       llvm::outs() << name << ": [";
       for (size_t i = 0; i < vec.size(); ++i) {
         llvm::outs() << vec[i];
@@ -85,7 +93,7 @@ public:
       }
       llvm::outs() << "]\n";
     };
-    auto printExprVec = [&](const char *name, const llvm::SmallVector<AffineExpr, 2> &vec) {
+    auto printExprVec = [&](const char *name, const std::array<AffineExpr, 2> &vec) {
       llvm::outs() << name << ": [";
       for (size_t i = 0; i < vec.size(); ++i) {
         vec[i].print(llvm::outs());
@@ -137,10 +145,9 @@ public:
     llvm::outs() << "=================\n";
   }
 
-  llvm::SmallVector<AffineExpr, 2> getAffineMap() {
+  std::array<AffineExpr, 2> getAffineMap() {
     // 根据上述信息，生成不同层面的索引
     // 强制重新计算
-    indices.clear();
     dimCount = 1;
     OpBuilder b{buffer.getContext()};
     MemRefType type = dyn_cast<MemRefType>(buffer.getType());
@@ -152,7 +159,7 @@ public:
         auto iw = b.getAffineDimExpr(i * 3 + 2); // warp_repeat：[2, mma_k/(warp_layout[1] * thread_widths[1])]
         auto it = b.getAffineDimExpr(i * 3 + 3); // thread_widths: [1, 2]
         AffineExpr expr = ib * (warp_repeat[i] * thread_widths[i]) + iw * thread_widths[i] + it;
-        indices.push_back(expr);
+        indices[i]= expr;
         // add labels
         mapOperandsLabel.push_back(BLOCK_LABELS[i]);
         mapOperandsLabel.push_back(WARP_LABELS[i]);
@@ -174,7 +181,7 @@ public:
         auto it = b.getAffineDimExpr(i * 3 + 3);          // iv_tx
         AffineExpr expr = ib * block_widths[i] + warp_indices[i] * (warp_repeat[i] * warp_widths[i]) +
                           iw * warp_widths[i] + lane_indices[i] * thread_widths[i] + it;
-        indices.push_back(expr);
+        indices[i] = expr;
         mapOperandsLabel.push_back(BLOCK_LABELS[i]);
         mapOperandsLabel.push_back(WARP_LABELS[i]);
         mapOperandsLabel.push_back(THREAD_LABELS[i]);
@@ -193,46 +200,46 @@ public:
     return indices;
   }
 
-  llvm::SmallVector<AffineExpr, 2> getThreadIndices(
-    OpBuilder b, llvm::SmallVector<int64_t, 2> warp_layout) {
+  std::array<AffineExpr, 2> getThreadIndices(
+    OpBuilder b, std::array<int64_t, 2> warp_layout) {
       // tid -> lane_id
     auto tid = _theadIdx(b);
-    auto ly = (tid % 32).floorDiv(warp_layout[1]);
-    auto lx = (tid % 32) % warp_layout[1];
-    return llvm::SmallVector<AffineExpr, 2>{ly, lx};
+    auto ly = (tid % warp_threads).floorDiv(warp_layout[1]);
+    auto lx = (tid % warp_threads) % warp_layout[1];
+    return {ly, lx};
   }
 
-  llvm::SmallVector<AffineExpr, 2> getWarpIndices(
-    OpBuilder b, llvm::SmallVector<int64_t, 2> block_layout) {
+  std::array<AffineExpr, 2> getWarpIndices(
+    OpBuilder b, std::array<int64_t, 2> block_layout) {
       // tid -> warp_id
     auto tid = _theadIdx(b);
-    auto wy = tid.floorDiv(32).floorDiv(block_layout[1]);
-    auto wx = tid.floorDiv(32) % block_layout[1];
-    return llvm::SmallVector<AffineExpr, 2>{wy, wx};
+    auto wy = tid.floorDiv(warp_threads).floorDiv(block_layout[1]);
+    auto wx = tid.floorDiv(warp_threads) % block_layout[1];
+    return {wy, wx};
   }
 
-  llvm::SmallVector<int64_t, 2> getWarpWidths(
-      llvm::SmallVector<int64_t, 2> thread_widths, 
-      llvm::SmallVector<int64_t, 2> warp_layout) {
+  std::array<int64_t, 2> getWarpWidths(
+      std::array<int64_t, 2> thread_widths,
+      std::array<int64_t, 2> warp_layout) {
         // 一个warp计算的tile
-    llvm::SmallVector<int64_t, 2> warp_widths;
+    std::array<int64_t, 2> warp_widths;
     for (size_t i=0; i<thread_widths.size(); ++i) {
       int64_t ws = warp_layout[i] * thread_widths[i];
-      warp_widths.push_back(ws);
+      warp_widths[i] = ws;
     }
     return warp_widths;
   }
 
-  llvm::SmallVector<int64_t, 2> getBlockWidths(
-      llvm::SmallVector<int64_t, 2> warp_widths, 
-      llvm::SmallVector<int64_t, 2> warp_repeat,
-      llvm::SmallVector<int64_t, 2> block_layout) {
+  std::array<int64_t, 2> getBlockWidths(
+      std::array<int64_t, 2> warp_widths,
+      std::array<int64_t, 2> warp_repeat,
+      std::array<int64_t, 2> block_layout) {
         // 一个block计算的tile（重复后才等于bm/bn）
-    llvm::SmallVector<int64_t, 2> block_widths;
+    std::array<int64_t, 2> block_widths;
     for (size_t i=0; i<warp_repeat.size(); ++i) {
       int64_t wrs = warp_repeat[i] * warp_widths[i];
       int64_t bs = block_layout[i] * wrs;
-      block_widths.push_back(bs);
+      block_widths[i] = bs;
     }
     return block_widths;
   }
@@ -241,24 +248,25 @@ private:
 
   int64_t thread_bound;
   AffineMap affine_map;
+  
 
   std::vector<const char*> mapOperandsLabel;  // mapOperands 的标签
   std::vector<const char*> iterVarLabels;  // for 循环的标签
   std::vector<int> ivUpperBounds;  // 迭代变量的上界
-  llvm::SmallVector<AffineExpr, 2> indices;
+  std::array<AffineExpr, 2> indices;
   uint32_t dimCount = 0;
 
-  llvm::SmallVector<AffineExpr, 2> warp_indices;  // warp_id: [(tid / 32) / block_layout[1], (tid / 32) % block_layout[1]]
-  llvm::SmallVector<AffineExpr, 2> lane_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]
-  llvm::SmallVector<int64_t, 2> warp_layout;  // lane
-  llvm::SmallVector<int64_t, 2> block_layout;  // warp
+  std::array<AffineExpr, 2> warp_indices;  // warp_id: [(tid / 32) / block_layout[1], (tid / 32) % block_layout[1]]  warp_id[x,y]
+  std::array<AffineExpr, 2> lane_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]   lane[x,y]
+  std::array<int64_t, 2> warp_layout;  // lane
+  std::array<int64_t, 2> block_layout;  // warp
 
-  llvm::SmallVector<int64_t, 2> warp_repeat;
-  llvm::SmallVector<int64_t, 2> block_repeat;
+  std::array<int64_t, 2> warp_repeat;
+  std::array<int64_t, 2> block_repeat;
 
-  llvm::SmallVector<int64_t, 2> thread_widths;  // 一个thread计算的元素个数 [tx,ty]
-  llvm::SmallVector<int64_t, 2> warp_widths;
-  llvm::SmallVector<int64_t, 2> block_widths;
+  std::array<int64_t, 2> thread_widths;  // 一个thread计算的元素个数 [tx,ty]
+  std::array<int64_t, 2> warp_widths;
+  std::array<int64_t, 2> block_widths;
 
 protected:
   AffineExpr _theadIdx(OpBuilder& b){
@@ -273,7 +281,62 @@ protected:
 class LowerInfoAnalysis {
 public:
 
-  static DenseMap<Value, LowerInfo> run(mlir::Operation* kernelOp);
+  static DenseMap<Value, LowerInfo> run(mlir::Operation* kernelOp,
+                                        const std::string& hwKind = HW_KIND_DCU,
+                                        const std::string& version = HW_VERSION_DCU_BW1000);
+
+private:
+  struct GemmProblem {
+    Value A;
+    Value B;
+    Value C;
+    MemRefType aType;
+    MemRefType bType;
+    MemRefType cType;
+    unsigned inElemBitWidth;
+    int64_t bm;
+    int64_t bn;
+    int64_t bk;
+  };
+
+
+
+
+  static llvm::SmallVector<Operation*, 5> collectNeedInferOps(mlir::Operation *kernelOp);
+  static std::pair<int, int> squareFactor(int n);
+  static uint64_t getRegionThreadNum(Operation *op);
+  static GemmProblem getGemmProblem(GemmOp gemmOp);
+  static bool checkGemmProblem(GemmProblem p, HWSpecification* hw);
+  static MMAInstInfo* selectGemmInst(GemmProblem problem, HWSpecification* hw);
+  static bool getDirectGemmBlockLayout(uint64_t thread_num,
+                                       std::array<int64_t, 2> &block_layout, HWSpecification* hw);
+  static LowerInfo makeDirectGemmCInfo(OpBuilder b, const GemmProblem &problem,
+                                       MMAInstInfo *mma, uint64_t thread_num,
+                                       HWSpecification *hw,
+                                       std::array<int64_t, 2> block_layout);
+  static LowerInfo makeRelyGemmCInfo(OpBuilder b, const GemmProblem &problem,
+                                     MMAInstInfo *mma, uint64_t thread_num,
+                                     HWSpecification *hw, const LowerInfo &source_info,
+                                     bool source_is_a);
+  static void applyDirectGemmAInfo(LowerInfo &info, const GemmProblem &problem,
+                                   MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw);
+  static void applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &problem,
+                                 MMAInstInfo *mma, AffineExpr zero );
+  static void applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
+                             MMAInstInfo *mma, AffineExpr zero);
+  static bool inferDirectOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+                            HWSpecification *hw);
+  static bool inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+                          HWSpecification *hw);
+  static LowerInfo &setBufferInfo(DenseMap<Value, LowerInfo> &buf_info_maps,
+                                  Value buffer, const LowerInfo &info);
+  static bool inferCopyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
+  static bool inferBlockOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
+  static bool inferGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+                          HWSpecification *hw);
+  static bool inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+                              HWSpecification *hw);
+  static bool inferReduceOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
 
   // void getTest() {
   //   llvm::outs() << "[D]need_infer_ops size: " << need_infer_ops.size() << "\n";

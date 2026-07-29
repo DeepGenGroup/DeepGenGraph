@@ -12,6 +12,7 @@
 #include "mlir/IR/Verifier.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "mlir/Support/LLVM.h"
+#include <cstdint>
 
 namespace mlir::frisk {
 
@@ -98,6 +99,14 @@ private:
 
 using friskMs = ::mlir::frisk::attr::MemorySpace;
 
+enum class FriskDType : int {
+  unknown = 0,
+  f32,
+  f16,
+  i32,
+  i16
+};
+
 // 比较memspace层级大小（）
 static inline int compareMemspace(frisk::attr::MemorySpace lhs, frisk::attr::MemorySpace rhs){
   auto toInt = [](frisk::attr::MemorySpace ms){
@@ -172,6 +181,12 @@ static inline DenseI32ArrayAttr getOpOutputMemspaceAttr(mlir::Operation* op){
 struct WgmmaConfig {
   static int mma_m ;
   static int mma_k_bytes ;
+};
+
+enum class VendorKind : int32_t {
+  DCU = 1,
+  NVIDIA = 2,
+  AMD = 3
 };
 
 }

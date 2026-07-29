@@ -4,6 +4,7 @@
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
+#include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -44,6 +45,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include <cassert>
 #include "mlir/Dialect/Affine/Transforms/Transforms.h"
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Conversion/Passes.h"
@@ -67,6 +69,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     arith::ArithDialect,
     tensor::TensorDialect,
     linalg::LinalgDialect,
+    memref::MemRefDialect,
     scf::SCFDialect,
     affine::AffineDialect,
     math::MathDialect,
@@ -114,6 +117,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.addPass(frisk::createConvertFriskToBasePass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
+
+  
+  // pm.addNestedPass<func::FuncOp>(frisk::createFriskLayoutInferPass());
+  // pm.run(src->getOperation());
+  // llvm::outs() << "\n---------- after createFriskLayoutInferPass ---------\n"; llvm::outs().flush();src->dump();
+
   pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   // pm.addPass(mlir::createSymbolDCEPass());
   pm.run(src->getOperation());
@@ -193,6 +202,7 @@ void testGPULayout(){
     arith::ArithDialect,
     tensor::TensorDialect,
     linalg::LinalgDialect,
+    memref::MemRefDialect,
     scf::SCFDialect,
     affine::AffineDialect,
     math::MathDialect,
@@ -206,35 +216,73 @@ void testGPULayout(){
   auto mod = builder.create<ModuleOp>(loc);
   builder.setInsertionPointToStart(mod.getBody());
 
-  auto kernelType = builder.getFunctionType(TypeRange{}, TypeRange{});
-  auto kernel = builder.create<frisk::KernelOp>(loc, "gpu_layout_test", kernelType);
-  Block *kernelEntry = kernel.addEntryBlock();
-  builder.setInsertionPointToStart(kernelEntry);
+  auto funcType = builder.getFunctionType(TypeRange{}, TypeRange{});
+  auto func = builder.create<func::FuncOp>(loc, "gpu_layout_memref_test", funcType);
+  Block *entry = func.addEntryBlock();
+  builder.setInsertionPointToStart(entry);
 
   constexpr int64_t kRows = 128;
   constexpr int64_t kCols = 32;
-  auto alloc = builder.create<frisk::AllocBufferOp>(
-      loc, ArrayRef<int64_t>{kRows, kCols}, builder.getF32Type(), 0,
-      int64_t(frisk::attr::MemorySpace::Shared));
+  constexpr int64_t kPaddedCols = 64;
 
   auto shapeAttr = builder.getDenseI64ArrayAttr({kRows, kCols});
+  auto paddedShapeAttr = builder.getDenseI64ArrayAttr({kRows, kPaddedCols});
   auto paddingOffsets = builder.getDenseI64ArrayAttr({0, 0});
   auto row = builder.getAffineDimExpr(0);
   auto col = builder.getAffineDimExpr(1);
   auto baseMap = AffineMapAttr::get(
-      AffineMap::get(2, 0, ArrayRef<AffineExpr>{row * kCols + col}, &ctx));
+      AffineMap::get(2, 0, ArrayRef<AffineExpr>{row * kPaddedCols + col}, &ctx));
+  auto swizzle = frisk::GPUSwizzleAttr::get(&ctx, 3, 4, 5);
   auto gpuLayout = frisk::GPULayoutAttr::get(
-      &ctx, shapeAttr, shapeAttr, paddingOffsets,
-      frisk::attr::GPUTargetSpace::SHM, baseMap, frisk::GPUSwizzleAttr());
+      &ctx, shapeAttr, paddedShapeAttr, paddingOffsets,
+      frisk::attr::GPUTargetSpace::SHM, baseMap, swizzle);
 
-  alloc->setAttr("gpu_layout", gpuLayout);
+  if (!isa<MemRefLayoutAttrInterface>(gpuLayout)) {
+    llvm::errs() << "GPULayoutAttr does not implement MemRefLayoutAttrInterface\n";
+    return;
+  }
+
+  auto gpuMemrefType = MemRefType::get(
+      {kRows, kCols}, builder.getF32Type(),
+      cast<MemRefLayoutAttrInterface>(gpuLayout),
+      builder.getI64IntegerAttr(
+          static_cast<int64_t>(frisk::attr::MemorySpace::Shared)));
+  auto alloc = builder.create<memref::AllocaOp>(loc, gpuMemrefType);
+  (void)alloc;
+  builder.create<func::ReturnOp>(loc);
+
+  llvm::outs() << "gpu memref type: " << gpuMemrefType << "\n";
+  llvm::outs() << "layout affine map: " << gpuMemrefType.getLayout().getAffineMap()
+               << "\n";
   mod.dump();
 }
 
+
+void testCompareAffinemap() {
+  MLIRContext ctx;
+  OpBuilder builder(&ctx);
+  auto d0 = builder.getAffineDimExpr(0);
+  auto d1 = builder.getAffineDimExpr(1);
+  auto map1 =
+      AffineMap::get(2, 0, ArrayRef<AffineExpr>{(d0 + d1 * 2) * 3,  (d0 + d1 * 2) % 3}, &ctx);
+  auto map2 =
+      AffineMap::get(2, 0, ArrayRef<AffineExpr>{d0 * 3 + d1 * 6,  (d0 - d1) % 3}, &ctx);
+  
+  mlir::FlatLinearValueConstraints(2,0);
+
+  if(simplifyAffineMap(map1) == simplifyAffineMap(map2)){
+    llvm::outs() << "ok\n";
+  }
+  else{
+    llvm::outs() << "error\n";
+  }
+}
+
 int main(int argc, char** argv) {
-  // readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
+  readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
   // if (testAffineMapCaluclate())
   //   return 1;
-  testGPULayout();
+  // testGPULayout();
+  // testCompareAffinemap();
   return 0;
 }
