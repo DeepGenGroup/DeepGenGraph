@@ -139,9 +139,9 @@ MMAInstInfo* LowerInfoAnalysis::selectGemmInst(LowerInfoAnalysis::GemmProblem pr
   auto aTy = _GetFriskDTypeFromBuffer(problem.aType);
   auto bTy = _GetFriskDTypeFromBuffer(problem.bType);
   auto cTy = _GetFriskDTypeFromBuffer(problem.cType);
-  for(auto inst : hw->gemmInfo.validInsts){
-    // TODO : 如果 inst 的 mnk在其中最大，且mnk小于 bm bn bk, 且dtype符合 problem的elementType, 则选择该inst
-    if(inst.accElementType == cTy && inst.fragmentElementType == aTy && inst.fragmentElementType == bTy){
+  for(auto& inst : hw->gemmInfo.validInsts){
+    // 如果 inst 的 mnk在其中最大，且mnk小于 bm bn bk, 且dtype符合 problem的elementType, 则选择该inst
+    if(inst.desc_c.elementType == cTy && inst.desc_a.elementType == aTy && inst.desc_b.elementType == bTy){
       if(inst.m <= problem.bm && inst.n <= problem.bn && inst.k <= problem.bk 
         && inst.m * inst.n > max_m * max_n
       ){
@@ -154,21 +154,12 @@ MMAInstInfo* LowerInfoAnalysis::selectGemmInst(LowerInfoAnalysis::GemmProblem pr
   return ret;
 }
 
-// LowerInfoAnalysis::MmaShape LowerInfoAnalysis::getMmaShape(const GemmProblem &problem,
-//                                                            HWSpecification *hw) {
-//   (void)hw;
-//   // TODO: 根据问题规模和 hw 下合规的mma指令集，选择最大tile的 mma指令
-
-//   return {64, problem.bn >= 256 ? 256 : problem.bn,
-//           32 * 8 / problem.inElemBitWidth};
-// }
-
 bool LowerInfoAnalysis::getDirectGemmBlockLayout(
   uint64_t thread_num,
   std::array<int64_t, 2> &block_layout,
   HWSpecification* hw
 ) {
-  if(hw->hwKind == HW_KIND_NVIDIA){
+  if(hw->getKind() == HW_KIND_NVIDIA){
     int warpgroup_num = thread_num / 128;
     auto [y, x] = squareFactor(warpgroup_num);
     if (warpgroup_num <= 0 || y <= 0 || x <= 0) {
@@ -178,8 +169,8 @@ bool LowerInfoAnalysis::getDirectGemmBlockLayout(
     block_layout = {y * 4, x};
     return true;
   }
-  else if(hw->hwKind == HW_KIND_DCU){
-    int warp_num = thread_num / hw->warpSize;
+  else if(hw->getKind() == HW_KIND_DCU){
+    int warp_num = thread_num / hw->getWarpsize();
     auto [y, x] = squareFactor(warp_num);
     if (warp_num <= 0 || y <= 0 || x <= 0) {
       LLVM_OUT_MSG("warp_num layout err");
@@ -195,8 +186,8 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
                                                  HWSpecification *hw,
                                                  std::array<int64_t, 2> block_layout
                                                 ) {
-  LowerInfo info{hw->warpSize};
-  if(hw->hwKind == HW_KIND_NVIDIA){
+  LowerInfo info{hw->getWarpsize()};
+  if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
     info.thread_widths = {1, 32 / static_cast<int64_t>(problem.inElemBitWidth)};
@@ -209,14 +200,14 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
     info.warp_indices = info.getWarpIndices(b, info.block_layout);
     info.lane_indices = info.getThreadIndices(b, info.warp_layout);
   }
-  else if(hw->hwKind == HW_KIND_DCU){
+  else if(hw->getKind() == HW_KIND_DCU){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
-    info.thread_widths = {1, 1};
-    info.warp_layout = mma->warp_layout_acc;
+    info.thread_widths = mma->desc_c.thread_creg;
+    info.warp_layout = mma->desc_c.warp_layout;
     info.block_layout = block_layout;
-    info.warp_widths = {16,4};
-    info.warp_repeat = {1,1};
+    info.warp_widths = PointwiseDot(mma->desc_c.warp_layout, mma->desc_c.thread_creg);
+    info.warp_repeat = mma->desc_c.warp_repeat;
     info.block_widths = info.getBlockWidths(info.warp_widths, info.warp_repeat, info.block_layout);
     info.block_repeat = {problem.bm / info.block_widths[0], problem.bn / info.block_widths[1]};
     info.warp_indices = info.getWarpIndices(b, info.block_layout);
@@ -230,7 +221,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
                                                HWSpecification *hw,
                                                const LowerInfo &source_info,
                                                bool source_is_a) {
-  LowerInfo info{hw->warpSize};
+  LowerInfo info{hw->getWarpsize()};
   info.buffer = problem.C;
   info.thread_bound = thread_num;
   info.warp_layout = source_info.warp_layout;
@@ -257,7 +248,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
 void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.A;
-  if(hw->hwKind == HW_KIND_NVIDIA){
+  if(hw->getKind() == HW_KIND_NVIDIA){
     info.thread_widths[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
     info.warp_widths[1] = 0;
     info.warp_repeat[1] = mma->k / info.warp_layout[1] / info.thread_widths[1];
@@ -266,10 +257,10 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
     info.warp_indices[1] = zero;
     info.lane_indices[1] = zero;
   }
-  else if(hw->hwKind == HW_KIND_DCU){
-    info.thread_widths[1] = mma->k / 4 ;
-    info.warp_widths[1] = 0;
-    info.warp_repeat[1] = mma->k / info.warp_layout[1] / info.thread_widths[1];
+  else if(hw->getKind() == HW_KIND_DCU){
+    info.thread_widths = mma->desc_a.thread_creg ;
+    info.warp_widths = mma->desc_a.get_warp_widths();
+    info.warp_repeat = mma->desc_a.warp_repeat;
     info.block_widths[1] = mma->k;
     info.block_repeat[1] = problem.bk / mma->k;
     info.warp_indices[1] = zero;
@@ -280,6 +271,7 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
 void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                            MMAInstInfo *mma, AffineExpr zero) {
   info.buffer = problem.A;
+
   info.thread_widths[1] = 0;
   info.warp_widths[1] = 0;
   info.warp_repeat[1] = 0;
@@ -287,18 +279,34 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
   info.block_repeat[1] = problem.bk / mma->k;
   info.warp_indices[1] = zero;
   info.lane_indices[1] = zero;
+
+
 }
 
 void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
-                                       MMAInstInfo *mma, AffineExpr zero) {
+                                       MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.B;
-  info.thread_widths[0] = 0;
-  info.warp_widths[0] = 0;
-  info.warp_repeat[0] = 0;
-  info.block_widths[0] = mma->k;
-  info.block_repeat[0] = problem.bk / mma->k;
-  info.warp_indices[0] = zero;
-  info.lane_indices[0] = zero;
+  if(hw->getKind() == HW_KIND_NVIDIA){
+    info.thread_widths[0] = 0;
+    info.warp_widths[0] = 0;
+    info.warp_repeat[0] = 0;
+    info.block_widths[0] = mma->k;
+    info.block_repeat[0] = problem.bk / mma->k;
+    info.warp_indices[0] = zero;
+    info.lane_indices[0] = zero;
+  }
+  else if(hw->getKind() == HW_KIND_DCU) {
+    // info.thread_widths[0] = 0;
+    // info.warp_widths[0] = 0;
+    // info.warp_repeat[0] = 0;
+    info.thread_widths = mma->desc_b.thread_creg;
+    info.warp_widths = mma->desc_b.get_warp_widths();
+    info.warp_repeat = mma->desc_b.warp_repeat;
+    info.block_widths[0] = mma->k;
+    info.block_repeat[0] = problem.bk / mma->k;
+    info.warp_indices[0] = zero;
+    info.lane_indices[0] = zero;
+  }
 }
 
 bool LowerInfoAnalysis::inferCopyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps) {
@@ -423,7 +431,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, DenseMap<Value, LowerInfo> &b
   applyDirectGemmAInfo(aInfo, problem, instInfo, zero, hw);
 
   LowerInfo &bInfo = setBufferInfo(buf_info_maps, problem.B, LowerInfo(ic));
-  applyGemmBInfo(bInfo, problem, instInfo, zero);
+  applyGemmBInfo(bInfo, problem, instInfo, zero,hw);
   return true;
 }
 
@@ -449,7 +457,7 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo
   // MmaShape mma = getMmaShape(problem, hw);
   auto mma = selectGemmInst(problem, hw);
 
-  LowerInfo ic{hw->warpSize};
+  LowerInfo ic{hw->getWarpsize()};
   if (buf_info_maps.count(problem.A) || buf_info_maps.count(problem.B)) {
     bool source_is_a = buf_info_maps.count(problem.A);
     LowerInfo info = source_is_a ? buf_info_maps.find(problem.A)->second
@@ -464,7 +472,7 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo
   auto zero = b.getAffineConstantExpr(0);
   if (buf_info_maps.count(problem.A)) {
     LowerInfo &bInfo = setBufferInfo(buf_info_maps, problem.B, ic);
-    applyGemmBInfo(bInfo, problem, mma, zero);
+    applyGemmBInfo(bInfo, problem, mma, zero,hw);
   }
   if (buf_info_maps.count(problem.B)) {
     LowerInfo &aInfo = setBufferInfo(buf_info_maps, problem.A, ic);

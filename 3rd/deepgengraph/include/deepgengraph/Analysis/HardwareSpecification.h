@@ -6,10 +6,42 @@
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/SmallVector.h"
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 
+using coordXY_t = std::array<int64_t, 2>;  // coordinate [x,y]
+
+coordXY_t PointwiseDot(coordXY_t a, coordXY_t b);
+
+// 一般的线性排布描述
+struct LinearLayout2DDesc {
+    mlir::frisk::friskMs memspace;  // 位于shm还是reg
+    mlir::frisk::FriskDType  elementType;  // 数据类型
+    coordXY_t warp_layout;   // warp中的线程排布形状
+    coordXY_t warp_layout_order;  // [0,1]  表示自增顺序先x坐标再y坐标。即列优先
+    coordXY_t thread_creg;  // thread持有的连续reg排布
+    coordXY_t thread_creg_order;  // reg 排布为行/列优先
+    coordXY_t warp_repeat;  // warp内所有thread持有的连续数据构成D. D如何重复
+    coordXY_t warp_repeat_order;  // D的重复按行/列优先
+    coordXY_t wg_layout;   // warpgroup 里 warp的排列形状
+    coordXY_t wg_layout_order;  // [0,1]  表示自增顺序先x坐标再y坐标。即列优先
+
+    inline coordXY_t get_warp_widths() {  // warp单次计算的连续区域（还没有replicate）
+        return PointwiseDot(warp_layout, thread_creg);
+    }
+    inline coordXY_t get_warp_widths_total() {  // warp repeat后计算的区域大小
+        return PointwiseDot(get_warp_widths(), warp_repeat);
+    }
+    inline coordXY_t get_wg_widths() {  // warpgroup计算的连续区域大小
+        return PointwiseDot(get_warp_widths_total(), wg_layout);
+    }
+};
+
+struct SwizzleLayoutDesc {
+    int B,M,S;
+};
 
 /**
  * @brief 描述块级别 mma指令
@@ -20,22 +52,9 @@ struct MMAInstInfo {
     int m;
     int n;
     int k;
-    int coopThreadsCount;
-    mlir::frisk::friskMs memspaceA; 
-    mlir::frisk::friskMs memspaceB; 
-    mlir::frisk::friskMs memspaceAcc; 
-    mlir::frisk::FriskDType fragmentElementType;
-    mlir::frisk::FriskDType accElementType;
-    std::array<int64_t, 2> warp_layout_a;  // warp中的线程如何排布
-    std::array<int64_t, 2> warp_layout_b;  // warp中的线程如何排布
-    std::array<int64_t, 2> warp_layout_acc;  // warp中的线程如何排布
-    std::array<int64_t, 2> wg_layout_acc;    // wg中的warp如何排列
-    int dataCountPerThread_A;  // 描述单个mma指令中，一个线程持有多少data（按元素个数计）
-    int dataCountPerThread_B;  // 描述单个mma指令中，一个线程持有多少data（按元素个数计）
-    int dataCountPerThread_Acc;  // 描述单个mma指令中，一个线程持有多少data（按元素个数计）
-    std::array<mlir::AffineExpr, 2> wlr_Aij;  // f(warp,lane,reg) -> buffer[i,j]
-    std::array<mlir::AffineExpr, 2> wlr_Bij;  // f(warp,lane,reg) -> buffer[i,j]
-    std::array<mlir::AffineExpr, 2> wlr_Cij;  // f(warp,lane,reg) -> buffer[i,j]
+    LinearLayout2DDesc desc_a;  // operator
+    LinearLayout2DDesc desc_b;  // operator
+    LinearLayout2DDesc desc_c;  // accumulator
 };
 
 // 块级别 wmma 指令描述
@@ -76,13 +95,27 @@ struct SyncGranularityInfo {
 #define HW_VERSION_DCU_BW1000  "bw1000"
 
 // 描述硬件特性
-struct HWSpecification {
-    std::string hwKind;
-    std::string hwVersion;
+class HWSpecification {
+public:
     TiledGEMMInfo gemmInfo;  // 是否支持tile级别的gemm
     DataCopyInfo dataCopyInfo;  // 是否支持 GM<->shm 之间的异步拷贝
-    int  warpSize;      // warp 大小（调度单元有几个线程）
     SyncGranularityInfo syncGranularity;   // 同步语句的控制粒度
+
+    HWSpecification(std::string kind, std::string version) : hwKind(kind), hwVersion(version) {
+        if(kind == HW_KIND_NVIDIA){
+            warpSize = 32;
+        }
+        else if(kind == HW_KIND_DCU){
+            warpSize = 64;
+        }
+    }
+    inline const std::string getKind() {return hwKind;}
+    inline const std::string getVersion() {return hwVersion;}
+    inline int getWarpsize() {return warpSize;}
+private:
+    std::string hwKind;
+    std::string hwVersion;
+    int  warpSize;      // warp 大小（调度单元有几个线程）
 };
 
 HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mlir::MLIRContext* ctx);

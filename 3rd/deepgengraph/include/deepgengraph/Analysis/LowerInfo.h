@@ -41,6 +41,8 @@ public:
   int warp_threads;
 public:
   explicit LowerInfo(int _warp_threads);
+  LinearLayout2DDesc base_layout;  // 某个指令决定的，基础访问模式。
+  coordXY_t        base_layout_repeat;  // 以基础访问模式的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
 
   int get_dimcount() const {
     return dimCount;
@@ -238,7 +240,7 @@ public:
     std::array<int64_t, 2> block_widths;
     for (size_t i=0; i<warp_repeat.size(); ++i) {
       int64_t wrs = warp_repeat[i] * warp_widths[i];
-      int64_t bs = block_layout[i] * wrs;
+      int64_t bs = block_layout[i] * wrs;  // block中的warp排布 * warp_repeat计算的区域尺寸
       block_widths[i] = bs;
     }
     return block_widths;
@@ -248,8 +250,6 @@ private:
 
   int64_t thread_bound;
   AffineMap affine_map;
-  
-
   std::vector<const char*> mapOperandsLabel;  // mapOperands 的标签
   std::vector<const char*> iterVarLabels;  // for 循环的标签
   std::vector<int> ivUpperBounds;  // 迭代变量的上界
@@ -283,9 +283,7 @@ public:
 
   static DenseMap<Value, LowerInfo> run(mlir::Operation* kernelOp,
                                         const std::string& hwKind = HW_KIND_DCU,
-                                        const std::string& version = HW_VERSION_DCU_BW1000);
-
-private:
+                                        const std::string& version = HW_VERSION_DCU_BW1000);                                        
   struct GemmProblem {
     Value A;
     Value B;
@@ -298,16 +296,14 @@ private:
     int64_t bn;
     int64_t bk;
   };
+  static GemmProblem getGemmProblem(GemmOp gemmOp);
+  static MMAInstInfo* selectGemmInst(GemmProblem problem, HWSpecification* hw);
 
-
-
-
+private:
   static llvm::SmallVector<Operation*, 5> collectNeedInferOps(mlir::Operation *kernelOp);
   static std::pair<int, int> squareFactor(int n);
   static uint64_t getRegionThreadNum(Operation *op);
-  static GemmProblem getGemmProblem(GemmOp gemmOp);
   static bool checkGemmProblem(GemmProblem p, HWSpecification* hw);
-  static MMAInstInfo* selectGemmInst(GemmProblem problem, HWSpecification* hw);
   static bool getDirectGemmBlockLayout(uint64_t thread_num,
                                        std::array<int64_t, 2> &block_layout, HWSpecification* hw);
   static LowerInfo makeDirectGemmCInfo(OpBuilder b, const GemmProblem &problem,
@@ -323,7 +319,7 @@ private:
   static void applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                  MMAInstInfo *mma, AffineExpr zero );
   static void applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
-                             MMAInstInfo *mma, AffineExpr zero);
+                             MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw);
   static bool inferDirectOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
                             HWSpecification *hw);
   static bool inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,

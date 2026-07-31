@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
@@ -18,12 +19,14 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/OpenACC/OpenACC.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
@@ -399,6 +402,43 @@ public:
 };
 
 
+// GemmOp的 ABC判断是否满足硬件要求。如果 memspaceA B 不满足，则加上对应buffer alloc
+struct GemmOperatorInsertBuffer : public mlir::OpRewritePattern<frisk::GemmOp> {
+  using mlir::OpRewritePattern<frisk::GemmOp>::OpRewritePattern;
+
+  mlir::LogicalResult matchAndRewrite(frisk::GemmOp op, mlir::PatternRewriter &rewriter) const override {
+    auto hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000 , op->getContext());
+    auto memTypeA = mlir::cast<MemRefType>(op.getMatrixA().getType());
+    auto memspaceA = memTypeA.getMemorySpaceAsInt();
+    auto memTypeB = mlir::cast<MemRefType>(op.getMatrixB().getType());
+    auto memspaceB = memTypeB.getMemorySpaceAsInt();
+    mlir::Value bufferA = nullptr;
+    mlir::Value bufferB = nullptr;
+    
+    auto p = LowerInfoAnalysis::getGemmProblem(op);
+    auto mma =  LowerInfoAnalysis::selectGemmInst(p, hw);
+    assert(mma != nullptr);
+    if(memspaceA != (int)mma->desc_a.memspace){
+      bufferA = rewriter.create<frisk::AllocBufferOp>(op->getLoc(),  memTypeA.getShape(), memTypeA.getElementType(), 16, (int)mma->desc_a.memspace);
+      auto copyToA = rewriter.create<frisk::CopyOp>(op->getLoc(), op.getMatrixA(), bufferA);
+    }
+    if(memspaceB != (int)mma->desc_b.memspace){
+      bufferB = rewriter.create<frisk::AllocBufferOp>(op->getLoc(),  memTypeB.getShape(), memTypeB.getElementType(), 16, (int)mma->desc_b.memspace);
+      auto copyToB = rewriter.create<frisk::CopyOp>(op->getLoc(), op.getMatrixB(), bufferB);
+    }
+    if(bufferA != nullptr || bufferB != nullptr){
+      auto bufA = bufferA == nullptr ? op.getMatrixA() : bufferA;
+      auto bufB = bufferB == nullptr ? op.getMatrixB() : bufferB;
+      auto newGemm = rewriter.create<frisk::GemmOp>(op->getLoc(),  bufA, bufB, op.getMatrixC(), op.getTransA(), op.getTransB());
+      rewriter.replaceOp(op, newGemm);
+      return success();
+    }
+    else{
+      return failure();
+    }
+  }
+};
+
 
 // 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分其他op到thread上
 class ConvertFriskBaseToThreadLevelIR : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
@@ -411,6 +451,35 @@ public:
     if(!kernel->hasAttr("thread_num")){
       return;
     }
+    // -------- step 1 : 根据硬件信息，在block级别语义IR上视情况插入buffer，使得指令符合要求（如gemm的 abc memspace需求）
+    RewritePatternSet ps0(context);
+    ps0.add<
+      GemmOperatorInsertBuffer
+    >(context);
+    
+    // llvm::SmallVector<frisk::GemmOp> gemms {};
+    // kernel->walk([&](frisk::GemmOp gemm){
+    //   gemms.push_back(gemm);
+    // });
+
+    // PatternRewriter rewriter{context};
+    // for(auto gemm : gemms){
+    //   GemmOperatorInsertBuffer pattern{context};
+    //   if(failed(pattern.matchAndRewrite(gemm, rewriter))){
+    //     llvm::outs() << "rewrite failed\n";llvm::outs().flush();
+    //   }
+    // }
+
+    GreedyRewriteConfig cfg;
+    cfg.strictMode = GreedyRewriteStrictness::ExistingOps;
+    cfg.enableRegionSimplification = GreedySimplifyRegionLevel::Disabled;
+
+    if(failed(applyPatternsGreedily(kernel, std::move(ps0), cfg))) {
+      llvm::errs() << "gemmOp buffer memspace 适配失败 !\n";
+    }
+    llvm::outs() << "after GemmOperatorInsertBuffer\n"; llvm::outs().flush();
+    kernel->dump();
+    // -------- step 2 ：进行 layoutInfer 得到block级别IR上，每个buffer的 访问模式。
     s_info = LowerInfoAnalysis::run(kernel);
     llvm::outs() << "-- lowerinfo analyze done\n";llvm::outs().flush();
     
