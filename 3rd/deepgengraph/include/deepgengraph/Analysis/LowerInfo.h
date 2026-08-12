@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
+#include "mlir/Support/LLVM.h"
 
 struct HWSpecification;
 
@@ -41,8 +42,10 @@ public:
   int warp_threads;
 public:
   explicit LowerInfo(int _warp_threads);
+  MMAInstInfo*  mmaInst = nullptr;
   LinearLayout2DDesc base_layout;  // 某个指令决定的，基础访问模式。
   coordXY_t        base_layout_repeat;  // 以基础访问模式的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
+  coordXY_t        base_layout_repeat_order;  // 以基础访问模式的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
 
   int get_dimcount() const {
     return dimCount;
@@ -150,7 +153,11 @@ public:
   std::array<AffineExpr, 2> getAffineMap() {
     // 根据上述信息，生成不同层面的索引
     // 强制重新计算
+    mapOperandsLabel.clear();
+    iterVarLabels.clear();
+    ivUpperBounds.clear();
     dimCount = 1;
+    mapOperandsLabel.push_back(TID);
     OpBuilder b{buffer.getContext()};
     MemRefType type = dyn_cast<MemRefType>(buffer.getType());
 
@@ -161,7 +168,7 @@ public:
         auto iw = b.getAffineDimExpr(i * 3 + 2); // warp_repeat：[2, mma_k/(warp_layout[1] * thread_widths[1])]
         auto it = b.getAffineDimExpr(i * 3 + 3); // thread_widths: [1, 2]
         AffineExpr expr = ib * (warp_repeat[i] * thread_widths[i]) + iw * thread_widths[i] + it;
-        indices[i]= expr;
+        indices[i]= expr;  // buffer-> thread 级别元素的映射
         // add labels
         mapOperandsLabel.push_back(BLOCK_LABELS[i]);
         mapOperandsLabel.push_back(WARP_LABELS[i]);
@@ -278,10 +285,27 @@ protected:
   }
 };
 
+class LowerInfoMap {
+public:
+  using LowerInfoMapTy = DenseMap<std::pair<Value, Operation*> , LowerInfo>;
+  // 进行op顺序分析
+  void getOpsOrder(mlir::Operation* rootNode);
+  // 查询 <buffer，op> 对应的LowerInfo
+  LowerInfo* getLowerInfo(const mlir::Value& buffer, mlir::Operation* op);
+  // 添加 lowerinfo（info中已经含有buffer）
+  LowerInfo* addLowerInfo(mlir::Operation* op, LowerInfo info);
+  // 根据buffer查找infoMap，找到其中距离currOp最近的之前/之后的Op的 LowerInfo
+  LowerInfo* getNearestInferedInfo(const mlir::Value& buffer, mlir::Operation* currOp, bool isBefore = true);
+  auto begin() { return infoMap.begin(); }
+  auto end() { return infoMap.end(); }
+private:
+  LowerInfoMapTy infoMap;
+  DenseMap<Operation*, unsigned> opOrder;
+};
+
 class LowerInfoAnalysis {
 public:
-
-  static DenseMap<Value, LowerInfo> run(mlir::Operation* kernelOp,
+  static LowerInfoMap* run(mlir::Operation* kernelOp,
                                         const std::string& hwKind = HW_KIND_DCU,
                                         const std::string& version = HW_VERSION_DCU_BW1000);                                        
   struct GemmProblem {
@@ -300,6 +324,7 @@ public:
   static MMAInstInfo* selectGemmInst(GemmProblem problem, HWSpecification* hw);
 
 private:
+  static LowerInfoMap buf_info_maps;
   static llvm::SmallVector<Operation*, 5> collectNeedInferOps(mlir::Operation *kernelOp);
   static std::pair<int, int> squareFactor(int n);
   static uint64_t getRegionThreadNum(Operation *op);
@@ -320,19 +345,15 @@ private:
                                  MMAInstInfo *mma, AffineExpr zero );
   static void applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw);
-  static bool inferDirectOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
-                            HWSpecification *hw);
-  static bool inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+  static bool inferDirectOp(Operation *op, LowerInfoMap& infoMap ,HWSpecification *hw);
+  static bool inferRelyOp(Operation *op, LowerInfoMap& infoMap, HWSpecification *hw);
+  static bool inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps);
+  static bool inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps);
+  static bool inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                           HWSpecification *hw);
-  static LowerInfo &setBufferInfo(DenseMap<Value, LowerInfo> &buf_info_maps,
-                                  Value buffer, const LowerInfo &info);
-  static bool inferCopyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
-  static bool inferBlockOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
-  static bool inferGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
-                          HWSpecification *hw);
-  static bool inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+  static bool inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                               HWSpecification *hw);
-  static bool inferReduceOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps);
+  static bool inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps);
 
   // void getTest() {
   //   llvm::outs() << "[D]need_infer_ops size: " << need_infer_ops.size() << "\n";

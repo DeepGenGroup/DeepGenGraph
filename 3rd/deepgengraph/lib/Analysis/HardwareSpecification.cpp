@@ -7,6 +7,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
+#include <sstream>
 #include <vector>
 
 coordXY_t PointwiseDot(coordXY_t a, coordXY_t b){
@@ -56,9 +57,11 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
             // BW 1000
             auto get_inst = [](int m, int n, int k, mlir::frisk::FriskDType abTy, mlir::frisk::FriskDType cTy)-> MMAInstInfo {
                 MMAInstInfo info;
+                llvm::raw_string_ostream ss(info.name);
                 info.m = m;
                 info.n = n;
                 info.k = k;
+                ss << "m" << m << "n" << n << "k" << k << ":"<< int(abTy)<<":" << int(cTy);
                 LinearLayout2DDesc& _a = info.desc_a;
                 LinearLayout2DDesc& _b = info.desc_b;
                 LinearLayout2DDesc& _c = info.desc_c;

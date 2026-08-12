@@ -14,6 +14,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
@@ -44,6 +45,88 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 #define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
 LowerInfo::LowerInfo(int w) : warp_threads(w){ }
+
+LowerInfo *LowerInfoMap::getLowerInfo(const mlir::Value &buffer,
+                                      mlir::Operation *op) {
+  auto it = infoMap.find(std::make_pair(buffer, op));
+  if (it == infoMap.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+LowerInfo *LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info) {
+  assert(info.buffer != nullptr);
+  auto key = std::make_pair(info.buffer, op);
+  auto it = infoMap.find(key);
+  if (it == infoMap.end()) {
+    it = infoMap.insert(std::make_pair(key, std::move(info))).first;
+  } else {
+    it->second = std::move(info);
+  }
+  it->second.buffer = key.first;
+  return &it->second;
+}
+
+void LowerInfoMap::getOpsOrder(mlir::Operation* rootNode){
+  unsigned idx = 1;
+  rootNode->walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
+    opOrder.try_emplace(subOp, idx++);
+  });
+}
+
+
+LowerInfo *LowerInfoMap::getNearestInferedInfo(const mlir::Value &buffer,
+                                               mlir::Operation *currOp,
+                                               bool isBefore) {
+  if (currOp == nullptr) {
+    return nullptr;
+  }
+  if(opOrder.empty()){
+    assert(false && "must run LowerInfoMap::getOpsOrder() first");
+    return nullptr;
+  }
+  auto currOrderIt = opOrder.find(currOp);
+  if (currOrderIt == opOrder.end()) {
+    assert(false && "currOp must be recorded in LowerInfoMap::getOpsOrder()");
+    return nullptr;
+  }
+  unsigned currOrder = currOrderIt->second;
+  unsigned bestOrder = 0;
+  LowerInfo *nearestInfo = nullptr;
+  for (auto &entry : infoMap) {
+    auto& buf = entry.first.first;
+    auto op = entry.first.second;
+    auto& info = entry.second;
+    auto opOrderIt = opOrder.find(op);
+    if (opOrderIt == opOrder.end()) {
+      continue;
+    }
+    unsigned order = opOrderIt->second;
+    if (buffer != buf) {
+      continue;
+    }
+    if (isBefore && order <= currOrder &&
+        (nearestInfo == nullptr || order > bestOrder)) {
+      nearestInfo = &info;
+      bestOrder = order;
+    } else if (!isBefore && order >= currOrder &&
+               (nearestInfo == nullptr || order < bestOrder)) {
+      nearestInfo = &info;
+      bestOrder = order;
+    }
+  }
+  return nearestInfo;
+}
+
+static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
+                                              const mlir::Value &buffer,
+                                              mlir::Operation *currOp) {
+  if (auto *info = infoMap.getNearestInferedInfo(buffer, currOp, true)) {
+    return info;
+  }
+  return infoMap.getNearestInferedInfo(buffer, currOp, false);
+}
 
 llvm::SmallVector<Operation*, 5>
 LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
@@ -96,17 +179,6 @@ uint64_t LowerInfoAnalysis::getRegionThreadNum(Operation *op) {
   return thread_num;
 }
 
-LowerInfo &LowerInfoAnalysis::setBufferInfo(DenseMap<Value, LowerInfo> &buf_info_maps,
-                                            Value buffer, const LowerInfo &info) {
-  auto it = buf_info_maps.find(buffer);
-  if (it == buf_info_maps.end()) {
-    it = buf_info_maps.insert(std::make_pair(buffer, info)).first;
-  } else {
-    it->second = info;
-  }
-  return it->second;
-}
-
 LowerInfoAnalysis::GemmProblem LowerInfoAnalysis::getGemmProblem(GemmOp gemmOp) {
   GemmProblem problem;
   problem.A = gemmOp.getMatrixA();
@@ -124,6 +196,7 @@ LowerInfoAnalysis::GemmProblem LowerInfoAnalysis::getGemmProblem(GemmOp gemmOp) 
   return problem;
 }
 
+// 根据gemm问题，选择最大的 wmma指令计算（先不考虑memspace，后续有Pass处理）
 MMAInstInfo* LowerInfoAnalysis::selectGemmInst(LowerInfoAnalysis::GemmProblem problem, HWSpecification* hw){
   MMAInstInfo* ret = nullptr;
   int max_m = 0, max_n = 0, max_k = 0;
@@ -187,6 +260,7 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
                                                  std::array<int64_t, 2> block_layout
                                                 ) {
   LowerInfo info{hw->getWarpsize()};
+  info.mmaInst = mma;
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
@@ -222,6 +296,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
                                                const LowerInfo &source_info,
                                                bool source_is_a) {
   LowerInfo info{hw->getWarpsize()};
+  info.mmaInst = mma;
   info.buffer = problem.C;
   info.thread_bound = thread_num;
   info.warp_layout = source_info.warp_layout;
@@ -248,6 +323,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
 void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.A;
+  info.mmaInst = mma;
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.thread_widths[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
     info.warp_widths[1] = 0;
@@ -279,13 +355,12 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
   info.block_repeat[1] = problem.bk / mma->k;
   info.warp_indices[1] = zero;
   info.lane_indices[1] = zero;
-
-
 }
 
 void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
                                        MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.B;
+  info.mmaInst = mma;
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.thread_widths[0] = 0;
     info.warp_widths[0] = 0;
@@ -309,26 +384,35 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
   }
 }
 
-bool LowerInfoAnalysis::inferCopyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps) {
+bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps) {
+  // copyop : 根据 src dst的一方推定 另一方
   if (auto copyOp = dyn_cast<CopyOp>(op)) {
     Value dst = copyOp.getDstMemRef();
     Value src = copyOp.getSrcMemRef();
-    if (auto dstInfo = buf_info_maps.find(dst); dstInfo != buf_info_maps.end()) {
-      LowerInfo &srcInfo = setBufferInfo(buf_info_maps, src, dstInfo->second);
-      srcInfo.buffer = src;
-      return true;
-    } else if (auto srcInfo = buf_info_maps.find(src); srcInfo != buf_info_maps.end()) {
-      LowerInfo &dstInfo = setBufferInfo(buf_info_maps, dst, srcInfo->second);
-      dstInfo.buffer = dst;
+    auto dstInfo = getNearestInferedInfoEither(buf_info_maps, dst, op);
+    auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op);
+    LowerInfo *sourceInfo = dstInfo != nullptr ? dstInfo : srcInfo;
+    if (sourceInfo != nullptr) {
+      LowerInfo source = *sourceInfo;
+      if (buf_info_maps.getLowerInfo(src, op) == nullptr) {
+        LowerInfo i = source;
+        i.buffer = src;
+        buf_info_maps.addLowerInfo(op, i);
+      }
+      if (buf_info_maps.getLowerInfo(dst, op) == nullptr) {
+        LowerInfo i = source;
+        i.buffer = dst;
+        buf_info_maps.addLowerInfo(op, i);
+      }
       return true;
     }
-    LLVM_OUT_MSG("---- inferError 0");
+    LLVM_OUT_MSG("---- inferCopyOp error");
     return false;
   }
   return false;
 }
 
-bool LowerInfoAnalysis::inferBlockOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps) {
+bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps) {
   auto blockOp = dyn_cast<BlockOp>(op);
   if (!blockOp) {
     return false;
@@ -364,25 +448,29 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, DenseMap<Value, LowerInfo> &
 
   LowerInfo *info = nullptr;
   for (const auto &lbuf : load_bufs) {
-    if (buf_info_maps.count(lbuf) && get_main_info_func(lbuf)) {
-      info = &buf_info_maps.find(lbuf)->second;
+    info = getNearestInferedInfoEither(buf_info_maps, lbuf, op);
+    if (info != nullptr && get_main_info_func(lbuf)) {
       break;
     }
   }
-  if (info == nullptr && buf_info_maps.count(store_buf) && get_main_info_func(store_buf)) {
-    info = &buf_info_maps.find(store_buf)->second;
+  // loadbufs 均没推断
+  auto storeLowerInfo = getNearestInferedInfoEither(buf_info_maps, store_buf, op);
+  if (info == nullptr && storeLowerInfo != nullptr && get_main_info_func(store_buf)) {
+    info = storeLowerInfo;
   }
   if (info == nullptr) {
-    LLVM_OUT_MSG("---- inferError 3");
+    LLVM_OUT_MSG("---- blockOp::loadbufs storebufs 均没推定");
     return false;
   }
-
+  // 根据 load storebuf 的一方推定另一方
   load_bufs.push_back(store_buf);
   LowerInfo sourceInfo = *info;
   for (const Value &buf : load_bufs) {
-    if (!buf_info_maps.count(buf)) {
-      LowerInfo &bufInfo = setBufferInfo(buf_info_maps, buf, sourceInfo);
+    auto info = buf_info_maps.getLowerInfo(buf, op);
+    if (info == nullptr) {
+      auto bufInfo = sourceInfo;
       bufInfo.buffer = buf;
+      buf_info_maps.addLowerInfo(op, bufInfo);
     }
   }
   return true;
@@ -393,7 +481,7 @@ bool LowerInfoAnalysis::checkGemmProblem(LowerInfoAnalysis::GemmProblem p, HWSpe
   return true;
 }
 
-bool LowerInfoAnalysis::inferGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                                     HWSpecification *hw) {
   auto gemmOp = dyn_cast<GemmOp>(op);
   if (!gemmOp) {
@@ -422,20 +510,23 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, DenseMap<Value, LowerInfo> &b
   //        "C must be local buffer.");
   // MmaShape mma = getMmaShape(problem, hw);
   MMAInstInfo* instInfo = selectGemmInst(problem, hw);
+  llvm::outs() <<"mma_inst - " << instInfo->name.c_str() << "\n"; llvm::outs().flush();
 
   LowerInfo ic = makeDirectGemmCInfo(b, problem, instInfo, thread_num, hw, block_layout);
-  setBufferInfo(buf_info_maps, problem.C, ic);
+  ic.mmaInst = instInfo;
+  buf_info_maps.addLowerInfo(op, ic);
 
   auto zero = b.getAffineConstantExpr(0);
-  LowerInfo &aInfo = setBufferInfo(buf_info_maps, problem.A, LowerInfo(ic));
+  LowerInfo aInfo = ic;
+  LowerInfo bInfo = ic;
   applyDirectGemmAInfo(aInfo, problem, instInfo, zero, hw);
-
-  LowerInfo &bInfo = setBufferInfo(buf_info_maps, problem.B, LowerInfo(ic));
+  buf_info_maps.addLowerInfo(op, aInfo);
   applyGemmBInfo(bInfo, problem, instInfo, zero,hw);
+  buf_info_maps.addLowerInfo(op, bInfo);
   return true;
 }
 
-bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                                         HWSpecification *hw) {
   auto gemmOp = dyn_cast<GemmOp>(op);
   if (!gemmOp) {
@@ -457,31 +548,56 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, DenseMap<Value, LowerInfo
   // MmaShape mma = getMmaShape(problem, hw);
   auto mma = selectGemmInst(problem, hw);
 
-  LowerInfo ic{hw->getWarpsize()};
-  if (buf_info_maps.count(problem.A) || buf_info_maps.count(problem.B)) {
-    bool source_is_a = buf_info_maps.count(problem.A);
-    LowerInfo info = source_is_a ? buf_info_maps.find(problem.A)->second
-                                 : buf_info_maps.find(problem.B)->second;
-    assert(thread_num == info.thread_bound && "Thread Number is not equl");
-    ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, info, source_is_a);
-    setBufferInfo(buf_info_maps, problem.C, ic);
-  } else {
-    ic = buf_info_maps.find(problem.C)->second;
-  }
-
   auto zero = b.getAffineConstantExpr(0);
-  if (buf_info_maps.count(problem.A)) {
-    LowerInfo &bInfo = setBufferInfo(buf_info_maps, problem.B, ic);
-    applyGemmBInfo(bInfo, problem, mma, zero,hw);
+  // 若A或B已经推断：根据A或B的info得到C的info；否则C的info从 map里找
+  auto infoA = getNearestInferedInfoEither(buf_info_maps, problem.A, op);
+  auto infoB = getNearestInferedInfoEither(buf_info_maps, problem.B, op);
+  if(infoA != nullptr){
+    // A 已经推断, A->C
+    LowerInfo sourceA = *infoA;
+    if (buf_info_maps.getLowerInfo(problem.A, op) == nullptr) {
+      sourceA.buffer = problem.A;
+      buf_info_maps.addLowerInfo(op, sourceA);
+    }
+    auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceA, true);
+    buf_info_maps.addLowerInfo(op, ic);
+    // 检查B是否已推断
+    if(infoB == nullptr){
+      // C->B
+      ic.buffer = problem.B;
+      infoB = buf_info_maps.addLowerInfo(op, ic);
+      applyGemmBInfo(*infoB, problem, mma, zero, hw);
+    } else if (buf_info_maps.getLowerInfo(problem.B, op) == nullptr) {
+      LowerInfo bInfo = *infoB;
+      bInfo.buffer = problem.B;
+      buf_info_maps.addLowerInfo(op, bInfo);
+    }
+    return true;
   }
-  if (buf_info_maps.count(problem.B)) {
-    LowerInfo &aInfo = setBufferInfo(buf_info_maps, problem.A, ic);
-    applyRelyGemmAInfo(aInfo, problem, mma, zero);
+  else{
+    // A没被推断。检查B是否已推断
+    if(infoB != nullptr){
+      // B->C
+      LowerInfo sourceB = *infoB;
+      if (buf_info_maps.getLowerInfo(problem.B, op) == nullptr) {
+        sourceB.buffer = problem.B;
+        buf_info_maps.addLowerInfo(op, sourceB);
+      }
+      auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceB, false);
+      buf_info_maps.addLowerInfo(op, ic);
+      // C->A
+      ic.buffer = problem.A;
+      infoA = buf_info_maps.addLowerInfo(op, ic);
+      applyRelyGemmAInfo(*infoA, problem, mma, zero);
+      return true;
+    }
   }
-  return true;
+  // AB 均无推断
+  return false;
 }
 
-bool LowerInfoAnalysis::inferReduceOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps) {
+// reduce : 根据src推定dst的layout
+bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps) {
   auto reduceOp = dyn_cast<ReduceOp>(op);
   if (!reduceOp) {
     return false;
@@ -490,12 +606,15 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, DenseMap<Value, LowerInfo> 
   Value dst = reduceOp.getDst();
   Value src = reduceOp.getSrc();
   uint64_t dim = reduceOp.getDim();
-  if (!buf_info_maps.count(src)) {
+  auto srcInfo = buf_info_maps.getNearestInferedInfo(src, op);
+  if (srcInfo == nullptr) {
     LLVM_OUT_MSG("---- inferError 4");
     return false;
   }
-  LowerInfo &dstInfo = setBufferInfo(buf_info_maps, dst, buf_info_maps.find(src)->second);
+  // 根据src 推断 dst
+  LowerInfo dstInfo = *srcInfo;
   dstInfo.buffer = dst;
+  auto _dstInfo = buf_info_maps.addLowerInfo(op, dstInfo);
 
   auto zero = OpBuilder(op).getAffineConstantExpr(0);
   auto erase_affine_dim_func = [&](std::array<AffineExpr, 2> &vec) -> bool {
@@ -515,22 +634,22 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, DenseMap<Value, LowerInfo> 
     return true;
   };
 
-  if (!erase_affine_dim_func(dstInfo.warp_indices) ||
-      !erase_affine_dim_func(dstInfo.lane_indices) ||
-      !erase_i64_dim_func(dstInfo.warp_layout) ||
-      !erase_i64_dim_func(dstInfo.block_layout) ||
-      !erase_i64_dim_func(dstInfo.warp_repeat) ||
-      !erase_i64_dim_func(dstInfo.block_repeat) ||
-      !erase_i64_dim_func(dstInfo.thread_widths) ||
-      !erase_i64_dim_func(dstInfo.warp_widths) ||
-      !erase_i64_dim_func(dstInfo.block_widths)) {
+  if (!erase_affine_dim_func(_dstInfo->warp_indices) ||
+      !erase_affine_dim_func(_dstInfo->lane_indices) ||
+      !erase_i64_dim_func(_dstInfo->warp_layout) ||
+      !erase_i64_dim_func(_dstInfo->block_layout) ||
+      !erase_i64_dim_func(_dstInfo->warp_repeat) ||
+      !erase_i64_dim_func(_dstInfo->block_repeat) ||
+      !erase_i64_dim_func(_dstInfo->thread_widths) ||
+      !erase_i64_dim_func(_dstInfo->warp_widths) ||
+      !erase_i64_dim_func(_dstInfo->block_widths)) {
     LLVM_OUT_MSG("---- inferError 5");
     return false;
   }
   return true;
 }
 
-bool LowerInfoAnalysis::inferDirectOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
+bool LowerInfoAnalysis::inferDirectOp(Operation *op, LowerInfoMap &buf_info_maps,
                                       HWSpecification *hw) {
   if (auto gemmOp = dyn_cast<GemmOp>(op)) {
     (void)gemmOp;
@@ -539,8 +658,8 @@ bool LowerInfoAnalysis::inferDirectOp(Operation *op, DenseMap<Value, LowerInfo> 
   return false;
 }
 
-bool LowerInfoAnalysis::inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &buf_info_maps,
-                                    HWSpecification *hw) {
+bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps, HWSpecification *hw) {
+  // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
   for (const auto &opd : op->getOperands()) {
     if (isa<MemRefType>(opd.getType())) {
@@ -556,20 +675,28 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &b
       }
     });
   }
-
+  // 检查是否已经推断过
   bool all_in = true;
+  bool has_anchor = false;
   size_t count = 0;
   for (const Value &memref : memrefsToCheck) {
-    if (!buf_info_maps.count(memref)) {
+    // 检查op的buffer是否已被推定过
+    auto info = buf_info_maps.getLowerInfo(memref, op);
+    // 检查buffer是否在op前后已经存在可传播的锚点
+    auto lastInfo = getNearestInferedInfoEither(buf_info_maps, memref, op);
+    if (info == nullptr) {
       all_in = false;
       count++;
+    }
+    if(lastInfo != nullptr){
+      has_anchor = true;
     }
   }
   if (all_in) {
     LLVM_OUT_MSG("buf已全部推断");
     return true;
   }
-  if (!all_in && count == memrefsToCheck.size()) {
+  if (!all_in && count == memrefsToCheck.size() && !has_anchor) {
     LLVM_OUT_MSG("无已推断buf, 需要gemmOp做锚点");
     return false;
   }
@@ -580,6 +707,7 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &b
   if (inferBlockOp(op, buf_info_maps)) {
     return true;
   }
+  // notes: 修改infer逻辑后 这里待商榷
   if (inferRelyGemmOp(op, buf_info_maps, hw)) {
     return true;
   }
@@ -592,6 +720,8 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &b
   return false;
 }
 
+LowerInfoMap LowerInfoAnalysis::buf_info_maps {};
+
 /**
  * @brief lowinfo 推断
  目的：以kernel中的首个gemm为出发点，向两侧推断线程应该持有的寄存器buffer形状。尽可能减少算子之间 local->shm 的写回
@@ -601,21 +731,23 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, DenseMap<Value, LowerInfo> &b
  * @param hwKind : dcu,nvidia 
  * @return DenseMap<Value, LowerInfo> 
  */
-DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version){
+LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version){
   auto hw = GetHWSpecification(hwKind, version, kernelOp->getContext());
-  DenseMap<Value, LowerInfo> buf_info_maps{};
+
+  buf_info_maps = LowerInfoMap{};
+  buf_info_maps.getOpsOrder(kernelOp);
+
   SmallVector<Operation*, 5> need_infer_ops = collectNeedInferOps(kernelOp);
 
-  bool exsit_dircet_infer_op = false;
-  for (size_t i=0; i<need_infer_ops.size(); ++i) {
-    if (inferDirectOp(need_infer_ops[i], buf_info_maps, hw)) {
-      exsit_dircet_infer_op = true;
-      need_infer_ops.erase(need_infer_ops.begin() + i);
-      break;
-    }
-  }
-  if (!exsit_dircet_infer_op) {
-    assert(false && "LowerInfo infer filed.");
+  auto old_size = need_infer_ops.size();
+  // need_infer_ops 中的gemm进行直接推定 
+  need_infer_ops.erase(llvm::remove_if(need_infer_ops, [&](mlir::Operation* op){
+    return inferDirectOp(op, buf_info_maps, hw);
+  }), need_infer_ops.end());
+  
+  
+  if (old_size == need_infer_ops.size()) {
+    assert(false && "LowerInfo infer failed. No direct infer anchor op");
   }
 
   while (!need_infer_ops.empty()) {
@@ -638,7 +770,7 @@ DenseMap<Value, LowerInfo> LowerInfoAnalysis::run(mlir::Operation* kernelOp, con
     }
     need_infer_ops.swap(pendingOps);
   }
-  return buf_info_maps;
+  return &buf_info_maps;
 }
 
 }

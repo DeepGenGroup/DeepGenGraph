@@ -48,7 +48,7 @@ struct SwizzleLayoutDesc {
  * 
  */
 struct MMAInstInfo {
-    const char* name;  // inst的name
+    std::string name;  // inst的name
     int m;
     int n;
     int k;

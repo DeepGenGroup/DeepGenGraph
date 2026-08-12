@@ -783,4 +783,34 @@ def Frisk_WgMmaAsyncLSOp : Frisk_Op<"wgmma_ls_async", []> {
   // let hasVerifier = 1;
 }
 
+// 在instSelect阶段，我们以确保参数正确性。因此这里不需要特意强调acc和operator的type以及尺寸。一切由lowerinfo记录
+def Frisk_WarpMmaOp : Frisk_Op<"warp_mma", [
+    // 声明该 Op 具有内存副作用 (MemRead 和 MemWrite)
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+  let summary = "MMAC 16x16x16 FP16 到 FP32 的矩阵乘加指令 (累加器原地读写)";
+  let description = [{
+    进行 C = A * B + C 的矩阵乘加计算，计算结果直接写回累加器 C 中。
+    注：参数类型约束为 MemRef，但具体元素类型(ElementType)与尺寸(Shape)校验由 instSelect 阶段及 lowerinfo 处理。
+
+    A: 只读 MemRef
+    B: 只读 MemRef
+    C: 读写 MemRef
+  }];
+
+  // 定义输入参数：A, B, C
+  // 使用 AnyMemRef 强调内存引用语义，但不限制其元素类型与 Shape
+  let arguments = (ins 
+    Arg<AnyMemRef, "只读输入 A", [MemRead]>:$a,
+    Arg<AnyMemRef, "只读输入 B", [MemRead]>:$b,
+    Arg<AnyMemRef, "读写累加器 C", [MemRead, MemWrite]>:$c
+  );
+
+  // 原地修改累加器，无 SSA 返回值
+  let results = (outs);
+
+  // 指定自定义汇编格式
+  let assemblyFormat = "$a `,` $b `,` $c attr-dict `:` type($a) `,` type($b) `,` type($c)";
+}
+
 #endif // FRISK_OPS
