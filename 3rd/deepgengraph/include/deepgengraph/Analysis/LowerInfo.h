@@ -43,41 +43,42 @@ public:
 public:
   explicit LowerInfo(int _warp_threads);
   MMAInstInfo*  mmaInst = nullptr;
-  LinearLayout2DDesc base_layout;  // 某个指令决定的，基础访问模式。
-  coordXY_t        base_layout_repeat;  // 以基础访问模式的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
-  coordXY_t        base_layout_repeat_order;  // 以基础访问模式的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
+
+  LinearLayout2DDesc base_layout;  // 某个指令决定的，基础访问模式（thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 inst级别的布局）
+  coordXY_t        base_layout_repeat;  // 以base_layout的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个block-level 的buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
+  std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
 
   int get_dimcount() const {
     return dimCount;
   }
-  const std::array<int64_t, 2>& get_warp_layout() const {
-    return warp_layout;
+  coordXY_t get_warp_layout() const {
+    return base_layout.warp_layout;
   }
-  const std::array<int64_t, 2>& get_block_layout() const {
-    return block_layout;
+  coordXY_t get_block_layout() const {
+    return base_layout.wg_layout;
   }
-  const std::array<int64_t, 2>& get_warp_repeat() const {
-    return warp_repeat;
+  coordXY_t get_warp_repeat() const {
+    return base_layout.warp_repeat;
   }
-  const std::array<int64_t, 2>& get_block_repeat() const {
-    return block_repeat;
+  coordXY_t get_block_repeat() const {
+    return base_layout_repeat;
   }
-  const std::array<int64_t, 2>& get_thread_widths() const {
-    return thread_widths;
+  coordXY_t get_thread_widths() const {
+    return base_layout.thread_creg;
   } 
   std::array<int64_t, 2> get_thread_total_widths() const {
     std::array<int64_t, 2> ret;
     for(int i=0;i<2;++i){
-      ret[i] = (thread_widths[i] * warp_repeat[i] * block_repeat[i]);
+      ret[i] = (base_layout.thread_creg[i] * base_layout.warp_repeat[i] * base_layout_repeat[i]);
     }
     return ret;
   }
 
-  const std::array<int64_t, 2>& get_warp_widths() const {
-    return warp_widths;
+  coordXY_t get_warp_widths() const {
+    return base_layout.get_warp_widths();
   }
-  const std::array<int64_t, 2>& get_block_widths() const {
-    return block_widths;
+  coordXY_t get_block_widths() const {
+    return base_layout.get_wg_widths();
   }
   const auto& getOperandLabels() const {
     return mapOperandsLabel;
@@ -138,15 +139,15 @@ public:
     }
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
 
-    printExprVec("warp_indices", warp_indices);
-    printExprVec("thread_indices", lane_indices);
-    printI64Vec("warp_layout", warp_layout);
-    printI64Vec("block_layout", block_layout);
-    printI64Vec("warp_repeat", warp_repeat);
-    printI64Vec("block_repeat", block_repeat);
-    printI64Vec("thread_widths", thread_widths);
-    printI64Vec("warp_widths", warp_widths);
-    printI64Vec("block_widths", block_widths);
+    printExprVec("warp_indices", getWarpIndices(OpBuilder{buffer.getContext()}, get_block_layout()));
+    printExprVec("thread_indices", getThreadIndices(OpBuilder{buffer.getContext()}, get_warp_layout()));
+    printI64Vec("warp_layout", get_warp_layout());
+    printI64Vec("block_layout", get_block_layout());
+    printI64Vec("warp_repeat", get_warp_repeat());
+    printI64Vec("block_repeat", get_block_repeat());
+    printI64Vec("thread_widths", get_thread_widths());
+    printI64Vec("warp_widths", get_warp_widths());
+    printI64Vec("block_widths", get_block_widths());
     llvm::outs() << "=================\n";
   }
 
@@ -160,6 +161,15 @@ public:
     mapOperandsLabel.push_back(TID);
     OpBuilder b{buffer.getContext()};
     MemRefType type = dyn_cast<MemRefType>(buffer.getType());
+    auto thread_widths = get_thread_widths();
+    auto warp_layout = get_warp_layout();
+    auto block_layout = get_block_layout();
+    auto warp_repeat = get_warp_repeat();
+    auto block_repeat = get_block_repeat();
+    auto warp_widths = get_warp_widths();
+    auto block_widths = get_block_widths();
+    auto warp_indices = getWarpIndices(b, block_layout);
+    auto lane_indices = getThreadIndices(b, warp_layout);
 
     if (type.getMemorySpaceAsInt() == 0 || type.getMemorySpaceAsInt() == 5) { // local
       for (size_t i = 0; i < thread_widths.size(); ++i) {
@@ -210,18 +220,18 @@ public:
   }
 
   std::array<AffineExpr, 2> getThreadIndices(
-    OpBuilder b, std::array<int64_t, 2> warp_layout) {
+    OpBuilder b, std::array<int64_t, 2> warp_layout) const {
       // tid -> lane_id
-    auto tid = _theadIdx(b);
+    auto tid = b.getAffineDimExpr(0);
     auto ly = (tid % warp_threads).floorDiv(warp_layout[1]);
     auto lx = (tid % warp_threads) % warp_layout[1];
     return {ly, lx};
   }
 
   std::array<AffineExpr, 2> getWarpIndices(
-    OpBuilder b, std::array<int64_t, 2> block_layout) {
+    OpBuilder b, std::array<int64_t, 2> block_layout) const {
       // tid -> warp_id
-    auto tid = _theadIdx(b);
+    auto tid = b.getAffineDimExpr(0);
     auto wy = tid.floorDiv(warp_threads).floorDiv(block_layout[1]);
     auto wx = tid.floorDiv(warp_threads) % block_layout[1];
     return {wy, wx};
@@ -229,7 +239,7 @@ public:
 
   std::array<int64_t, 2> getWarpWidths(
       std::array<int64_t, 2> thread_widths,
-      std::array<int64_t, 2> warp_layout) {
+      std::array<int64_t, 2> warp_layout) const {
         // 一个warp计算的tile
     std::array<int64_t, 2> warp_widths;
     for (size_t i=0; i<thread_widths.size(); ++i) {
@@ -242,7 +252,7 @@ public:
   std::array<int64_t, 2> getBlockWidths(
       std::array<int64_t, 2> warp_widths,
       std::array<int64_t, 2> warp_repeat,
-      std::array<int64_t, 2> block_layout) {
+      std::array<int64_t, 2> block_layout) const {
         // 一个block计算的tile（重复后才等于bm/bn）
     std::array<int64_t, 2> block_widths;
     for (size_t i=0; i<warp_repeat.size(); ++i) {
@@ -262,27 +272,6 @@ private:
   std::vector<int> ivUpperBounds;  // 迭代变量的上界
   std::array<AffineExpr, 2> indices;
   uint32_t dimCount = 0;
-
-  std::array<AffineExpr, 2> warp_indices;  // warp_id: [(tid / 32) / block_layout[1], (tid / 32) % block_layout[1]]  warp_id[x,y]
-  std::array<AffineExpr, 2> lane_indices;  // lane_id: [(tid % 32) / warp_layout[1], ...]   lane[x,y]
-  std::array<int64_t, 2> warp_layout;  // lane
-  std::array<int64_t, 2> block_layout;  // warp
-
-  std::array<int64_t, 2> warp_repeat;
-  std::array<int64_t, 2> block_repeat;
-
-  std::array<int64_t, 2> thread_widths;  // 一个thread计算的元素个数 [tx,ty]
-  std::array<int64_t, 2> warp_widths;
-  std::array<int64_t, 2> block_widths;
-
-protected:
-  AffineExpr _theadIdx(OpBuilder& b){
-    if(dimCount == 0){
-      dimCount++;
-      mapOperandsLabel.push_back(TID);
-    }
-    return b.getAffineDimExpr(0);
-  }
 };
 
 class LowerInfoMap {
@@ -325,6 +314,7 @@ public:
 
 private:
   static LowerInfoMap buf_info_maps;
+  static int block_threads ;
   static llvm::SmallVector<Operation*, 5> collectNeedInferOps(mlir::Operation *kernelOp);
   static std::pair<int, int> squareFactor(int n);
   static uint64_t getRegionThreadNum(Operation *op);

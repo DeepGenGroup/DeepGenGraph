@@ -16,6 +16,89 @@ using coordXY_t = std::array<int64_t, 2>;  // coordinate [x,y]
 coordXY_t PointwiseDot(coordXY_t a, coordXY_t b);
 
 // 一般的线性排布描述
+/*
+ * DCU WMMA Matrix Layout Mapping (16 x 16 Matrices for CUDA / MMA Tensor Core Operations)
+ *
+ * 1. MATRIX B (16 x 16):
+ *    Cols:  0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15
+ *         +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+ * Row 0:  |T0  |T1  |T2  |T3  |T4  |T5  |T6  |T7  |T8  |T9  |T10 |T11 |T12 |T13 |T14 |T15 | (V0)
+ * Row 1:  |T0  |T1  |T2  |T3  |T4  |T5  |T6  |T7  |T8  |T9  |T10 |T11 |T12 |T13 |T14 |T15 | (V1)
+ * Row 2:  |T0  |T1  |T2  |T3  |T4  |T5  |T6  |T7  |T8  |T9  |T10 |T11 |T12 |T13 |T14 |T15 | (V2)
+ * Row 3:  |T0  |T1  |T2  |T3  |T4  |T5  |T6  |T7  |T8  |T9  |T10 |T11 |T12 |T13 |T14 |T15 | (V3)
+ * Row 4:  |T16 |T17 |T18 |T19 |T20 |T21 |T22 |T23 |T24 |T25 |T26 |T27 |T28 |T29 |T30 |T31 | (V0)
+ * Row 5:  |T16 |T17 |T18 |T19 |T20 |T21 |T22 |T23 |T24 |T25 |T26 |T27 |T28 |T29 |T30 |T31 | (V1)
+ * Row 6:  |T16 |T17 |T18 |T19 |T20 |T21 |T22 |T23 |T24 |T25 |T26 |T27 |T28 |T29 |T30 |T31 | (V2)
+ * Row 7:  |T16 |T17 |T18 |T19 |T20 |T21 |T22 |T23 |T24 |T25 |T26 |T27 |T28 |T29 |T30 |T31 | (V3)
+ * Row 8:  |T32 |T33 |T34 |T35 |T36 |T37 |T38 |T39 |T40 |T41 |T42 |T43 |T44 |T45 |T46 |T47 | (V0)
+ * Row 9:  |T32 |T33 |T34 |T35 |T36 |T37 |T38 |T39 |T40 |T41 |T42 |T43 |T44 |T45 |T46 |T47 | (V1)
+ * Row10:  |T32 |T33 |T34 |T35 |T36 |T37 |T38 |T39 |T40 |T41 |T42 |T43 |T44 |T45 |T46 |T47 | (V2)
+ * Row11:  |T32 |T33 |T34 |T35 |T36 |T37 |T38 |T39 |T40 |T41 |T42 |T43 |T44 |T45 |T46 |T47 | (V3)
+ * Row12:  |T48 |T49 |T50 |T51 |T52 |T53 |T54 |T55 |T56 |T57 |T58 |T59 |T60 |T61 |T62 |T63 | (V0)
+ * Row13:  |T48 |T49 |T50 |T51 |T52 |T53 |T54 |T55 |T56 |T57 |T58 |T59 |T60 |T61 |T62 |T63 | (V1)
+ * Row14:  |T48 |T49 |T50 |T51 |T52 |T53 |T54 |T55 |T56 |T57 |T58 |T59 |T60 |T61 |T62 |T63 | (V2)
+ * Row15:  |T48 |T49 |T50 |T51 |T52 |T53 |T54 |T55 |T56 |T57 |T58 |T59 |T60 |T61 |T62 |T63 | (V3)
+ *         +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+ *
+ * 2. MATRIX A (16 x 16):
+ *    Cols:  0..3 (V0..V3)  |  4..7 (V0..V3)  | 8..11 (V0..V3)  | 12..15 (V0..V3)
+ *          +---------------+---------------+---------------+-----------------+
+ * Row 0:   | T0  V0..V3    | T16 V0..V3    | T32 V0..V3    | T48 V0..V3      |
+ * Row 1:   | T1  V0..V3    | T17 V0..V3    | T33 V0..V3    | T49 V0..V3      |
+ * Row 2:   | T2  V0..V3    | T18 V0..V3    | T34 V0..V3    | T50 V0..V3      |
+ * Row 3:   | T3  V0..V3    | T19 V0..V3    | T35 V0..V3    | T51 V0..V3      |
+ * Row 4:   | T4  V0..V3    | T20 V0..V3    | T36 V0..V3    | T52 V0..V3      |
+ * Row 5:   | T5  V0..V3    | T21 V0..V3    | T37 V0..V3    | T53 V0..V3      |
+ * Row 6:   | T6  V0..V3    | T22 V0..V3    | T38 V0..V3    | T54 V0..V3      |
+ * Row 7:   | T7  V0..V3    | T23 V0..V3    | T39 V0..V3    | T55 V0..V3      |
+ * Row 8:   | T8  V0..V3    | T24 V0..V3    | T40 V0..V3    | T56 V0..V3      |
+ * Row 9:   | T9  V0..V3    | T41 V0..V3    | T41 V0..V3    | T57 V0..V3      |
+ * Row10:   | T10 V0..V3    | T26 V0..V3    | T42 V0..V3    | T58 V0..V3      |
+ * Row11:   | T11 V0..V3    | T27 V0..V3    | T43 V0..V3    | T59 V0..V3      |
+ * Row12:   | T12 V0..V3    | T28 V0..V3    | T44 V0..V3    | T60 V0..V3      |
+ * Row13:   | T13 V0..V3    | T29 V0..V3    | T45 V0..V3    | T61 V0..V3      |
+ * Row14:   | T14 V0..V3    | T30 V0..V3    | T46 V0..V3    | T62 V0..V3      |
+ * Row15:   | T15 V0..V3    | T31 V0..V3    | T47 V0..V3    | T63 V0..V3      |
+ *          +---------------+---------------+---------------+-----------------+
+ *
+ * 3. MATRIX ACC (16 x 16):
+ *    Sub-block repeating pattern across 4x4 quad-groups (Columns 0..3, 4..7, 8..11, 12..15):
+ *    Pattern per row group across the 16 columns:
+ *    [T0..T3|T16..T19|T32..T35|T48..T51] -> [T4..T7|T20..T23...] -> [T8..T11...] -> [T12..T15...]
+ *
+ *    Row 0  (V0): | T0  T16 T32 T48 | T0  T16 T32 T48 | T0  T16 T32 T48 | T0  T16 T32 T48 |
+ *    Row 1  (V0): | T1  T17 T33 T49 | T1  T17 T33 T49 | T1  T17 T33 T49 | T1  T17 T33 T49 |
+ *    Row 2  (V0): | T2  T18 T34 T50 | T2  T18 T34 T50 | T2  T18 T34 T50 | T2  T18 T34 T50 |
+ *    Row 3  (V0): | T3  T19 T35 T51 | T3  T19 T35 T51 | T3  T19 T35 T51 | T3  T19 T35 T51 |
+ *    Row 4  (V0): | T4  T20 T36 T52 | T4  T20 T36 T52 | T4  T20 T36 T52 | T4  T20 T36 T52 |
+ *    Row 5  (V0): | T5  T21 T37 T53 | T5  T21 T37 T53 | T5  T21 T37 T53 | T5  T21 T37 T53 |
+ *    Row 6  (V0): | T6  T22 T38 T54 | T6  T22 T38 T54 | T6  T22 T38 T54 | T6  T22 T38 T54 |
+ *    Row 7  (V0): | T7  T23 T39 T55 | T7  T23 T39 T55 | T7  T23 T39 T55 | T7  T23 T39 T55 |
+ *    Row 8  (V0): | T8  T24 T40 T56 | T8  T24 T40 T56 | T8  T24 T40 T56 | T8  T24 T40 T56 |
+ *    Row 9  (V0): | T9  T25 T41 T57 | T9  T25 T41 T57 | T9  T25 T41 T57 | T9  T25 T41 T57 |
+ *    Row 10 (V0): | T10 T26 T42 T58 | T10 T26 T42 T58 | T10 T26 T42 T58 | T10 T26 T42 T58 |
+ *    Row 11 (V0): | T11 T27 T43 T59 | T11 T27 T43 T59 | T11 T27 T43 T59 | T11 T27 T43 T59 |
+ *    Row 12 (V0): | T12 T28 T44 T60 | T12 T28 T44 T60 | T12 T28 T44 T60 | T12 T28 T44 T60 |
+ *    Row 13 (V0): | T13 T29 T45 T61 | T13 T29 T45 T61 | T13 T29 T45 T61 | T13 T29 T45 T61 |
+ *    Row 14 (V0): | T14 T30 T46 T62 | T14 T30 T46 T62 | T14 T30 T46 T62 | T14 T30 T46 T62 |
+ *    Row 15 (V0): | T15 T31 T47 T63 | T15 T31 T47 T63 | T15 T31 T47 T63 | T15 T31 T47 T63 |
+ *                 +---------------+---------------+---------------+-----------------+
+ *                 | Vector V0     | Vector V1     | Vector V2     | Vector V3       |
+ 以上述的排布举例, 说明 LinearLayout2DDesc 中各个字段含义
+ C:
+    warp_layout = [16,4]
+    warp_layout_order = [0,1]   // warp中的tid按列优先排布
+
+    wg_layout, wg_layout_order 同理
+
+    thread_creg = [1,1]  // 一个线程持有[1,1] 个连续元素
+    thread_creg_order = [1，0]  // 线程的连续元素按行优先排布( 存在dim=1，行列优先没区别 )
+    warp_repeat = [1，4]  // 按照 {thread_creg+order, warp_layout+order} 给定的微观模式，以warp为单位重复 [1,4] 得到指令级别 layout
+    warp_repeat_order = [1, 0]  // warp_repeat 为行优先顺序(即先迭代0序号的dim 再迭代1序号的dim)
+
+    block_repeat = [br0 , br1]  // 对于此buffer，为了完成GEMM运算，需要以 wmmaInst 为单位在MN 上各做 [br0, br1] 次循环.
+ */
+
 struct LinearLayout2DDesc {
     mlir::frisk::friskMs memspace;  // 位于shm还是reg
     mlir::frisk::FriskDType  elementType;  // 数据类型
@@ -28,13 +111,13 @@ struct LinearLayout2DDesc {
     coordXY_t wg_layout;   // warpgroup 里 warp的排列形状
     coordXY_t wg_layout_order;  // [0,1]  表示自增顺序先x坐标再y坐标。即列优先
 
-    inline coordXY_t get_warp_widths() {  // warp单次计算的连续区域（还没有replicate）
+    inline coordXY_t get_warp_widths() const {  // warp单次计算的连续区域（还没有 repeat）
         return PointwiseDot(warp_layout, thread_creg);
     }
-    inline coordXY_t get_warp_widths_total() {  // warp repeat后计算的区域大小
+    inline coordXY_t get_warp_widths_total() const {  // warp repeat后计算的区域大小
         return PointwiseDot(get_warp_widths(), warp_repeat);
     }
-    inline coordXY_t get_wg_widths() {  // warpgroup计算的连续区域大小
+    inline coordXY_t get_wg_widths() const {  // warpgroup计算的连续区域大小
         return PointwiseDot(get_warp_widths_total(), wg_layout);
     }
 };

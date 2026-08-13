@@ -2,8 +2,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -58,6 +60,12 @@ static LowerInfoMap* s_info { nullptr};
 static HWSpecification* s_hw {nullptr};
 
 static DenseMap<mlir::Value, mlir::Value> s_buffer_replace;
+
+static bool isLocalMemref(Value buffer) {
+  auto ty = mlir::cast<MemRefType>(buffer.getType());
+  auto memorySpace = ty.getMemorySpaceAsInt();
+  return memorySpace == int(friskMs::Local) || memorySpace == 5;
+}
 
 static LowerInfo getLowerInfoOrDie(Value buffer, Operation *op) {
   LowerInfo *info = s_info->getLowerInfo(buffer, op);
@@ -185,21 +193,69 @@ public:
 };
 
 
+static gpu::ThreadIdOp findThreadIdxOp(mlir::Operation* currOp){
+  auto kernel = getOuterMostOpWithName(currOp, func::FuncOp::getOperationName().data());
+  assert(kernel->hasAttr("thread_num"));
+  auto funcOp = mlir::cast<func::FuncOp>(kernel);
+  gpu::ThreadIdOp tidx = nullptr;
+  funcOp->walk([&](mlir::gpu::ThreadIdOp tidOp){
+    if(tidx == nullptr && tidOp.getDimension() == gpu::Dimension::x){
+      tidx = tidOp;
+    }
+  });
+  assert(tidx != nullptr);
+  return tidx;
+}
+
+static SmallVector<Value, 2> buildMappedAccessIndices(OpBuilder &builder,
+                                                      Location loc,
+                                                      LowerInfo &info,
+                                                      Value tidx,
+                                                      ArrayRef<Value> tileIvs,
+                                                      unsigned rank) {
+  std::vector<Value> mapOperands;
+  mapOperands.push_back(tidx);
+
+  for (int i = 0; i < 2; ++i) {
+    Value iv = i < static_cast<int>(tileIvs.size())
+                   ? tileIvs[i]
+                   : builder.create<arith::ConstantIndexOp>(loc, 0).getResult();
+    auto warpRepeat = info.get_warp_repeat()[i];
+    auto threadWidth = info.get_thread_widths()[i];
+    auto repeatWidth = warpRepeat * threadWidth;
+    auto d0 = builder.getAffineDimExpr(0);
+    auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), builder.getContext());
+    auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), builder.getContext());
+    auto trMap = AffineMap::get(1, 0, d0 % threadWidth, builder.getContext());
+    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, brMap, iv));
+    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, wrMap, iv));
+    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, trMap, iv));
+  }
+
+  SmallVector<Value, 2> indices;
+  auto affineExprs = info.getAffineMap();
+  for (unsigned i = 0; i < rank && i < affineExprs.size(); ++i) {
+    auto oneResultMap =
+        AffineMap::get(info.get_dimcount(), 0, affineExprs[i], builder.getContext());
+    indices.push_back(builder.create<affine::AffineApplyOp>(loc, oneResultMap, mapOperands));
+  }
+  return indices;
+}
+
+static SmallVector<Value, 2> makeLocalIndices(ArrayRef<Value> ivs, unsigned rank) {
+  SmallVector<Value, 2> indices;
+  for (unsigned i = 0; i < rank && i < ivs.size(); ++i) {
+    indices.push_back(ivs[i]);
+  }
+  return indices;
+}
+
 class GemmOpConversion : public OpConversionPattern<frisk::GemmOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(GemmOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
-    auto kernel = getOuterMostOpWithName(op, func::FuncOp::getOperationName().data());
-    assert(kernel->hasAttr("thread_num"));
-    auto funcOp = mlir::cast<func::FuncOp>(kernel);
-    gpu::ThreadIdOp tidx = nullptr;
-    funcOp->walk([&](mlir::gpu::ThreadIdOp tidOp){
-      if(tidx == nullptr && tidOp.getDimension() == gpu::Dimension::x){
-        tidx = tidOp;
-      }
-    });
-    assert(tidx != nullptr);
+    auto tidx = findThreadIdxOp(op);
     // get lowerInfo
     auto infoA = getLowerInfoOrDie(op.getA(), op.getOperation());
     auto infoB = getLowerInfoOrDie(op.getB(), op.getOperation());
@@ -212,6 +268,11 @@ public:
     assert(infoA.mmaInst->name == infoB.mmaInst->name);
     auto typeA = mlir::cast<MemRefType>(adaptor.getA().getType());
     auto typeB = mlir::cast<MemRefType>(adaptor.getB().getType());
+    auto isLocalBuffer = [](Value buffer) {
+      auto ty = mlir::cast<MemRefType>(buffer.getType());
+      auto memorySpace = ty.getMemorySpaceAsInt();
+      return memorySpace == int(friskMs::Local) || memorySpace == 5;
+    };
     // 创建thread-level 的buffer。并全局查找其是否已经完成alloc了。若没有，注册之；否则使用已注册的thread-level buffer
     auto threadLevelBufferCreate = [&](LowerInfo info, bool needInitZero, coordXY_t shape, bool registReplace )-> Value{
       // acc：需要保存当前线程负责的bufferC所有数据。结果不能跨循环覆盖
@@ -227,7 +288,7 @@ public:
         }
         if(needInitZero){
           // acc 需要初始化为0
-          rewriter.create<frisk::FillOp>(op->getLoc(), info.buffer, rewriter.getFloatAttr(ety, 0.0));
+          rewriter.create<frisk::FillOp>(op->getLoc(), newAlloc, rewriter.getFloatAttr(ety, 0.0));
         }
         return newAlloc;
       }
@@ -239,7 +300,7 @@ public:
           auto newAlloc = rewriter.create<AllocBufferOp>(op->getLoc(), shape, ety, 1, int(friskMs::Local));
           if (needInitZero) {
             // acc 需要初始化为0
-            rewriter.create<frisk::FillOp>(op->getLoc(), info.buffer, rewriter.getFloatAttr(ety, 0.0));
+            rewriter.create<frisk::FillOp>(op->getLoc(), newAlloc, rewriter.getFloatAttr(ety, 0.0));
           }
           return newAlloc;
         }
@@ -247,10 +308,10 @@ public:
     };
     
     if(s_hw->getKind() == HW_KIND_DCU){
-      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , true);
-      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , true);
+      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , isLocalBuffer(infoA.buffer));
+      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , isLocalBuffer(infoB.buffer));
       auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_total_widths(), true);
-      auto instC = threadLevelBufferCreate(infoC, true, infoC.get_thread_widths(), false);
+      auto instC = threadLevelBufferCreate(infoC, false, infoC.get_thread_widths(), false);
 
       auto [br0, br1] = infoC.get_block_repeat();
       int twA0 = infoA.get_thread_widths()[0];
@@ -273,6 +334,9 @@ public:
       // 指令在bufferC上的循环(m,n)
       createNestedAffineFor(rewriter, op->getLoc(), mn_loops, ivs_block);
       // insPoint 位于 mn loop内
+      auto instCTy = mlir::cast<MemRefType>(instC.getType());
+      rewriter.create<frisk::FillOp>(op->getLoc(), instC,
+                                     rewriter.getFloatAttr(instCTy.getElementType(), 0.0));
       {
         RewriterBase::InsertionGuard ig{rewriter};
         createNestedAffineFor(rewriter, op->getLoc(), k_loops, ivs_block);
@@ -320,8 +384,8 @@ public:
       auto _tid = rewriter.getAffineDimExpr(6);
       
       std::vector<AffineExpr> instCToNewC = {
-        _br0 * _wr0 * twC0 + _tr0,  
-        _br1 * _wr1 * twC1 + _tr1  
+        _br0 * (wrC0 * twC0) + _wr0 * twC0 + _tr0,
+        _br1 * (wrC1 * twC1) + _wr1 * twC1 + _tr1
       };
       auto instCToNewCMap = AffineMap::get(7,0,instCToNewC, rewriter.getContext());
       std::vector<Value> mapOper = {ivs_block[0], ivs_block[1]  ,ivs[0],ivs[1], ivs[2], ivs[3], tidx  };
@@ -335,6 +399,232 @@ public:
     else if(s_hw->getKind() == HW_KIND_NVIDIA){
       // ...
     }
+    return success();
+  }
+};
+
+/**
+ * @brief 应该区分 lowerinfo和 thread hold buffer size
+ lowerInfo决定了该buffer应如何访问（tid+ thread持有元素数量 + br/wr/tr for循环）
+ thread-buffer-sz 决定了单个线程持有多少元素
+ * 
+ */
+
+class ReduceOpConversion : public OpConversionPattern<frisk::ReduceOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(frisk::ReduceOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto tidx = findThreadIdxOp(op);
+    auto getReduceLowerInfo = [&](Value buffer) -> FailureOr<LowerInfo> {
+      if (auto *info = s_info->getLowerInfo(buffer, op.getOperation())) {
+        return *info;
+      }
+      if (auto *info = s_info->getNearestInferedInfo(buffer, op.getOperation(), true)) {
+        return *info;
+      }
+      if (auto *info = s_info->getNearestInferedInfo(buffer, op.getOperation(), false)) {
+        return *info;
+      }
+      return failure();
+    };
+    // 获取src dst的LowerInfo
+    auto srcInfoOr = getReduceLowerInfo(op.getSrc());
+    auto dstInfoOr = getReduceLowerInfo(op.getDst());
+    if (failed(srcInfoOr) || failed(dstInfoOr)) {
+      return op.emitOpError("LowerInfo not found for reduce operands");
+    }
+    auto srcInfo = *srcInfoOr;
+    auto dstInfo = *dstInfoOr;
+    srcInfo.buffer = op.getSrc();
+    dstInfo.buffer = op.getDst();
+    srcInfo.show("reduce_src");
+    dstInfo.show("reduce_dst");
+    // 获取src 的 memrefType
+    auto srcTy = mlir::cast<MemRefType>(adaptor.getSrc().getType());
+    auto dstTy = mlir::cast<MemRefType>(adaptor.getDst().getType());
+    auto elemTy = srcTy.getElementType();
+    if (elemTy != dstTy.getElementType()) {
+      return op.emitOpError("source and destination element types must match");
+    }
+    if (!mlir::isa<FloatType>(elemTy)) {
+      return op.emitOpError("thread-level reduce currently supports floating-point memrefs");
+    }
+    // 获取reduce的规约轴长度
+    int64_t reduceDim = op.getDim();
+    int64_t reduceExtent = srcTy.getDimSize(reduceDim);
+    if (ShapedType::isDynamic(reduceExtent) || reduceExtent <= 0) {
+      return op.emitOpError("thread-level reduce requires a positive static reduce extent");
+    }
+    
+    // 单个线程持有的数据量
+    auto [srcTw0, srcTw1] = srcInfo.get_thread_widths();
+    auto [srcWr0, srcWr1] = srcInfo.get_warp_repeat();
+
+    auto getOrCreateLocalReplacement = [&](LowerInfo &info, MemRefType originalTy,
+                                           ArrayRef<int64_t> shape,
+                                           bool forRead) -> FailureOr<Value> {
+      auto it = s_buffer_replace.find(info.buffer);
+      if (it != s_buffer_replace.end()) {
+        return it->second;
+      }
+      if (forRead) {
+        return failure();
+      }
+      auto newTy =
+          MemRefType::get(shape, originalTy.getElementType(), AffineMap{},
+                          originalTy.getMemorySpace());
+      auto newBuffer = rewriter.create<memref::AllocaOp>(op->getLoc(), newTy);
+      s_buffer_replace[info.buffer] = newBuffer.getResult();
+      return newBuffer.getResult();
+    };
+
+    std::array<int64_t, 2> dstThreadShape2D = dstInfo.get_thread_total_widths();
+    SmallVector<int64_t, 2> dstLoopShape;
+    for (unsigned i = 0; i < dstTy.getRank(); ++i) {
+      dstLoopShape.push_back(dstThreadShape2D[i]);
+    }
+    if (dstLoopShape.empty()) {
+      return op.emitOpError("rank-0 reduce destination is not supported");
+    }
+
+    Value srcBuffer = op.getSrc();
+    Value dstBuffer = op.getDst();
+    bool srcIsLocal = isLocalMemref(srcInfo.buffer);
+    bool dstIsLocal = isLocalMemref(dstInfo.buffer);
+    if (srcIsLocal) {
+      auto replacement = getOrCreateLocalReplacement(srcInfo, srcTy, {}, true);
+      if (succeeded(replacement)) {
+        srcBuffer = *replacement;
+        srcTy = mlir::cast<MemRefType>(srcBuffer.getType());
+        reduceExtent = srcTy.getDimSize(reduceDim);
+      }
+    }
+    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value value, int32_t offset, int32_t width, ShuffleMode mode);
+    // rewriter.create<gpu::ShuffleOp>(op->getLoc(), )
+    if (dstIsLocal) {
+      auto replacement = getOrCreateLocalReplacement(dstInfo, dstTy, dstLoopShape, false);
+      if (failed(replacement)) {
+        return failure();
+      }
+      dstBuffer = *replacement;
+      dstTy = mlir::cast<MemRefType>(dstBuffer.getType());
+    }
+
+    auto makeIdentity = [&]() -> FailureOr<Value> {
+      double identity = 0.0;
+      auto kind = op.getKind();
+      if (kind == "add") {
+        identity = 0.0;
+      } else if (kind == "mul") {
+        identity = 1.0;
+      } else if (kind == "min") {
+        identity = std::numeric_limits<double>::infinity();
+      } else if (kind == "max") {
+        identity = -std::numeric_limits<double>::infinity();
+      } else {
+        return failure();
+      }
+      auto attr = rewriter.getFloatAttr(elemTy, identity);
+      return rewriter.create<arith::ConstantOp>(op->getLoc(), attr).getResult();
+    };
+
+    auto combine = [&](Value lhs, Value rhs) -> FailureOr<Value> {
+      auto kind = op.getKind();
+      if (kind == "add") {
+        return rewriter.create<arith::AddFOp>(op->getLoc(), lhs, rhs).getResult();
+      }
+      if (kind == "mul") {
+        return rewriter.create<arith::MulFOp>(op->getLoc(), lhs, rhs).getResult();
+      }
+      if (kind == "min") {
+        return rewriter.create<arith::MinNumFOp>(op->getLoc(), lhs, rhs).getResult();
+      }
+      if (kind == "max") {
+        return rewriter.create<arith::MaxNumFOp>(op->getLoc(), lhs, rhs).getResult();
+      }
+      return failure();
+    };
+
+    std::vector<int> loopUbs;
+    for (int64_t ub : dstLoopShape) {
+      loopUbs.push_back(static_cast<int>(ub));
+    }
+    std::vector<Value> dstTileIvs;
+    createNestedAffineFor(rewriter, op->getLoc(), loopUbs, dstTileIvs);
+
+    auto zeroIdx = rewriter.create<arith::ConstantIndexOp>(op->getLoc(), 0);
+    auto accTy = MemRefType::get({1}, elemTy);
+    auto acc = rewriter.create<memref::AllocaOp>(op->getLoc(), accTy);
+    auto identity = makeIdentity();
+    if (failed(identity)) {
+      return op.emitOpError("unsupported reduce kind");
+    }
+    rewriter.create<affine::AffineStoreOp>(op->getLoc(), *identity, acc,
+                                           ValueRange{zeroIdx});
+
+    auto dstIndices =
+        dstIsLocal ? makeLocalIndices(dstTileIvs, dstTy.getRank())
+                   : buildMappedAccessIndices(rewriter, op->getLoc(), dstInfo,
+                                              tidx, dstTileIvs, dstTy.getRank());
+
+    std::vector<Value> redIvs;
+    auto redLoops = createNestedAffineFor(rewriter, op->getLoc(),
+                                          {static_cast<int>(reduceExtent)}, redIvs);
+
+    SmallVector<Value, 2> srcIndices;
+    if (srcIsLocal && srcBuffer != op.getSrc()) {
+      if (srcTy.getRank() == dstTy.getRank()) {
+        for (unsigned i = 0; i < srcTy.getRank(); ++i) {
+          srcIndices.push_back(i == static_cast<unsigned>(reduceDim) ? redIvs[0]
+                                                                     : dstTileIvs[i]);
+        }
+      } else {
+        unsigned dstPos = 0;
+        for (unsigned i = 0; i < srcTy.getRank(); ++i) {
+          if (i == static_cast<unsigned>(reduceDim)) {
+            srcIndices.push_back(redIvs[0]);
+          } else {
+            srcIndices.push_back(dstTileIvs[dstPos++]);
+          }
+        }
+      }
+    } else {
+      if (srcTy.getRank() == dstTy.getRank()) {
+        for (unsigned i = 0; i < srcTy.getRank(); ++i) {
+          srcIndices.push_back(i == static_cast<unsigned>(reduceDim) ? redIvs[0]
+                                                                     : dstIndices[i]);
+        }
+      } else {
+        unsigned dstPos = 0;
+        for (unsigned i = 0; i < srcTy.getRank(); ++i) {
+          if (i == static_cast<unsigned>(reduceDim)) {
+            srcIndices.push_back(redIvs[0]);
+          } else {
+            srcIndices.push_back(dstIndices[dstPos++]);
+          }
+        }
+      }
+    }
+
+    auto current =
+        rewriter.create<affine::AffineLoadOp>(op->getLoc(), acc, ValueRange{zeroIdx});
+    auto srcValue =
+        rewriter.create<affine::AffineLoadOp>(op->getLoc(), srcBuffer, srcIndices);
+    auto next = combine(current.getResult(), srcValue.getResult());
+    if (failed(next)) {
+      return op.emitOpError("unsupported reduce kind");
+    }
+    rewriter.create<affine::AffineStoreOp>(op->getLoc(), *next, acc,
+                                           ValueRange{zeroIdx});
+
+    rewriter.setInsertionPointAfter(redLoops.back());
+    auto result =
+        rewriter.create<affine::AffineLoadOp>(op->getLoc(), acc, ValueRange{zeroIdx});
+    rewriter.create<affine::AffineStoreOp>(op->getLoc(), result.getResult(), dstBuffer,
+                                           dstIndices);
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -391,58 +681,111 @@ public:
       }
     });
     assert(!storeOps.empty());
-    std::vector<AllocBufferOp> threadLocalForStoreOps;
-    std::vector<AllocBufferOp> threadLocalForLoadOps;
-    std::array<int64_t, 2> threadLevelSize;
-    // 收集所有需要替换的 local AllocBufferOp，去重
-    llvm::DenseMap<AllocBufferOp, std::array<int64_t, 2>> allocLocalsToReplace;
+    struct AccessedBufferInfo {
+      Value buffer;
+      std::optional<LowerInfo> lowerInfo;
+    };
 
+    std::array<int64_t, 2> threadLevelSize = {0, 0};
+    llvm::DenseMap<AllocBufferOp, std::array<int64_t, 2>> allocLocalsToReplace;
+    std::vector<AccessedBufferInfo> bufferInfos;
+
+    auto get2DShape = [](Value buffer) -> std::array<int64_t, 2> {
+      auto ty = cast<MemRefType>(buffer.getType());
+      auto shape = ty.getShape();
+      if (shape.size() == 1) {
+        return {shape[0], 1};
+      }
+      return {shape[0], shape[1]};
+    };
+
+    auto setThreadLevelSizeIfUnset = [&](std::array<int64_t, 2> sz) {
+      if (threadLevelSize[0] == 0 && threadLevelSize[1] == 0) {
+        threadLevelSize = sz;
+      }
+    };
+
+    auto isThreadLocalTile = [](Value buffer) {
+      if (auto alloc = buffer.getDefiningOp<AllocBufferOp>()) {
+        return alloc.getMemorySpace() == int(friskMs::Local);
+      }
+      auto ty = cast<MemRefType>(buffer.getType());
+      auto memorySpace = ty.getMemorySpaceAsInt();
+      return memorySpace == int(friskMs::Local) || memorySpace == 5;
+    };
+
+    auto findBufferInfo = [&](Value buffer) -> AccessedBufferInfo * {
+      for (auto &info : bufferInfos) {
+        if (info.buffer == buffer) {
+          return &info;
+        }
+      }
+      return nullptr;
+    };
+
+    auto recordBufferInfo = [&](Value buffer, const char *label) {
+      if (!isa<MemRefType>(buffer.getType()) || findBufferInfo(buffer) != nullptr) {
+        return;
+      }
+
+      AccessedBufferInfo recordedInfo{buffer, std::nullopt};
+      if (auto *lowerInfo = s_info->getLowerInfo(buffer, op.getOperation())) {
+        recordedInfo.lowerInfo = *lowerInfo;
+        setThreadLevelSizeIfUnset(lowerInfo->get_thread_total_widths());
+        lowerInfo->show(label);
+      } else {
+        // 前面的 block conversion 可能已经把原 frisk.alloc_buffer 替换为
+        // memref.alloca 形式的 thread tile。这个新 value 已经是 lowered 后
+        // 的形态，不会出现在 LowerInfoMap 中，因此直接用当前 memref shape
+        // 作为循环 shape。
+        setThreadLevelSizeIfUnset(get2DShape(buffer));
+      }
+      bufferInfos.push_back(recordedInfo);
+    };
+    
+    // 对每个affine.load 检查其memref，记录buffer Info。
+    // 追踪来源 srcDefOp， 标记 allocLocalsToReplace[srcDefOp] = lowerInfo 的thread总计算量
     for (auto loadOp : loadOps) {
       auto srcValue = loadOp.getMemref();
-      // if (srcValue.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
-        auto srcDefOp = srcValue.getDefiningOp<AllocBufferOp>();
-        if (srcDefOp != nullptr && !allocLocalsToReplace.count(srcDefOp)) {
-          auto i = getLowerInfoOrDie(srcValue, op.getOperation());
-          allocLocalsToReplace[srcDefOp] = i.get_thread_total_widths();
-          i.show("block_load");
-        }
-      // }
+      recordBufferInfo(srcValue, "block_load");
+      auto srcDefOp = srcValue.getDefiningOp<AllocBufferOp>();
+      auto *info = findBufferInfo(srcValue);
+      if (srcDefOp != nullptr && info != nullptr && info->lowerInfo && isThreadLocalTile(srcValue) &&
+          !allocLocalsToReplace.count(srcDefOp)) {
+        allocLocalsToReplace[srcDefOp] = info->lowerInfo->get_thread_total_widths();
+      }
     }
 
     for (auto storeOp : storeOps) {
       auto dstVal = storeOp.getMemref();
-      // if (dstVal.getType().getMemorySpaceAsInt() == int(friskMs::Local)) {
-        auto srcDefOp = dstVal.getDefiningOp<AllocBufferOp>();
-        if (srcDefOp != nullptr && !allocLocalsToReplace.count(srcDefOp)) {
-          auto i = getLowerInfoOrDie(dstVal, op.getOperation());
-          allocLocalsToReplace[srcDefOp] = i.get_thread_total_widths();
-          i.show("block_store");
-        }
-      // }
+      recordBufferInfo(dstVal, "block_store");
+      auto dstDefOp = dstVal.getDefiningOp<AllocBufferOp>();
+      auto *info = findBufferInfo(dstVal);
+      if (dstDefOp != nullptr && info != nullptr && info->lowerInfo && isThreadLocalTile(dstVal) &&
+          !allocLocalsToReplace.count(dstDefOp)) {
+        allocLocalsToReplace[dstDefOp] = info->lowerInfo->get_thread_total_widths();
+      }
     }
+
+    assert(threadLevelSize[0] > 0 && threadLevelSize[1] > 0 && "thread-level block size not inferred");
     IRMapping mapper;
-    // 统一替换，每个 AllocBufferOp 只处理一次
+    IRMapping localMapper;
+    // local/register block buffer 会物化成每个线程自己的 tile；shared buffer
+    // 仍然保持 block-sized，后面通过 LowerInfo map 生成真实 block 坐标。
     for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
       rewriter.setInsertionPoint(srcDefOp);
       auto ty = MemRefType::get(sz, srcDefOp.getElementType(), AffineMap{}, srcDefOp.getMemorySpace());
-      if(srcDefOp.getMemorySpace() == int(friskMs::Local)){
-        auto it = s_buffer_replace.find(srcDefOp);
-        mlir::Value replaceVal = nullptr;
-        if(it != s_buffer_replace.end()){
-          replaceVal = it->second;
-        }
-        else{
-          auto newAlloc = rewriter.create<memref::AllocaOp>(srcDefOp->getLoc(), ty);
-          replaceVal = newAlloc->getResult(0);
-          s_buffer_replace[srcDefOp] = newAlloc;  
-        }
-        mapper.map(srcDefOp->getResult(0), replaceVal);
+      auto it = s_buffer_replace.find(srcDefOp);
+      mlir::Value replaceVal = nullptr;
+      if (it != s_buffer_replace.end()) {
+        replaceVal = it->second;
+      } else {
+        auto newAlloc = rewriter.create<memref::AllocaOp>(srcDefOp->getLoc(), ty);
+        replaceVal = newAlloc->getResult(0);
+        s_buffer_replace[srcDefOp] = newAlloc;
       }
-      else{
-        mapper.map(srcDefOp->getResult(0), srcDefOp->getResult(0));
-      }
-      // 同步更新 threadLevelSize，供后续 createNestedAffineFor 使用
-      threadLevelSize = sz;
+      mapper.map(srcDefOp->getResult(0), replaceVal);
+      localMapper.map(srcDefOp->getResult(0), replaceVal);
     }
     rewriter.setInsertionPoint(op);
     // frisk.blocOp 根据newbuffer的size，生成 nestedFor
@@ -453,16 +796,78 @@ public:
       labels.push_back(nullptr);
     }
     createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, newIvs, labels);
-    
-    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), newIvs)){
+
+    // newIvs 是 thread-level local tile 坐标，例如 4x32。local/register
+    // buffer 用它直接访问；shared/block buffer 必须恢复成原 128x128 block
+    // 内的真实坐标，否则就会出现 4x32 循环写 128x128 memref 的错配。
+    std::vector<Value> blockIvs;
+    LowerInfo *blockIndexInfo = nullptr;
+    for (auto &info : bufferInfos) {
+      if (info.lowerInfo && !isThreadLocalTile(info.buffer)) {
+        blockIndexInfo = &*info.lowerInfo;
+        break;
+      }
+    }
+    if (blockIndexInfo != nullptr && newIvs.size() == 2) {
+      std::vector<Value> mapOperands;
+      mapOperands.push_back(tidx);
+      for (int i = 0; i < 2; ++i) {
+        auto warpRepeat = blockIndexInfo->get_warp_repeat()[i];
+        auto threadWidth = blockIndexInfo->get_thread_widths()[i];
+        auto repeatWidth = warpRepeat * threadWidth;
+        auto d0 = rewriter.getAffineDimExpr(0);
+        auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), rewriter.getContext());
+        auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), rewriter.getContext());
+        auto trMap = AffineMap::get(1, 0, d0 % threadWidth, rewriter.getContext());
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), brMap, newIvs[i]));
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), wrMap, newIvs[i]));
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), trMap, newIvs[i]));
+      }
+
+      // LowerInfo::getAffineMap() 的 operand 顺序是
+      // [tid, blockX, warpX, threadX, blockY, warpY, threadY]。这里先把
+      // 压平后的 thread tile iv 拆回这几层，再得到 shared/block 坐标。
+      auto affineExprs = blockIndexInfo->getAffineMap();
+      for (auto expr : affineExprs) {
+        auto oneResultMap = AffineMap::get(blockIndexInfo->get_dimcount(), 0, expr, rewriter.getContext());
+        blockIvs.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), oneResultMap, mapOperands));
+      }
+    } else {
+      blockIvs = newIvs;
+    }
+
+    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), blockIvs)){
       mapper.map(oldIndex,newIter);
+    }
+    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), newIvs)){
+      localMapper.map(oldIndex,newIter);
     }
     // 根据映射规则，将frisk.blockOp 内的全部op 搬运到 nestedFOr的最内层 （createNestedAffineFor 之后，insertionPoint已经在最内侧了，不用动）
     // 将 blockOp body 内的所有 op 按序 clone 到当前 insertionPoint（nestedFor 最内层）
     // 跳过 block terminator（frisk.yield 或类似）
     Block *body = op.getBody();
     for (auto &childOp : body->without_terminator()) {
-      rewriter.clone(childOp, mapper);
+      IRMapping *activeMapper = &mapper;
+      if (auto loadOp = dyn_cast<affine::AffineLoadOp>(childOp)) {
+        if (isThreadLocalTile(loadOp.getMemref())) {
+          activeMapper = &localMapper;
+        }
+      } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(childOp)) {
+        if (isThreadLocalTile(storeOp.getMemref())) {
+          activeMapper = &localMapper;
+        }
+      }
+      auto *cloned = rewriter.clone(childOp, *activeMapper);
+      // 后续普通 arith/math op 使用 mapper，后续 local store 使用 localMapper。
+      // 因此不管当前 op 用哪套下标克隆，都把 result 同步给两套映射。
+      for (auto [oldResult, newResult] : llvm::zip(childOp.getResults(), cloned->getResults())) {
+        if (!mapper.lookupOrNull(oldResult)) {
+          mapper.map(oldResult, newResult);
+        }
+        if (!localMapper.lookupOrNull(oldResult)) {
+          localMapper.map(oldResult, newResult);
+        }
+      }
     }
     // blockOp body 外部（blockOp 之后）可能还有对旧 alloc 的 use（如 copy-out 等）
     // 用 replaceAllUsesExcept 只替换 blockOp 外部的 use
@@ -517,27 +922,91 @@ public:
 
     auto srcInfo = s_info->getLowerInfo(op.getSrcMemRef(), op);
     auto dstInfo = s_info->getLowerInfo(op.getDstMemRef(), op);
+    assert(srcInfo != nullptr && dstInfo != nullptr && "copy-convert LowerInfo not found");
     auto [tw0,tw1] = srcInfo->get_thread_total_widths();
+    auto [dstTw0, dstTw1] = dstInfo->get_thread_total_widths();
+    assert(tw0 == dstTw0 && tw1 == dstTw1 &&
+           "copy-convert expects source and destination thread tiles to match");
     std::vector<int> ubs = {int(tw0), int(tw1)};
     std::vector<mlir::Value> outIvs;
-    auto itSrc = s_buffer_replace.find(srcInfo->buffer);
-    if(itSrc == s_buffer_replace.end()){
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ArrayRef<int64_t> shape, Type elementType, int64_t alignment, int64_t memorySpace);
-      std::vector<int64_t> shape = {tw0,tw1};
-      auto newBuffer = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), shape, srcTy.getElementType(),1, int(friskMs::Local));
-      s_buffer_replace[srcInfo->buffer] = newBuffer;
-    }
-    
-    auto itDst = s_buffer_replace.find(dstInfo->buffer);
-    if(itDst == s_buffer_replace.end()){
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ArrayRef<int64_t> shape, Type elementType, int64_t alignment, int64_t memorySpace);
-      std::vector<int64_t> shape = {tw0,tw1};
-      auto newBuffer = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), shape, dstTy.getElementType(),1, int(friskMs::Local));
-      s_buffer_replace[dstInfo->buffer] = newBuffer;
-    }
-    
+
+    auto isThreadLocalTile = [](Value buffer) {
+      auto ty = cast<MemRefType>(buffer.getType());
+      auto memorySpace = ty.getMemorySpaceAsInt();
+      return memorySpace == int(friskMs::Local) || memorySpace == 5;
+    };
+
+    auto getOrCreateLocalReplacement = [&](LowerInfo *info, Type elementType,
+                                           bool forRead) -> FailureOr<Value> {
+      auto it = s_buffer_replace.find(info->buffer);
+      if (it != s_buffer_replace.end()) {
+        return it->second;
+      }
+      if (forRead) {
+        return failure();
+      }
+      std::vector<int64_t> shape = {tw0, tw1};
+      auto newBuffer = rewriter.create<frisk::AllocBufferOp>(
+          op->getLoc(), shape, elementType, 1, int(friskMs::Local));
+      s_buffer_replace[info->buffer] = newBuffer;
+      return newBuffer.getResult();
+    };
+
     createNestedAffineFor(rewriter, op->getLoc(), ubs, outIvs);
-    auto srcValue = rewriter.create<affine::AffineLoadOp>(op->getLoc(), s_buffer_replace[srcInfo->buffer], outIvs);
+
+    auto getAccessIndices = [&](LowerInfo *info,
+                                bool useLocalTile) -> SmallVector<Value, 2> {
+      if (useLocalTile) {
+        return SmallVector<Value, 2>{outIvs.begin(), outIvs.end()};
+      }
+
+      std::vector<Value> mapOperands;
+      mapOperands.push_back(tidx);
+      for (int i = 0; i < 2; ++i) {
+        auto warpRepeat = info->get_warp_repeat()[i];
+        auto threadWidth = info->get_thread_widths()[i];
+        auto repeatWidth = warpRepeat * threadWidth;
+        auto d0 = rewriter.getAffineDimExpr(0);
+        auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), rewriter.getContext());
+        auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), rewriter.getContext());
+        auto trMap = AffineMap::get(1, 0, d0 % threadWidth, rewriter.getContext());
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), brMap, outIvs[i]));
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), wrMap, outIvs[i]));
+        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), trMap, outIvs[i]));
+      }
+
+      SmallVector<Value, 2> indices;
+      auto affineExprs = info->getAffineMap();
+      for (auto expr : affineExprs) {
+        auto oneResultMap =
+            AffineMap::get(info->get_dimcount(), 0, expr, rewriter.getContext());
+        indices.push_back(
+            rewriter.create<affine::AffineApplyOp>(op->getLoc(), oneResultMap, mapOperands));
+      }
+      return indices;
+    };
+
+    bool srcIsLocal = isThreadLocalTile(srcInfo->buffer);
+    bool dstIsLocal = isThreadLocalTile(dstInfo->buffer);
+    auto srcBuffer = srcInfo->buffer;
+    auto dstBuffer = dstInfo->buffer;
+    if (srcIsLocal) {
+      auto replacement = getOrCreateLocalReplacement(srcInfo, srcTy.getElementType(), true);
+      if (failed(replacement)) {
+        return op.emitOpError("local source has no thread-level replacement for dtype conversion");
+      }
+      srcBuffer = *replacement;
+    }
+    if (dstIsLocal) {
+      auto replacement = getOrCreateLocalReplacement(dstInfo, dstTy.getElementType(), false);
+      if (failed(replacement)) {
+        return failure();
+      }
+      dstBuffer = *replacement;
+    }
+
+    auto srcValue = rewriter.create<affine::AffineLoadOp>(
+        op->getLoc(), srcBuffer, getAccessIndices(srcInfo, srcIsLocal));
     mlir::Value converted{};
     if(srcTy.getElementType().getIntOrFloatBitWidth() < dstTy.getElementType().getIntOrFloatBitWidth()){
       converted = rewriter.create<arith::ExtFOp>(op->getLoc(), dstTy.getElementType(), srcValue.getResult() );
@@ -545,7 +1014,8 @@ public:
     else{
       converted = rewriter.create<arith::TruncFOp>(op->getLoc(), dstTy.getElementType(), srcValue.getResult() );
     }
-    rewriter.create<affine::AffineStoreOp>(op->getLoc(), converted, s_buffer_replace[dstInfo->buffer], outIvs);
+    rewriter.create<affine::AffineStoreOp>(
+        op->getLoc(), converted, dstBuffer, getAccessIndices(dstInfo, dstIsLocal));
     rewriter.eraseOp(op);
     return success();
   }
@@ -590,7 +1060,7 @@ public:
       gpu::GPUDialect>();
 
     target.addIllegalOp<KernelOp,ParallelOp,ForOp,
-      BlockOp, GemmOp
+      BlockOp, GemmOp, ReduceOp
     >();
     target.addDynamicallyLegalOp<frisk::CopyOp>([](frisk::CopyOp op){
       auto srctype = mlir::cast<MemRefType>(op.getSrcMemRef().getType());
@@ -600,7 +1070,7 @@ public:
     });
     RewritePatternSet patterns(context);
     patterns.add<
-      BlockOpConversion, GemmOpConversion, CopyConvertOpRewrite
+      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite
     >(context);
     llvm::outs() << "-- lowerinfo partialconversion\n";llvm::outs().flush();
     if (failed(applyPartialConversion(kernel, target, std::move(patterns)))){

@@ -371,7 +371,7 @@ def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [MemoryEffects<[MemRead]>]> {
   let hasCustomAssemblyFormat = 1;
 }
 // alloc buffer
-def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [Pure]> {
+def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [MemoryEffects<[MemAlloc]>]> {
   let summary = "allocate buffer operation";
   let description = [{ 
     Allocates a buffer with the specified shape, element type and optional attributes.
@@ -811,6 +811,22 @@ def Frisk_WarpMmaOp : Frisk_Op<"warp_mma", [
 
   // 指定自定义汇编格式
   let assemblyFormat = "$a `,` $b `,` $c attr-dict `:` type($a) `,` type($b) `,` type($c)";
+}
+
+def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+  let summary = "Synchronize all threads in a block";
+  let description = [{
+    Synchronize all threads within the current block.  This operation has no
+    operands and no results, but models memory side effects so that DCE and
+    other optimization passes preserve the synchronization point.
+  }];
+
+  let arguments = (ins);
+  let results = (outs);
+
+  let assemblyFormat = "attr-dict";
 }
 
 #endif // FRISK_OPS
