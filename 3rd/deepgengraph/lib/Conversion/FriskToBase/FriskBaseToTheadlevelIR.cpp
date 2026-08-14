@@ -698,9 +698,10 @@ public:
       }
       return {shape[0], shape[1]};
     };
-
-    auto setThreadLevelSizeIfUnset = [&](std::array<int64_t, 2> sz) {
-      if (threadLevelSize[0] == 0 && threadLevelSize[1] == 0) {
+    
+    // thread层面，每个buffer 当前tid持有的元素不一定一样。
+    auto collectMaxThreadlevelSz = [&](std::array<int64_t, 2> sz) {
+      if(sz[0] > threadLevelSize[0] && sz[1] > threadLevelSize[1]){
         threadLevelSize = sz;
       }
     };
@@ -723,7 +724,7 @@ public:
       return nullptr;
     };
 
-    auto recordBufferInfo = [&](Value buffer, const char *label) {
+    auto recordBufferInfo = [&](Value buffer, bool isOutBuffer , const char *label) {
       if (!isa<MemRefType>(buffer.getType()) || findBufferInfo(buffer) != nullptr) {
         return;
       }
@@ -731,14 +732,18 @@ public:
       AccessedBufferInfo recordedInfo{buffer, std::nullopt};
       if (auto *lowerInfo = s_info->getLowerInfo(buffer, op.getOperation())) {
         recordedInfo.lowerInfo = *lowerInfo;
-        setThreadLevelSizeIfUnset(lowerInfo->get_thread_total_widths());
+        if(!isOutBuffer){
+          collectMaxThreadlevelSz(lowerInfo->get_thread_own_data_size());
+        }
         lowerInfo->show(label);
       } else {
         // 前面的 block conversion 可能已经把原 frisk.alloc_buffer 替换为
         // memref.alloca 形式的 thread tile。这个新 value 已经是 lowered 后
         // 的形态，不会出现在 LowerInfoMap 中，因此直接用当前 memref shape
         // 作为循环 shape。
-        setThreadLevelSizeIfUnset(get2DShape(buffer));
+        if(!isOutBuffer){
+          collectMaxThreadlevelSz(get2DShape(buffer));
+        }
       }
       bufferInfos.push_back(recordedInfo);
     };
@@ -747,23 +752,23 @@ public:
     // 追踪来源 srcDefOp， 标记 allocLocalsToReplace[srcDefOp] = lowerInfo 的thread总计算量
     for (auto loadOp : loadOps) {
       auto srcValue = loadOp.getMemref();
-      recordBufferInfo(srcValue, "block_load");
+      recordBufferInfo(srcValue,false, "block_load");
       auto srcDefOp = srcValue.getDefiningOp<AllocBufferOp>();
       auto *info = findBufferInfo(srcValue);
       if (srcDefOp != nullptr && info != nullptr && info->lowerInfo && isThreadLocalTile(srcValue) &&
           !allocLocalsToReplace.count(srcDefOp)) {
-        allocLocalsToReplace[srcDefOp] = info->lowerInfo->get_thread_total_widths();
+        allocLocalsToReplace[srcDefOp] = info->lowerInfo->get_thread_own_data_size();
       }
     }
 
     for (auto storeOp : storeOps) {
       auto dstVal = storeOp.getMemref();
-      recordBufferInfo(dstVal, "block_store");
+      recordBufferInfo(dstVal, true,"block_store");
       auto dstDefOp = dstVal.getDefiningOp<AllocBufferOp>();
       auto *info = findBufferInfo(dstVal);
       if (dstDefOp != nullptr && info != nullptr && info->lowerInfo && isThreadLocalTile(dstVal) &&
           !allocLocalsToReplace.count(dstDefOp)) {
-        allocLocalsToReplace[dstDefOp] = info->lowerInfo->get_thread_total_widths();
+        allocLocalsToReplace[dstDefOp] = info->lowerInfo->get_thread_own_data_size();
       }
     }
 
@@ -792,10 +797,8 @@ public:
     std::vector<mlir::Value> newIvs {};
     std::vector<const char* > labels {};
     std::vector<int> thread_level_sz { threadLevelSize.begin(), threadLevelSize.end() };
-    for(auto _ : thread_level_sz){
-      labels.push_back(nullptr);
-    }
-    createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, newIvs, labels);
+
+    createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, newIvs);
 
     // newIvs 是 thread-level local tile 坐标，例如 4x32。local/register
     // buffer 用它直接访问；shared/block buffer 必须恢复成原 128x128 block
@@ -1043,9 +1046,12 @@ public:
     
     auto warpLayout = s_info->begin()->getSecond().get_warp_layout();
     auto blockLayout = s_info->begin()->getSecond().get_block_layout();
+    auto blockLayoutOrder = s_info->begin()->getSecond().get_block_layout_order();
 
     kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, warpLayout));
     kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
+    kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
+
 
     ConversionTarget target(*context);
   
@@ -1062,6 +1068,7 @@ public:
     target.addIllegalOp<KernelOp,ParallelOp,ForOp,
       BlockOp, GemmOp, ReduceOp
     >();
+    // 对于类型转换语义的frisk.copy ,标记为非法。采取Pattern做重写
     target.addDynamicallyLegalOp<frisk::CopyOp>([](frisk::CopyOp op){
       auto srctype = mlir::cast<MemRefType>(op.getSrcMemRef().getType());
       auto dsttype = mlir::cast<MemRefType>(op.getDstMemRef().getType());

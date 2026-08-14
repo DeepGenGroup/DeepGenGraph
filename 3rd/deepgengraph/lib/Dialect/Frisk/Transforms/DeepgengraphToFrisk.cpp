@@ -125,6 +125,26 @@ static Type ModifyMemrefType(Type t, int ms){
   }
 }
 
+static Value stripMemrefTensorRoundTrip(Value v, MemRefType dstTy) {
+  Value curr = v;
+  for (int depth = 0; depth < 8; ++depth) {
+    auto castOp = curr.getDefiningOp<UnrealizedConversionCastOp>();
+    if (!castOp || castOp.getInputs().size() != 1) {
+      break;
+    }
+
+    Value input = castOp.getInputs()[0];
+    if (auto inputTy = dyn_cast<MemRefType>(input.getType())) {
+      if (inputTy.getShape() == dstTy.getShape() &&
+          inputTy.getElementType() == dstTy.getElementType()) {
+        return input;
+      }
+    }
+    curr = input;
+  }
+  return v;
+}
+
 
 // 从v开始，向上追溯其defOp，构建affine_expr表达式
 static AffineExpr GetExprOfValue(
@@ -988,8 +1008,29 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       rewriter.clone(nestedOp, mapping);
     }
 
-    // 5. 单独处理旧的 Terminator (AffineYieldOp)，创建没有任何操作数的新 YieldOp
+    // 5. 单独处理旧的 Terminator (AffineYieldOp)。
+    // 清空 iter_args/yield 后，原来的 loop-carried memref 结果需要显式写回
+    // 对应 init buffer，才能保留 SSA iter_arg 的累加语义。
     auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(oldBlock->getTerminator());
+    for (auto [idx, initVal] : llvm::enumerate(op.getInits())) {
+      auto initAlloc = initVal.getDefiningOp<frisk::AllocBufferOp>();
+      if (!initAlloc) {
+        continue;
+      }
+      if (idx >= oldYieldOp.getNumOperands()) {
+        continue;
+      }
+      auto dstTy = dyn_cast<MemRefType>(initVal.getType());
+      auto src = mapping.lookupOrDefault(oldYieldOp.getOperand(idx));
+      if (dstTy) {
+        src = stripMemrefTensorRoundTrip(src, dstTy);
+      }
+      auto srcTy = dyn_cast<MemRefType>(src.getType());
+      if (!dstTy || !srcTy || dstTy.getShape() != srcTy.getShape()) {
+        continue;
+      }
+      rewriter.create<frisk::CopyOp>(oldYieldOp.getLoc(), src, initVal);
+    }
     rewriter.create<affine::AffineYieldOp>(oldYieldOp.getLoc());
 
     // 6. 用新 Op 替代旧 Op，并返回成功
@@ -1366,6 +1407,62 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
     auto operand = adaptor.getOperand();
     AppendMemspaceToMemrefValue(operand, inMs[0]);
     auto reduce = rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
+
+    if (auto init = adaptor.getInit()) {
+      if (op.getReduceType() != dg::ReduceType::ADD &&
+          op.getReduceType() != dg::ReduceType::MUL) {
+        return failure();
+      }
+      AppendMemspaceToMemrefValue(init, inMs[1]);
+      auto initMemTy = dyn_cast<MemRefType>(init.getType());
+      if (!initMemTy || initMemTy.getShape() != outMemTy.getShape()) {
+        return failure();
+      }
+
+      auto block = rewriter.create<frisk::BlockOp>(loc, outMemTy.getShape(), nullptr);
+      {
+        RewriterBase::InsertionGuard guard{rewriter};
+        rewriter.setInsertionPointToStart(block.getBody(0));
+        SmallVector<Value, 4> indices(block.getBody(0)->getArguments().begin(),
+                                      block.getBody(0)->getArguments().end());
+        auto reducedVal = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
+        auto initVal = rewriter.create<affine::AffineLoadOp>(loc, init, indices);
+        Value combined;
+        if (op.getReduceType() == dg::ReduceType::ADD) {
+          if (isa<FloatType>(outMemTy.getElementType())) {
+            combined = rewriter.create<arith::AddFOp>(loc, initVal, reducedVal);
+          } else {
+            combined = rewriter.create<arith::AddIOp>(loc, initVal, reducedVal);
+          }
+        } else {
+          if (isa<FloatType>(outMemTy.getElementType())) {
+            combined = rewriter.create<arith::MulFOp>(loc, initVal, reducedVal);
+          } else {
+            combined = rewriter.create<arith::MulIOp>(loc, initVal, reducedVal);
+          }
+        }
+        rewriter.create<affine::AffineStoreOp>(loc, combined, buffer, indices);
+      }
+    }
+
+    SmallVector<UnrealizedConversionCastOp, 4> memrefCastUsers;
+    for (Operation *user : op.getResult().getUsers()) {
+      auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!castOp || castOp->getNumResults() != 1) {
+        continue;
+      }
+      auto castMemTy = dyn_cast<MemRefType>(castOp.getResult(0).getType());
+      if (!castMemTy || castMemTy.getShape() != outMemTy.getShape() ||
+          castMemTy.getElementType() != outMemTy.getElementType()) {
+        continue;
+      }
+      memrefCastUsers.push_back(castOp);
+    }
+    for (auto castOp : memrefCastUsers) {
+      rewriter.replaceAllUsesWith(castOp.getResult(0), buffer.getResult());
+      rewriter.eraseOp(castOp);
+    }
+
     rewriter.replaceOp(op, buffer);
     return success();
   }

@@ -44,9 +44,28 @@ public:
   explicit LowerInfo(int _warp_threads);
   MMAInstInfo*  mmaInst = nullptr;
 
-  LinearLayout2DDesc base_layout;  // 某个指令决定的，基础访问模式（thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 inst级别的布局）
-  coordXY_t        base_layout_repeat;  // 以base_layout的subBuffer为粒度，(i,j)在YX方向上repeat，最终平铺整个block-level 的buffer。本质:(i,j,warp,lane,reg) -> buffer[x,y]
+// 字段说明：以如下布局为例。假设最外侧为block-level buffer，data_warpX 为单个warp级别Inst能覆盖的区域，i表示for循环迭代
+
+// +--[Block-level buffer]-------+
+// | data_warp0   | data_warp0   |
+// | i=0          | i=1          |
+// +--------------+--------------+
+// | data_warp1   | data_warp1   |
+// | i=0          | i=1          |
+// +--------------+--------------+
+// | data_warp0   | data_warp0   |
+// | i=2          | i=3          |
+// +--------------+--------------+
+// | data_warp1   | data_warp1   |
+// | i=2          | i=3          |
+// +--------------+--------------+
+//
+  LinearLayout2DDesc base_layout;  // data_warp0，即某个warp级指令决定的基础访问模式（thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 warp_inst级别的布局）
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
+
+  std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，即[2,1]
+  std::array<int64_t, 2> block_layout_order = {0, 1};  // warp布局行列优先顺序 上例中为[1,0] 行优先（列优先也可）
+  std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2]. 其中行列优先顺序无所谓，不影响结果
 
   int get_dimcount() const {
     return dimCount;
@@ -55,30 +74,38 @@ public:
     return base_layout.warp_layout;
   }
   coordXY_t get_block_layout() const {
-    return base_layout.wg_layout;
+    return block_layout;
+  }
+  coordXY_t get_block_layout_order() const {
+    return block_layout_order;
   }
   coordXY_t get_warp_repeat() const {
     return base_layout.warp_repeat;
   }
   coordXY_t get_block_repeat() const {
-    return base_layout_repeat;
+    return block_repeat;
   }
+  // 单个inst中，每个线程处理的连续元素数
   coordXY_t get_thread_widths() const {
     return base_layout.thread_creg;
   } 
+  // kernel中，每个线程持有多少buffer的数据
+  coordXY_t get_thread_own_data_size() const {
+    return thread_own_data_size;
+  }
+  // kernel中，buffer下 每个线程的总计算数据量
   std::array<int64_t, 2> get_thread_total_widths() const {
     std::array<int64_t, 2> ret;
     for(int i=0;i<2;++i){
-      ret[i] = (base_layout.thread_creg[i] * base_layout.warp_repeat[i] * base_layout_repeat[i]);
+      ret[i] = (base_layout.thread_creg[i] * base_layout.warp_repeat[i] * block_repeat[i]);
     }
     return ret;
   }
-
   coordXY_t get_warp_widths() const {
     return base_layout.get_warp_widths();
   }
   coordXY_t get_block_widths() const {
-    return base_layout.get_wg_widths();
+    return getBlockWidths(get_warp_widths(), get_warp_repeat(), get_block_layout());
   }
   const auto& getOperandLabels() const {
     return mapOperandsLabel;
@@ -146,8 +173,11 @@ public:
     printI64Vec("warp_repeat", get_warp_repeat());
     printI64Vec("block_repeat", get_block_repeat());
     printI64Vec("thread_widths", get_thread_widths());
+    printI64Vec("warp_layout_order", base_layout.warp_layout_order);
+    printI64Vec("block_layout_order", block_layout_order);
     printI64Vec("warp_widths", get_warp_widths());
     printI64Vec("block_widths", get_block_widths());
+    printI64Vec("thread_own_data", get_thread_own_data_size());
     llvm::outs() << "=================\n";
   }
 

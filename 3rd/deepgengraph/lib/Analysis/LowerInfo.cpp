@@ -272,23 +272,23 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
                                                 ) {
   LowerInfo info{hw->getWarpsize()};
   info.mmaInst = mma;
+  info.block_layout = block_layout;
+  info.block_layout_order = {0, 1};
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
     info.base_layout.thread_creg = {1, 32 / static_cast<int64_t>(problem.inElemBitWidth)};
     info.base_layout.warp_layout = {8, 4};
     info.base_layout.warp_repeat = {2, mma->n / info.get_warp_widths()[1]};
-    info.base_layout.wg_layout = block_layout;
-    info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                               problem.bn / info.get_block_widths()[1]};
+    info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                         problem.bn / info.get_block_widths()[1]};
   }
   else if(hw->getKind() == HW_KIND_DCU){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
     info.base_layout = mma->desc_c;
-    info.base_layout.wg_layout = block_layout;
-    info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                               problem.bn / info.get_block_widths()[1]};
+    info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                         problem.bn / info.get_block_widths()[1]};
   }
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
@@ -308,17 +308,17 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   if (!getDirectGemmBlockLayout(thread_num, block_layout, hw)) {
     block_layout = source_info.get_block_layout();
   }
+  info.block_layout = block_layout;
+  info.block_layout_order = source_info.block_layout_order;
   if (hw->getKind() == HW_KIND_DCU) {
     info.base_layout = mma->desc_c;
-    info.base_layout.wg_layout = block_layout;
   } else {
     info.base_layout.thread_creg = {1, 32 / static_cast<int64_t>(problem.inElemBitWidth)};
     info.base_layout.warp_layout = source_info.get_warp_layout();
     info.base_layout.warp_repeat = {2, mma->n / info.get_warp_widths()[1]};
-    info.base_layout.wg_layout = block_layout;
   }
-  info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                             problem.bn / info.get_block_widths()[1]};
+  info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                       problem.bn / info.get_block_widths()[1]};
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
 
@@ -334,16 +334,16 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
     info.base_layout.thread_creg[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
     info.base_layout.warp_repeat[1] =
         mma->k / info.get_warp_layout()[1] / info.get_thread_widths()[1];
-    info.base_layout.wg_layout = {blockLayout[0], 1};
-    info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                               problem.bk / info.get_block_widths()[1]};
+    info.block_layout = {blockLayout[0], 1};
+    info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                         problem.bk / info.get_block_widths()[1]};
   }
   else if(hw->getKind() == HW_KIND_DCU){
     auto blockLayout = info.get_block_layout();
     info.base_layout = mma->desc_a;
-    info.base_layout.wg_layout = {blockLayout[0], 1};
-    info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                               problem.bk / info.get_block_widths()[1]};
+    info.block_layout = {blockLayout[0], 1};
+    info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                         problem.bk / info.get_block_widths()[1]};
   }
   // 对于gemm A/B ，wmmaInst在block-level buffer上滑动时，每次清空AB即可。故线程仅需要持有单个wmmaInst所需区域的AB
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
@@ -354,9 +354,9 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
   info.buffer = problem.A;
   auto blockLayout = info.get_block_layout();
   info.base_layout = mma->desc_a;
-  info.base_layout.wg_layout = {blockLayout[0], 1};
-  info.base_layout_repeat = {problem.bm / info.get_block_widths()[0],
-                             problem.bk / info.get_block_widths()[1]};
+  info.block_layout = {blockLayout[0], 1};
+  info.block_repeat = {problem.bm / info.get_block_widths()[0],
+                       problem.bk / info.get_block_widths()[1]};
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
 }
 
@@ -368,16 +368,16 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[0] = 1;
     info.base_layout.warp_repeat[0] = mma->k / info.get_warp_widths()[0];
-    info.base_layout.wg_layout = {1, blockLayout[1]};
-    info.base_layout_repeat = {problem.bk / info.get_block_widths()[0],
-                               problem.bn / info.get_block_widths()[1]};
+    info.block_layout = {1, blockLayout[1]};
+    info.block_repeat = {problem.bk / info.get_block_widths()[0],
+                         problem.bn / info.get_block_widths()[1]};
   }
   else if(hw->getKind() == HW_KIND_DCU) {
     auto blockLayout = info.get_block_layout();
     info.base_layout = mma->desc_b;
-    info.base_layout.wg_layout = {1, blockLayout[1]};
-    info.base_layout_repeat = {problem.bk / info.get_block_widths()[0],
-                               problem.bn / info.get_block_widths()[1]};
+    info.block_layout = {1, blockLayout[1]};
+    info.block_repeat = {problem.bk / info.get_block_widths()[0],
+                         problem.bn / info.get_block_widths()[1]};
   }
   // 对于gemm A/B ，wmmaInst在block-level buffer上滑动时，每次清空AB即可。故线程仅需要持有计算单个wmmaInst所需的A/B （最少持有）
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
@@ -488,15 +488,118 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
     return false;
   }
   // 根据 load storebuf 的一方推定另一方
-  load_bufs.push_back(store_buf);
   LowerInfo sourceInfo = *info;
+  // 补充： checkCompatibility(sourceInfo) 检查适配性
+  // blockOp : 描述pointWise的op。特征为：outBuffer上，每个点的数据互相独立，不可替代。
+  //  storeOp buffer：输出。 每个线程需完整持有结果的一部分。数据规模必须等于 m=总规模/线程数
+  //  loadOp buffer：输入。 每个线程持有的数据量不必等于 m. 可以为 m/(I*J),  配合 寄存器复用+for IJ 循环完成 store buffer的覆盖
+  //  取决于buffer是否已有 Lowerinfo信息
+  auto checkCompatibleAndInfer = [](Operation* op, LowerInfo& info, Value targetBuffer, bool isStoreBuffer, LowerInfoMap& infoMap){
+    auto memType = mlir::cast<MemRefType>(targetBuffer.getType());
+    auto shape = memType.getShape();
+    auto [infoThreadData0, infoThreadData1] = info.get_thread_own_data_size();
+
+    auto [wl0, wl1] = info.get_warp_layout();  // warp_threads
+    auto [bl0, bl1] = info.get_block_layout();  // block_warps
+    auto safeDiv = [](int64_t lhs, int64_t rhs) -> int64_t {
+      return rhs == 0 ? 0 : lhs / rhs;
+    };
+    int64_t required_sz0 = safeDiv(shape[0], wl0 * bl0);  // 分到每个线程的计算量：0轴
+    int64_t required_sz1 = safeDiv(shape[1], wl1 * bl1);  // 分到每个线程的计算量：1轴
+    int64_t required_all = safeDiv(shape[0] * shape[1], wl0 * bl0 * wl1 * bl1);  // 线程计算量总数
+    int64_t infoThreadData_all = infoThreadData0 * infoThreadData1;
+    if(isStoreBuffer){  // 推定的为输出buffer
+      if(required_sz0 !=0 && required_sz1 != 0
+          && required_sz0 == infoThreadData0
+          && required_sz1 == infoThreadData1
+      ){
+        // 完全一致, 可直接推定
+        llvm::outs() << "完全一致!\n"; llvm::outs().flush();
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+      else if(required_all == infoThreadData_all){
+        // 数据量一致，布局不同。可按照 info指定的访问模式 覆盖buffer
+        llvm::outs() << "数据量一致，布局不同!\n"; llvm::outs().flush();
+        assert(false);  // 理论上，不应出现这种状况
+      }
+      else if(required_all > infoThreadData_all){
+        // 数据量不同。info指定的访问模式无法完全覆盖buffer的计算任务，需要增大每个thread的数据持有量 （用 info 的 thread_own_buffer做下平铺）
+        int64_t k0 = safeDiv(required_sz0, infoThreadData0);
+        int64_t k1 = safeDiv(required_sz1, infoThreadData1);
+        llvm::outs() << "需增加info.thread_own 持有量. (k0,k1) = " << k0 <<"," << k1 << " | br " <<
+          info.block_repeat[0] << "," << info.block_repeat[1] << "\n";llvm::outs().flush();
+
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        // 扩大寄存器数目， 缩减 block_repeat 次数
+        info.thread_own_data_size = {required_sz0, required_sz1};
+        info.block_repeat[0] /= k0;
+        info.block_repeat[1] /= k1;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+      else{
+        int64_t k0 = safeDiv(infoThreadData0, required_sz0);
+        int64_t k1 = safeDiv(infoThreadData1, required_sz1);
+        llvm::outs() << "需降低 info.thread_own 持有量. (k0,k1)= " << k0<<","<<k1 << "\n";llvm::outs().flush();
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+    }
+    else{  // 推定输入buffer
+      if(required_sz0 !=0 && required_sz1 != 0
+          && required_sz0 == infoThreadData0
+          && required_sz1 == infoThreadData1
+      ){
+        // 完全一致, 可直接推定
+        llvm::outs() << "完全一致!\n"; llvm::outs().flush();
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+      else if(required_all == infoThreadData_all){
+        // 数据量一致，布局不同。可按照 info指定的访问模式 覆盖buffer
+        llvm::outs() << "数据量一致，布局不同!\n"; llvm::outs().flush();
+        assert(false);  // 理论上，不应出现这种状况
+      }
+      else if(required_all > infoThreadData_all){
+        // 数据量不同。info指定的访问模式无法完全覆盖buffer的计算任务，
+        // 可用 block_repeat for循环覆盖整个buffer，单个线程持有数据不变。后续IR 生成时需要协调inBuffer  outBuffer的循环体结构(block_repeat 不相同)
+        /*
+          for(brA0,brA1){
+            subA = getThreadElements(A[brA0,brA1]); 
+            smallTile = someOp(subA);
+            store(smallTile, outCReg[brA0, brA1 对应的小分区]);  // 多次迭代，将小tile 分次放入 outC的 reg
+          }
+          对blockOp，inBuffer和outBuffer一般形状相同。 生成for循环时，只需要按照 block_repeat 大的
+          之后 outBuffer 遵照输入buffer进行访问即可
+        */
+        // 或者提高单个线程持有元素个数，减少 block_repeat 次数
+        int64_t k0 = safeDiv(required_sz0, infoThreadData0);
+        int64_t k1 = safeDiv(required_sz1, infoThreadData1);
+        llvm::outs() << "需增加info.thread_own 持有量. (k0,k1) = " << k0 <<"," << k1 << " | br " <<
+          info.block_repeat[0] << "," << info.block_repeat[1] << "\n";llvm::outs().flush();
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+      else{
+        int64_t k0 = safeDiv(infoThreadData0, required_sz0);
+        int64_t k1 = safeDiv(infoThreadData1, required_sz1);
+        llvm::outs() << "info.thread_own 持有量超过需求 ,info: " << infoThreadData0  << "," << infoThreadData1 << " | require " << required_sz0 << ","<< required_sz1 << "\n";llvm::outs().flush();
+        LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        infoMap.addLowerInfo(op, targetInfo);
+      }
+    }
+  };
+
   for (const Value &buf : load_bufs) {
     auto info = buf_info_maps.getLowerInfo(buf, op);
     if (info == nullptr) {
       auto bufInfo = sourceInfo;
-      bufInfo.buffer = buf;
-      buf_info_maps.addLowerInfo(op, bufInfo);
+      checkCompatibleAndInfer(op, sourceInfo, buf, false, buf_info_maps); 
     }
+  }
+  auto store_info = buf_info_maps.getLowerInfo(store_buf, op);
+  if (store_info == nullptr) {
+    checkCompatibleAndInfer(op, sourceInfo, store_buf, true, buf_info_maps);
   }
   return true;
 }
@@ -628,6 +731,7 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
     return false;
   }
 
+
   Value dst = reduceOp.getDst();
   Value src = reduceOp.getSrc();
   uint64_t dim = reduceOp.getDim();
@@ -656,9 +760,9 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
       !erase_i64_dim_func(_dstInfo->base_layout.thread_creg_order) ||
       !erase_i64_dim_func(_dstInfo->base_layout.warp_repeat) ||
       !erase_i64_dim_func(_dstInfo->base_layout.warp_repeat_order) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.wg_layout) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.wg_layout_order) ||
-      !erase_i64_dim_func(_dstInfo->base_layout_repeat) ||
+      !erase_i64_dim_func(_dstInfo->block_layout) ||
+      !erase_i64_dim_func(_dstInfo->block_layout_order) ||
+      !erase_i64_dim_func(_dstInfo->block_repeat) ||
       !erase_i64_dim_func(_dstInfo->thread_own_data_size)) {
     LLVM_OUT_MSG("---- inferError 5");
     return false;
