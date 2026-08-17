@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -250,6 +251,8 @@ static SmallVector<Value, 2> makeLocalIndices(ArrayRef<Value> ivs, unsigned rank
   return indices;
 }
 
+// gemmOp的 Layout是直接推定的。不会存在问题。直接按照 wmma的相关要求进行变换即可
+// 从 AB读数据 - 构建wmma IJ循环 - 构建K循环，计算单个wmmaInst区域 - 结果写回C - wmmaInst区域 在IJ滑动。覆盖完整buffer
 class GemmOpConversion : public OpConversionPattern<frisk::GemmOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -308,8 +311,10 @@ public:
     };
     
     if(s_hw->getKind() == HW_KIND_DCU){
+      // 若AB为local，将其直接替换为local buffer；否则，添加 copyfrom shm to reg 的逻辑。返回这个reg buffer
       auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , isLocalBuffer(infoA.buffer));
       auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , isLocalBuffer(infoB.buffer));
+      // C: 创建reg级别buffer 注册到 s_buffer_replace 中，存放最终结果； instWMMA 的acc 临时用，不用注册到全局列表里
       auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_total_widths(), true);
       auto instC = threadLevelBufferCreate(infoC, false, infoC.get_thread_widths(), false);
 
@@ -687,6 +692,7 @@ public:
     };
 
     std::array<int64_t, 2> threadLevelSize = {0, 0};
+    std::array<int64_t, 2> blockRepeats = {0, 0};
     llvm::DenseMap<AllocBufferOp, std::array<int64_t, 2>> allocLocalsToReplace;
     std::vector<AccessedBufferInfo> bufferInfos;
 
@@ -701,9 +707,8 @@ public:
     
     // thread层面，每个buffer 当前tid持有的元素不一定一样。
     auto collectMaxThreadlevelSz = [&](std::array<int64_t, 2> sz) {
-      if(sz[0] > threadLevelSize[0] && sz[1] > threadLevelSize[1]){
-        threadLevelSize = sz;
-      }
+      threadLevelSize[0] = std::max(threadLevelSize[0], sz[0]);
+      threadLevelSize[1] = std::max(threadLevelSize[1], sz[1]);
     };
 
     auto isThreadLocalTile = [](Value buffer) {
@@ -732,18 +737,14 @@ public:
       AccessedBufferInfo recordedInfo{buffer, std::nullopt};
       if (auto *lowerInfo = s_info->getLowerInfo(buffer, op.getOperation())) {
         recordedInfo.lowerInfo = *lowerInfo;
-        if(!isOutBuffer){
-          collectMaxThreadlevelSz(lowerInfo->get_thread_own_data_size());
-        }
+        collectMaxThreadlevelSz(lowerInfo->get_thread_own_data_size());
         lowerInfo->show(label);
       } else {
         // 前面的 block conversion 可能已经把原 frisk.alloc_buffer 替换为
         // memref.alloca 形式的 thread tile。这个新 value 已经是 lowered 后
         // 的形态，不会出现在 LowerInfoMap 中，因此直接用当前 memref shape
         // 作为循环 shape。
-        if(!isOutBuffer){
-          collectMaxThreadlevelSz(get2DShape(buffer));
-        }
+        collectMaxThreadlevelSz(get2DShape(buffer));
       }
       bufferInfos.push_back(recordedInfo);
     };
@@ -772,95 +773,258 @@ public:
       }
     }
 
+    // 统计该blockOp应该以多少 blockRepeat 为准。 每个子op的 blockRepeat可能不同
+    for(auto e : bufferInfos){
+      if(e.lowerInfo){
+        auto br = e.lowerInfo->get_block_repeat();
+        blockRepeats[0] = std::max(blockRepeats[0], br[0]);
+        blockRepeats[1] = std::max(blockRepeats[1], br[1]);
+      }
+    }
+
     assert(threadLevelSize[0] > 0 && threadLevelSize[1] > 0 && "thread-level block size not inferred");
+    assert(blockRepeats[0] > 0 && blockRepeats[1] > 0 && "br not inferred");
     IRMapping mapper;
     IRMapping localMapper;
     // local/register block buffer 会物化成每个线程自己的 tile；shared buffer
     // 仍然保持 block-sized，后面通过 LowerInfo map 生成真实 block 坐标。
+    // 对每个loadOp/storeOp，寻找thread 级别buffer是否已有注册。没有则创建+注册
     for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
       rewriter.setInsertionPoint(srcDefOp);
-      auto ty = MemRefType::get(sz, srcDefOp.getElementType(), AffineMap{}, srcDefOp.getMemorySpace());
-      auto it = s_buffer_replace.find(srcDefOp);
+      auto oldBuffer = srcDefOp->getResult(0);
+      auto it = s_buffer_replace.find(oldBuffer);
       mlir::Value replaceVal = nullptr;
       if (it != s_buffer_replace.end()) {
         replaceVal = it->second;
-      } else {
+      }
+      else {
+        auto ty = MemRefType::get(sz, srcDefOp.getElementType(), AffineMap{}, srcDefOp.getMemorySpace());
         auto newAlloc = rewriter.create<memref::AllocaOp>(srcDefOp->getLoc(), ty);
         replaceVal = newAlloc->getResult(0);
-        s_buffer_replace[srcDefOp] = newAlloc;
+        s_buffer_replace[oldBuffer] = replaceVal;
       }
-      mapper.map(srcDefOp->getResult(0), replaceVal);
-      localMapper.map(srcDefOp->getResult(0), replaceVal);
+      mapper.map(oldBuffer, replaceVal);
+      localMapper.map(oldBuffer, replaceVal);
     }
     rewriter.setInsertionPoint(op);
     // frisk.blocOp 根据newbuffer的size，生成 nestedFor
-    std::vector<mlir::Value> newIvs {};
+    std::vector<mlir::Value> threadOwnDataIvs {};
+    std::vector<mlir::Value> blockRepeatIvs {};
     std::vector<const char* > labels {};
     std::vector<int> thread_level_sz { threadLevelSize.begin(), threadLevelSize.end() };
+    std::vector<int> blockop_br { blockRepeats.begin(), blockRepeats.end() };
 
-    createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, newIvs);
+    // 创建 thread_own_data_sz 循环
+    createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, threadOwnDataIvs);
+    // block_repeat 循环
+    createNestedAffineFor(rewriter, op->getLoc(), blockop_br, blockRepeatIvs);
 
-    // newIvs 是 thread-level local tile 坐标，例如 4x32。local/register
-    // buffer 用它直接访问；shared/block buffer 必须恢复成原 128x128 block
-    // 内的真实坐标，否则就会出现 4x32 循环写 128x128 memref 的错配。
-    std::vector<Value> blockIvs;
-    LowerInfo *blockIndexInfo = nullptr;
-    for (auto &info : bufferInfos) {
-      if (info.lowerInfo && !isThreadLocalTile(info.buffer)) {
-        blockIndexInfo = &*info.lowerInfo;
+    auto constIndex = [&](int64_t v) -> Value {
+      return rewriter.create<arith::ConstantIndexOp>(op->getLoc(), v);
+    };
+
+    auto affineApply1 = [&](AffineExpr expr, Value operand) -> Value {
+      auto map = AffineMap::get(1, 0, expr, rewriter.getContext());
+      return rewriter.create<affine::AffineApplyOp>(op->getLoc(), map, operand);
+    };
+
+    auto modBy = [&](Value operand, int64_t divisor) -> Value {
+      assert(divisor > 0 && "affine modulo divisor must be positive");
+      if (divisor == 1) {
+        return constIndex(0);
+      }
+      auto d0 = rewriter.getAffineDimExpr(0);
+      return affineApply1(d0 % divisor, operand);
+    };
+
+    auto floorDivBy = [&](Value operand, int64_t divisor) -> Value {
+      assert(divisor > 0 && "affine floordiv divisor must be positive");
+      if (divisor == 1) {
+        return operand;
+      }
+      auto d0 = rewriter.getAffineDimExpr(0);
+      return affineApply1(d0.floorDiv(divisor), operand);
+    };
+
+    auto getBufferInfo = [&](Value buffer) -> AccessedBufferInfo * {
+      if (auto mapped = mapper.lookupOrNull(buffer)) {
+        for (auto &info : bufferInfos) {
+          if (info.buffer == mapped) {
+            return &info;
+          }
+        }
+      }
+      return findBufferInfo(buffer);
+    };
+
+    auto getLinearIvForDim = [&](unsigned dim) -> Value {
+      if (dim < threadOwnDataIvs.size()) {
+        return threadOwnDataIvs[dim];
+      }
+      return constIndex(0);
+    };
+
+    auto getRepeatIvForDim = [&](unsigned dim) -> Value {
+      if (dim < blockRepeatIvs.size()) {
+        return blockRepeatIvs[dim];
+      }
+      return constIndex(0);
+    };
+
+    auto buildAccessCoords = [&](Value originalBuffer,
+                                 unsigned rank) -> SmallVector<Value, 2> {
+      SmallVector<Value, 2> coords;
+      auto *accessInfo = getBufferInfo(originalBuffer);
+      if (accessInfo == nullptr || !accessInfo->lowerInfo) {
+        for (unsigned i = 0; i < rank; ++i) {
+          coords.push_back(getLinearIvForDim(i));
+        }
+        return coords;
+      }
+
+      LowerInfo &info = *accessInfo->lowerInfo;
+      bool useLocalTile = isThreadLocalTile(originalBuffer);
+      std::vector<Value> mapOperands;
+      mapOperands.push_back(tidx);
+
+      for (int i = 0; i < 2; ++i) {
+        int64_t warpRepeat = info.get_warp_repeat()[i];
+        int64_t threadWidth = info.get_thread_widths()[i];
+        int64_t repeatWidth = warpRepeat * threadWidth;
+        int64_t ownDataSize = info.get_thread_own_data_size()[i];
+        int64_t ownBlockRepeat = info.get_block_repeat()[i];
+        Value linearIv = getLinearIvForDim(i);
+        Value repeatIv = getRepeatIvForDim(i);
+        Value br = modBy(repeatIv, ownBlockRepeat);
+
+        // Some local tiles materialize all block-repeat slices in the
+        // thread-owned buffer. In that case the linear thread iv already
+        // carries the repeat position and is the authoritative local index.
+        if (useLocalTile && ownDataSize >= repeatWidth * ownBlockRepeat) {
+          Value clippedLinearIv = modBy(linearIv, ownDataSize);
+          br = modBy(floorDivBy(clippedLinearIv, repeatWidth), ownBlockRepeat);
+          linearIv = clippedLinearIv;
+        } else {
+          linearIv = modBy(linearIv, repeatWidth);
+          if (useLocalTile && ownDataSize <= repeatWidth) {
+            br = constIndex(0);
+          }
+        }
+
+        Value wr = floorDivBy(linearIv, threadWidth);
+        Value tr = modBy(linearIv, threadWidth);
+        mapOperands.push_back(br);
+        mapOperands.push_back(wr);
+        mapOperands.push_back(tr);
+      }
+
+      auto affineExprs = info.getAffineMap();
+      for (unsigned i = 0; i < rank && i < affineExprs.size(); ++i) {
+        auto oneResultMap =
+            AffineMap::get(info.get_dimcount(), 0, affineExprs[i],
+                           rewriter.getContext());
+        coords.push_back(rewriter.create<affine::AffineApplyOp>(
+            op->getLoc(), oneResultMap, mapOperands));
+      }
+      return coords;
+    };
+
+    std::function<Value(Value, ArrayRef<Value>)> remapValueForAccess =
+        [&](Value operand, ArrayRef<Value> accessCoords) -> Value {
+      Block *body = op.getBody();
+      if (auto blockArg = dyn_cast<BlockArgument>(operand);
+          blockArg && blockArg.getOwner() == body &&
+          blockArg.getArgNumber() < accessCoords.size()) {
+        return accessCoords[blockArg.getArgNumber()];
+      }
+      if (auto applyOp = operand.getDefiningOp<affine::AffineApplyOp>()) {
+        SmallVector<Value, 4> operands;
+        operands.reserve(applyOp.getMapOperands().size());
+        for (Value mapOperand : applyOp.getMapOperands()) {
+          operands.push_back(remapValueForAccess(mapOperand, accessCoords));
+        }
+        return rewriter.create<affine::AffineApplyOp>(
+            applyOp.getLoc(), applyOp.getAffineMap(), operands);
+      }
+      return mapper.lookupOrDefault(operand);
+    };
+
+    auto remapAffineOperands = [&](ValueRange oldOperands,
+                                   ArrayRef<Value> accessCoords) {
+      SmallVector<Value, 4> newOperands;
+      newOperands.reserve(oldOperands.size());
+      for (Value operand : oldOperands) {
+        newOperands.push_back(remapValueForAccess(operand, accessCoords));
+      }
+      return newOperands;
+    };
+
+    // 根据映射规则，将frisk.blockOp 内的全部op 搬运到 nestedFor 的最内层。
+    // load/store 需要按各自 memref 的 LowerInfo 重建访问下标；其他 op 只
+    // 需要普通 SSA value 映射。
+    Block *body = op.getBody();
+    Value defaultIndexBuffer;
+    for (auto storeOp : storeOps) {
+      Value buffer = storeOp.getMemref();
+      if (findBufferInfo(buffer) != nullptr && !isThreadLocalTile(buffer)) {
+        defaultIndexBuffer = buffer;
         break;
       }
     }
-    if (blockIndexInfo != nullptr && newIvs.size() == 2) {
-      std::vector<Value> mapOperands;
-      mapOperands.push_back(tidx);
-      for (int i = 0; i < 2; ++i) {
-        auto warpRepeat = blockIndexInfo->get_warp_repeat()[i];
-        auto threadWidth = blockIndexInfo->get_thread_widths()[i];
-        auto repeatWidth = warpRepeat * threadWidth;
-        auto d0 = rewriter.getAffineDimExpr(0);
-        auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), rewriter.getContext());
-        auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), rewriter.getContext());
-        auto trMap = AffineMap::get(1, 0, d0 % threadWidth, rewriter.getContext());
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), brMap, newIvs[i]));
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), wrMap, newIvs[i]));
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), trMap, newIvs[i]));
+    if (!defaultIndexBuffer) {
+      for (auto &info : bufferInfos) {
+        if (info.lowerInfo && !isThreadLocalTile(info.buffer)) {
+          defaultIndexBuffer = info.buffer;
+          break;
+        }
       }
+    }
+    if (!defaultIndexBuffer) {
+      for (auto &info : bufferInfos) {
+        if (info.lowerInfo) {
+          defaultIndexBuffer = info.buffer;
+          break;
+        }
+      }
+    }
 
-      // LowerInfo::getAffineMap() 的 operand 顺序是
-      // [tid, blockX, warpX, threadX, blockY, warpY, threadY]。这里先把
-      // 压平后的 thread tile iv 拆回这几层，再得到 shared/block 坐标。
-      auto affineExprs = blockIndexInfo->getAffineMap();
-      for (auto expr : affineExprs) {
-        auto oneResultMap = AffineMap::get(blockIndexInfo->get_dimcount(), 0, expr, rewriter.getContext());
-        blockIvs.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), oneResultMap, mapOperands));
-      }
+    SmallVector<Value, 2> defaultBlockCoords;
+    if (defaultIndexBuffer) {
+      defaultBlockCoords =
+          buildAccessCoords(defaultIndexBuffer, body->getNumArguments());
     } else {
-      blockIvs = newIvs;
+      for (unsigned i = 0; i < body->getNumArguments(); ++i) {
+        defaultBlockCoords.push_back(getLinearIvForDim(i));
+      }
+    }
+    for (auto [oldIndex, newIter] :
+         llvm::zip(body->getArguments(), defaultBlockCoords)) {
+      mapper.map(oldIndex, newIter);
+      localMapper.map(oldIndex, newIter);
     }
 
-    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), blockIvs)){
-      mapper.map(oldIndex,newIter);
-    }
-    for(auto [oldIndex, newIter] : llvm::zip(op.getBody()->getArguments(), newIvs)){
-      localMapper.map(oldIndex,newIter);
-    }
-    // 根据映射规则，将frisk.blockOp 内的全部op 搬运到 nestedFOr的最内层 （createNestedAffineFor 之后，insertionPoint已经在最内侧了，不用动）
-    // 将 blockOp body 内的所有 op 按序 clone 到当前 insertionPoint（nestedFor 最内层）
-    // 跳过 block terminator（frisk.yield 或类似）
-    Block *body = op.getBody();
     for (auto &childOp : body->without_terminator()) {
-      IRMapping *activeMapper = &mapper;
       if (auto loadOp = dyn_cast<affine::AffineLoadOp>(childOp)) {
-        if (isThreadLocalTile(loadOp.getMemref())) {
-          activeMapper = &localMapper;
-        }
+        Value memref = mapper.lookupOrDefault(loadOp.getMemref());
+        auto accessCoords =
+            buildAccessCoords(loadOp.getMemref(), loadOp.getAffineMap().getNumResults());
+        auto mapOperands = remapAffineOperands(loadOp.getMapOperands(), accessCoords);
+        auto newLoad = rewriter.create<affine::AffineLoadOp>(
+            loadOp.getLoc(), memref, loadOp.getAffineMap(), mapOperands);
+        mapper.map(loadOp.getResult(), newLoad.getResult());
+        localMapper.map(loadOp.getResult(), newLoad.getResult());
+        continue;
       } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(childOp)) {
-        if (isThreadLocalTile(storeOp.getMemref())) {
-          activeMapper = &localMapper;
-        }
+        Value memref = mapper.lookupOrDefault(storeOp.getMemref());
+        Value valueToStore = mapper.lookupOrDefault(storeOp.getValueToStore());
+        auto accessCoords =
+            buildAccessCoords(storeOp.getMemref(), storeOp.getAffineMap().getNumResults());
+        auto mapOperands = remapAffineOperands(storeOp.getMapOperands(), accessCoords);
+        rewriter.create<affine::AffineStoreOp>(
+            storeOp.getLoc(), valueToStore, memref, storeOp.getAffineMap(), mapOperands);
+        continue;
       }
-      auto *cloned = rewriter.clone(childOp, *activeMapper);
+      auto *cloned = rewriter.clone(childOp, mapper);
       // 后续普通 arith/math op 使用 mapper，后续 local store 使用 localMapper。
       // 因此不管当前 op 用哪套下标克隆，都把 result 同步给两套映射。
       for (auto [oldResult, newResult] : llvm::zip(childOp.getResults(), cloned->getResults())) {
@@ -875,14 +1039,15 @@ public:
     // blockOp body 外部（blockOp 之后）可能还有对旧 alloc 的 use（如 copy-out 等）
     // 用 replaceAllUsesExcept 只替换 blockOp 外部的 use
     for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
-      auto temp = mapper.lookupOrNull(srcDefOp->getResult(0));
+      Value oldBuffer = srcDefOp->getResult(0);
+      auto temp = mapper.lookupOrNull(oldBuffer);
       if(temp == nullptr){
         continue;
       }
       auto newAlloc = temp.getDefiningOp<memref::AllocaOp>();
       // 只替换 blockOp 之外还残留的 use
       if(newAlloc != nullptr){
-        srcDefOp->getResult(0).replaceAllUsesExcept(
+        oldBuffer.replaceAllUsesExcept(
             newAlloc->getResult(0),
             SmallPtrSet<Operation *, 1>{op});
         rewriter.eraseOp(srcDefOp);
