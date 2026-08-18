@@ -11,6 +11,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/LLVM.h"
@@ -60,33 +61,240 @@ static std::array<int64_t, 2> getThreadOwnDataSize(const LowerInfo &info,
 LowerInfo *LowerInfoMap::getLowerInfo(const mlir::Value &buffer,
                                       mlir::Operation *op) {
   auto it = infoMap.find(std::make_pair(buffer, op));
-  if (it == infoMap.end()) {
+  if (it != infoMap.end()) {
+    return &it->second;
+  }
+  auto candidateIt = m_candidates.find(buffer);
+  if (candidateIt == m_candidates.end()) {
     return nullptr;
   }
-  return &it->second;
-}
-
-LowerInfo *LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info) {
-  assert(info.buffer != nullptr);
-  auto key = std::make_pair(info.buffer, op);
-  auto it = infoMap.find(key);
-  if (it == infoMap.end()) {
-    it = infoMap.insert(std::make_pair(key, std::move(info))).first;
-  } else {
-    it->second = std::move(info);
+  for (auto &candidate : candidateIt->second) {
+    if (candidate.op == op) {
+      return &candidate;
+    }
   }
-  it->second.buffer = key.first;
-  return &it->second;
+  return nullptr;
 }
 
-void LowerInfoMap::getOpsOrder(mlir::Operation* rootNode){
-  unsigned idx = 1;
-  rootNode->walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
-    opOrder.try_emplace(subOp, idx++);
-  });
+static bool isSameLinearLayout(const LinearLayout2DDesc &lhs,
+                               const LinearLayout2DDesc &rhs) {
+  return lhs.memspace == rhs.memspace &&
+         lhs.elementType == rhs.elementType &&
+         lhs.warp_layout == rhs.warp_layout &&
+         lhs.warp_layout_order == rhs.warp_layout_order &&
+         lhs.thread_creg == rhs.thread_creg &&
+         lhs.thread_creg_order == rhs.thread_creg_order &&
+         lhs.warp_repeat == rhs.warp_repeat &&
+         lhs.warp_repeat_order == rhs.warp_repeat_order &&
+         lhs.wg_layout == rhs.wg_layout &&
+         lhs.wg_layout_order == rhs.wg_layout_order;
 }
 
+// 比较两个info间，除了op buffer 外是否相同
+static bool isSameLayout(const LowerInfo &lhs, const LowerInfo &rhs) {
+  return lhs.warp_threads == rhs.warp_threads &&
+        isSameLinearLayout(lhs.base_layout, rhs.base_layout) &&
+        lhs.block_layout == rhs.block_layout &&
+        lhs.block_layout_order == rhs.block_layout_order &&
+        lhs.block_repeat == rhs.block_repeat &&
+        lhs.thread_own_data_size == rhs.thread_own_data_size;
+}
 
+// 比较info的 tod_sz. 如果参数中 ignoreDim有效，则忽略对应维度（此时 ignoreDim 必为 0 或 1）
+static int compareThreadOwnData(const LowerInfo& lhs, const LowerInfo& rhs, int ignoreDim){
+  int x = 0;
+  int y = 0 ; 
+  if(ignoreDim >= 0){
+    x = lhs.thread_own_data_size[1-ignoreDim];
+    y = rhs.thread_own_data_size[1-ignoreDim];
+  }
+  else{
+    x = lhs.thread_own_data_size[0] * lhs.thread_own_data_size[1];
+    y = rhs.thread_own_data_size[0] * rhs.thread_own_data_size[1];
+  }
+  if(x < y){
+    return -1;
+  }
+  else if(x == y){
+    return 0;
+  }
+  else{
+    return 1;
+  }
+}
+
+static bool isSameCandidate(const LowerInfo &lhs, const LowerInfo &rhs) {
+  return lhs.op == rhs.op 
+    && lhs.buffer == rhs.buffer 
+    && lhs.pos == rhs.pos 
+    && isSameLayout(lhs, rhs);
+}
+
+// 判断Layout 冲突：op buffer 相同，但数据分布规则不同。视为冲突(不区分 in out， 因为是同一个buffer)
+static bool isLowerInfoConflict(const LowerInfo &lhs, const LowerInfo &rhs) {
+  return lhs.op == rhs.op && lhs.buffer == rhs.buffer && !isSameLayout(lhs, rhs);
+}
+
+void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConflict) {
+  assert(info.buffer != nullptr);
+  info.op = op;
+  llvm::outs() << "[debug] addLayout : " << op->getName().getStringRef() << " - "<< info.buffer;
+
+  auto &candidates = m_candidates[info.buffer];
+  bool hasConflict = isConflict ||
+                     llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+                       return isLowerInfoConflict(candidate, info);
+                     });
+  if (hasConflict) {
+    llvm::outs() << " with conflict\n";
+  }
+
+  if (!llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+        return isSameCandidate(candidate, info);
+      })) {
+    candidates.push_back(std::move(info));
+  }
+  llvm::outs() << "\n";
+  return;
+}
+
+static void recalcLayout(LowerInfo& info, const coordXY_t& new_thread_own_data_sz, unsigned pos){
+  // 调整 info.thread_own_data 后，线程持有数据增加
+  // 单次指令计算区域仍不变，为 warp_layout * warp_repeat * thread_creg -> inst在buffer上平铺次数没变
+  // 线程持有数据多了 -> block_repeat 少了，但每次平铺需要额外 unroll k0*k1 次 inst操作
+  // 本质是将 k0*k1 次的inst 所用数据都放进 thread_own_data 里。
+
+  if(pos >= unsigned(LowerInfo::BufPos::Out)){
+    // buffer有作为 out参数的时候 ： 需要按最大数据量
+    auto k0 = new_thread_own_data_sz[0] / info.thread_own_data_size[0];
+    auto k1 = new_thread_own_data_sz[1] / info.thread_own_data_size[1];
+    info.thread_own_data_size = new_thread_own_data_sz;
+    info.block_repeat[0] /= k0;  // 以 thread_own_data_size 为单位进行的 buffer 平铺次数减少
+    info.block_repeat[1] /= k1;
+    info.warpInstUnroll = {k0,k1};  // 单次平铺内，需额外进行 {k0,k1} inst 展开以算满 new_thread_own_data_sz
+  }
+  else{
+    // buffer 仅作为 in 参数被读取 : 无需修改LowerInfo。
+    llvm::outs() << "[recalcLayout] buffer 仅作为输入。不需修改Layout \n";
+  }
+}
+
+void LowerInfoMap::conflictResolve() {
+  infoMap.clear();
+  
+  for (auto &entry : m_candidates) {
+    Value buffer = entry.getFirst();
+    auto &candidates = entry.getSecond();
+    if (candidates.empty()) {
+      continue;
+    }
+
+    const LowerInfo &selectedInfo = candidates.front();
+    bool hasConflict = llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+      return isLowerInfoConflict(selectedInfo, candidate);
+    });
+    bool isBaselayoutMismatch = llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+      return !isSameLinearLayout(selectedInfo.base_layout, candidate.base_layout);
+    });
+    if(isBaselayoutMismatch){
+      // baselayout 不同。无法协商 —— 需插入 convertLayoutOp。LowerInfo 需注明 needConvertFrom = srcLowerInfo
+      llvm::sort(candidates, [&](const LowerInfo &a, const LowerInfo &b) {
+        // 在 Map 中查找 a 和 b 的 op 对应的序号
+        // 使用 lookup 或 find，未查找到时 lookup 会返回 0，建议用 find 或 lookupOrDefault
+        int orderA = opOrder.lookup(a.op);
+        int orderB = opOrder.lookup(b.op);
+        return orderA < orderB; // 升序排列
+      });
+      LowerInfo* lastInfo = nullptr;
+      for(int i=0;i<candidates.size();++i){
+        if(lastInfo == nullptr){
+          candidates[i].convertFrom = nullptr;
+          lastInfo = &candidates[i];
+          continue;
+        }
+        if(isLowerInfoConflict(*lastInfo, candidates[i])){
+          candidates[i].convertFrom = lastInfo;
+          lastInfo = &candidates[i];
+        }
+      }
+    }
+    else{
+      if(hasConflict){
+        // get greatest thread_own_data_sz 
+        auto anchorInfo = candidates[0];
+        int ignoreDim = -1;
+        if(mlir::isa<frisk::ReduceOp>(anchorInfo.op)){
+          if(anchorInfo.pos >= LowerInfo::BufPos::Out){
+            auto realType = mlir::dyn_cast<frisk::ReduceOp>(anchorInfo.op);
+            ignoreDim = realType.getDim();
+          }
+        }
+        auto bufferPos = (unsigned)anchorInfo.pos;
+        for(int i=1;i<candidates.size();++i){
+          auto pos =  unsigned(candidates[i].pos);
+          bufferPos |= pos;
+          if(mlir::isa<frisk::ReduceOp>(candidates[i].op)){
+            // 当buffer作为 reduceOp的 out buffer时，可忽略 reducedim 的layout数值
+            if(candidates[i].pos >= LowerInfo::BufPos::Out){
+              auto realType = mlir::dyn_cast<frisk::ReduceOp>(candidates[i].op);
+              ignoreDim = realType.getDim();
+            }
+          }
+          if(compareThreadOwnData(anchorInfo, candidates[i], ignoreDim) < 0){
+            anchorInfo = candidates[i];
+          }
+        }
+        auto base_tod_sz = anchorInfo.thread_own_data_size;
+        // 根据 base_tod_sz, 调整 buffer对应的所有op下的LowerInfo
+        for(auto &info : candidates){
+          if(info.op != nullptr){
+            recalcLayout(info, base_tod_sz, bufferPos);
+            auto key = std::make_pair(buffer, info.op);
+            infoMap.try_emplace(key, info);
+          }
+        }
+      }
+    }
+    if (hasConflict) {
+      // debug print
+      llvm::outs() << "[conflict]" << buffer << "\n";
+      for (auto &candidate : candidates) {
+        candidate.show("temp_conflict");
+      }
+    }
+  }
+  // 结果整理
+  for(auto& ent : m_candidates){
+    auto buffer = ent.getFirst();
+    auto &lowerInfos = ent.getSecond();
+    for(auto& info : lowerInfos){
+      // infoMap.insert(const std::pair<std::pair<mlir::Value, mlir::Operation *>, mlir::frisk::LowerInfo> &KV)
+      infoMap.insert({{info.buffer, info.op}, info});
+    }
+  }
+  // m_candidates.clear();
+}
+
+const SmallVector<Operation*>& LowerInfoMap::getOpsOrder(mlir::Operation* rootNode){
+  if(opOrder.empty()){
+    opOrderVec.push_back(nullptr);
+    unsigned idx = 1;
+    rootNode->walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
+      opOrder.try_emplace(subOp, idx++);
+      opOrderVec.push_back(subOp);
+    });
+  }
+  return opOrderVec;
+}
+
+void LowerInfoMap::print(){
+  for(auto[k,lowInfo] : infoMap){
+    auto [value,operation] = k;
+    lowInfo.show( operation->getName().getStringRef().data() );
+  }
+}
+
+// 获取距离 currOp 前向/后向 的已经推定的 LowerInfo
 LowerInfo *LowerInfoMap::getNearestInferedInfo(const mlir::Value &buffer,
                                                mlir::Operation *currOp,
                                                bool isBefore) {
@@ -105,17 +313,14 @@ LowerInfo *LowerInfoMap::getNearestInferedInfo(const mlir::Value &buffer,
   unsigned currOrder = currOrderIt->second;
   unsigned bestOrder = 0;
   LowerInfo *nearestInfo = nullptr;
-  for (auto &entry : infoMap) {
-    auto& buf = entry.first.first;
-    auto op = entry.first.second;
-    auto& info = entry.second;
+  auto updateNearest = [&](Value buf, Operation *op, LowerInfo &info) {
     auto opOrderIt = opOrder.find(op);
     if (opOrderIt == opOrder.end()) {
-      continue;
+      return;
     }
     unsigned order = opOrderIt->second;
     if (buffer != buf) {
-      continue;
+      return;
     }
     if (isBefore && order <= currOrder &&
         (nearestInfo == nullptr || order > bestOrder)) {
@@ -126,17 +331,28 @@ LowerInfo *LowerInfoMap::getNearestInferedInfo(const mlir::Value &buffer,
       nearestInfo = &info;
       bestOrder = order;
     }
+  };
+
+  for (auto &entry : infoMap) {
+    updateNearest(entry.first.first, entry.first.second, entry.second);
+  }
+  for (auto &entry : m_candidates) {
+    Value buf = entry.getFirst();
+    for (auto &candidate : entry.getSecond()) {
+      updateNearest(buf, candidate.op, candidate);
+    }
   }
   return nearestInfo;
 }
 
 static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
                                               const mlir::Value &buffer,
-                                              mlir::Operation *currOp) {
-  if (auto *info = infoMap.getNearestInferedInfo(buffer, currOp, true)) {
+                                              mlir::Operation *currOp,
+                                              bool preferBefore = true) {
+  if (auto *info = infoMap.getNearestInferedInfo(buffer, currOp, preferBefore)) {
     return info;
   }
-  return infoMap.getNearestInferedInfo(buffer, currOp, false);
+  return infoMap.getNearestInferedInfo(buffer, currOp, !preferBefore);
 }
 
 llvm::SmallVector<Operation*, 5>
@@ -288,10 +504,11 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
     info.thread_bound = thread_num;
     info.base_layout = mma->desc_c;
     info.block_repeat = {problem.bm / info.get_block_widths()[0],
-                         problem.bn / info.get_block_widths()[1]};
+                         problem.bn / info.get_block_widths()[1]};  // 这里的 block_repeat 可能不准。因为 block_layout 可根据conflict动态调整
   }
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
+  info.pos = LowerInfo::BufPos::Out;
   return info;
 }
 
@@ -321,7 +538,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
                        problem.bn / info.get_block_widths()[1]};
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
-
+  info.pos = LowerInfo::BufPos::Out;
   return info;
 }
 
@@ -347,6 +564,7 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
   }
   // 对于gemm A/B ，wmmaInst在block-level buffer上滑动时，每次清空AB即可。故线程仅需要持有单个wmmaInst所需区域的AB
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
+  info.pos = LowerInfo::BufPos::In;
 }
 
 void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &problem,
@@ -358,6 +576,7 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
                        problem.bk / info.get_block_widths()[1]};
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
+  info.pos = LowerInfo::BufPos::In;
 }
 
 void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
@@ -381,15 +600,17 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
   }
   // 对于gemm A/B ，wmmaInst在block-level buffer上滑动时，每次清空AB即可。故线程仅需要持有计算单个wmmaInst所需的A/B （最少持有）
   info.thread_own_data_size = getThreadOwnDataSize(info, false);
+  info.pos = LowerInfo::BufPos::In;
 }
 
-bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps) {
+bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
+                                    bool preferBefore) {
   // copyop : 根据 src dst的一方推定 另一方
   if (auto copyOp = dyn_cast<CopyOp>(op)) {
     Value dst = copyOp.getDstMemRef();
     Value src = copyOp.getSrcMemRef();
-    auto dstInfo = getNearestInferedInfoEither(buf_info_maps, dst, op);
-    auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op);
+    auto dstInfo = getNearestInferedInfoEither(buf_info_maps, dst, op, preferBefore);
+    auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op, preferBefore);
     LowerInfo *sourceInfo = dstInfo != nullptr ? dstInfo : srcInfo;
 
     auto isLowerInfoOKForCalculate = [](Value buffer, LowerInfo& info){
@@ -411,24 +632,19 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps) 
         // 数据量充足
         return true;
       }
-
     };
 
     if (sourceInfo != nullptr) {
       LowerInfo source = *sourceInfo;
+      LowerInfo srcCandidate = source;
+      srcCandidate.buffer = src;
+      srcCandidate.pos = LowerInfo::BufPos::In;
+      buf_info_maps.addLowerInfo(op, srcCandidate);
 
-
-
-      if (buf_info_maps.getLowerInfo(src, op) == nullptr) {
-        LowerInfo i = source;
-        i.buffer = src;
-        buf_info_maps.addLowerInfo(op, i);
-      }
-      if (buf_info_maps.getLowerInfo(dst, op) == nullptr) {
-        LowerInfo i = source;
-        i.buffer = dst;
-        buf_info_maps.addLowerInfo(op, i);
-      }
+      LowerInfo dstCandidate = source;
+      dstCandidate.buffer = dst;
+      dstCandidate.pos = LowerInfo::BufPos::Out;
+      buf_info_maps.addLowerInfo(op, dstCandidate);
       return true;
     }
     LLVM_OUT_MSG("---- inferCopyOp error");
@@ -437,7 +653,8 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps) 
   return false;
 }
 
-bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps) {
+bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps,
+                                     bool preferBefore) {
   auto blockOp = dyn_cast<BlockOp>(op);
   if (!blockOp) {
     return false;
@@ -473,13 +690,13 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
 
   LowerInfo *info = nullptr;
   for (const auto &lbuf : load_bufs) {
-    info = getNearestInferedInfoEither(buf_info_maps, lbuf, op);
+    info = getNearestInferedInfoEither(buf_info_maps, lbuf, op, preferBefore);
     if (info != nullptr && get_main_info_func(lbuf)) {
       break;
     }
   }
   // loadbufs 均没推断
-  auto storeLowerInfo = getNearestInferedInfoEither(buf_info_maps, store_buf, op);
+  auto storeLowerInfo = getNearestInferedInfoEither(buf_info_maps, store_buf, op, preferBefore);
   if (info == nullptr && storeLowerInfo != nullptr && get_main_info_func(store_buf)) {
     info = storeLowerInfo;
   }
@@ -497,13 +714,14 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
   auto checkCompatibleAndInfer = [](Operation* op, LowerInfo& info, Value targetBuffer, bool isStoreBuffer, LowerInfoMap& infoMap){
     auto memType = mlir::cast<MemRefType>(targetBuffer.getType());
     auto shape = memType.getShape();
-    auto [infoThreadData0, infoThreadData1] = info.get_thread_own_data_size();
+    auto [infoThreadData0, infoThreadData1] = info.get_thread_own_data_size();  // base
 
     auto [wl0, wl1] = info.get_warp_layout();  // warp_threads
     auto [bl0, bl1] = info.get_block_layout();  // block_warps
     auto safeDiv = [](int64_t lhs, int64_t rhs) -> int64_t {
       return rhs == 0 ? 0 : lhs / rhs;
     };
+    
     int64_t required_sz0 = safeDiv(shape[0], wl0 * bl0);  // 分到每个线程的计算量：0轴
     int64_t required_sz1 = safeDiv(shape[1], wl1 * bl1);  // 分到每个线程的计算量：1轴
     int64_t required_all = safeDiv(shape[0] * shape[1], wl0 * bl0 * wl1 * bl1);  // 线程计算量总数
@@ -516,6 +734,7 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
         // 完全一致, 可直接推定
         llvm::outs() << "完全一致!\n"; llvm::outs().flush();
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        targetInfo.pos = LowerInfo::BufPos::Out;
         infoMap.addLowerInfo(op, targetInfo);
       }
       else if(required_all == infoThreadData_all){
@@ -531,18 +750,18 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
           info.block_repeat[0] << "," << info.block_repeat[1] << "\n";llvm::outs().flush();
 
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
-        // 扩大寄存器数目， 缩减 block_repeat 次数
-        info.thread_own_data_size = {required_sz0, required_sz1};
-        info.block_repeat[0] /= k0;
-        info.block_repeat[1] /= k1;
-        infoMap.addLowerInfo(op, targetInfo);
+        targetInfo.thread_own_data_size = {required_sz0,required_sz1};
+        targetInfo.pos = LowerInfo::BufPos::Out;
+        infoMap.addLowerInfo(op, targetInfo, true);  // isCOnflict=true 表示该buffer的Lowerinfo需要协商一致。放在conflict里以待后续检查
       }
       else{
         int64_t k0 = safeDiv(infoThreadData0, required_sz0);
         int64_t k1 = safeDiv(infoThreadData1, required_sz1);
         llvm::outs() << "需降低 info.thread_own 持有量. (k0,k1)= " << k0<<","<<k1 << "\n";llvm::outs().flush();
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
-        infoMap.addLowerInfo(op, targetInfo);
+        targetInfo.thread_own_data_size = {required_sz0, required_sz1};
+        targetInfo.pos = LowerInfo::BufPos::Out;
+        infoMap.addLowerInfo(op, targetInfo, true);
       }
     }
     else{  // 推定输入buffer
@@ -553,6 +772,7 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
         // 完全一致, 可直接推定
         llvm::outs() << "完全一致!\n"; llvm::outs().flush();
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
+        targetInfo.pos = LowerInfo::BufPos::In;
         infoMap.addLowerInfo(op, targetInfo);
       }
       else if(required_all == infoThreadData_all){
@@ -578,29 +798,28 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps)
         llvm::outs() << "需增加info.thread_own 持有量. (k0,k1) = " << k0 <<"," << k1 << " | br " <<
           info.block_repeat[0] << "," << info.block_repeat[1] << "\n";llvm::outs().flush();
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
-        infoMap.addLowerInfo(op, targetInfo);
+        targetInfo.thread_own_data_size = {required_sz0, required_sz1};
+        targetInfo.pos = LowerInfo::BufPos::In;
+        infoMap.addLowerInfo(op, targetInfo, true);
       }
       else{
         int64_t k0 = safeDiv(infoThreadData0, required_sz0);
         int64_t k1 = safeDiv(infoThreadData1, required_sz1);
         llvm::outs() << "info.thread_own 持有量超过需求 ,info: " << infoThreadData0  << "," << infoThreadData1 << " | require " << required_sz0 << ","<< required_sz1 << "\n";llvm::outs().flush();
         LowerInfo targetInfo = info; targetInfo.buffer = targetBuffer;
-        infoMap.addLowerInfo(op, targetInfo);
+        targetInfo.thread_own_data_size = {required_sz0, required_sz1};
+        targetInfo.pos = LowerInfo::BufPos::In;
+        infoMap.addLowerInfo(op, targetInfo, true);
       }
     }
   };
 
   for (const Value &buf : load_bufs) {
-    auto info = buf_info_maps.getLowerInfo(buf, op);
-    if (info == nullptr) {
-      auto bufInfo = sourceInfo;
-      checkCompatibleAndInfer(op, sourceInfo, buf, false, buf_info_maps); 
-    }
+    LowerInfo candidateInfo = sourceInfo;
+    checkCompatibleAndInfer(op, candidateInfo, buf, false, buf_info_maps); 
   }
-  auto store_info = buf_info_maps.getLowerInfo(store_buf, op);
-  if (store_info == nullptr) {
-    checkCompatibleAndInfer(op, sourceInfo, store_buf, true, buf_info_maps);
-  }
+  LowerInfo candidateInfo = sourceInfo;
+  checkCompatibleAndInfer(op, candidateInfo, store_buf, true, buf_info_maps);
   return true;
 }
 
@@ -642,6 +861,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
 
   LowerInfo ic = makeDirectGemmCInfo(b, problem, instInfo, thread_num, hw, block_layout);
   ic.mmaInst = instInfo;
+  
   buf_info_maps.addLowerInfo(op, ic);
 
   auto zero = b.getAffineConstantExpr(0);
@@ -655,7 +875,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
 }
 
 bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
-                                        HWSpecification *hw) {
+                                        HWSpecification *hw, bool preferBefore) {
   auto gemmOp = dyn_cast<GemmOp>(op);
   if (!gemmOp) {
     return false;
@@ -678,28 +898,19 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
 
   auto zero = b.getAffineConstantExpr(0);
   // 若A或B已经推断：根据A或B的info得到C的info；否则C的info从 map里找
-  auto infoA = getNearestInferedInfoEither(buf_info_maps, problem.A, op);
-  auto infoB = getNearestInferedInfoEither(buf_info_maps, problem.B, op);
+  auto infoA = getNearestInferedInfoEither(buf_info_maps, problem.A, op, preferBefore);
+  auto infoB = getNearestInferedInfoEither(buf_info_maps, problem.B, op, preferBefore);
   if(infoA != nullptr){
     // A 已经推断, A->C
     LowerInfo sourceA = *infoA;
-    if (buf_info_maps.getLowerInfo(problem.A, op) == nullptr) {
-      sourceA.buffer = problem.A;
-      buf_info_maps.addLowerInfo(op, sourceA);
-    }
+    sourceA.buffer = problem.A;
+    buf_info_maps.addLowerInfo(op, sourceA);
     auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceA, true);
     buf_info_maps.addLowerInfo(op, ic);
-    // 检查B是否已推断
-    if(infoB == nullptr){
-      // C->B
-      ic.buffer = problem.B;
-      infoB = buf_info_maps.addLowerInfo(op, ic);
-      applyGemmBInfo(*infoB, problem, mma, zero, hw);
-    } else if (buf_info_maps.getLowerInfo(problem.B, op) == nullptr) {
-      LowerInfo bInfo = *infoB;
-      bInfo.buffer = problem.B;
-      buf_info_maps.addLowerInfo(op, bInfo);
-    }
+    // C->B
+    LowerInfo bInfo = ic;
+    applyGemmBInfo(bInfo, problem, mma, zero, hw);
+    buf_info_maps.addLowerInfo(op, bInfo);
     return true;
   }
   else{
@@ -707,16 +918,14 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
     if(infoB != nullptr){
       // B->C
       LowerInfo sourceB = *infoB;
-      if (buf_info_maps.getLowerInfo(problem.B, op) == nullptr) {
-        sourceB.buffer = problem.B;
-        buf_info_maps.addLowerInfo(op, sourceB);
-      }
+      sourceB.buffer = problem.B;
+      buf_info_maps.addLowerInfo(op, sourceB);
       auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceB, false);
       buf_info_maps.addLowerInfo(op, ic);
       // C->A
-      ic.buffer = problem.A;
-      infoA = buf_info_maps.addLowerInfo(op, ic);
-      applyRelyGemmAInfo(*infoA, problem, mma, zero);
+      LowerInfo aInfo = ic;
+      applyRelyGemmAInfo(aInfo, problem, mma, zero);
+      buf_info_maps.addLowerInfo(op, aInfo);
       return true;
     }
   }
@@ -725,48 +934,44 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
 }
 
 // reduce : 根据src推定dst的layout
-bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps) {
+// 将 src切分到block threads上。每个线程持有几个元素，先做局部reduce
+// 之后通过shuffle 做warp内的跨线程通信 （对new & old值做运算 (sum, max 等)）
+bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps,
+                                      bool preferBefore) {
   auto reduceOp = dyn_cast<ReduceOp>(op);
   if (!reduceOp) {
     return false;
   }
 
-
   Value dst = reduceOp.getDst();
   Value src = reduceOp.getSrc();
   uint64_t dim = reduceOp.getDim();
-  auto srcInfo = buf_info_maps.getNearestInferedInfo(src, op);
+  auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op, preferBefore);
   if (srcInfo == nullptr) {
     LLVM_OUT_MSG("---- inferError 4");
     return false;
   }
+  // 检查srcInfo
+  auto srcType = mlir::cast<MemRefType>(src.getType());
+  auto dstType = mlir::cast<MemRefType>(dst.getType());
+  assert(srcType.getMemorySpaceAsInt() == int(friskMs::Shared));
+  assert(dstType.getMemorySpaceAsInt() == int(friskMs::Shared));
+  auto shape = srcType.getShape();
+  auto required_src = shape[0] * shape[1] / LowerInfoAnalysis::block_threads;
+  
+  auto required_sz0 = shape[0] / (srcInfo->get_warp_layout()[0] * srcInfo->get_block_layout()[0]);
+  auto required_sz1 = shape[1] / (srcInfo->get_warp_layout()[1] * srcInfo->get_block_layout()[1]);
+
   // 根据src 推断 dst
-  LowerInfo dstInfo = *srcInfo;
-  dstInfo.buffer = dst;
-  auto _dstInfo = buf_info_maps.addLowerInfo(op, dstInfo);
+  LowerInfo _dstInfo = *srcInfo;
+  _dstInfo.pos = LowerInfo::BufPos::Out;
+  _dstInfo.buffer = dst;
+  _dstInfo.ignoreDim = dim;
+  _dstInfo.thread_own_data_size[0] = required_sz0;
+  _dstInfo.thread_own_data_size[1] = required_sz1;
+  _dstInfo.thread_own_data_size[dim] = 1; 
 
-  auto erase_i64_dim_func = [&](std::array<int64_t, 2> &vec) -> bool {
-    if (dim >= vec.size()) return false;
-    for (size_t i = dim; i + 1 < vec.size(); ++i) {
-      vec[i] = vec[i + 1];
-    }
-    vec.back() = 1;
-    return true;
-  };
-
-  if (!erase_i64_dim_func(_dstInfo->base_layout.warp_layout) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.warp_layout_order) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.thread_creg) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.thread_creg_order) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.warp_repeat) ||
-      !erase_i64_dim_func(_dstInfo->base_layout.warp_repeat_order) ||
-      !erase_i64_dim_func(_dstInfo->block_layout) ||
-      !erase_i64_dim_func(_dstInfo->block_layout_order) ||
-      !erase_i64_dim_func(_dstInfo->block_repeat) ||
-      !erase_i64_dim_func(_dstInfo->thread_own_data_size)) {
-    LLVM_OUT_MSG("---- inferError 5");
-    return false;
-  }
+  buf_info_maps.addLowerInfo(op, _dstInfo);
   return true;
 }
 
@@ -779,7 +984,9 @@ bool LowerInfoAnalysis::inferDirectOp(Operation *op, LowerInfoMap &buf_info_maps
   return false;
 }
 
-bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps, HWSpecification *hw) {
+bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
+                                    HWSpecification *hw, bool collectConflict,
+                                    bool preferBefore) {
   // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
   for (const auto &opd : op->getOperands()) {
@@ -804,7 +1011,7 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps, 
     // 检查op的buffer是否已被推定过
     auto info = buf_info_maps.getLowerInfo(memref, op);
     // 检查buffer是否在op前后已经存在可传播的锚点
-    auto lastInfo = getNearestInferedInfoEither(buf_info_maps, memref, op);
+    auto lastInfo = getNearestInferedInfoEither(buf_info_maps, memref, op, preferBefore);
     if (info == nullptr) {
       all_in = false;
       count++;
@@ -813,7 +1020,10 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps, 
       has_anchor = true;
     }
   }
-  if (all_in) {
+  if (memrefsToCheck.empty()) {
+    return true;
+  }
+  if (all_in && !collectConflict) {
     LLVM_OUT_MSG("buf已全部推断");
     return true;
   }
@@ -822,17 +1032,17 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps, 
     return false;
   }
 
-  if (inferCopyOp(op, buf_info_maps)) {
+  if (inferCopyOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
-  if (inferBlockOp(op, buf_info_maps)) {
+  if (inferBlockOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
   // notes: 修改infer逻辑后 这里待商榷
-  if (inferRelyGemmOp(op, buf_info_maps, hw)) {
+  if (inferRelyGemmOp(op, buf_info_maps, hw, preferBefore)) {
     return true;
   }
-  if (inferReduceOp(op, buf_info_maps)) {
+  if (inferReduceOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
 
@@ -852,12 +1062,15 @@ int LowerInfoAnalysis::block_threads = 0;
  * @param hwKind : dcu,nvidia 
  * @return DenseMap<Value, LowerInfo> 
  */
+
+// TODO : 建立 LowerInfo之间的双向链表，明确推断链条。当后面的LowerInfo发生冲突，需要修改，可直接传播到同链条的所有 info
+// 
 LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version){
   auto hw = GetHWSpecification(hwKind, version, kernelOp->getContext());
 
   buf_info_maps = LowerInfoMap{};
-  buf_info_maps.getOpsOrder(kernelOp);
-
+  const auto& opOrderVec = buf_info_maps.getOpsOrder(kernelOp);
+  
   // 获取kernelOp的 thread_num 属性, 用于判断 lowerInfo中 thread_own_data_sz 是否能满足op计算要求
   LowerInfoAnalysis::block_threads = kernelOp->getAttrOfType<IntegerAttr>("thread_num").getInt();
   llvm::outs() << "LowerInfoAnalysis::block_threads = " << LowerInfoAnalysis::block_threads << "\n"; llvm::outs().flush();
@@ -870,9 +1083,60 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
     return inferDirectOp(op, buf_info_maps, hw);
   }), need_infer_ops.end());
   
+  SmallVector<int> gemmOpIds {};
+  for(int i=0;i<opOrderVec.size();++i){
+    auto op = opOrderVec[i];
+    if(op != nullptr && mlir::isa<frisk::GemmOp>(op)){
+      gemmOpIds.push_back(i);
+    }
+  }
   
   if (old_size == need_infer_ops.size()) {
     assert(false && "LowerInfo infer failed. No direct infer anchor op");
+  }
+  
+  // 以 gemmOpIds 为锚点，前向/后向推断 LowerInfo。
+  // 根据 op 性质从已知 buffer 推定未知 buffer；已存在的不同候选由 addLowerInfo
+  // 放入 m_candidates，最后通过 conflictResolve() 统一处理。
+
+  auto isInferTargetOp = [](Operation *op) {
+    return op != nullptr && isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op);
+  };
+  auto tryInferAt = [&](int opId, bool collectConflict, bool preferBefore) -> bool {
+    if (opId <= 0 || opId >= static_cast<int>(opOrderVec.size())) {
+      return false;
+    }
+    Operation *op = opOrderVec[opId];
+    if (!isInferTargetOp(op)) {
+      return false;
+    }
+    auto inferSuccess = inferRelyOp(op, buf_info_maps, hw, collectConflict, preferBefore);
+    if(inferSuccess){
+      auto it =llvm::find_if(need_infer_ops, [&](Operation* _op){
+        return _op != nullptr && _op == op;
+      });
+      if(it != need_infer_ops.end()){
+        need_infer_ops.erase(it);
+      }
+    }
+    return inferSuccess;
+  };
+
+  // gemm 作为 anchor，分别向前、向后传播 Layout。
+  int lastOpId = static_cast<int>(opOrderVec.size()) - 1;
+  for (int anchorIdx = 0; anchorIdx < static_cast<int>(gemmOpIds.size()); ++anchorIdx) {
+    int gemmId = gemmOpIds[anchorIdx];
+    int leftBound = anchorIdx == 0 ? 1 : gemmOpIds[anchorIdx - 1] + 1;
+    int rightBound = anchorIdx + 1 == static_cast<int>(gemmOpIds.size())
+                         ? lastOpId
+                         : gemmOpIds[anchorIdx + 1] - 1;
+
+    for (int i = gemmId - 1; i >= leftBound; --i) {
+      tryInferAt(i, /*collectConflict=*/true, /*preferBefore=*/false);
+    }
+    for (int i = gemmId + 1; i <= rightBound; ++i) {
+      tryInferAt(i, /*collectConflict=*/true, /*preferBefore=*/true);
+    }
   }
 
   while (!need_infer_ops.empty()) {
@@ -895,6 +1159,9 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
     }
     need_infer_ops.swap(pendingOps);
   }
+  // 冲突解决
+  buf_info_maps.conflictResolve();
+
   return &buf_info_maps;
 }
 

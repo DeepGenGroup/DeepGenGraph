@@ -38,35 +38,58 @@ class LowerInfoAnalysis ;
 class LowerInfo {
   friend LowerInfoAnalysis;
 public:
-  Value buffer;
+  enum class BufPos : int {
+    In = 1,  // buffer作为op输入参数  0b01
+    Out = 2  // buffer作为op输出参数  0b10
+  };
+  Value buffer = nullptr;
+  mlir::Operation* op = nullptr;
   int warp_threads;
+  BufPos pos = LowerInfo::BufPos::In;
+  coordXY_t warpInstUnroll = {1,1};
+  int ignoreDim = -1;
+  LowerInfo* convertFrom = nullptr;  // 表示该Layout使用前，需要添加 LayoutConvertOp，从 convertFrom Layout转换到到自己（即：reg->shm->reg）
+
 public:
   explicit LowerInfo(int _warp_threads);
   MMAInstInfo*  mmaInst = nullptr;
 
-// 字段说明：以如下布局为例。假设最外侧为block-level buffer，data_warpX 为单个warp级别Inst能覆盖的区域，i表示for循环迭代
+// 字段说明：以如下布局为例。假设最外侧为block-level buffer，
+// data_warpX 为单个warp级别Inst能覆盖的区域，i表示for循环迭代
 
-// +--[Block-level buffer]-------+
-// | data_warp0   | data_warp0   |
-// | i=0          | i=1          |
-// +--------------+--------------+
-// | data_warp1   | data_warp1   |
-// | i=0          | i=1          |
-// +--------------+--------------+
-// | data_warp0   | data_warp0   |
-// | i=2          | i=3          |
-// +--------------+--------------+
-// | data_warp1   | data_warp1   |
-// | i=2          | i=3          |
-// +--------------+--------------+
-//
-  LinearLayout2DDesc base_layout;  // data_warp0，即某个warp级指令决定的基础访问模式（thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 warp_inst级别的布局）
+// +--[Block-level buffer]-------+         +--[Block-level buffer]-------+
+// | data_warp0   | data_warp0   |         | data_warp0   | data_warp1   |
+// | i=0          | i=1          |         | i=0          | i=0          |
+// +--------------+--------------+         +--------------+--------------+
+// | data_warp1   | data_warp1   |         | data_warp0   | data_warp1   |
+// | i=0          | i=1          |         | i=1          | i=1          |
+// +--------------+--------------+    or   +--------------+--------------+
+// | data_warp0   | data_warp0   |         | data_warp0   | data_warp1   |
+// | i=2          | i=3          |         | i=2          | i=2          |
+// +--------------+--------------+         +--------------+--------------+
+// | data_warp1   | data_warp1   |         | data_warp0   | data_warp1   |
+// | i=2          | i=3          |         | i=3          | i=3          |
+// +--------------+--------------+         +--------------+--------------+
+//        plan1                                     plan2
+
+// base_layout ：对应 data_warp0， 即某个warp级指令决定的基础访问模式（ thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 warp_inst级别的布局）
+// 该布局完全由 warp-level-inst 决定。具有刚性要求
+// base_layout 中的warp_layout+order  本质也是 tid -> (warp, lane) 映射规则
+// 
+// Layout 推断中的不变量：
+// - warp_inst -> thread_creg+order, warp_layout+order, warp_repeat+order 固定
+// - block中thread数目固定 + block-level buffer 尺寸固定 -> warp_inst 需要在buffer上滑动的次数固定 -> thread_own_data_size 总量固定，
+// 可变量：
+// - block_layout xy分量（x*y = block中warp数）
+// - thread_own_data_size xy分量( 单个线程需至少持有多少数据才能保证计算正确 )
+  LinearLayout2DDesc base_layout;  
+  
+  std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
+  std::array<int64_t, 2> block_layout_order = {0, 1};  // block内warp布局的行列优先顺序 上例中为[1,0] 行优先（列优先也可）
+  std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2] or [4,1]. 其中行列优先顺序无所谓，不影响结果
+
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
-
-  std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，即[2,1]
-  std::array<int64_t, 2> block_layout_order = {0, 1};  // warp布局行列优先顺序 上例中为[1,0] 行优先（列优先也可）
-  std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2]. 其中行列优先顺序无所谓，不影响结果
-
+  
   int get_dimcount() const {
     return dimCount;
   }
@@ -161,22 +184,22 @@ public:
       } else {
         llvm::outs() << "unknown(memory_space=" << memorySpace << ")\n";
       }
-      auto affineMapIndices = getAffineMap();
-      printExprVec("getAffineMap()", affineMapIndices);
+      // auto affineMapIndices = getAffineMap();
+      // printExprVec("getAffineMap()", affineMapIndices);
     }
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
 
     printExprVec("warp_indices", getWarpIndices(OpBuilder{buffer.getContext()}, get_block_layout()));
     printExprVec("thread_indices", getThreadIndices(OpBuilder{buffer.getContext()}, get_warp_layout()));
     printI64Vec("warp_layout", get_warp_layout());
-    printI64Vec("block_layout", get_block_layout());
-    printI64Vec("warp_repeat", get_warp_repeat());
-    printI64Vec("block_repeat", get_block_repeat());
-    printI64Vec("thread_widths", get_thread_widths());
     printI64Vec("warp_layout_order", base_layout.warp_layout_order);
+    printI64Vec("block_layout", get_block_layout());
     printI64Vec("block_layout_order", block_layout_order);
+    printI64Vec("warp_repeat", get_warp_repeat());
+    printI64Vec("thread_widths", get_thread_widths());
     printI64Vec("warp_widths", get_warp_widths());
     printI64Vec("block_widths", get_block_widths());
+    printI64Vec("block_repeat", get_block_repeat());
     printI64Vec("thread_own_data", get_thread_own_data_size());
     llvm::outs() << "=================\n";
   }
@@ -308,18 +331,23 @@ class LowerInfoMap {
 public:
   using LowerInfoMapTy = DenseMap<std::pair<Value, Operation*> , LowerInfo>;
   // 进行op顺序分析
-  void getOpsOrder(mlir::Operation* rootNode);
+  const SmallVector<Operation*>& getOpsOrder(mlir::Operation* rootNode);
   // 查询 <buffer，op> 对应的LowerInfo
   LowerInfo* getLowerInfo(const mlir::Value& buffer, mlir::Operation* op);
   // 添加 lowerinfo（info中已经含有buffer）
-  LowerInfo* addLowerInfo(mlir::Operation* op, LowerInfo info);
+  void addLowerInfo(mlir::Operation* op, LowerInfo info, bool isConflict=false);
+  void conflictResolve();
   // 根据buffer查找infoMap，找到其中距离currOp最近的之前/之后的Op的 LowerInfo
   LowerInfo* getNearestInferedInfo(const mlir::Value& buffer, mlir::Operation* currOp, bool isBefore = true);
   auto begin() { return infoMap.begin(); }
   auto end() { return infoMap.end(); }
+  void print();
 private:
-  LowerInfoMapTy infoMap;
-  DenseMap<Operation*, unsigned> opOrder;
+  LowerInfoMapTy infoMap;  // 存放解决完冲突后的 LowerInfo 信息
+  DenseMap<mlir::Value, SmallVector<LowerInfo, 4>> m_candidates;  // 先存放所有LowerInfo
+
+  DenseMap<Operation*, unsigned> opOrder;  // 存放 op 顺序
+  SmallVector<Operation*> opOrderVec;
 };
 
 class LowerInfoAnalysis {
@@ -366,14 +394,18 @@ private:
   static void applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw);
   static bool inferDirectOp(Operation *op, LowerInfoMap& infoMap ,HWSpecification *hw);
-  static bool inferRelyOp(Operation *op, LowerInfoMap& infoMap, HWSpecification *hw);
-  static bool inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps);
-  static bool inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps);
+  static bool inferRelyOp(Operation *op, LowerInfoMap& infoMap, HWSpecification *hw,
+                          bool collectConflict = false, bool preferBefore = true);
+  static bool inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
+                          bool preferBefore = true);
+  static bool inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps,
+                           bool preferBefore = true);
   static bool inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                           HWSpecification *hw);
   static bool inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
-                              HWSpecification *hw);
-  static bool inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps);
+                              HWSpecification *hw, bool preferBefore = true);
+  static bool inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps,
+                            bool preferBefore = true);
 
   // void getTest() {
   //   llvm::outs() << "[D]need_infer_ops size: " << need_infer_ops.size() << "\n";

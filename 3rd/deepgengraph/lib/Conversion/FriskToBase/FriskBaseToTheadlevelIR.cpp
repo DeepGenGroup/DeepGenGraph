@@ -1207,8 +1207,10 @@ public:
 
     // -------- step 1 ：进行 layoutInfer 得到block级别IR上，每个buffer的 访问模式。
     s_info = LowerInfoAnalysis::run(kernel);
-    llvm::outs() << "-- lowerinfo analyze done\n";llvm::outs().flush();
-    
+    llvm::outs() << "\n-------------- lowerinfo analyze done\n";llvm::outs().flush();
+    s_info->print();
+    llvm::outs() << "\n-------------- lowerinfo print done!\n";llvm::outs().flush();
+
     auto warpLayout = s_info->begin()->getSecond().get_warp_layout();
     auto blockLayout = s_info->begin()->getSecond().get_block_layout();
     auto blockLayoutOrder = s_info->begin()->getSecond().get_block_layout_order();
