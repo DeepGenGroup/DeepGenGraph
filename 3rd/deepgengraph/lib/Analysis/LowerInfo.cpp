@@ -92,34 +92,38 @@ static bool isSameLinearLayout(const LinearLayout2DDesc &lhs,
 
 // 比较两个info间，除了op buffer 外是否相同
 static bool isSameLayout(const LowerInfo &lhs, const LowerInfo &rhs) {
-  return lhs.warp_threads == rhs.warp_threads &&
+  // 是否需要考虑 ignoreDim的情况？
+  if(lhs.warp_threads == rhs.warp_threads &&
         isSameLinearLayout(lhs.base_layout, rhs.base_layout) &&
         lhs.block_layout == rhs.block_layout &&
         lhs.block_layout_order == rhs.block_layout_order &&
-        lhs.block_repeat == rhs.block_repeat &&
-        lhs.thread_own_data_size == rhs.thread_own_data_size;
+        lhs.thread_own_data_size == rhs.thread_own_data_size){
+    auto br_wu0_x = lhs.block_repeat[0] * lhs.warpInstUnroll[0];
+    auto br_wu0_y = lhs.block_repeat[1] * lhs.warpInstUnroll[1];
+    auto br_wu1_x = rhs.block_repeat[0] * rhs.warpInstUnroll[0];
+    auto br_wu1_y = rhs.block_repeat[1] * rhs.warpInstUnroll[1];
+    if(br_wu0_x == br_wu1_x && br_wu0_y == br_wu1_y){
+      return true;
+    }
+  }
+  return false;
 }
 
 // 比较info的 tod_sz. 如果参数中 ignoreDim有效，则忽略对应维度（此时 ignoreDim 必为 0 或 1）
-static int compareThreadOwnData(const LowerInfo& lhs, const LowerInfo& rhs, int ignoreDim){
-  int x = 0;
-  int y = 0 ; 
-  if(ignoreDim >= 0){
+static int getMaxThreadOwnDatasz(const LowerInfo& lhs, coordXY_t& tod_sz, int ignoreDim){
+  auto x = lhs.thread_own_data_size[0] * lhs.thread_own_data_size[1];
+  auto y = tod_sz[0] * tod_sz[1];
+  if(ignoreDim < 0){
+    if(y < x){
+      tod_sz = lhs.thread_own_data_size;
+    }
+  }
+  else{
     x = lhs.thread_own_data_size[1-ignoreDim];
-    y = rhs.thread_own_data_size[1-ignoreDim];
-  }
-  else{
-    x = lhs.thread_own_data_size[0] * lhs.thread_own_data_size[1];
-    y = rhs.thread_own_data_size[0] * rhs.thread_own_data_size[1];
-  }
-  if(x < y){
-    return -1;
-  }
-  else if(x == y){
-    return 0;
-  }
-  else{
-    return 1;
+    y = tod_sz[1-ignoreDim];
+    if(y < x){
+      tod_sz[1-ignoreDim] = lhs.thread_own_data_size[1-ignoreDim];
+    }
   }
 }
 
@@ -132,7 +136,8 @@ static bool isSameCandidate(const LowerInfo &lhs, const LowerInfo &rhs) {
 
 // 判断Layout 冲突：op buffer 相同，但数据分布规则不同。视为冲突(不区分 in out， 因为是同一个buffer)
 static bool isLowerInfoConflict(const LowerInfo &lhs, const LowerInfo &rhs) {
-  return lhs.op == rhs.op && lhs.buffer == rhs.buffer && !isSameLayout(lhs, rhs);
+  // return lhs.op == rhs.op && lhs.buffer == rhs.buffer && !isSameLayout(lhs, rhs);
+  return lhs.buffer == rhs.buffer && !isSameLayout(lhs, rhs);
 }
 
 void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConflict) {
@@ -141,14 +146,6 @@ void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConf
   llvm::outs() << "[debug] addLayout : " << op->getName().getStringRef() << " - "<< info.buffer;
 
   auto &candidates = m_candidates[info.buffer];
-  bool hasConflict = isConflict ||
-                     llvm::any_of(candidates, [&](const LowerInfo &candidate) {
-                       return isLowerInfoConflict(candidate, info);
-                     });
-  if (hasConflict) {
-    llvm::outs() << " with conflict\n";
-  }
-
   if (!llvm::any_of(candidates, [&](const LowerInfo &candidate) {
         return isSameCandidate(candidate, info);
       })) {
@@ -184,82 +181,95 @@ void LowerInfoMap::conflictResolve() {
   
   for (auto &entry : m_candidates) {
     Value buffer = entry.getFirst();
-    auto &candidates = entry.getSecond();
-    if (candidates.empty()) {
+    auto &bufferInfoCandidates = entry.getSecond();
+    if (bufferInfoCandidates.empty() || bufferInfoCandidates.size() == 1) {
       continue;
     }
-
-    const LowerInfo &selectedInfo = candidates.front();
-    bool hasConflict = llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+    // candidate 按照opOrder 排序
+    llvm::sort(bufferInfoCandidates, [&](const LowerInfo &a, const LowerInfo &b) {
+      int orderA = opOrder.lookup(a.op);
+      int orderB = opOrder.lookup(b.op);
+      return orderA < orderB; // 升序排列
+    });
+    // 判断是否存在冲突，以及BaseLayout 是否不同
+    const LowerInfo &selectedInfo = bufferInfoCandidates.front();
+    bool hasConflict = llvm::any_of(bufferInfoCandidates, [&](const LowerInfo &candidate) {
       return isLowerInfoConflict(selectedInfo, candidate);
     });
-    bool isBaselayoutMismatch = llvm::any_of(candidates, [&](const LowerInfo &candidate) {
+    bool isBaselayoutMismatch = llvm::any_of(bufferInfoCandidates, [&](const LowerInfo &candidate) {
       return !isSameLinearLayout(selectedInfo.base_layout, candidate.base_layout);
     });
+    
     if(isBaselayoutMismatch){
       // baselayout 不同。无法协商 —— 需插入 convertLayoutOp。LowerInfo 需注明 needConvertFrom = srcLowerInfo
-      llvm::sort(candidates, [&](const LowerInfo &a, const LowerInfo &b) {
-        // 在 Map 中查找 a 和 b 的 op 对应的序号
-        // 使用 lookup 或 find，未查找到时 lookup 会返回 0，建议用 find 或 lookupOrDefault
-        int orderA = opOrder.lookup(a.op);
-        int orderB = opOrder.lookup(b.op);
-        return orderA < orderB; // 升序排列
-      });
       LowerInfo* lastInfo = nullptr;
-      for(int i=0;i<candidates.size();++i){
+      for(int i=0;i<bufferInfoCandidates.size();++i){
         if(lastInfo == nullptr){
-          candidates[i].convertFrom = nullptr;
-          lastInfo = &candidates[i];
+          bufferInfoCandidates[i].convertFrom = nullptr;
+          lastInfo = &bufferInfoCandidates[i];
           continue;
         }
-        if(isLowerInfoConflict(*lastInfo, candidates[i])){
-          candidates[i].convertFrom = lastInfo;
-          lastInfo = &candidates[i];
+        if(isLowerInfoConflict(*lastInfo, bufferInfoCandidates[i])){
+          bufferInfoCandidates[i].convertFrom = lastInfo;
+          lastInfo = &bufferInfoCandidates[i];
         }
       }
     }
     else{
       if(hasConflict){
-        // get greatest thread_own_data_sz 
-        auto anchorInfo = candidates[0];
-        int ignoreDim = -1;
-        if(mlir::isa<frisk::ReduceOp>(anchorInfo.op)){
-          if(anchorInfo.pos >= LowerInfo::BufPos::Out){
-            auto realType = mlir::dyn_cast<frisk::ReduceOp>(anchorInfo.op);
-            ignoreDim = realType.getDim();
-          }
+        // 看下buffer是否作为op的输入/输出参数。
+        unsigned bufferPos = 0;
+        for(auto info : bufferInfoCandidates){
+          bufferPos |= unsigned(info.pos);
         }
-        auto bufferPos = (unsigned)anchorInfo.pos;
-        for(int i=1;i<candidates.size();++i){
-          auto pos =  unsigned(candidates[i].pos);
-          bufferPos |= pos;
-          if(mlir::isa<frisk::ReduceOp>(candidates[i].op)){
+        // 最大尺寸的 thread_own_data_sz 
+        coordXY_t max_tod_sz = {0,0};
+        for(int i=0;i<bufferInfoCandidates.size();++i){
+          int ignoreDim = -1;
+          if(mlir::isa<frisk::ReduceOp>(bufferInfoCandidates[i].op)){
             // 当buffer作为 reduceOp的 out buffer时，可忽略 reducedim 的layout数值
-            if(candidates[i].pos >= LowerInfo::BufPos::Out){
-              auto realType = mlir::dyn_cast<frisk::ReduceOp>(candidates[i].op);
+            if(bufferInfoCandidates[i].pos >= LowerInfo::BufPos::Out){
+              auto realType = mlir::dyn_cast<frisk::ReduceOp>(bufferInfoCandidates[i].op);
               ignoreDim = realType.getDim();
             }
           }
-          if(compareThreadOwnData(anchorInfo, candidates[i], ignoreDim) < 0){
-            anchorInfo = candidates[i];
-          }
+          getMaxThreadOwnDatasz(bufferInfoCandidates[i], max_tod_sz, ignoreDim);
         }
-        auto base_tod_sz = anchorInfo.thread_own_data_size;
-        // 根据 base_tod_sz, 调整 buffer对应的所有op下的LowerInfo
-        for(auto &info : candidates){
+        assert(max_tod_sz[0] > 0);
+        assert(max_tod_sz[1] > 0);
+        // 根据 max_tod_sz, 调整 buffer对应的所有op下的LowerInfo
+        for(auto &info : bufferInfoCandidates){
           if(info.op != nullptr){
-            recalcLayout(info, base_tod_sz, bufferPos);
+            recalcLayout(info, max_tod_sz, bufferPos);
             auto key = std::make_pair(buffer, info.op);
             infoMap.try_emplace(key, info);
           }
         }
       }
     }
-    if (hasConflict) {
-      // debug print
-      llvm::outs() << "[conflict]" << buffer << "\n";
-      for (auto &candidate : candidates) {
-        candidate.show("temp_conflict");
+    // post check : 检查buffer下所有的info须保持一致
+    LowerInfo* prev = nullptr;
+    for(int i=0;i<bufferInfoCandidates.size();++i){
+      if(prev== nullptr){
+        prev = &bufferInfoCandidates[i]; 
+        continue;
+      }
+      assert(prev->buffer == bufferInfoCandidates[i].buffer);
+      if(isLowerInfoConflict(*prev, bufferInfoCandidates[i])){
+        if(bufferInfoCandidates[i].convertFrom == nullptr){
+          bufferInfoCandidates[i].show("crashed");
+          prev->show("anchor");
+          llvm::outs().flush(); assert(false);
+        }
+        prev = &bufferInfoCandidates[i];
+        continue;
+      }
+      if(bufferInfoCandidates[i].convertFrom == nullptr){
+        if(isLowerInfoConflict(*prev, bufferInfoCandidates[i])){
+          bufferInfoCandidates[i].show("crashed");
+          prev->show("anchor");
+          llvm::outs().flush(); assert(false);
+        }
       }
     }
   }
@@ -725,6 +735,11 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps,
     int64_t required_sz0 = safeDiv(shape[0], wl0 * bl0);  // 分到每个线程的计算量：0轴
     int64_t required_sz1 = safeDiv(shape[1], wl1 * bl1);  // 分到每个线程的计算量：1轴
     int64_t required_all = safeDiv(shape[0] * shape[1], wl0 * bl0 * wl1 * bl1);  // 线程计算量总数
+  
+    assert(required_all > 0);
+    if(required_sz0 == 0){ required_sz0 = 1;}  // 至少计算一个元素
+    if(required_sz1 == 0){ required_sz1 = 1;}
+
     int64_t infoThreadData_all = infoThreadData0 * infoThreadData1;
     if(isStoreBuffer){  // 推定的为输出buffer
       if(required_sz0 !=0 && required_sz1 != 0

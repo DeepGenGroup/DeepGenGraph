@@ -78,7 +78,7 @@ public:
 // 
 // Layout 推断中的不变量：
 // - warp_inst -> thread_creg+order, warp_layout+order, warp_repeat+order 固定
-// - block中thread数目固定 + block-level buffer 尺寸固定 -> warp_inst 需要在buffer上滑动的次数固定 -> thread_own_data_size 总量固定，
+// - block中thread数目固定 + block-level buffer 尺寸固定 -> warp_inst 需要在buffer上滑动的次数固定 -> block_repeat * warp_inst_unroll 固定
 // 可变量：
 // - block_layout xy分量（x*y = block中warp数）
 // - thread_own_data_size xy分量( 单个线程需至少持有多少数据才能保证计算正确 )
@@ -187,6 +187,12 @@ public:
       // auto affineMapIndices = getAffineMap();
       // printExprVec("getAffineMap()", affineMapIndices);
     }
+    if(op != nullptr){
+      llvm::outs() << "op: " << op->getName().getStringRef() << "\n";  
+    }
+    else{
+      llvm::outs() << "op: null\n";  
+    }
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
 
     printExprVec("warp_indices", getWarpIndices(OpBuilder{buffer.getContext()}, get_block_layout()));
@@ -200,7 +206,12 @@ public:
     printI64Vec("warp_widths", get_warp_widths());
     printI64Vec("block_widths", get_block_widths());
     printI64Vec("block_repeat", get_block_repeat());
+    printI64Vec("warpInstUnroll", warpInstUnroll);
     printI64Vec("thread_own_data", get_thread_own_data_size());
+    llvm::outs() << "ignoreDim = " << ignoreDim << "\n";
+    llvm::outs() << "pos = " << int(pos) << "\n";
+    auto cvf = convertFrom == nullptr? "NULL" : "notNull";
+    llvm::outs() << "convertFrom =" << cvf << "\n";
     llvm::outs() << "=================\n";
   }
 

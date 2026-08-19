@@ -263,11 +263,14 @@ public:
     auto infoA = getLowerInfoOrDie(op.getA(), op.getOperation());
     auto infoB = getLowerInfoOrDie(op.getB(), op.getOperation());
     auto infoC = getLowerInfoOrDie(op.getC(), op.getOperation());
-    infoA.show("A");
-    infoB.show("B");
-    infoC.show("C");
+    llvm::errs() << "[gemm-lower] A br=[" << infoA.get_block_repeat()[0] << ","
+                 << infoA.get_block_repeat()[1] << "] buffer=" << op.getA() << "\n";
+    llvm::errs() << "[gemm-lower] B br=[" << infoB.get_block_repeat()[0] << ","
+                 << infoB.get_block_repeat()[1] << "] buffer=" << op.getB() << "\n";
+    llvm::errs() << "[gemm-lower] C br=[" << infoC.get_block_repeat()[0] << ","
+                 << infoC.get_block_repeat()[1] << "] buffer=" << op.getC() << "\n";
     
-    assert(infoA.get_block_repeat()[1] == infoB.get_block_repeat()[0]);  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
+    assert(infoA.get_block_repeat()[1] * infoA.warpInstUnroll[1] == infoB.get_block_repeat()[0] * infoB.warpInstUnroll[0] );  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
     assert(infoA.mmaInst->name == infoB.mmaInst->name);
     auto typeA = mlir::cast<MemRefType>(adaptor.getA().getType());
     auto typeB = mlir::cast<MemRefType>(adaptor.getB().getType());
@@ -312,13 +315,14 @@ public:
     
     if(s_hw->getKind() == HW_KIND_DCU){
       // 若AB为local，将其直接替换为local buffer；否则，添加 copyfrom shm to reg 的逻辑。返回这个reg buffer
-      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , isLocalBuffer(infoA.buffer));
-      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , isLocalBuffer(infoB.buffer));
+      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_own_data_size() , isLocalBuffer(infoA.buffer));
+      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_own_data_size() , isLocalBuffer(infoB.buffer));
       // C: 创建reg级别buffer 注册到 s_buffer_replace 中，存放最终结果； instWMMA 的acc 临时用，不用注册到全局列表里
-      auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_total_widths(), true);
+      auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_own_data_size(), true);
       auto instC = threadLevelBufferCreate(infoC, false, infoC.get_thread_widths(), false);
 
       auto [br0, br1] = infoC.get_block_repeat();
+      auto [wiu0, wiu1] = infoC.warpInstUnroll;
       int twA0 = infoA.get_thread_widths()[0];
       int twA1 = infoA.get_thread_widths()[1];
       int wrA0 = infoA.get_warp_repeat()[0];
@@ -332,12 +336,12 @@ public:
 
       int kloopCount = infoA.get_block_repeat()[1];
 
-      std::vector<int> mn_loops = {int(br0), int(br1)};
+      std::vector<int> mn_wiu_loops = {int(br0), int(br1), int(wiu0), int(wiu1)};
       std::vector<int> k_loops = {kloopCount};
       std::vector<Value> ivs_block {};  // itervar mnk
 
       // 指令在bufferC上的循环(m,n)
-      createNestedAffineFor(rewriter, op->getLoc(), mn_loops, ivs_block);
+      createNestedAffineFor(rewriter, op->getLoc(), mn_wiu_loops, ivs_block);
       // insPoint 位于 mn loop内
       auto instCTy = mlir::cast<MemRefType>(instC.getType());
       rewriter.create<frisk::FillOp>(op->getLoc(), instC,
