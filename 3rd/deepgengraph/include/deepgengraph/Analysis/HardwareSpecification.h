@@ -13,7 +13,76 @@
 
 using coordXY_t = std::array<int64_t, 2>;  // coordinate [x,y]
 
-coordXY_t PointwiseDot(coordXY_t a, coordXY_t b);
+namespace mlir::frisk {
+
+inline coordXY_t operator*(const coordXY_t& lhs, const coordXY_t& rhs) {
+    return {
+        lhs[0] * rhs[0],
+        lhs[1] * rhs[1]
+    };
+}
+inline coordXY_t operator/(const coordXY_t& lhs, const coordXY_t& rhs) {
+    return {
+        lhs[0] / rhs[0],
+        lhs[1] / rhs[1]
+    };
+}
+inline coordXY_t operator+(const coordXY_t& lhs, const coordXY_t& rhs) {
+    return {
+        lhs[0] + rhs[0],
+        lhs[1] + rhs[1]
+    };
+}
+inline coordXY_t operator-(const coordXY_t& lhs, const coordXY_t& rhs) {
+    return {
+        lhs[0] - rhs[0],
+        lhs[1] - rhs[1]
+    };
+}
+
+inline int64_t flat_size(const coordXY_t& x){
+    return x[0] * x[1];
+}
+
+// 根据展平的idx, order, layout，还原出xy分量的计算式
+static std::array<mlir::AffineExpr, 2> UnflattenIndexToXY(mlir::AffineExpr flattenIdx, 
+    const coordXY_t& order, const coordXY_t& layout)
+{
+    // 寻找连续维
+    auto consistentDim = order[0] == 0 ? 0 : 1;
+    auto consistentLen = layout[consistentDim];
+    std::array<mlir::AffineExpr, 2> ret = {0,0};
+    ret[order[0]] = flattenIdx % (consistentLen);  // 列优先时，warp_layout_order[0] = 0， 行优先为1
+    ret[order[1]] = flattenIdx.floorDiv(consistentLen) ;
+    return ret;
+}
+
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    const std::vector<int> &upperBounds,
+    std::vector<mlir::Value> &outIvs);
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    const std::vector<int> &upperBounds,
+    std::vector<mlir::Value> &outIvs,
+    const std::vector<const char*> &labels);
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    mlir::DenseMap<const char*, std::pair<int, mlir::Value>> &loopInfoMap  // in out : 标签-{上界，迭代变量}
+  ) ;
+
+
+}
+using mlir::frisk::operator*;
+
+
+
 
 // 一般的线性排布描述
 /*
@@ -99,6 +168,8 @@ coordXY_t PointwiseDot(coordXY_t a, coordXY_t b);
     block_repeat = [br0 , br1]  // 对于此buffer，为了完成GEMM运算，需要以 wmmaInst 为单位在MN 上各做 [br0, br1] 次循环.
  */
 
+
+
 struct LinearLayout2DDesc {
     mlir::frisk::friskMs memspace;  // 位于shm还是reg
     mlir::frisk::FriskDType  elementType;  // 数据类型
@@ -112,13 +183,13 @@ struct LinearLayout2DDesc {
     coordXY_t wg_layout_order;  // [0,1]  表示自增顺序先x坐标再y坐标。即列优先
 
     inline coordXY_t get_warp_widths() const {  // warp单次计算的连续区域（还没有 repeat）
-        return PointwiseDot(warp_layout, thread_creg);
+        return warp_layout* thread_creg;
     }
     inline coordXY_t get_warp_widths_total() const {  // warp repeat后计算的区域大小
-        return PointwiseDot(get_warp_widths(), warp_repeat);
+        return get_warp_widths() * warp_repeat;
     }
     inline coordXY_t get_wg_widths() const {  // warpgroup计算的连续区域大小
-        return PointwiseDot(get_warp_widths_total(), wg_layout);
+        return get_warp_widths_total() * wg_layout;
     }
 };
 

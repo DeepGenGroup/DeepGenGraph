@@ -78,76 +78,11 @@ static LowerInfo getLowerInfoOrDie(Value buffer, Operation *op) {
   return *info;
 }
 
-static std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
-    mlir::OpBuilder &builder,
-    mlir::Location loc,
-    const std::vector<int> &upperBounds,
-    std::vector<mlir::Value> &outIvs) {
-  std::vector<mlir::affine::AffineForOp> loops;
-  loops.reserve(upperBounds.size());
-
-  // 确保标签数量与循环层数一致（可选的安全检查）
-  size_t numLoops = upperBounds.size();
-  
-  for (size_t i = 0; i < numLoops; ++i) {
-    // 1. 定义下界、上界和步长 (下界默认为 0，步长默认为 1)
-    int64_t lowerBound = 0;
-    int64_t step = 1;
-    auto ub = upperBounds[i];
-    // 2. 创建当前层的 AffineForOp
-    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
-    mlir::Value iv = forOp.getInductionVar();
-    // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
-    outIvs.push_back(iv);
-    loops.push_back(forOp);
-    // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
-    builder.setInsertionPointToStart(forOp.getBody());
-  }
-
-  return loops;
-}
-
-static std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
-    mlir::OpBuilder &builder,
-    mlir::Location loc,
-    const std::vector<int> &upperBounds,
-    std::vector<mlir::Value> &outIvs,
-    const std::vector<const char*> &labels) {
-  std::vector<mlir::affine::AffineForOp> loops;
-  loops.reserve(upperBounds.size());
-  outIvs.reserve(upperBounds.size());
-
-  // 确保标签数量与循环层数一致（可选的安全检查）
-  size_t numLoops = upperBounds.size();
-  
-  for (size_t i = 0; i < numLoops; ++i) {
-    // 1. 定义下界、上界和步长 (下界默认为 0，步长默认为 1)
-    int64_t lowerBound = 0;
-    int64_t step = 1;
-    auto ub = upperBounds[i];
-    // 2. 创建当前层的 AffineForOp
-    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
-    // 3. 如果提供了对应的 label，则为其添加 StringAttr 属性
-    if (i < labels.size() && labels[i] != nullptr) {
-      forOp->setAttr("iterLabel", builder.getStringAttr(labels[i]));
-    }
-    mlir::Value iv = forOp.getInductionVar();
-    // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
-    outIvs.push_back(iv);
-    loops.push_back(forOp);
-    // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
-    builder.setInsertionPointToStart(forOp.getBody());
-  }
-
-  return loops;
-}
-
 struct WgmmaMNKLoopInfo {
   int mLoopNum;
   int nLoopNum;
   int kLoopNum;
   int kLoopStep;
-
 };
 
 // 计算：k轴循环次数，Y和X方向迭代次数（=blockRepeat）
@@ -208,47 +143,155 @@ static gpu::ThreadIdOp findThreadIdxOp(mlir::Operation* currOp){
   return tidx;
 }
 
-static SmallVector<Value, 2> buildMappedAccessIndices(OpBuilder &builder,
-                                                      Location loc,
-                                                      LowerInfo &info,
-                                                      Value tidx,
-                                                      ArrayRef<Value> tileIvs,
-                                                      unsigned rank) {
-  std::vector<Value> mapOperands;
-  mapOperands.push_back(tidx);
-
-  for (int i = 0; i < 2; ++i) {
-    Value iv = i < static_cast<int>(tileIvs.size())
-                   ? tileIvs[i]
-                   : builder.create<arith::ConstantIndexOp>(loc, 0).getResult();
-    auto warpRepeat = info.get_warp_repeat()[i];
-    auto threadWidth = info.get_thread_widths()[i];
-    auto repeatWidth = warpRepeat * threadWidth;
-    auto d0 = builder.getAffineDimExpr(0);
-    auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), builder.getContext());
-    auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), builder.getContext());
-    auto trMap = AffineMap::get(1, 0, d0 % threadWidth, builder.getContext());
-    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, brMap, iv));
-    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, wrMap, iv));
-    mapOperands.push_back(builder.create<affine::AffineApplyOp>(loc, trMap, iv));
-  }
-
-  SmallVector<Value, 2> indices;
-  auto affineExprs = info.getAffineMap();
-  for (unsigned i = 0; i < rank && i < affineExprs.size(); ++i) {
-    auto oneResultMap =
-        AffineMap::get(info.get_dimcount(), 0, affineExprs[i], builder.getContext());
-    indices.push_back(builder.create<affine::AffineApplyOp>(loc, oneResultMap, mapOperands));
-  }
-  return indices;
-}
-
 static SmallVector<Value, 2> makeLocalIndices(ArrayRef<Value> ivs, unsigned rank) {
   SmallVector<Value, 2> indices;
   for (unsigned i = 0; i < rank && i < ivs.size(); ++i) {
     indices.push_back(ivs[i]);
   }
   return indices;
+}
+
+static Value createIndexConstant(OpBuilder &builder, Location loc, int64_t value) {
+  return builder.create<arith::ConstantIndexOp>(loc, value);
+}
+
+static Value createSingleDimAffineApply(OpBuilder &builder, Location loc,
+                                        AffineExpr expr, Value operand) {
+  auto map = AffineMap::get(1, 0, expr, builder.getContext());
+  return builder.create<affine::AffineApplyOp>(loc, map, operand);
+}
+
+static Value modBy(OpBuilder &builder, Location loc, Value operand,
+                   int64_t divisor) {
+  assert(divisor > 0 && "affine modulo divisor must be positive");
+  if (divisor == 1) {
+    return createIndexConstant(builder, loc, 0);
+  }
+  auto d0 = builder.getAffineDimExpr(0);
+  return createSingleDimAffineApply(builder, loc, d0 % divisor, operand);
+}
+
+static Value floorDivBy(OpBuilder &builder, Location loc, Value operand,
+                        int64_t divisor) {
+  assert(divisor > 0 && "affine floordiv divisor must be positive");
+  if (divisor == 1) {
+    return operand;
+  }
+  auto d0 = builder.getAffineDimExpr(0);
+  return createSingleDimAffineApply(builder, loc, d0.floorDiv(divisor), operand);
+}
+
+static Value flattenXY(OpBuilder &builder, Location loc, ArrayRef<Value> xy,
+                       coordXY_t order, coordXY_t layout) {
+  assert(xy.size() == 2 && "expected two coordinates");
+  if (flat_size(layout) == 1) {
+    return createIndexConstant(builder, loc, 0);
+  }
+  auto d0 = builder.getAffineDimExpr(0);
+  auto d1 = builder.getAffineDimExpr(1);
+  AffineExpr dims[] = {d0, d1};
+  AffineExpr flat = dims[order[0]] + dims[order[1]] * layout[order[0]];
+  auto map = AffineMap::get(2, 0, flat, builder.getContext());
+  return builder.create<affine::AffineApplyOp>(loc, map, xy);
+}
+
+static SmallVector<Value, 7>
+buildLowerInfoMapOperands(OpBuilder &builder, Location loc, LowerInfo &info,
+                          Value tidx, Value br0, Value br1, Value iu0,
+                          Value iu1, Value wr0, Value wr1, Value reg0,
+                          Value reg1) {
+  SmallVector<Value, 7> operands;
+  operands.push_back(tidx);
+  operands.push_back(br0);
+  operands.push_back(br1);
+  operands.push_back(iu0);
+  operands.push_back(iu1);
+  SmallVector<Value, 2> wrXY{wr0, wr1};
+  SmallVector<Value, 2> regXY{reg0, reg1};
+  operands.push_back(flattenXY(builder, loc, wrXY,
+                               info.base_layout.warp_repeat_order,
+                               info.get_warp_repeat()));
+  operands.push_back(flattenXY(builder, loc, regXY,
+                               info.base_layout.thread_creg_order,
+                               info.get_thread_widths()));
+  return operands;
+}
+
+static SmallVector<Value, 2> applyLowerInfoMap(OpBuilder &builder, Location loc,
+                                               LowerInfo &info,
+                                               ArrayRef<Value> mapOperands,
+                                               unsigned rank) {
+  SmallVector<Value, 2> indices;
+  auto map = info.getAffineMap();
+  for (unsigned i = 0; i < rank && i < map.getNumResults(); ++i) {
+    if (info.ignoreDim >= 0 && static_cast<unsigned>(info.ignoreDim) == i) {
+      indices.push_back(createIndexConstant(builder, loc, 0));
+      continue;
+    }
+    auto oneResultMap =
+        AffineMap::get(map.getNumDims(), map.getNumSymbols(), map.getResult(i),
+                       builder.getContext());
+    indices.push_back(
+        builder.create<affine::AffineApplyOp>(loc, oneResultMap, mapOperands));
+  }
+  return indices;
+}
+
+static SmallVector<Value, 2>
+buildMappedAccessIndices(OpBuilder &builder, Location loc, LowerInfo &info,
+                         Value tidx, ArrayRef<Value> tileIvs, unsigned rank) {
+  Value zero = createIndexConstant(builder, loc, 0);
+  SmallVector<Value, 2> brs;
+  SmallVector<Value, 2> ius;
+  SmallVector<Value, 2> wrs;
+  SmallVector<Value, 2> regs;
+
+  for (int i = 0; i < 2; ++i) {
+    Value iv = i < static_cast<int>(tileIvs.size()) ? tileIvs[i] : zero;
+    int64_t threadWidth = info.get_thread_widths()[i];
+    int64_t warpRepeat = info.get_warp_repeat()[i];
+    int64_t instUnroll = info.warpInstUnroll[i];
+    int64_t repeatWidth = warpRepeat * threadWidth;
+    int64_t unrollWidth = instUnroll * repeatWidth;
+
+    brs.push_back(floorDivBy(builder, loc, iv, unrollWidth));
+    ius.push_back(modBy(builder, loc,
+                        floorDivBy(builder, loc, iv, repeatWidth),
+                        instUnroll));
+    Value withinInst = modBy(builder, loc, iv, repeatWidth);
+    wrs.push_back(floorDivBy(builder, loc, withinInst, threadWidth));
+    regs.push_back(modBy(builder, loc, withinInst, threadWidth));
+  }
+
+  auto operands = buildLowerInfoMapOperands(builder, loc, info, tidx, brs[0],
+                                            brs[1], ius[0], ius[1], wrs[0],
+                                            wrs[1], regs[0], regs[1]);
+  return applyLowerInfoMap(builder, loc, info, operands, rank);
+}
+
+static AffineMap buildThreadTileOffsetMap(OpBuilder &builder, LowerInfo &info) {
+  auto d0 = builder.getAffineDimExpr(0);
+  auto d1 = builder.getAffineDimExpr(1);
+  auto d2 = builder.getAffineDimExpr(2);
+  auto d3 = builder.getAffineDimExpr(3);
+  auto d4 = builder.getAffineDimExpr(4);
+  auto d5 = builder.getAffineDimExpr(5);
+
+  auto [wr0, wr1] = UnflattenIndexToXY(
+      d4, info.base_layout.warp_repeat_order, info.get_warp_repeat());
+  auto [reg0, reg1] = UnflattenIndexToXY(
+      d5, info.base_layout.thread_creg_order, info.get_thread_widths());
+
+  std::array<AffineExpr, 2> indices;
+  indices[0] =
+      ((d0 * info.warpInstUnroll[0] + d2) * info.get_warp_repeat()[0] + wr0) *
+          info.get_thread_widths()[0] +
+      reg0;
+  indices[1] =
+      ((d1 * info.warpInstUnroll[1] + d3) * info.get_warp_repeat()[1] + wr1) *
+          info.get_thread_widths()[1] +
+      reg1;
+  return AffineMap::get(6, 0, indices, builder.getContext());
 }
 
 // gemmOp的 Layout是直接推定的。不会存在问题。直接按照 wmma的相关要求进行变换即可
@@ -346,21 +389,31 @@ public:
       auto instCTy = mlir::cast<MemRefType>(instC.getType());
       rewriter.create<frisk::FillOp>(op->getLoc(), instC,
                                      rewriter.getFloatAttr(instCTy.getElementType(), 0.0));
+      std::vector<affine::AffineForOp> kLoopOps;
       {
         RewriterBase::InsertionGuard ig{rewriter};
-        createNestedAffineFor(rewriter, op->getLoc(), k_loops, ivs_block);
+        kLoopOps = createNestedAffineFor(rewriter, op->getLoc(), k_loops, ivs_block);
         // insPoint 位于 kloop 内 
+        Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
+        auto instUnrollIvOrZero = [&](LowerInfo &info, int dim,
+                                      Value candidate) -> Value {
+          return info.warpInstUnroll[dim] > 1 ? candidate : zero;
+        };
         // 单次指令所需数据的构建 A
         if (mlir::cast<MemRefType>(infoA.buffer.getType()).getMemorySpaceAsInt() == (int)friskMs::Shared) {
           RewriterBase::InsertionGuard _temp{rewriter};
           std::vector<int> ubs = {wrA0, wrA1, twA0, twA1};
           std::vector<mlir::Value> instIvs;
           createNestedAffineFor(rewriter, op->getLoc(), ubs, instIvs);
-          std::vector<Value> mapOperands{
-              tidx,         ivs_block[0], instIvs[0], instIvs[2],
-              ivs_block[1], instIvs[1],   instIvs[3]}; // 0:tidx, 1:iv_bx, iv_wx , iv_tx ,iv_by, iv_wy, iv_ty
-          auto map = mlir::AffineMap::get(infoA.get_dimcount(), 0, infoA.getAffineMap(), rewriter.getContext());
-          rewriter.create<frisk::CopyOp>(op->getLoc(), infoA.buffer, newA, mapOperands, map);
+          auto mapOperands = buildLowerInfoMapOperands(
+              rewriter, op->getLoc(), infoA, tidx,
+              /*br0=*/ivs_block[0], /*br1=*/ivs_block[4],
+              /*iu0=*/instUnrollIvOrZero(infoA, 0, ivs_block[2]),
+              /*iu1=*/zero, /*wr0=*/instIvs[0], /*wr1=*/instIvs[1],
+              /*reg0=*/instIvs[2], /*reg1=*/instIvs[3]);
+          auto map = infoA.getAffineMap();
+          rewriter.create<frisk::CopyOp>(op->getLoc(), infoA.buffer, newA,
+                                         mapOperands, map);
         }
         // 单次指令所需数据的构建 B
         if (mlir::cast<MemRefType>(infoB.buffer.getType()).getMemorySpaceAsInt() == (int)friskMs::Shared) {
@@ -368,37 +421,36 @@ public:
           std::vector<int> ubs = {wrB0, wrB1, twB0, twB1};
           std::vector<mlir::Value> instIvs;
           createNestedAffineFor(rewriter, op->getLoc(), ubs, instIvs);
-          std::vector<Value> mapOperands{
-              tidx,         ivs_block[0], instIvs[0], instIvs[2],
-              ivs_block[1], instIvs[1],   instIvs[3]}; // 0:tidx, 1:iv_bx, iv_wx , iv_tx ,iv_by, iv_wy, iv_ty
-          auto map = mlir::AffineMap::get(infoB.get_dimcount(), 0, infoB.getAffineMap(), rewriter.getContext());
-          rewriter.create<frisk::CopyOp>(op->getLoc(), infoB.buffer, newB, mapOperands, map);
+          auto mapOperands = buildLowerInfoMapOperands(
+              rewriter, op->getLoc(), infoB, tidx,
+              /*br0=*/ivs_block[4], /*br1=*/ivs_block[1],
+              /*iu0=*/zero,
+              /*iu1=*/instUnrollIvOrZero(infoB, 1, ivs_block[3]),
+              /*wr0=*/instIvs[0], /*wr1=*/instIvs[1],
+              /*reg0=*/instIvs[2], /*reg1=*/instIvs[3]);
+          auto map = infoB.getAffineMap();
+          rewriter.create<frisk::CopyOp>(op->getLoc(), infoB.buffer, newB,
+                                         mapOperands, map);
         }
         // AB copy ok. 计算wmma（ instC 具有累加语义）
         rewriter.create<frisk::WarpMmaOp>(op->getLoc(), newA, newB, instC);
       }
       // kloop ends. 需要将instC累加结果写回 newC with loopMN
-      auto [wrC0, wrC1] = infoC.get_warp_repeat();
-      auto [twC0, twC1] = infoC.get_thread_widths();
-      std::vector<int> loopUbs = {(int)wrC0,(int)wrC1,(int)twC0,(int)twC1};
-      std::vector<mlir::Value> ivs{};
-      // 构建循环写回: 点对点拷贝(或许能用 affine.load/store 拷贝元素。 但后期需向量化优化)
-      createNestedAffineFor(rewriter, op->getLoc(), loopUbs, ivs);
-      auto _br0 = rewriter.getAffineDimExpr(0);
-      auto _br1 = rewriter.getAffineDimExpr(1);
-      auto _wr0 = rewriter.getAffineDimExpr(2);
-      auto _wr1 = rewriter.getAffineDimExpr(3);
-      auto _tr0 = rewriter.getAffineDimExpr(4);
-      auto _tr1 = rewriter.getAffineDimExpr(5);
-      auto _tid = rewriter.getAffineDimExpr(6);
+      if (!kLoopOps.empty()) {
+        rewriter.setInsertionPointAfter(kLoopOps.front());
+      }
+      Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
+      std::vector<Value> cIvs;
+      createNestedAffineFor(rewriter, op->getLoc(),
+                            {static_cast<int>(flat_size(infoC.get_warp_repeat()))},
+                            cIvs);
+      SmallVector<Value, 6> mapOperands{
+          ivs_block[0], ivs_block[1], ivs_block[2], ivs_block[3], cIvs[0],
+          zero};
+      auto instCToNewCMap = buildThreadTileOffsetMap(rewriter, infoC);
+      rewriter.create<frisk::CopyOp>(op->getLoc(), instC, newC, mapOperands,
+                                     instCToNewCMap);
       
-      std::vector<AffineExpr> instCToNewC = {
-        _br0 * (wrC0 * twC0) + _wr0 * twC0 + _tr0,
-        _br1 * (wrC1 * twC1) + _wr1 * twC1 + _tr1
-      };
-      auto instCToNewCMap = AffineMap::get(7,0,instCToNewC, rewriter.getContext());
-      std::vector<Value> mapOper = {ivs_block[0], ivs_block[1]  ,ivs[0],ivs[1], ivs[2], ivs[3], tidx  };
-      rewriter.create<frisk::CopyOp>(op->getLoc() ,instC, newC, mapOper ,instCToNewCMap);
       // newC 写回完成
       // 后续使用newC 做其他op的计算（之前已经过Layout推定）
       // rewriter.replaceAllUsesWith(infoC.buffer, newC);  // notes 这里不进行buffer的替换。因后续op的convert依赖于buffer的loweInfo。而新buffer无LowerInfo，故会报错
@@ -489,7 +541,11 @@ public:
       return newBuffer.getResult();
     };
 
-    std::array<int64_t, 2> dstThreadShape2D = dstInfo.get_thread_total_widths();
+    std::array<int64_t, 2> dstThreadShape2D = dstInfo.get_thread_own_data_size();
+    if (dstInfo.ignoreDim >= 0 &&
+        static_cast<unsigned>(dstInfo.ignoreDim) < dstThreadShape2D.size()) {
+      dstThreadShape2D[dstInfo.ignoreDim] = 1;
+    }
     SmallVector<int64_t, 2> dstLoopShape;
     for (unsigned i = 0; i < dstTy.getRank(); ++i) {
       dstLoopShape.push_back(dstThreadShape2D[i]);
@@ -781,6 +837,10 @@ public:
     for(auto e : bufferInfos){
       if(e.lowerInfo){
         auto br = e.lowerInfo->get_block_repeat();
+        if (e.lowerInfo->ignoreDim >= 0 &&
+            static_cast<unsigned>(e.lowerInfo->ignoreDim) < br.size()) {
+          br[e.lowerInfo->ignoreDim] = 1;
+        }
         blockRepeats[0] = std::max(blockRepeats[0], br[0]);
         blockRepeats[1] = std::max(blockRepeats[1], br[1]);
       }
@@ -888,49 +948,42 @@ public:
 
       LowerInfo &info = *accessInfo->lowerInfo;
       bool useLocalTile = isThreadLocalTile(originalBuffer);
-      std::vector<Value> mapOperands;
-      mapOperands.push_back(tidx);
+      if (useLocalTile) {
+        for (unsigned i = 0; i < rank; ++i) {
+          Value linearIv = getLinearIvForDim(i);
+          int64_t ownDataSize = i < 2 ? info.get_thread_own_data_size()[i] : 1;
+          coords.push_back(modBy(linearIv, ownDataSize));
+        }
+        return coords;
+      }
 
+      SmallVector<Value, 2> brs;
+      SmallVector<Value, 2> ius;
+      SmallVector<Value, 2> wrs;
+      SmallVector<Value, 2> regs;
       for (int i = 0; i < 2; ++i) {
         int64_t warpRepeat = info.get_warp_repeat()[i];
         int64_t threadWidth = info.get_thread_widths()[i];
         int64_t repeatWidth = warpRepeat * threadWidth;
-        int64_t ownDataSize = info.get_thread_own_data_size()[i];
+        int64_t instUnroll = info.warpInstUnroll[i];
+        int64_t unrollWidth = repeatWidth * instUnroll;
         int64_t ownBlockRepeat = info.get_block_repeat()[i];
         Value linearIv = getLinearIvForDim(i);
         Value repeatIv = getRepeatIvForDim(i);
         Value br = modBy(repeatIv, ownBlockRepeat);
+        Value linearInTile = modBy(linearIv, unrollWidth);
 
-        // Some local tiles materialize all block-repeat slices in the
-        // thread-owned buffer. In that case the linear thread iv already
-        // carries the repeat position and is the authoritative local index.
-        if (useLocalTile && ownDataSize >= repeatWidth * ownBlockRepeat) {
-          Value clippedLinearIv = modBy(linearIv, ownDataSize);
-          br = modBy(floorDivBy(clippedLinearIv, repeatWidth), ownBlockRepeat);
-          linearIv = clippedLinearIv;
-        } else {
-          linearIv = modBy(linearIv, repeatWidth);
-          if (useLocalTile && ownDataSize <= repeatWidth) {
-            br = constIndex(0);
-          }
-        }
-
-        Value wr = floorDivBy(linearIv, threadWidth);
-        Value tr = modBy(linearIv, threadWidth);
-        mapOperands.push_back(br);
-        mapOperands.push_back(wr);
-        mapOperands.push_back(tr);
+        brs.push_back(br);
+        ius.push_back(modBy(floorDivBy(linearInTile, repeatWidth), instUnroll));
+        Value withinInst = modBy(linearInTile, repeatWidth);
+        wrs.push_back(floorDivBy(withinInst, threadWidth));
+        regs.push_back(modBy(withinInst, threadWidth));
       }
 
-      auto affineExprs = info.getAffineMap();
-      for (unsigned i = 0; i < rank && i < affineExprs.size(); ++i) {
-        auto oneResultMap =
-            AffineMap::get(info.get_dimcount(), 0, affineExprs[i],
-                           rewriter.getContext());
-        coords.push_back(rewriter.create<affine::AffineApplyOp>(
-            op->getLoc(), oneResultMap, mapOperands));
-      }
-      return coords;
+      auto mapOperands = buildLowerInfoMapOperands(
+          rewriter, op->getLoc(), info, tidx, brs[0], brs[1], ius[0], ius[1],
+          wrs[0], wrs[1], regs[0], regs[1]);
+      return applyLowerInfoMap(rewriter, op->getLoc(), info, mapOperands, rank);
     };
 
     std::function<Value(Value, ArrayRef<Value>)> remapValueForAccess =
@@ -1095,8 +1148,8 @@ public:
     auto srcInfo = s_info->getLowerInfo(op.getSrcMemRef(), op);
     auto dstInfo = s_info->getLowerInfo(op.getDstMemRef(), op);
     assert(srcInfo != nullptr && dstInfo != nullptr && "copy-convert LowerInfo not found");
-    auto [tw0,tw1] = srcInfo->get_thread_total_widths();
-    auto [dstTw0, dstTw1] = dstInfo->get_thread_total_widths();
+    auto [tw0,tw1] = srcInfo->get_thread_own_data_size();
+    auto [dstTw0, dstTw1] = dstInfo->get_thread_own_data_size();
     assert(tw0 == dstTw0 && tw1 == dstTw1 &&
            "copy-convert expects source and destination thread tiles to match");
     std::vector<int> ubs = {int(tw0), int(tw1)};
@@ -1132,30 +1185,8 @@ public:
         return SmallVector<Value, 2>{outIvs.begin(), outIvs.end()};
       }
 
-      std::vector<Value> mapOperands;
-      mapOperands.push_back(tidx);
-      for (int i = 0; i < 2; ++i) {
-        auto warpRepeat = info->get_warp_repeat()[i];
-        auto threadWidth = info->get_thread_widths()[i];
-        auto repeatWidth = warpRepeat * threadWidth;
-        auto d0 = rewriter.getAffineDimExpr(0);
-        auto brMap = AffineMap::get(1, 0, d0.floorDiv(repeatWidth), rewriter.getContext());
-        auto wrMap = AffineMap::get(1, 0, (d0 % repeatWidth).floorDiv(threadWidth), rewriter.getContext());
-        auto trMap = AffineMap::get(1, 0, d0 % threadWidth, rewriter.getContext());
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), brMap, outIvs[i]));
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), wrMap, outIvs[i]));
-        mapOperands.push_back(rewriter.create<affine::AffineApplyOp>(op->getLoc(), trMap, outIvs[i]));
-      }
-
-      SmallVector<Value, 2> indices;
-      auto affineExprs = info->getAffineMap();
-      for (auto expr : affineExprs) {
-        auto oneResultMap =
-            AffineMap::get(info->get_dimcount(), 0, expr, rewriter.getContext());
-        indices.push_back(
-            rewriter.create<affine::AffineApplyOp>(op->getLoc(), oneResultMap, mapOperands));
-      }
-      return indices;
+      return buildMappedAccessIndices(rewriter, op->getLoc(), *info, tidx,
+                                      outIvs, 2);
     };
 
     bool srcIsLocal = isThreadLocalTile(srcInfo->buffer);

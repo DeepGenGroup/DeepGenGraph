@@ -99,6 +99,93 @@ static frisk::CopyOp checkStoreDstMemIsCopySrcMem(SmallVector<frisk::CopyOp>& co
   return nullptr;
 }
 
+static bool opUsesValue(Operation *op, Value value) {
+  bool found = false;
+  op->walk<WalkOrder::PreOrder>([&](Operation *nested) {
+    if (found) {
+      return;
+    }
+    for (Value operand : nested->getOperands()) {
+      if (operand == value) {
+        found = true;
+        return;
+      }
+    }
+  });
+  return found;
+}
+
+static bool isFullShapeSameTypeCopy(frisk::CopyOp copyOp) {
+  auto srcTy = dyn_cast<MemRefType>(copyOp.getSrc().getType());
+  auto dstTy = dyn_cast<MemRefType>(copyOp.getDst().getType());
+  if (!srcTy || !dstTy) {
+    return false;
+  }
+  if (!copyOp.getMapOperands().empty()) {
+    return false;
+  }
+  return srcTy.getShape() == dstTy.getShape() &&
+         srcTy.getElementType() == dstTy.getElementType();
+}
+
+static frisk::CopyOp findOnlyCopyUseAfterBlock(BlockOp blockOp, Value data) {
+  frisk::CopyOp candidate = nullptr;
+  for (Operation *op = blockOp->getNextNode(); op != nullptr;
+       op = op->getNextNode()) {
+    if (auto copyOp = dyn_cast<frisk::CopyOp>(op)) {
+      if (copyOp.getSrc() == data) {
+        if (candidate || !isFullShapeSameTypeCopy(copyOp)) {
+          return nullptr;
+        }
+        candidate = copyOp;
+        continue;
+      }
+    }
+    if (opUsesValue(op, data)) {
+      return nullptr;
+    }
+  }
+  return candidate;
+}
+
+static bool sinkBlockStoreToCopyDst(BlockOp blockOp, OpBuilder &builder) {
+  SmallVector<affine::AffineStoreOp, 2> stores;
+  blockOp->walk([&](affine::AffineStoreOp storeOp) {
+    auto storeDefOp = storeOp.getMemref().getDefiningOp();
+    if (storeDefOp == nullptr || storeDefOp->getParentOp() != blockOp) {
+      stores.push_back(storeOp);
+    }
+  });
+  if (stores.size() != 1) {
+    return false;
+  }
+
+  auto storeOp = stores.front();
+  Value data = storeOp.getMemref();
+  auto copyOp = findOnlyCopyUseAfterBlock(blockOp, data);
+  if (!copyOp) {
+    return false;
+  }
+
+  auto dstTy = dyn_cast<MemRefType>(copyOp.getDst().getType());
+  if (!dstTy || dstTy.getRank() != storeOp.getAffineMap().getNumResults()) {
+    return false;
+  }
+
+  builder.setInsertionPoint(storeOp);
+  builder.create<affine::AffineStoreOp>(
+      storeOp.getLoc(), storeOp.getValue(), copyOp.getDst(),
+      storeOp.getAffineMap(), storeOp.getMapOperands());
+
+  Operation *dataDefOp = data.getDefiningOp();
+  storeOp.erase();
+  copyOp.erase();
+  if (dataDefOp && data.use_empty()) {
+    dataDefOp->erase();
+  }
+  return true;
+}
+
 
 static void MergeBlockOps(BlockOp from, BlockOp to) {
   if (from.getBodyRegion().empty() || to.getBodyRegion().empty())
@@ -169,6 +256,9 @@ struct FuseBlockOps : public PassWrapper<FuseBlockOps, OperationPass<frisk::Kern
         if(infoArr[j] == nullptr){
           continue;
         }
+        if(infoArr[j]->blockOp->getBlock() != baseOp->getBlock()){
+          continue;
+        }
         auto ld = checkStoreDstMemIsLoadSrcMem(infoArr[j]->ins, baseStore.getMemref());
         if(ld != nullptr){
           // load的结果直接替换为 baseStore 的value
@@ -193,6 +283,23 @@ struct FuseBlockOps : public PassWrapper<FuseBlockOps, OperationPass<frisk::Kern
     });
     for(auto op : dumpBufferAllocOps){
       op->erase();
+    }
+
+    SmallVector<BlockOp, 8> blockOps;
+    kernelOp->walk<WalkOrder::PreOrder>([&](BlockOp blockOp) {
+      blockOps.push_back(blockOp);
+    });
+
+    OpBuilder builder(kernelOp->getContext());
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (BlockOp blockOp : blockOps) {
+        if (blockOp->getParentOp() == nullptr) {
+          continue;
+        }
+        changed |= sinkBlockStoreToCopyDst(blockOp, builder);
+      }
     }
   }
 };

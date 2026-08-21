@@ -3,11 +3,13 @@
 
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
@@ -54,34 +56,20 @@ public:
   explicit LowerInfo(int _warp_threads);
   MMAInstInfo*  mmaInst = nullptr;
 
-// 字段说明：以如下布局为例。假设最外侧为block-level buffer，
-// data_warpX 为单个warp级别Inst能覆盖的区域，i表示for循环迭代
+/**
+  * 字段说明
+//  $![截图](/data2/xsl/DeepGenGraph/image_comments/LowerInfo.png)
 
-// +--[Block-level buffer]-------+         +--[Block-level buffer]-------+
-// | data_warp0   | data_warp0   |         | data_warp0   | data_warp1   |
-// | i=0          | i=1          |         | i=0          | i=0          |
-// +--------------+--------------+         +--------------+--------------+
-// | data_warp1   | data_warp1   |         | data_warp0   | data_warp1   |
-// | i=0          | i=1          |         | i=1          | i=1          |
-// +--------------+--------------+    or   +--------------+--------------+
-// | data_warp0   | data_warp0   |         | data_warp0   | data_warp1   |
-// | i=2          | i=3          |         | i=2          | i=2          |
-// +--------------+--------------+         +--------------+--------------+
-// | data_warp1   | data_warp1   |         | data_warp0   | data_warp1   |
-// | i=2          | i=3          |         | i=3          | i=3          |
-// +--------------+--------------+         +--------------+--------------+
-//        plan1                                     plan2
+上述布局示例中，warp_inst 对应单个warp级别指令（如wmma）构成的基础计算区域，称为 base_layout. 该部分的布局完全由硬件决定。一般手册中已经固定了访问模式
+- base_layout中: thread_creg+order, warp_layout+order, warp_repeat+order 唯一确定一个base_Layout 布局
+    其中： thread_creg = thread 计算的连续区域大小 
+          order = 行列优先顺序.[0,1] 表示先迭代0轴，再迭代1轴，即列优先，反之为行优先
+          warp_layout = warp中线程排布形状。NVIDIA下，单个warp含32线程,如[4,8]; AMD/DCU 下=64. 如[16,4]
+          warp_repeat = 单个warp中所有线程计算的连续区域。对应 【图1】中的 warp_inst
+- singeIter表示单次循环计算的区域。其中，可能含有多个 warp_inst 指令。单个循环内 warp_inst 的排列称为 warpInstUnroll
+- 
+*/
 
-// base_layout ：对应 data_warp0， 即某个warp级指令决定的基础访问模式（ thread_creg+order, warp_layout+order, warp_repeat+order 共同描述 warp_inst级别的布局）
-// 该布局完全由 warp-level-inst 决定。具有刚性要求
-// base_layout 中的warp_layout+order  本质也是 tid -> (warp, lane) 映射规则
-// 
-// Layout 推断中的不变量：
-// - warp_inst -> thread_creg+order, warp_layout+order, warp_repeat+order 固定
-// - block中thread数目固定 + block-level buffer 尺寸固定 -> warp_inst 需要在buffer上滑动的次数固定 -> block_repeat * warp_inst_unroll 固定
-// 可变量：
-// - block_layout xy分量（x*y = block中warp数）
-// - thread_own_data_size xy分量( 单个线程需至少持有多少数据才能保证计算正确 )
   LinearLayout2DDesc base_layout;  
   
   std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
@@ -90,9 +78,6 @@ public:
 
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
   
-  int get_dimcount() const {
-    return dimCount;
-  }
   coordXY_t get_warp_layout() const {
     return base_layout.warp_layout;
   }
@@ -122,14 +107,22 @@ public:
     for(int i=0;i<2;++i){
       ret[i] = (base_layout.thread_creg[i] * base_layout.warp_repeat[i] * block_repeat[i]);
     }
+    if (ignoreDim >= 0 && static_cast<size_t>(ignoreDim) < ret.size()) {
+      ret[ignoreDim] = 1;
+    }
     return ret;
   }
+  // 单个warp计算的连续区域
   coordXY_t get_warp_widths() const {
     return base_layout.get_warp_widths();
   }
-  coordXY_t get_block_widths() const {
-    return getBlockWidths(get_warp_widths(), get_warp_repeat(), get_block_layout());
+  coordXY_t get_warpInst_widths() const {
+    return get_warp_widths() * get_warp_repeat();
   }
+  coordXY_t get_block_widths() const {
+    return get_warpInst_widths() * get_block_layout() * warpInstUnroll;
+  }
+
   const auto& getOperandLabels() const {
     return mapOperandsLabel;
   }
@@ -194,9 +187,9 @@ public:
       llvm::outs() << "op: null\n";  
     }
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
-
-    printExprVec("warp_indices", getWarpIndices(OpBuilder{buffer.getContext()}, get_block_layout()));
-    printExprVec("thread_indices", getThreadIndices(OpBuilder{buffer.getContext()}, get_warp_layout()));
+    
+    printI64Vec("creg", base_layout.thread_creg) ;  // consistent reg
+    printI64Vec("creg_order", base_layout.thread_creg_order) ;
     printI64Vec("warp_layout", get_warp_layout());
     printI64Vec("warp_layout_order", base_layout.warp_layout_order);
     printI64Vec("block_layout", get_block_layout());
@@ -215,127 +208,60 @@ public:
     llvm::outs() << "=================\n";
   }
 
-  std::array<AffineExpr, 2> getAffineMap() {
+  mlir::AffineMap getAffineMap() {
     // 根据上述信息，生成不同层面的索引
     // 强制重新计算
     mapOperandsLabel.clear();
     iterVarLabels.clear();
     ivUpperBounds.clear();
-    dimCount = 1;
     mapOperandsLabel.push_back(TID);
     OpBuilder b{buffer.getContext()};
-    MemRefType type = dyn_cast<MemRefType>(buffer.getType());
-    auto thread_widths = get_thread_widths();
-    auto warp_layout = get_warp_layout();
-    auto block_layout = get_block_layout();
-    auto warp_repeat = get_warp_repeat();
-    auto block_repeat = get_block_repeat();
-    auto warp_widths = get_warp_widths();
-    auto block_widths = get_block_widths();
-    auto warp_indices = getWarpIndices(b, block_layout);
-    auto lane_indices = getThreadIndices(b, warp_layout);
+    unsigned int pos = 0;
+    // iterVar 顺序 ： tid br0 br1  instUnroll0 instUnroll1 warp_repeat_flat  creg_flat 
+    auto tid = b.getAffineDimExpr(pos++);  // 根据warp_layout & order, 分解为tx ty
+    auto i_br0 = b.getAffineDimExpr(pos++);  // block_repeat 无order限制
+    auto i_br1 = b.getAffineDimExpr(pos++);
+    
+    auto i_iu0 = b.getAffineDimExpr(pos++);  // inst unroll 没order限制
+    auto i_iu1 = b.getAffineDimExpr(pos++);
+    
+    auto i_wr_flatten = b.getAffineDimExpr(pos++);  // warp_repeat 有order限制。需传入flattenId，然后分解
+    auto i_creg_flatten = b.getAffineDimExpr(pos++);  // thread_creg 有order限制。需传入flattenId，然后分解
+    
+    std::array<AffineExpr, 2> indices{0,0};
+    
+    // 分解为xy分量
+    auto[t0,t1] = UnflattenIndexToXY(tid, base_layout.warp_layout_order, base_layout.warp_layout);
+    auto[i_wr0, i_wr1] = UnflattenIndexToXY(i_wr_flatten, base_layout.warp_repeat_order, base_layout.warp_repeat);
+    auto[i_reg0, i_reg1] = UnflattenIndexToXY(i_creg_flatten, base_layout.thread_creg_order, base_layout.thread_creg);
+    
+    indices[0] = i_br0 * get_block_widths()[0] + i_iu0 * get_warpInst_widths()[0] + i_wr0 * get_warp_widths()[0] + t0 * get_thread_widths()[0] + i_reg0;
+    indices[1] = i_br1 * get_block_widths()[1] + i_iu1 * get_warpInst_widths()[1] + i_wr1 * get_warp_widths()[1] + t1 * get_thread_widths()[1] + i_reg1;
 
-    if (type.getMemorySpaceAsInt() == 0 || type.getMemorySpaceAsInt() == 5) { // local
-      for (size_t i = 0; i < thread_widths.size(); ++i) {
-        auto ib = b.getAffineDimExpr(
-            i * 3 + 1); // block_repeat: [bm_ / (block_layout[0] * warp_layout[0] * thread_widths[0]), ...]
-        auto iw = b.getAffineDimExpr(i * 3 + 2); // warp_repeat：[2, mma_k/(warp_layout[1] * thread_widths[1])]
-        auto it = b.getAffineDimExpr(i * 3 + 3); // thread_widths: [1, 2]
-        AffineExpr expr = ib * (warp_repeat[i] * thread_widths[i]) + iw * thread_widths[i] + it;
-        indices[i]= expr;  // buffer-> thread 级别元素的映射
-        // add labels
-        mapOperandsLabel.push_back(BLOCK_LABELS[i]);
-        mapOperandsLabel.push_back(WARP_LABELS[i]);
-        mapOperandsLabel.push_back(THREAD_LABELS[i]);
-        iterVarLabels.push_back(BLOCK_LABELS[i]);
-        iterVarLabels.push_back(WARP_LABELS[i]);
-        iterVarLabels.push_back(THREAD_LABELS[i]);
-        
-        dimCount+=3;
-        // add upperBounds
-        ivUpperBounds.push_back(block_repeat[i]);
-        ivUpperBounds.push_back(warp_repeat[i]);
-        ivUpperBounds.push_back(thread_widths[i]);
-      }
-    } else if (type.getMemorySpaceAsInt() == int(friskMs::Shared)) { // shared
-      for (size_t i = 0; i < thread_widths.size(); ++i) { // 0:tidx, 1:iv_bx, iv_wx , iv_tx ,iv_by, iv_wy, iv_ty
-        auto ib = b.getAffineDimExpr(i * 3 + 1);          // iv_bx
-        auto iw = b.getAffineDimExpr(i * 3 + 2);          // iv_wx
-        auto it = b.getAffineDimExpr(i * 3 + 3);          // iv_tx
-        AffineExpr expr = ib * block_widths[i] + warp_indices[i] * (warp_repeat[i] * warp_widths[i]) +
-                          iw * warp_widths[i] + lane_indices[i] * thread_widths[i] + it;
-        indices[i] = expr;
-        mapOperandsLabel.push_back(BLOCK_LABELS[i]);
-        mapOperandsLabel.push_back(WARP_LABELS[i]);
-        mapOperandsLabel.push_back(THREAD_LABELS[i]);
-        iterVarLabels.push_back(BLOCK_LABELS[i]);
-        iterVarLabels.push_back(WARP_LABELS[i]);
-        iterVarLabels.push_back(THREAD_LABELS[i]);
-        dimCount+=3;
-        // add upperBounds
-        ivUpperBounds.push_back(block_repeat[i]);
-        ivUpperBounds.push_back(warp_repeat[i]);
-        ivUpperBounds.push_back(thread_widths[i]);
-      }
-    }
-    affine_map = mlir::AffineMap::get(dimCount, 0, indices, buffer.getContext());
+    auto affine_map = mlir::AffineMap::get(pos, 0, indices, buffer.getContext());
   
-    return indices;
+    return affine_map;
   }
 
-  std::array<AffineExpr, 2> getThreadIndices(
-    OpBuilder b, std::array<int64_t, 2> warp_layout) const {
-      // tid -> lane_id
-    auto tid = b.getAffineDimExpr(0);
-    auto ly = (tid % warp_threads).floorDiv(warp_layout[1]);
-    auto lx = (tid % warp_threads) % warp_layout[1];
-    return {ly, lx};
-  }
+  std::vector<affine::AffineForOp> getForLoops(mlir::OpBuilder& b, mlir::Location loc, std::vector<mlir::Value>& iterVars){
+    int ub_wr = flat_size(get_warp_repeat());
+    int ub_reg = flat_size(get_thread_widths());
+    auto br = get_block_repeat();
 
-  std::array<AffineExpr, 2> getWarpIndices(
-    OpBuilder b, std::array<int64_t, 2> block_layout) const {
-      // tid -> warp_id
-    auto tid = b.getAffineDimExpr(0);
-    auto wy = tid.floorDiv(warp_threads).floorDiv(block_layout[1]);
-    auto wx = tid.floorDiv(warp_threads) % block_layout[1];
-    return {wy, wx};
-  }
-
-  std::array<int64_t, 2> getWarpWidths(
-      std::array<int64_t, 2> thread_widths,
-      std::array<int64_t, 2> warp_layout) const {
-        // 一个warp计算的tile
-    std::array<int64_t, 2> warp_widths;
-    for (size_t i=0; i<thread_widths.size(); ++i) {
-      int64_t ws = warp_layout[i] * thread_widths[i];
-      warp_widths[i] = ws;
-    }
-    return warp_widths;
-  }
-
-  std::array<int64_t, 2> getBlockWidths(
-      std::array<int64_t, 2> warp_widths,
-      std::array<int64_t, 2> warp_repeat,
-      std::array<int64_t, 2> block_layout) const {
-        // 一个block计算的tile（重复后才等于bm/bn）
-    std::array<int64_t, 2> block_widths;
-    for (size_t i=0; i<warp_repeat.size(); ++i) {
-      int64_t wrs = warp_repeat[i] * warp_widths[i];
-      int64_t bs = block_layout[i] * wrs;  // block中的warp排布 * warp_repeat计算的区域尺寸
-      block_widths[i] = bs;
-    }
-    return block_widths;
+    std::vector<int> ubs = {(int)br[0], (int)br[1],
+      (int)warpInstUnroll[0], (int)warpInstUnroll[1], 
+    ub_wr, ub_reg
+    };
+    return createNestedAffineFor(b, loc, ubs, iterVars);
   }
 
 private:
 
   int64_t thread_bound;
-  AffineMap affine_map;
   std::vector<const char*> mapOperandsLabel;  // mapOperands 的标签
   std::vector<const char*> iterVarLabels;  // for 循环的标签
   std::vector<int> ivUpperBounds;  // 迭代变量的上界
-  std::array<AffineExpr, 2> indices;
-  uint32_t dimCount = 0;
+
 };
 
 class LowerInfoMap {

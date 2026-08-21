@@ -10,8 +10,92 @@
 #include <sstream>
 #include <vector>
 
-coordXY_t PointwiseDot(coordXY_t a, coordXY_t b){
-    return {a[0] * b[0], a[1] * b[1]};
+namespace mlir::frisk {
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    const std::vector<int> &upperBounds,
+    std::vector<mlir::Value> &outIvs) {
+  std::vector<mlir::affine::AffineForOp> loops;
+  loops.reserve(upperBounds.size());
+
+  // 确保标签数量与循环层数一致（可选的安全检查）
+  size_t numLoops = upperBounds.size();
+  
+  for (size_t i = 0; i < numLoops; ++i) {
+    // 1. 定义下界、上界和步长 (下界默认为 0，步长默认为 1)
+    int64_t lowerBound = 0;
+    int64_t step = 1;
+    auto ub = upperBounds[i];
+    // 2. 创建当前层的 AffineForOp
+    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
+    mlir::Value iv = forOp.getInductionVar();
+    // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
+    outIvs.push_back(iv);
+    loops.push_back(forOp);
+    // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
+    builder.setInsertionPointToStart(forOp.getBody());
+  }
+
+  return loops;
+}
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    const std::vector<int> &upperBounds,
+    std::vector<mlir::Value> &outIvs,
+    const std::vector<const char*> &labels) {
+  std::vector<mlir::affine::AffineForOp> loops;
+  loops.reserve(upperBounds.size());
+  outIvs.reserve(upperBounds.size());
+
+  // 确保标签数量与循环层数一致（可选的安全检查）
+  size_t numLoops = upperBounds.size();
+  
+  for (size_t i = 0; i < numLoops; ++i) {
+    // 1. 定义下界、上界和步长 (下界默认为 0，步长默认为 1)
+    int64_t lowerBound = 0;
+    int64_t step = 1;
+    auto ub = upperBounds[i];
+    // 2. 创建当前层的 AffineForOp
+    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, lowerBound, upperBounds[i], step);
+    // 3. 如果提供了对应的 label，则为其添加 StringAttr 属性
+    if (i < labels.size() && labels[i] != nullptr) {
+      forOp->setAttr("iterLabel", builder.getStringAttr(labels[i]));
+    }
+    mlir::Value iv = forOp.getInductionVar();
+    // 4. 收集当前循环的迭代变量 (Induction Variable) 和 Op 本身
+    outIvs.push_back(iv);
+    loops.push_back(forOp);
+    // 5. 将 builder 的插入点移动到当前循环体的末尾（yield 之前），以便下一层循环嵌套在内部
+    builder.setInsertionPointToStart(forOp.getBody());
+  }
+
+  return loops;
+}
+
+std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
+    mlir::OpBuilder &builder,
+    mlir::Location loc,
+    mlir::DenseMap<const char*, std::pair<int, mlir::Value>> &loopInfoMap  // in out : 标签-{上界，迭代变量}
+  ) {
+  std::vector<mlir::affine::AffineForOp> loops;
+  // 确保标签数量与循环层数一致（可选的安全检查）
+  size_t numLoops = loopInfoMap.size();
+  for(auto& entry : loopInfoMap){
+    auto [label , _pair] = entry;
+    auto& [ub, iterVar] = _pair;
+    auto forOp = builder.create<mlir::affine::AffineForOp>(loc, 0, ub, 1);
+    forOp->setAttr("iterLabel", builder.getStringAttr(label));
+    iterVar = forOp.getInductionVar();
+    loops.push_back(forOp);
+    builder.setInsertionPointToStart(forOp.getBody());
+  }
+  return loops;
+}
+
 }
 
 HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mlir::MLIRContext* ctx){
