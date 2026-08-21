@@ -366,25 +366,20 @@ public:
 
       auto [br0, br1] = infoC.get_block_repeat();
       auto [wiu0, wiu1] = infoC.warpInstUnroll;
-      int twA0 = infoA.get_thread_widths()[0];
-      int twA1 = infoA.get_thread_widths()[1];
       int wrA0 = infoA.get_warp_repeat()[0];
       int wrA1 = infoA.get_warp_repeat()[1];
-      
-      int twB0 = infoB.get_thread_widths()[0];
-      int twB1 = infoB.get_thread_widths()[1];
       int wrB0 = infoB.get_warp_repeat()[0];
       int wrB1 = infoB.get_warp_repeat()[1];
-      
-
       int kloopCount = infoA.get_block_repeat()[1];
+      int kWarpInstUnroll = infoA.warpInstUnroll[1];
 
       std::vector<int> mn_wiu_loops = {int(br0), int(br1), int(wiu0), int(wiu1)};
-      std::vector<int> k_loops = {kloopCount};
+      std::vector<int> k_loops = {kloopCount, kWarpInstUnroll};
       std::vector<Value> ivs_block {};  // itervar mnk
 
       // 指令在bufferC上的循环(m,n)
-      createNestedAffineFor(rewriter, op->getLoc(), mn_wiu_loops, ivs_block);
+      std::vector<const char*> label = {"br0","br1","wiu0","wiu1"};
+      createNestedAffineFor(rewriter, op->getLoc(), mn_wiu_loops, ivs_block, label);
       // insPoint 位于 mn loop内
       auto instCTy = mlir::cast<MemRefType>(instC.getType());
       rewriter.create<frisk::FillOp>(op->getLoc(), instC,
@@ -392,25 +387,40 @@ public:
       std::vector<affine::AffineForOp> kLoopOps;
       {
         RewriterBase::InsertionGuard ig{rewriter};
-        kLoopOps = createNestedAffineFor(rewriter, op->getLoc(), k_loops, ivs_block);
-        // insPoint 位于 kloop 内 
+        std::vector<const char*> _label = {"kBlock", "kWarpInstUnroll"};
+        kLoopOps = createNestedAffineFor(rewriter, op->getLoc(), k_loops, ivs_block, _label);
+        // 创建kloop。目前 insPoint 位于 kWarpInstUnroll 内
         Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
+        auto d0 = rewriter.getAffineDimExpr(0);
+        auto d1 = rewriter.getAffineDimExpr(1);
+        auto kLinearMap =
+            AffineMap::get(2, 0, d0 * kWarpInstUnroll + d1,
+                           rewriter.getContext());
+        Value kLinear = rewriter.create<affine::AffineApplyOp>(
+            op->getLoc(), kLinearMap, ValueRange{ivs_block[4], ivs_block[5]});
+        Value bKBr = floorDivBy(rewriter, op->getLoc(), kLinear,
+                                infoB.warpInstUnroll[0]);
+        Value bKIu = modBy(rewriter, op->getLoc(), kLinear,
+                           infoB.warpInstUnroll[0]);
         auto instUnrollIvOrZero = [&](LowerInfo &info, int dim,
                                       Value candidate) -> Value {
           return info.warpInstUnroll[dim] > 1 ? candidate : zero;
         };
         // 单次指令所需数据的构建 A
+        // 注意：对于wmma/wgmma op，其指令内部的layout由 creg & warp_repeat 描述
         if (mlir::cast<MemRefType>(infoA.buffer.getType()).getMemorySpaceAsInt() == (int)friskMs::Shared) {
           RewriterBase::InsertionGuard _temp{rewriter};
-          std::vector<int> ubs = {wrA0, wrA1, twA0, twA1};
-          std::vector<mlir::Value> instIvs;
-          createNestedAffineFor(rewriter, op->getLoc(), ubs, instIvs);
+          std::vector<int> ubs = {wrA0, wrA1};
+          std::vector<mlir::Value> wrIvs;
+          std::vector<const char*> _labels = {"wrA0", "wrA1"};
+          createNestedAffineFor(rewriter, op->getLoc(), ubs, wrIvs, _labels);
           auto mapOperands = buildLowerInfoMapOperands(
               rewriter, op->getLoc(), infoA, tidx,
               /*br0=*/ivs_block[0], /*br1=*/ivs_block[4],
               /*iu0=*/instUnrollIvOrZero(infoA, 0, ivs_block[2]),
-              /*iu1=*/zero, /*wr0=*/instIvs[0], /*wr1=*/instIvs[1],
-              /*reg0=*/instIvs[2], /*reg1=*/instIvs[3]);
+              /*iu1=*/instUnrollIvOrZero(infoA, 1, ivs_block[5]),
+              /*wr0=*/wrIvs[0], /*wr1=*/wrIvs[1],
+              /*reg0=*/zero, /*reg1=*/zero);
           auto map = infoA.getAffineMap();
           rewriter.create<frisk::CopyOp>(op->getLoc(), infoA.buffer, newA,
                                          mapOperands, map);
@@ -418,16 +428,17 @@ public:
         // 单次指令所需数据的构建 B
         if (mlir::cast<MemRefType>(infoB.buffer.getType()).getMemorySpaceAsInt() == (int)friskMs::Shared) {
           RewriterBase::InsertionGuard _temp{rewriter};
-          std::vector<int> ubs = {wrB0, wrB1, twB0, twB1};
-          std::vector<mlir::Value> instIvs;
-          createNestedAffineFor(rewriter, op->getLoc(), ubs, instIvs);
+          std::vector<int> ubs = {wrB0, wrB1};
+          std::vector<mlir::Value> wrIvs;
+          std::vector<const char*> _labels = {"wrB0", "wrB1"};
+          createNestedAffineFor(rewriter, op->getLoc(), ubs, wrIvs, _labels);
           auto mapOperands = buildLowerInfoMapOperands(
               rewriter, op->getLoc(), infoB, tidx,
-              /*br0=*/ivs_block[4], /*br1=*/ivs_block[1],
-              /*iu0=*/zero,
+              /*br0=*/bKBr, /*br1=*/ivs_block[1],
+              /*iu0=*/instUnrollIvOrZero(infoB, 0, bKIu),
               /*iu1=*/instUnrollIvOrZero(infoB, 1, ivs_block[3]),
-              /*wr0=*/instIvs[0], /*wr1=*/instIvs[1],
-              /*reg0=*/instIvs[2], /*reg1=*/instIvs[3]);
+              /*wr0=*/wrIvs[0], /*wr1=*/wrIvs[1],
+              /*reg0=*/zero, /*reg1=*/zero);
           auto map = infoB.getAffineMap();
           rewriter.create<frisk::CopyOp>(op->getLoc(), infoB.buffer, newB,
                                          mapOperands, map);
