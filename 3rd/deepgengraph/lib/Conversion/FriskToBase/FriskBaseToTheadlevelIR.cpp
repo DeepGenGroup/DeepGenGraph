@@ -61,6 +61,7 @@ static LowerInfoMap* s_info { nullptr};
 static HWSpecification* s_hw {nullptr};
 
 static DenseMap<mlir::Value, mlir::Value> s_buffer_replace;
+static DenseMap<frisk::ConvertLayoutOp , std::pair<LowerInfo*, LowerInfo*>> convertLayoutInfo;
 
 static bool isLocalMemref(Value buffer) {
   auto ty = mlir::cast<MemRefType>(buffer.getType());
@@ -76,6 +77,32 @@ static LowerInfo getLowerInfoOrDie(Value buffer, Operation *op) {
   // }
   assert(info != nullptr && "LowerInfo not found");
   return *info;
+}
+
+static void insertConvertLayoutOps(LowerInfoMap &infoMap ) {
+  SmallVector<std::pair<Value, Operation *>, 8> inserted;
+
+  for (auto &entry : infoMap) {
+    LowerInfo &toInfo = entry.second;
+    if (toInfo.convertFrom == nullptr || toInfo.buffer == nullptr ||
+        toInfo.op == nullptr) {
+      continue;
+    }
+
+    auto key = std::make_pair(toInfo.buffer, toInfo.op);
+    if (llvm::any_of(inserted, [&](const auto &insertedKey) {
+          return insertedKey == key;
+        })) {
+      continue;
+    }
+    inserted.push_back(key);
+
+    OpBuilder builder(toInfo.op);
+    auto convertLayout = builder.create<frisk::ConvertLayoutOp>(
+        toInfo.op->getLoc(), toInfo.buffer,
+        builder.getStringAttr("lowerinfo.convert"));
+    convertLayoutInfo.insert({convertLayout, {toInfo.convertFrom, &toInfo}});
+  }
 }
 
 struct WgmmaMNKLoopInfo {
@@ -893,6 +920,7 @@ public:
     createNestedAffineFor(rewriter, op->getLoc(), thread_level_sz, threadOwnDataIvs);
     // block_repeat 循环
     createNestedAffineFor(rewriter, op->getLoc(), blockop_br, blockRepeatIvs);
+    // TODO : 缺少 iwu 循环 和 warp_repeat 循环
 
     auto constIndex = [&](int64_t v) -> Value {
       return rewriter.create<arith::ConstantIndexOp>(op->getLoc(), v);
@@ -1128,6 +1156,28 @@ public:
   }
 };
 
+// convertLayoutOp -> sync op
+class ConvertLayoutOpConversion : public OpConversionPattern<frisk::ConvertLayoutOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(frisk::ConvertLayoutOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    
+    auto it = convertLayoutInfo.find(op);
+    if(it != convertLayoutInfo.end()){
+      auto [from, to] = it->getSecond();
+      // 根据from 构建for循环，用 frisk.copy 将线程持有的数据拷贝到 from.buffer(shm)
+      // 根据to 构建for循环 用 frisk.copy 将 from.buffer(shm) 的数据拷贝到线程持有的buffer
+      assert(from->buffer == to->buffer);
+      auto memTy = mlir::cast<MemRefType>(from->buffer.getType());
+      assert(memTy.getMemorySpaceAsInt() == (int)friskMs::Shared);
+      auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(op->getLoc(), from->buffer);
+      rewriter.replaceOp(op, sync);
+    }
+    return success();
+  }
+};
+
 // 用于重写 frisk.copy 进行数据类型转换的情况。frisk.copy <3x3xf32> to <3x3xf16>
 class CopyConvertOpRewrite : public OpConversionPattern<frisk::CopyOp> {
 public:
@@ -1159,12 +1209,10 @@ public:
     auto srcInfo = s_info->getLowerInfo(op.getSrcMemRef(), op);
     auto dstInfo = s_info->getLowerInfo(op.getDstMemRef(), op);
     assert(srcInfo != nullptr && dstInfo != nullptr && "copy-convert LowerInfo not found");
-    auto [tw0,tw1] = srcInfo->get_thread_own_data_size();
-    auto [dstTw0, dstTw1] = dstInfo->get_thread_own_data_size();
+    auto [tw0,tw1] = srcInfo->get_thread_widths();
+    auto [dstTw0, dstTw1] = dstInfo->get_thread_widths();
     assert(tw0 == dstTw0 && tw1 == dstTw1 &&
            "copy-convert expects source and destination thread tiles to match");
-    std::vector<int> ubs = {int(tw0), int(tw1)};
-    std::vector<mlir::Value> outIvs;
 
     auto isThreadLocalTile = [](Value buffer) {
       auto ty = cast<MemRefType>(buffer.getType());
@@ -1181,23 +1229,12 @@ public:
       if (forRead) {
         return failure();
       }
-      std::vector<int64_t> shape = {tw0, tw1};
+      auto [own0, own1] = info->get_thread_own_data_size();
+      std::vector<int64_t> shape = {own0, own1};
       auto newBuffer = rewriter.create<frisk::AllocBufferOp>(
           op->getLoc(), shape, elementType, 1, int(friskMs::Local));
       s_buffer_replace[info->buffer] = newBuffer;
       return newBuffer.getResult();
-    };
-
-    createNestedAffineFor(rewriter, op->getLoc(), ubs, outIvs);
-
-    auto getAccessIndices = [&](LowerInfo *info,
-                                bool useLocalTile) -> SmallVector<Value, 2> {
-      if (useLocalTile) {
-        return SmallVector<Value, 2>{outIvs.begin(), outIvs.end()};
-      }
-
-      return buildMappedAccessIndices(rewriter, op->getLoc(), *info, tidx,
-                                      outIvs, 2);
     };
 
     bool srcIsLocal = isThreadLocalTile(srcInfo->buffer);
@@ -1219,17 +1256,132 @@ public:
       dstBuffer = *replacement;
     }
 
+    auto loc = op->getLoc();
+    auto srcTile = rewriter.create<frisk::AllocBufferOp>(
+        loc, std::vector<int64_t>{tw0, tw1}, srcTy.getElementType(), 1,
+        int(friskMs::Local));
+    auto dstTile = rewriter.create<frisk::AllocBufferOp>(
+        loc, std::vector<int64_t>{tw0, tw1}, dstTy.getElementType(), 1,
+        int(friskMs::Local));
+
+    auto effectiveDimValue = [](LowerInfo *info, int dim, int64_t value) {
+      return info->ignoreDim == dim ? int64_t{1} : value;
+    };
+
+    auto srcTileCounts = srcInfo->get_block_repeat() *
+                         srcInfo->warpInstUnroll *
+                         srcInfo->get_warp_repeat();
+    auto dstTileCounts = dstInfo->get_block_repeat() *
+                         dstInfo->warpInstUnroll *
+                         dstInfo->get_warp_repeat();
+    for (int dim = 0; dim < 2; ++dim) {
+      srcTileCounts[dim] = effectiveDimValue(srcInfo, dim, srcTileCounts[dim]);
+      dstTileCounts[dim] = effectiveDimValue(dstInfo, dim, dstTileCounts[dim]);
+      if (srcTileCounts[dim] != dstTileCounts[dim]) {
+        return op.emitOpError("copy-convert source/destination tile counts do not match");
+      }
+    }
+
+    auto srcBr = srcInfo->get_block_repeat();
+    auto srcWr = srcInfo->get_warp_repeat();
+    std::vector<int> outerUbs = {
+        int(effectiveDimValue(srcInfo, 0, srcBr[0])),
+        int(effectiveDimValue(srcInfo, 1, srcBr[1])),
+        int(effectiveDimValue(srcInfo, 0, srcInfo->warpInstUnroll[0])),
+        int(effectiveDimValue(srcInfo, 1, srcInfo->warpInstUnroll[1])),
+        int(effectiveDimValue(srcInfo, 0, srcWr[0])),
+        int(effectiveDimValue(srcInfo, 1, srcWr[1]))};
+    std::vector<const char*> outerLabels = {
+        "br0", "br1", "iwu0", "iwu1", "wr0", "wr1"};
+    std::vector<Value> outerIvs;
+    createNestedAffineFor(rewriter, loc, outerUbs, outerIvs, outerLabels);
+
+    Value zero = createIndexConstant(rewriter, loc, 0);
+    auto buildTileBase = [&](int dim) -> Value {
+      auto d0 = rewriter.getAffineDimExpr(0);
+      auto d1 = rewriter.getAffineDimExpr(1);
+      auto d2 = rewriter.getAffineDimExpr(2);
+      auto expr = ((d0 * srcInfo->warpInstUnroll[dim] + d1) *
+                       srcInfo->get_warp_repeat()[dim] +
+                   d2) *
+                  srcInfo->get_thread_widths()[dim];
+      auto map = AffineMap::get(3, 0, expr, rewriter.getContext());
+      return rewriter.create<affine::AffineApplyOp>(
+          loc, map,
+          ValueRange{outerIvs[dim], outerIvs[dim + 2], outerIvs[dim + 4]});
+    };
+    SmallVector<Value, 2> tileBaseIvs{buildTileBase(0), buildTileBase(1)};
+
+    struct CopyOffset {
+      SmallVector<Value> operands;
+      AffineMap map;
+    };
+
+    auto buildCopyOffset = [&](LowerInfo *info, bool useLocalTile) -> CopyOffset {
+      SmallVector<Value, 2> brs;
+      SmallVector<Value, 2> ius;
+      SmallVector<Value, 2> wrs;
+      for (int i = 0; i < 2; ++i) {
+        Value iv = tileBaseIvs[i];
+        int64_t threadWidth = info->get_thread_widths()[i];
+        int64_t warpRepeat = info->get_warp_repeat()[i];
+        int64_t instUnroll = info->warpInstUnroll[i];
+        int64_t repeatWidth = warpRepeat * threadWidth;
+        int64_t unrollWidth = instUnroll * repeatWidth;
+
+        brs.push_back(floorDivBy(rewriter, loc, iv, unrollWidth));
+        ius.push_back(modBy(rewriter, loc,
+                            floorDivBy(rewriter, loc, iv, repeatWidth),
+                            instUnroll));
+        Value withinInst = modBy(rewriter, loc, iv, repeatWidth);
+        wrs.push_back(floorDivBy(rewriter, loc, withinInst, threadWidth));
+      }
+
+      if (useLocalTile) {
+        SmallVector<Value> wrXY{wrs[0], wrs[1]};
+        SmallVector<Value> operands{brs[0], brs[1], ius[0], ius[1],
+                                    flattenXY(rewriter, loc, wrXY,
+                                              info->base_layout.warp_repeat_order,
+                                              info->get_warp_repeat()),
+                                    zero};
+        return {operands, buildThreadTileOffsetMap(rewriter, *info)};
+      }
+
+      auto operands = buildLowerInfoMapOperands(
+          rewriter, loc, *info, tidx, brs[0], brs[1], ius[0], ius[1],
+          wrs[0], wrs[1], zero, zero);
+      return {SmallVector<Value>{operands.begin(), operands.end()},
+              info->getAffineMap()};
+    };
+
+    auto srcOffset = buildCopyOffset(srcInfo, srcIsLocal);
+    rewriter.create<frisk::CopyOp>(loc, srcBuffer, srcTile.getResult(),
+                                   srcOffset.operands, srcOffset.map);
+
+    std::vector<Value> regIvs;
+    std::vector<const char*> regLabels = {"tw0", "tw1"};
+    auto regLoops = createNestedAffineFor(
+        rewriter, loc, std::vector<int>{int(tw0), int(tw1)}, regIvs,
+        regLabels);
+
     auto srcValue = rewriter.create<affine::AffineLoadOp>(
-        op->getLoc(), srcBuffer, getAccessIndices(srcInfo, srcIsLocal));
+        loc, srcTile.getResult(), ValueRange{regIvs[0], regIvs[1]});
     mlir::Value converted{};
     if(srcTy.getElementType().getIntOrFloatBitWidth() < dstTy.getElementType().getIntOrFloatBitWidth()){
-      converted = rewriter.create<arith::ExtFOp>(op->getLoc(), dstTy.getElementType(), srcValue.getResult() );
+      converted = rewriter.create<arith::ExtFOp>(loc, dstTy.getElementType(), srcValue.getResult() );
     }
     else{
-      converted = rewriter.create<arith::TruncFOp>(op->getLoc(), dstTy.getElementType(), srcValue.getResult() );
+      converted = rewriter.create<arith::TruncFOp>(loc, dstTy.getElementType(), srcValue.getResult() );
     }
     rewriter.create<affine::AffineStoreOp>(
-        op->getLoc(), converted, dstBuffer, getAccessIndices(dstInfo, dstIsLocal));
+        loc, converted, dstTile.getResult(), ValueRange{regIvs[0], regIvs[1]});
+
+    if (!regLoops.empty()) {
+      rewriter.setInsertionPointAfter(regLoops.front());
+    }
+    auto dstOffset = buildCopyOffset(dstInfo, dstIsLocal);
+    rewriter.create<frisk::CopyOp>(loc, dstTile.getResult(), dstBuffer,
+                                   dstOffset.operands, dstOffset.map);
     rewriter.eraseOp(op);
     return success();
   }
@@ -1264,7 +1416,9 @@ public:
     kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, warpLayout));
     kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
     kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
-
+    
+    // 根据 layout推定结果，插入 convertLAyoutOp
+    insertConvertLayoutOps(*s_info);
 
     ConversionTarget target(*context);
   
@@ -1279,7 +1433,7 @@ public:
       gpu::GPUDialect>();
 
     target.addIllegalOp<KernelOp,ParallelOp,ForOp,
-      BlockOp, GemmOp, ReduceOp
+      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp
     >();
     // 对于类型转换语义的frisk.copy ,标记为非法。采取Pattern做重写
     target.addDynamicallyLegalOp<frisk::CopyOp>([](frisk::CopyOp op){
@@ -1290,7 +1444,7 @@ public:
     });
     RewritePatternSet patterns(context);
     patterns.add<
-      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite
+      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite, ConvertLayoutOpConversion
     >(context);
     llvm::outs() << "-- lowerinfo partialconversion\n";llvm::outs().flush();
     if (failed(applyPartialConversion(kernel, target, std::move(patterns)))){

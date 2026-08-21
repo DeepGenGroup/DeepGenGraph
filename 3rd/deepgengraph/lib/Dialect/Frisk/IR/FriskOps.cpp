@@ -1696,8 +1696,25 @@ LogicalResult GemmOp::inferLayout(OpBuilder &builder,
   return success(updated);
   #else
   return success();
-  #endif
+#endif
 }
+
+LogicalResult SyncThreadsInBlockOp::verify() {
+  if (getNumOperands() == 0)
+    return success();
+
+  auto bufferType = dyn_cast<MemRefType>(getOperand(0).getType());
+  if (!bufferType)
+    return emitOpError("buffer must be a memref");
+
+  if (bufferType.getMemorySpaceAsInt() !=
+      static_cast<int>(attr::MemorySpace::Shared)) {
+    return emitOpError("buffer must be in friskMs::Shared memory space");
+  }
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // -- AllocBufferOp --
 //===----------------------------------------------------------------------===//

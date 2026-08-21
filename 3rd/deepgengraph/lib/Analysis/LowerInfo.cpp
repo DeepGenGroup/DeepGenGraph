@@ -51,11 +51,12 @@ static std::array<int64_t, 2> getThreadOwnDataSize(const LowerInfo &info,
                                                    bool includeBaseRepeat) {
   auto [tw0, tw1] = info.get_thread_widths();
   auto [wr0, wr1] = info.get_warp_repeat();
+  auto [iwu0, iwu1] = info.warpInstUnroll;
   if (!includeBaseRepeat) {
-    return {tw0 * wr0, tw1 * wr1};
+    return {tw0 * wr0 * iwu0, tw1 * wr1 * iwu1};
   }
   auto [br0, br1] = info.get_block_repeat();
-  return {tw0 * wr0 * br0, tw1 * wr1 * br1};
+  return {tw0 * wr0 *iwu0 * br0, tw1 * wr1 *iwu1* br1};
 }
 
 LowerInfo *LowerInfoMap::getLowerInfo(const mlir::Value &buffer,
