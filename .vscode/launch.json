@@ -22,22 +22,13 @@
         },
         {
             "name": "C/C++ Debug (MyTest)",
-            "type": "cppdbg",
+            "type": "by-gdb",
             "request": "launch",
             "program": "${workspaceFolder}/3rd/deepgengraph/build/test/MyTest",
-            "args": ["${workspaceFolder}/3rd/deepgengraph/test/test_input.mlir"],
+            "programArgs": "${workspaceFolder}/3rd/deepgengraph/test/test_input.mlir",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            "miDebuggerPath": "/home/xushilong/anaconda3/envs/py310/bin/gdb",
+            "debuggerPath": "/data2/xsl/miniconda3/bin/gdb",
             "preLaunchTask": ""
         },
         

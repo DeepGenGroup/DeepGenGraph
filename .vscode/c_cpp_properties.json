@@ -6,7 +6,8 @@
                 "~/rocm-llvm-install/include",
                 "${workspaceFolder}/3rd/deepgengraph/build/cp310-cp310-linux_x86_64/include",
                 "${workspaceFolder}/3rd/deepgengraph/include",
-                "${workspaceFolder}/3rd/deepgengraph/3rd/dbg"
+                "${workspaceFolder}/3rd/deepgengraph/3rd/dbg",
+                "${workspaceFolder}/3rd/deepgengraph/build/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/g++",

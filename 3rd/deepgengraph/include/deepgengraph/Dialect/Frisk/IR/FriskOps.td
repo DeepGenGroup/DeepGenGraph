@@ -467,15 +467,62 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   }];
 }
 
+// class Frisk_BinaryPointwiseOp<string mnemonic, list<Trait> traits = []> :
+//   Frisk_Op<mnemonic, !listconcat(traits, [
+//     MemoryEffects<[MemRead, MemWrite]>
+//   ])> {
+//   let summary = "binary pointwise operation on memref regions";
+//   let description = [{
+//     Performs a pointwise binary operation from lhs/rhs memref regions into dst.
+//     The lhs/rhs memrefs may be broadcast to the destination shape when a source
+//     dimension is 1.
+//   }];
+
+//   let arguments = (ins
+//     Arg<AnyMemRef, "", [MemRead]>:$lhs,
+//     Arg<AnyMemRef, "", [MemRead]>:$rhs,
+//     Arg<AnyMemRef, "", [MemWrite]>:$dst
+//   );
+
+//   let extraClassDeclaration = [{
+//     MemRefType getLhsType() { return cast<MemRefType>(getLhs().getType()); }
+//     MemRefType getRhsType() { return cast<MemRefType>(getRhs().getType()); }
+//     MemRefType getDstType() { return cast<MemRefType>(getDst().getType()); }
+//   }];
+
+//   let hasVerifier = 1;
+//   let assemblyFormat = "$lhs `,` $rhs `to` $dst attr-dict `:` type($lhs) `,` type($rhs) `,` type($dst)";
+// }
+
+// def Frisk_AddOp : Frisk_BinaryPointwiseOp<"add", [Commutative]> {
+//   let summary = "pointwise add";
+// }
+
+// def Frisk_MulOp : Frisk_BinaryPointwiseOp<"mul", [Commutative]> {
+//   let summary = "pointwise multiply";
+// }
+
+// def Frisk_SubOp : Frisk_BinaryPointwiseOp<"sub"> {
+//   let summary = "pointwise subtract";
+// }
+
+// def Frisk_DivOp : Frisk_BinaryPointwiseOp<"div"> {
+//   let summary = "pointwise divide";
+// }
+
+// def Frisk_ModOp : Frisk_BinaryPointwiseOp<"mod"> {
+//   let summary = "pointwise modulo";
+// }
+
 // convert layout op
-def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite]>]> {
+def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, MemRead]>]> {
   let summary = "layout conversion";
   let description = [{ 
     layout convert
   }];
 
   let arguments = (ins 
-    Arg<AnyMemRef, "", [MemWrite]>:$memref,
+    Arg<AnyMemRef, "", [MemWrite, MemRead]>:$memref,
     AnyAttr:$value
   );
 
@@ -818,15 +865,24 @@ def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [
 ]> {
   let summary = "Synchronize all threads in a block";
   let description = [{
-    Synchronize all threads within the current block.  This operation has no
-    operands and no results, but models memory side effects so that DCE and
-    other optimization passes preserve the synchronization point.
+    Synchronize all threads within the current block.  This operation can
+    optionally carry a shared-memory buffer operand that records the memref
+    whose accesses must be waited on.
   }];
 
-  let arguments = (ins);
+  let arguments = (ins Optional<AnyMemRef>:$buffer);
   let results = (outs);
 
-  let assemblyFormat = "attr-dict";
+  let builders = [
+    OpBuilder<(ins), [{
+      build($_builder, $_state, ::mlir::Value{});
+    }]>
+  ];
+
+  let assemblyFormat = "attr-dict ($buffer^ `:` type($buffer))?";
+  let hasVerifier = 1;
 }
+
+
 
 #endif // FRISK_OPS
