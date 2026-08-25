@@ -150,12 +150,39 @@ public:
         mask_op.getRegion().front().walk([&](Operation *inner_op) { ops.push_back(inner_op); });
         // FIXME: hard code !
         auto is_where_op = [&]() -> bool {
-          if (ops.size() != 6)
+          if (ops.size() != 4 && ops.size() != 6)
             return false;
           if (!isa<arith::AddIOp>(ops[0]))
             return false;
           auto add_op = cast<arith::AddIOp>(ops[0]);
           if (add_op.getLhs() != mask_op.getIterArgInEntry(0))
+            return false;
+          if (!isa<arith::CmpIOp>(ops[1]))
+            return false;
+          auto cmpi_op = cast<arith::CmpIOp>(ops[1]);
+          if (cmpi_op.getLhs() != add_op.getResult())
+            return false;
+          if (cmpi_op.getRhs() != mask_op.getIterArgInEntry(1))
+            return false;
+          if (cmpi_op.getPredicate() != arith::CmpIPredicate::ule)
+            return false;
+          if (ops.size() == 4) {
+            if (!isa<arith::SelectOp>(ops[2]))
+              return false;
+            auto select_op = cast<arith::SelectOp>(ops[2]);
+            if (select_op.getCondition() != cmpi_op.getResult())
+              return false;
+            if (!isa<MaskYieldOp>(ops[3]))
+              return false;
+            return cast<MaskYieldOp>(ops[3]).getOperand(0) == select_op.getResult();
+          }
+          if (!isa<scf::YieldOp>(ops[2]))
+            return false;
+          if (!isa<scf::YieldOp>(ops[3]))
+            return false;
+          if (!isa<scf::IfOp>(ops[4]))
+            return false;
+          if (!isa<MaskYieldOp>(ops[5]))
             return false;
           // FIXME: many cases!
           return true;
