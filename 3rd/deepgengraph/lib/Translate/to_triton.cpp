@@ -194,9 +194,6 @@ public:
         auto elem_type = mask_op.getElementType();
         assert(starts.size() == 2);
 
-        auto for_op = mask_op->getParentOfType<scf::ForOp>();
-        assert(for_op);
-
         auto name = get_name("where");
         // create zero
         indent() << name << " = " << "tl.zeros([";
@@ -255,10 +252,14 @@ public:
         assert(lhs_type.getRank() == 2 && rhs_type.getRank() == 2);
         bool is_f16 = lhs_type.getElementType().isF16() && rhs_type.getElementType().isF16();
         bool is_bf16 = lhs_type.getElementType().isBF16() && rhs_type.getElementType().isBF16();
-        assert(is_f16 || is_bf16);
-        // FIXME: f32? verify
+        bool is_f32 = lhs_type.getElementType().isF32() && rhs_type.getElementType().isF32();
+        assert(is_f16 || is_bf16 || is_f32);
         assert(res_type.getRank() == 2 && res_type.getElementType().isF32());
-        indent() << name << " = tl.dot(" << symbol_table.lookup(lhs) << ", " << symbol_table.lookup(rhs) << ")\n";
+        indent() << name << " = tl.dot(" << symbol_table.lookup(lhs) << ", " << symbol_table.lookup(rhs);
+        if (is_f32) {
+          indent(false) << ", input_precision=\"ieee\"";
+        }
+        indent(false) << ")\n";
         symbol_table.insert(dot_op.getResult(), name);
       } else if (auto pow_op = dyn_cast<PowOp>(op)) {
         auto name = get_name("pow");

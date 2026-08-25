@@ -64,7 +64,8 @@ public:
     int n = rhs_type.getShape()[rhs_type.getRank() - 1];
 
     int block_size = DEEPGENGRAPH_BLOCK_SIZE;
-    if (m > block_size && k <= block_size && n <= block_size) {
+    int max_untiled_dot_dim = block_size * 2;
+    if (m > block_size && k <= max_untiled_dot_dim && n <= max_untiled_dot_dim) {
       // dbg("dot tiling m");
       assert(m % block_size == 0);
       SmallVector<Type> res_types({res_type});
@@ -81,7 +82,24 @@ public:
       rewriter.eraseOp(op);
       // dbg("dot tiling m done");
       return success();
-    } else if (m <= block_size && k > block_size && n <= block_size) {
+    } else if (m <= block_size && k <= max_untiled_dot_dim && n > max_untiled_dot_dim) {
+      assert(n % block_size == 0);
+      // dbg("dot tiling n");
+      SmallVector<Type> res_types({res_type});
+      SmallVector<Value> block_args({rhs});
+      SmallVector<int64_t> block_dims({rhs_type.getRank() - 1});
+
+      auto block_for_op =
+          rewriter.create<BlockForOp>(op.getLoc(), res_types, 0, n, block_size, block_args, block_dims, ValueRange());
+      Block *entry = block_for_op.addEntryBlock(op.getLoc());
+      rewriter.setInsertionPointToStart(entry);
+      auto new_dot_op = rewriter.create<DotOp>(op.getLoc(), lhs, block_for_op.getBlockArgInEntry(0));
+      rewriter.create<BlockYieldOp>(op.getLoc(), ValueRange({new_dot_op.getResult()}), ValueRange());
+      rewriter.replaceAllUsesWith(op.getResult(), block_for_op.getResult(0));
+      rewriter.eraseOp(op);
+      // dbg("dot tiling n done");
+      return success();
+    } else if (m <= block_size && k > max_untiled_dot_dim && n <= max_untiled_dot_dim) {
       assert(k % block_size == 0);
       // dbg("dot tiling k");
 
@@ -103,23 +121,6 @@ public:
       rewriter.replaceAllUsesWith(op.getResult(), block_for_op.getResult(0));
       rewriter.eraseOp(op);
       // dbg("dot tiling k done");
-      return success();
-    } else if (m <= block_size && k <= block_size && n > block_size) {
-      assert(n % block_size == 0);
-      // dbg("dot tiling n");
-      SmallVector<Type> res_types({res_type});
-      SmallVector<Value> block_args({rhs});
-      SmallVector<int64_t> block_dims({rhs_type.getRank() - 1});
-
-      auto block_for_op =
-          rewriter.create<BlockForOp>(op.getLoc(), res_types, 0, n, block_size, block_args, block_dims, ValueRange());
-      Block *entry = block_for_op.addEntryBlock(op.getLoc());
-      rewriter.setInsertionPointToStart(entry);
-      auto new_dot_op = rewriter.create<DotOp>(op.getLoc(), lhs, block_for_op.getBlockArgInEntry(0));
-      rewriter.create<BlockYieldOp>(op.getLoc(), ValueRange({new_dot_op.getResult()}), ValueRange());
-      rewriter.replaceAllUsesWith(op.getResult(), block_for_op.getResult(0));
-      rewriter.eraseOp(op);
-      // dbg("dot tiling n done");
       return success();
     }
     // no tiling

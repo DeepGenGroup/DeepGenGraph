@@ -270,40 +270,8 @@ public:
         auto operands = convertLeastElementType({dot_op.getLhs(), dot_op.getRhs()}, builder);
         auto lhs = operands[0];
         auto rhs = operands[1];
-        // FIXME: f32 is enough?
         Type acc_type = builder.getF32Type();
-
-        mlir::Value newLhs ;
-        mlir::Value newRhs ;
-        std::vector<int64_t> lhsShape;
-        std::vector<int64_t> rhsShape;
-        // llvm::outs() << "[D]---- recover 000 " << lhs << ", " << rhs << "\n"; llvm::outs().flush();
-        if(mlir::cast<RankedTensorType>(lhs.getType()).getElementType() != acc_type){
-          auto lhsTensorTy = mlir::cast<RankedTensorType>(lhs.getType());
-          // llvm::outs() << "[D]---- recover 111\n"; llvm::outs().flush();
-          lhsShape = lhsTensorTy.getShape();
-          auto lhsNewTensorType = mlir::RankedTensorType::get(lhsShape, acc_type);
-          auto lhsConvOp = builder.create<deepgengraph::ConvertOp>(dot_op->getLoc(), lhsNewTensorType,lhs, acc_type);
-          newLhs = lhsConvOp.getResult();
-          // llvm::outs() << "[D]---- recover 222 :" << newLhs << "\n"; llvm::outs().flush();
-
-        }
-        else{
-          newLhs = lhs;
-        }
-        if(mlir::cast<RankedTensorType>(rhs.getType()).getElementType() != acc_type){
-          auto rhsTensorTy = mlir::cast<RankedTensorType>(rhs.getType());
-          rhsShape = rhsTensorTy.getShape();
-          auto rhsNewTensorType = mlir::RankedTensorType::get(rhsShape, acc_type);
-          auto rhsConvOp = builder.create<deepgengraph::ConvertOp>(dot_op->getLoc(), rhsNewTensorType, rhs, acc_type);
-          newRhs = rhsConvOp.getResult();
-          // llvm::outs() << "[D]---- recover 333 "<< newRhs <<"\n"; llvm::outs().flush();
-        }
-        else{
-          newRhs = rhs;
-        }
-        // llvm::outs() << "[D]---- recover 444\n"; llvm::outs().flush();
-        auto new_dot_op = builder.create<PreciseDotOp>(dot_op.getLoc(), newLhs, newRhs, acc_type);
+        auto new_dot_op = builder.create<PreciseDotOp>(dot_op.getLoc(), lhs, rhs, acc_type);
         // llvm::outs() << "[D]---- recover 7  "<< new_dot_op <<"\n"; llvm::outs().flush();
         dot_op.getResult().replaceAllUsesWith(new_dot_op.getResult());
         dot_op->erase();
