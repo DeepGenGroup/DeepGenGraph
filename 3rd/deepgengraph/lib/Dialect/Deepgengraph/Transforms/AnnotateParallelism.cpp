@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
+#include "deepgengraph/Dialect/Deepgengraph/Transforms/BlockSize.h"
 #include "deepgengraph/Dialect/Deepgengraph/Transforms/Passes.h"
 
 #include "deepgengraph/Analysis/Parallelism.h"
@@ -50,8 +51,8 @@ public:
           if (info.info[i].kind == ParaType::Kind::kReUse && ana.batch_set.find(info.info[i].batch_id) == father) {
             if (map.unit_num <= 0) {
               // heuristic
-              if (shape[i] > 128) {
-                int size_per_unit = 128;
+              if (shape[i] > DEEPGENGRAPH_BLOCK_SIZE) {
+                int size_per_unit = DEEPGENGRAPH_BLOCK_SIZE;
                 assert(shape[i] % size_per_unit == 0);
                 map.unit_num = shape[i] / size_per_unit;
                 map.size_per_unit = size_per_unit;

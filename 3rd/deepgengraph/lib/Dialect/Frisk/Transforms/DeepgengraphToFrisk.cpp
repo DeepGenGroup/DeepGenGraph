@@ -310,13 +310,49 @@ struct ArgIdViewBuffer {
   AffineMap baseOffsetMap;
   std::vector<Value> baseOffsetMapOperands;
   std::vector<int64_t> blockShape;
+  std::vector<int64_t> sourceStrides;
+  std::vector<int64_t> blockStrides;
 };
 
 // 存放 argId : { arg对应的initView ， arg开辟view时建立的shm buffer }
 static std::vector<ArgIdViewBuffer*>  s_argId_bufferInfo;
 
-// 存放 arg 的permute 信息，用于计算全局offset
-static std::vector<std::vector<int64_t>> permuteInfo;
+static std::vector<int64_t> getPhysicalStrides(ArrayRef<int64_t> shape) {
+  std::vector<int64_t> strides(shape.size(), 1);
+  for (int i = static_cast<int>(shape.size()) - 2; i >= 0; --i) {
+    strides[i] = strides[i + 1] * shape[i + 1];
+  }
+  return strides;
+}
+
+static std::vector<AffineExpr>
+decomposePhysicalOffset(AffineExpr offset, ArrayRef<int64_t> shape,
+                        ArrayRef<int64_t> strides, MLIRContext *ctx) {
+  std::vector<AffineExpr> indices;
+  indices.reserve(shape.size());
+  for (size_t i = 0; i < shape.size(); ++i) {
+    if (shape[i] == 1) {
+      indices.push_back(getAffineConstantExpr(0, ctx));
+      continue;
+    }
+
+    AffineExpr idx = strides[i] == 1 ? offset : offset.floorDiv(strides[i]);
+    if (!ShapedType::isDynamic(shape[i]) && shape[i] > 1) {
+      idx = idx % shape[i];
+    }
+    indices.push_back(idx);
+  }
+  return indices;
+}
+
+static int findPhysicalDimForStride(ArrayRef<int64_t> sourceStrides,
+                                    int64_t stride) {
+  for (auto indexedStride : llvm::enumerate(sourceStrides)) {
+    if (indexedStride.value() == stride)
+      return static_cast<int>(indexedStride.index());
+  }
+  return -1;
+}
 
 // =============== Op Conversion Patterns =============
 
@@ -328,35 +364,6 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
                                 ConversionPatternRewriter &rewriter) const override {
     auto gridAttr = op->getAttr("grid");
     auto permuteAttr = op->getAttr("arg_permutes");
-    
-    // Parse `arg_permutes` attribute into `permuteInfo`.
-    // Expected form: [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, ...]
-    permuteInfo.clear();
-    if (permuteAttr) {
-      if (auto arr = mlir::dyn_cast<mlir::ArrayAttr>(permuteAttr)) {
-        for (auto a : arr.getValue()) {
-          if (auto darr = mlir::dyn_cast<mlir::DenseI64ArrayAttr>(a)) {
-            std::vector<int64_t> v;
-            for (auto x : darr.asArrayRef())
-              v.push_back(x);
-            permuteInfo.push_back(std::move(v));
-          } else if (auto de = mlir::dyn_cast<mlir::DenseIntElementsAttr>(a)) {
-            std::vector<int64_t> v;
-            for (auto ap : de.getValues<llvm::APInt>())
-              v.push_back(ap.getSExtValue());
-            permuteInfo.push_back(std::move(v));
-          } else if (auto iattr = mlir::dyn_cast<mlir::IntegerAttr>(a)) {
-            permuteInfo.push_back(std::vector<int64_t>{iattr.getInt()});
-          }
-        }
-      } else if (auto darr = mlir::dyn_cast<mlir::DenseI64ArrayAttr>(permuteAttr)) {
-        std::vector<int64_t> v;
-        for (auto x : darr.asArrayRef()){
-          v.push_back(x);
-        }
-        permuteInfo.push_back(std::move(v));
-      }
-    }
     auto loc = op->getLoc();
     auto oldFuncType = op.getFunctionType();
     auto converter = getTypeConverter();
@@ -483,39 +490,15 @@ struct BlockPointerOfConversionPattern
       vr_baseOffset.push_back(v);
     }
     auto stride = op.getStride();
-    auto order = op.getOrder();
 
-    std::vector<int64_t>* permute = nullptr;
-    if(!permuteInfo.empty()){
-      permute = &permuteInfo[argId];
-    }
-    
     auto basePtrType = mlir::dyn_cast<MemRefType>(adaptor.getBasePointer().getType());
     auto basePtrOldShape = basePtrType.getShape();  // basePtr 名义上的形状（即参数列表里的形状）
-    std::vector<int64_t> basePtrPermutedShape;
-    for(int i=0;i<basePtrOldShape.size();++i){
-      int id = i;
-      if(permute){
-        id = permute->at(i);
-      }
-      basePtrPermutedShape.push_back(basePtrOldShape[id]);
-    }
+    auto sourceStrides = getPhysicalStrides(basePtrOldShape);
 
-    // auto baseoffset_x = expr_baseOffset.floorDiv(stride[order[0]]);
-    // auto baseoffset_y = expr_baseOffset.floorDiv(stride[order[1]]);
-    // TODO : 存疑。先按照底层存储方式 <1,32,4096,128> 计算offsetxy. 如果遇到转置的，再做讨论 
-    auto baseoffset_x = expr_baseOffset.floorDiv(basePtrPermutedShape.back());
-    auto baseoffset_y = expr_baseOffset % basePtrPermutedShape.back();
-    
-    std::vector<AffineExpr> resExprArray = { baseoffset_y, baseoffset_x};
-    int32_t product = 1;
-    for(int i=basePtrPermutedShape.size()-1;i>=0;--i){
-      product *= basePtrPermutedShape[i];
-      if(i < basePtrPermutedShape.size() - 2){
-        resExprArray.push_back(expr_baseOffset.floorDiv(product));
-      }
-    }
-    std::reverse(resExprArray.begin(), resExprArray.end());
+    // base_offset 是按原始物理 memref layout 生成的，不能按 permute 后 shape
+    // 反解。permute 只影响 block 的二维访问方向，真实 GM 下标仍属于原始形状。
+    auto resExprArray = decomposePhysicalOffset(expr_baseOffset, basePtrOldShape,
+                                                sourceStrides, op->getContext());
 
     auto baseOffsetMap = AffineMap::get(dims.size(), 0, resExprArray, op->getContext());
 
@@ -523,6 +506,8 @@ struct BlockPointerOfConversionPattern
     info->baseOffsetMap = baseOffsetMap;
     info->baseOffsetMapOperands = vr_baseOffset;
     info->blockShape = op.getBlockShape();
+    info->sourceStrides = std::move(sourceStrides);
+    info->blockStrides.assign(stride.begin(), stride.end());
     s_argId_bufferInfo[argId] = info;
     if(newOp){
       // 含read，需要创建buffer存数据
@@ -669,24 +654,27 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       for(auto v : loop_expr_values){
         newIndices.push_back(v);
       }
-      std::vector<AffineExpr> newExprs;
-      // 比较 GM 的rank和newExpr的个数. 保证维度对齐. TODO:此处需要重新考虑 GM permute之后的布局.如何从 block_ptr_of 推断出前序的 affineExpr
-      // 本质原因 : asuka block_ptr_of 中没有包含 permute 的信息. <1,4096,32,128> 四维 != attr中的[128, 128] 二维信息
-      auto globalMemTy = mlir::cast<MemRefType>(globalBuffers[argId].getType());
-      for(int i=0; i < (globalMemTy.getShape().size() - indexExprs.size()); ++i){
-        newExprs.push_back(mlir::getAffineConstantExpr(0, op.getContext()));
-      }
+      std::vector<AffineExpr> newExprs(indexExprs.begin(), indexExprs.end());
       // 表达式构建 ：loop = iv0/step0 + iv1/step1 * ub0 + iv2/step2 * (ub0 * ub1) + (iv3/step3) * (ub0*ub1*ub2)
-      // [base_x + loop * offset_x, base_y + loop * offset_y] 
-      for(int i=0;i < indexExprs.size(); ++i){
-        AffineExpr newexpr;
-        if(i >= indexExprs.size() - 2){
-          newexpr = indexExprs[i] + offset[i-(indexExprs.size() - 2)] * loop_expr; 
+      // block_advance 的 offset 属于 block_ptr 的二维逻辑轴。该轴对应 GM 的哪一维，
+      // 要通过 block_ptr stride 与源 memref 物理 stride 匹配出来。
+      for(int i=0; i < offset.size(); ++i){
+        if(offset[i] == 0){
+          continue;
         }
-        else{
-          newexpr = indexExprs[i]; 
+        int physicalDim = -1;
+        if(i < info->blockStrides.size()){
+          physicalDim = findPhysicalDimForStride(info->sourceStrides,
+                                                 info->blockStrides[i]);
         }
-        newExprs.push_back(newexpr);
+        if(physicalDim < 0){
+          physicalDim = static_cast<int>(newExprs.size()) -
+                        static_cast<int>(offset.size()) + i;
+        }
+        assert(physicalDim >= 0 &&
+               physicalDim < static_cast<int>(newExprs.size()) &&
+               "block advance maps outside source rank");
+        newExprs[physicalDim] = newExprs[physicalDim] + offset[i] * loop_expr;
       }
       // newMap dim增加，symbol不变，expr重建
       auto newMap = AffineMap::get(newdimCount , info->baseOffsetMap.getNumSymbols(), newExprs, op->getContext());

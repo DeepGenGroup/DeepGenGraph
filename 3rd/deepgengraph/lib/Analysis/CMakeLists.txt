@@ -3,6 +3,7 @@ add_deepgengraph_library(DeepgengraphAnalysis
   ThreadAnalysis.cpp
   LowerInfo.cpp
   HardwareSpecification.cpp
+  LivelinessAnalyze.cpp
 
   DEPENDS
   DeepgengraphTableGen

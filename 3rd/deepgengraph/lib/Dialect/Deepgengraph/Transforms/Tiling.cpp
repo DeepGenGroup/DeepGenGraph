@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
+#include "deepgengraph/Dialect/Deepgengraph/Transforms/BlockSize.h"
 #include "deepgengraph/Dialect/Deepgengraph/Transforms/Passes.h"
 
 #include "dbg.h"
@@ -62,7 +63,7 @@ public:
     int k = lhs_type.getShape()[lhs_type.getRank() - 1];
     int n = rhs_type.getShape()[rhs_type.getRank() - 1];
 
-    int block_size = 128;
+    int block_size = DEEPGENGRAPH_BLOCK_SIZE;
     if (m > block_size && k <= block_size && n <= block_size) {
       // dbg("dot tiling m");
       assert(m % block_size == 0);

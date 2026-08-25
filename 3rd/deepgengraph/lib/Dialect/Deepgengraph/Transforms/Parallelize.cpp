@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // 引入 MLIR GreedyPatternRewriteDriver，用于贪心模式重写
 
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"         // 引入 Deepgengraph 方言定义
+#include "deepgengraph/Dialect/Deepgengraph/Transforms/BlockSize.h"
 #include "deepgengraph/Dialect/Deepgengraph/Transforms/Passes.h"       // 引入 Deepgengraph 方言中 Pass 定义
 
 #include "deepgengraph/Analysis/Parallelism.h"    // 引入并行性分析模块
@@ -58,15 +59,15 @@ public:
           if (info.info[i].kind == ParaType::Kind::kReUse && ana.batch_set.find(info.info[i].batch_id) == father) {
             // 如果 map 尚未初始化，则根据启发式设置 unit_num 和 size_per_unit
             if (map.unit_num <= 0) {
-              // 启发式：如果此维度大小 > 128，则将其切分成大小为128的块
-              const int DEFAULT_SIZE = 32;  // 128
+              // 启发式：如果此维度大于默认块大小，则按默认块大小切分。
+              const int DEFAULT_SIZE = DEEPGENGRAPH_BLOCK_SIZE;
               if (shape[i] > DEFAULT_SIZE) {
                 int size_per_unit = DEFAULT_SIZE;
-                assert(shape[i] % size_per_unit == 0);   // 健全性检查：维度长度必须能被128整除
-                map.unit_num = shape[i] / size_per_unit; // unit_num 为将维度按128划分后的块数
-                map.size_per_unit = size_per_unit;       // 每个并行单元的大小设为128
+                assert(shape[i] % size_per_unit == 0);   // 健全性检查：维度长度必须能被块大小整除
+                map.unit_num = shape[i] / size_per_unit; // unit_num 为按块大小划分后的块数
+                map.size_per_unit = size_per_unit;       // 每个并行单元的大小设为默认块大小
               } else {
-                // 如果维度太小（<=128），则不再进一步分块，以整个维度为并行单位
+                // 如果维度太小，则不再进一步分块，以整个维度为并行单位
                 map.size_per_unit = 1;
                 map.unit_num = (int)shape[i];            // unit_num 等于该维度长度本身
               }

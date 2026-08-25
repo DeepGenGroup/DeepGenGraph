@@ -126,9 +126,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   // pm.addNestedPass<func::FuncOp>(mlir::affine::createAffineLoopNormalizePass(true));
   pm.addPass(mlir::createCSEPass());
+  pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferLoopHoistingPass());
+  pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferHoistingPass());
+  pm.addPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // pm.addPass(mlir::createSymbolDCEPass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
+  
+
   return 0;
 }
 

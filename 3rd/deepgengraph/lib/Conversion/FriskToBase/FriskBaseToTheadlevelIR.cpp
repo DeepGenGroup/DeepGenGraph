@@ -23,6 +23,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenACC/OpenACC.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
@@ -44,10 +45,13 @@
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 // #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/LivelinessAnalyze.h"
 
 namespace mlir::frisk {
 
@@ -385,8 +389,8 @@ public:
     
     if(s_hw->getKind() == HW_KIND_DCU){
       // 若AB为local，将其直接替换为local buffer；否则，添加 copyfrom shm to reg 的逻辑。返回这个reg buffer
-      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_own_data_size() , isLocalBuffer(infoA.buffer));
-      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_own_data_size() , isLocalBuffer(infoB.buffer));
+      auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , isLocalBuffer(infoA.buffer));
+      auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , isLocalBuffer(infoB.buffer));
       // C: 创建reg级别buffer 注册到 s_buffer_replace 中，存放最终结果； instWMMA 的acc 临时用，不用注册到全局列表里
       auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_own_data_size(), true);
       auto instC = threadLevelBufferCreate(infoC, false, infoC.get_thread_widths(), false);
@@ -552,13 +556,20 @@ public:
     }
     // 获取reduce的规约轴长度
     int64_t reduceDim = op.getDim();
+    if (reduceDim < 0 || reduceDim >= srcTy.getRank()) {
+      return op.emitOpError("invalid reduce dimension");
+    }
+    if (reduceDim >= 2) {
+      return op.emitOpError("thread-level reduce currently supports 2D "
+                            "LowerInfo only");
+    }
     int64_t reduceExtent = srcTy.getDimSize(reduceDim);
     if (ShapedType::isDynamic(reduceExtent) || reduceExtent <= 0) {
       return op.emitOpError("thread-level reduce requires a positive static reduce extent");
     }
     
     // 单个线程持有的数据量
-    auto [srcTw0, srcTw1] = srcInfo.get_thread_widths();
+    auto [srcTw0, srcTw1] = srcInfo.get_thread_own_data_size();
     auto [srcWr0, srcWr1] = srcInfo.get_warp_repeat();
 
     auto getOrCreateLocalReplacement = [&](LowerInfo &info, MemRefType originalTy,
@@ -604,8 +615,6 @@ public:
         reduceExtent = srcTy.getDimSize(reduceDim);
       }
     }
-    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value value, int32_t offset, int32_t width, ShuffleMode mode);
-    // rewriter.create<gpu::ShuffleOp>(op->getLoc(), )
     if (dstIsLocal) {
       auto replacement = getOrCreateLocalReplacement(dstInfo, dstTy, dstLoopShape, false);
       if (failed(replacement)) {
@@ -672,9 +681,22 @@ public:
                    : buildMappedAccessIndices(rewriter, op->getLoc(), dstInfo,
                                               tidx, dstTileIvs, dstTy.getRank());
 
+    int64_t localReduceExtent = reduceExtent;
+    if (!srcIsLocal || srcBuffer == op.getSrc()) {
+      localReduceExtent = srcInfo.get_thread_own_data_size()[reduceDim];
+    }
+    if (ShapedType::isDynamic(localReduceExtent) || localReduceExtent <= 0) {
+      return op.emitOpError("thread-level reduce requires each thread to own "
+                            "a positive static reduce extent");
+    }
+    if (localReduceExtent > std::numeric_limits<int>::max()) {
+      return op.emitOpError("thread-level reduce extent is too large");
+    }
+
     std::vector<Value> redIvs;
     auto redLoops = createNestedAffineFor(rewriter, op->getLoc(),
-                                          {static_cast<int>(reduceExtent)}, redIvs);
+                                          {static_cast<int>(localReduceExtent)},
+                                          redIvs);
 
     SmallVector<Value, 2> srcIndices;
     if (srcIsLocal && srcBuffer != op.getSrc()) {
@@ -694,21 +716,25 @@ public:
         }
       }
     } else {
+      SmallVector<Value, 2> srcTileIvs;
       if (srcTy.getRank() == dstTy.getRank()) {
         for (unsigned i = 0; i < srcTy.getRank(); ++i) {
-          srcIndices.push_back(i == static_cast<unsigned>(reduceDim) ? redIvs[0]
-                                                                     : dstIndices[i]);
+          srcTileIvs.push_back(i == static_cast<unsigned>(reduceDim)
+                                   ? redIvs[0]
+                                   : dstTileIvs[i]);
         }
       } else {
         unsigned dstPos = 0;
         for (unsigned i = 0; i < srcTy.getRank(); ++i) {
           if (i == static_cast<unsigned>(reduceDim)) {
-            srcIndices.push_back(redIvs[0]);
+            srcTileIvs.push_back(redIvs[0]);
           } else {
-            srcIndices.push_back(dstIndices[dstPos++]);
+            srcTileIvs.push_back(dstTileIvs[dstPos++]);
           }
         }
       }
+      srcIndices = buildMappedAccessIndices(rewriter, op->getLoc(), srcInfo,
+                                            tidx, srcTileIvs, srcTy.getRank());
     }
 
     auto current =
@@ -723,10 +749,60 @@ public:
                                            ValueRange{zeroIdx});
 
     rewriter.setInsertionPointAfter(redLoops.back());
-    auto result =
+    auto localResult =
         rewriter.create<affine::AffineLoadOp>(op->getLoc(), acc, ValueRange{zeroIdx});
-    rewriter.create<affine::AffineStoreOp>(op->getLoc(), result.getResult(), dstBuffer,
+
+    auto isPowerOfTwo = [](int64_t value) {
+      return value > 0 && (value & (value - 1)) == 0;
+    };
+    auto warpLayout = srcInfo.get_warp_layout();
+    auto warpLayoutOrder = srcInfo.base_layout.warp_layout_order;
+    auto blockLayout = srcInfo.get_block_layout();
+    if (blockLayout[reduceDim] != 1) {
+      return op.emitOpError("shuffle reduce only supports reduce dimension "
+                            "within a single warp layout");
+    }
+    int64_t reduceLaneExtent = warpLayout[reduceDim];
+    if (!isPowerOfTwo(reduceLaneExtent)) {
+      return op.emitOpError("shuffle reduce requires power-of-two lane extent "
+                            "along the reduce dimension");
+    }
+    int64_t reduceLaneStride = 1;
+    if (warpLayoutOrder[0] == reduceDim) {
+      reduceLaneStride = 1;
+    } else if (warpLayoutOrder[1] == reduceDim) {
+      reduceLaneStride = warpLayout[warpLayoutOrder[0]];
+    } else {
+      return op.emitOpError("reduce dimension is not present in warp layout order");
+    }
+
+    Value reduced = localResult.getResult();
+    for (int64_t laneOffset = 1; laneOffset < reduceLaneExtent;
+         laneOffset <<= 1) {
+      auto shuffled = rewriter.create<gpu::ShuffleOp>(
+          op->getLoc(), reduced,
+          static_cast<int32_t>(laneOffset * reduceLaneStride),
+          static_cast<int32_t>(srcInfo.warp_threads), gpu::ShuffleMode::XOR);
+      auto combined = combine(reduced, shuffled.getShuffleResult());
+      if (failed(combined)) {
+        return op.emitOpError("unsupported reduce kind");
+      }
+      reduced = *combined;
+    }
+
+    Value laneId = modBy(rewriter, op->getLoc(), tidx, srcInfo.warp_threads);
+    Value reduceLaneCoord =
+        modBy(rewriter, op->getLoc(),
+              floorDivBy(rewriter, op->getLoc(), laneId, reduceLaneStride),
+              reduceLaneExtent);
+    auto isReduceLeader = rewriter.create<arith::CmpIOp>(
+        op->getLoc(), arith::CmpIPredicate::eq, reduceLaneCoord, zeroIdx);
+    auto ifOp =
+        rewriter.create<scf::IfOp>(op->getLoc(), isReduceLeader, false);
+    rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+    rewriter.create<affine::AffineStoreOp>(op->getLoc(), reduced, dstBuffer,
                                            dstIndices);
+    rewriter.setInsertionPointAfter(ifOp);
     rewriter.eraseOp(op);
     return success();
   }
@@ -1387,6 +1463,280 @@ public:
   }
 };
 
+// 规则：
+// 将frisk.copy 转换为对应的mlir基础op (点对点 或者 vector_copy)
+// 判断 src dst 的shape
+// srcSHape 更大，则indexmap作用于src。 dst更大时 map作用于 dst
+// 当src和dst其中一个来自 buffer_view, 那么另一个必然为同 shape。此时map取 buffer_view 的map
+// src dst 一样shape时，直接点对点copy
+class CopyOpRewrite : public OpConversionPattern<frisk::CopyOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(frisk::CopyOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    auto srcMem = op.getSrcMemRef();
+    auto dstMem = op.getDstMemRef();
+    auto srcMemType = mlir::cast<MemRefType>(srcMem.getType());
+    auto dstMemType = mlir::cast<MemRefType>(dstMem.getType());
+    if (srcMemType.getElementType() != dstMemType.getElementType()) {
+      return rewriter.notifyMatchFailure(
+          op, "copy-to-base only handles same element type copies");
+    }
+
+    struct BufferInfo {
+      Value realBuffer;
+      MemRefType realType;
+      bool fromView = false;
+      AffineMap viewMap;
+      SmallVector<Value, 4> viewOperands;
+    };
+
+    auto resolveBuffer = [](Value buffer) -> BufferInfo {
+      BufferInfo info;
+      info.realBuffer = buffer;
+      info.realType = cast<MemRefType>(buffer.getType());
+
+      if (auto viewOp = buffer.getDefiningOp<frisk::BufferViewOp>()) {
+        info.fromView = true;
+        info.realBuffer = viewOp.getSource();
+        info.realType = cast<MemRefType>(info.realBuffer.getType());
+        info.viewMap = viewOp.getIndexMap();
+        info.viewOperands.assign(viewOp.getIndices().begin(),
+                                 viewOp.getIndices().end());
+      }
+      return info;
+    };
+
+    auto srcInfo = resolveBuffer(srcMem);
+    auto dstInfo = resolveBuffer(dstMem);
+
+    auto productOfShape = [&](ArrayRef<int64_t> shape) -> FailureOr<int64_t> {
+      int64_t size = 1;
+      for (int64_t dim : shape) {
+        if (dim < 0) {
+          (void)rewriter.notifyMatchFailure(
+              op, "copy-to-base expects static memref shapes");
+          return failure();
+        }
+        if (dim != 0 && size > std::numeric_limits<int64_t>::max() / dim) {
+          (void)rewriter.notifyMatchFailure(op, "memref shape is too large");
+          return failure();
+        }
+        size *= dim;
+      }
+      return size;
+    };
+
+    // 比较两个buffer的shape，
+    auto compareShapeSize =
+        [&](ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) -> FailureOr<int> {
+      auto lhsSize = productOfShape(lhs);
+      if (failed(lhsSize)) {
+        return failure();
+      }
+      auto rhsSize = productOfShape(rhs);
+      if (failed(rhsSize)) {
+        return failure();
+      }
+      if (*lhsSize == *rhsSize) {
+        return 0;
+      }
+      return *lhsSize > *rhsSize ? 1 : -1;
+    };
+
+    SmallVector<int64_t, 4> copyShape;
+    bool hasMappedSide = false;
+    bool isMapForSrc = true;
+    AffineMap indexMap;
+    SmallVector<Value, 4> indexMapOperands;
+
+    if (srcInfo.fromView || dstInfo.fromView) {
+      if (srcInfo.fromView && dstInfo.fromView) {
+        return rewriter.notifyMatchFailure(
+            op, "copy-to-base does not support copy between two buffer_view ops");
+      }
+      if (srcMemType.getShape() != dstMemType.getShape()) {
+        return rewriter.notifyMatchFailure(
+            op, "buffer_view copy expects the other buffer to have the same shape");
+      }
+      hasMappedSide = true;
+      isMapForSrc = srcInfo.fromView;
+      indexMap = srcInfo.fromView ? srcInfo.viewMap : dstInfo.viewMap;
+      indexMapOperands =
+          srcInfo.fromView ? srcInfo.viewOperands : dstInfo.viewOperands;
+      copyShape.assign(srcMemType.getShape().begin(), srcMemType.getShape().end());
+    } else if (srcMemType.getShape() == dstMemType.getShape()) {
+      copyShape.assign(srcMemType.getShape().begin(), srcMemType.getShape().end());
+    } else {
+      auto shapeCompare =
+          compareShapeSize(srcMemType.getShape(), dstMemType.getShape());
+      if (failed(shapeCompare)) {
+        return failure();
+      }
+      if (*shapeCompare == 0) {
+        return rewriter.notifyMatchFailure(
+            op, "copy-to-base cannot infer map side for different shapes with the same element count");
+      }
+      hasMappedSide = true;
+      isMapForSrc = *shapeCompare > 0;
+      indexMap = op.getOffsetMap();
+      indexMapOperands.assign(op.getMapOperands().begin(),
+                              op.getMapOperands().end());
+      auto copyShapeRef =
+          isMapForSrc ? dstMemType.getShape() : srcMemType.getShape();
+      copyShape.assign(copyShapeRef.begin(), copyShapeRef.end());
+    }
+
+    std::vector<int> loopUpperBounds;
+    loopUpperBounds.reserve(copyShape.size());
+    for (int64_t dim : copyShape) {
+      if (dim < 0 || dim > std::numeric_limits<int>::max()) {
+        return rewriter.notifyMatchFailure(
+            op, "copy-to-base expects static int-sized loop bounds");
+      }
+      loopUpperBounds.push_back(static_cast<int>(dim));
+    }
+
+    std::vector<Value> copyIvs;
+    auto loops =
+        createNestedAffineFor(rewriter, op->getLoc(), loopUpperBounds, copyIvs);
+
+    auto buildDirectIndices = [&](unsigned rank) -> FailureOr<SmallVector<Value>> {
+      if (rank != copyIvs.size()) {
+        (void)rewriter.notifyMatchFailure(
+            op, "direct copy side rank must match copy iteration rank");
+        return failure();
+      }
+      return SmallVector<Value>{copyIvs.begin(), copyIvs.end()};
+    };
+
+    auto addIndexValues = [&](Value lhs, Value rhs) -> Value {
+      auto d0 = rewriter.getAffineDimExpr(0);
+      auto d1 = rewriter.getAffineDimExpr(1);
+      auto map = AffineMap::get(2, 0, d0 + d1, rewriter.getContext());
+      return rewriter.create<affine::AffineApplyOp>(
+          op->getLoc(), map, ValueRange{lhs, rhs});
+    };
+
+    auto buildMappedIndices =
+        [&](MemRefType realType) -> FailureOr<SmallVector<Value>> {
+      unsigned rank = realType.getRank();
+      if (indexMap.getNumResults() != rank) {
+        (void)rewriter.notifyMatchFailure(
+            op, "index map result count must match mapped buffer rank");
+        return failure();
+      }
+      if (indexMap.getNumInputs() != indexMapOperands.size()) {
+        (void)rewriter.notifyMatchFailure(
+            op, "index map operand count does not match map input count");
+        return failure();
+      }
+      if (copyIvs.size() > rank) {
+        (void)rewriter.notifyMatchFailure(
+            op, "copy iteration rank is larger than mapped buffer rank");
+        return failure();
+      }
+
+      SmallVector<Value> indices;
+      indices.reserve(rank);
+      unsigned loopStart = rank - copyIvs.size();
+      for (unsigned i = 0; i < rank; ++i) {
+        auto oneResultMap =
+            AffineMap::get(indexMap.getNumDims(), indexMap.getNumSymbols(),
+                           indexMap.getResult(i), rewriter.getContext());
+        Value index = rewriter.create<affine::AffineApplyOp>(
+            op->getLoc(), oneResultMap, indexMapOperands);
+        if (i >= loopStart) {
+          index = addIndexValues(index, copyIvs[i - loopStart]);
+        }
+        indices.push_back(index);
+      }
+      return indices;
+    };
+
+    FailureOr<SmallVector<Value>> srcIndices;
+    FailureOr<SmallVector<Value>> dstIndices;
+    if (!hasMappedSide) {
+      srcIndices = buildDirectIndices(srcInfo.realType.getRank());
+      dstIndices = buildDirectIndices(dstInfo.realType.getRank());
+    } else if (isMapForSrc) {
+      srcIndices = buildMappedIndices(srcInfo.realType);
+      dstIndices = buildDirectIndices(dstInfo.realType.getRank());
+    } else {
+      srcIndices = buildDirectIndices(srcInfo.realType.getRank());
+      dstIndices = buildMappedIndices(dstInfo.realType);
+    }
+    if (failed(srcIndices) || failed(dstIndices)) {
+      return failure();
+    }
+
+    auto value = rewriter.create<affine::AffineLoadOp>(
+        op->getLoc(), srcInfo.realBuffer, *srcIndices);
+    rewriter.create<affine::AffineStoreOp>(
+        op->getLoc(), value.getResult(), dstInfo.realBuffer, *dstIndices);
+
+    if (!loops.empty()) {
+      rewriter.setInsertionPointAfter(loops.front());
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// fillop -> 点对点赋值
+class FillOpRewrite : public OpConversionPattern<frisk::FillOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(frisk::FillOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    // 获取 value，构建for循环。将value 赋值给 memref的每个点
+    auto memref = op.getMemref();
+    auto memrefType = mlir::cast<MemRefType>(memref.getType());
+    auto loc = op->getLoc();
+
+    std::vector<int> loopUpperBounds;
+    loopUpperBounds.reserve(memrefType.getRank());
+    for (int64_t dim : memrefType.getShape()) {
+      if (dim < 0 || dim > std::numeric_limits<int>::max()) {
+        return rewriter.notifyMatchFailure(
+            op, "fill-to-base expects static int-sized memref shape");
+      }
+      loopUpperBounds.push_back(static_cast<int>(dim));
+    }
+
+    auto valueAttr = dyn_cast<TypedAttr>(op.getValueAttr());
+    if (!valueAttr) {
+      return rewriter.notifyMatchFailure(op, "fill value must be typed");
+    }
+    auto val = rewriter.create<arith::ConstantOp>(
+        loc, memrefType.getElementType(), valueAttr);
+    std::vector<Value> ivs;
+    auto loops = createNestedAffineFor(rewriter, loc, loopUpperBounds, ivs);
+    rewriter.create<affine::AffineStoreOp>(loc, val.getResult(), memref,
+                                           ValueRange{ivs});
+    if (!loops.empty()) {
+      rewriter.setInsertionPointAfter(loops.front());
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class AllocBufferOpConversion : public OpConversionPattern<frisk::AllocBufferOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(AllocBufferOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    auto memtype =  mlir::cast<MemRefType>(op.getResult().getType());
+    if(memtype.getMemorySpaceAsInt() == (int)friskMs::Shared){
+      auto newOp = rewriter.create<memref::AllocOp>(op->getLoc(), memtype, op.getAlignmentAttr() );
+      rewriter.replaceOp(op, newOp);
+    }
+    else if(memtype.getMemorySpaceAsInt() == (int)friskMs::Local){
+      auto newOp = rewriter.create<memref::AllocaOp>(op->getLoc(), memtype, op.getAlignmentAttr() );
+      rewriter.replaceOp(op, newOp);
+    }
+    return llvm::success();
+  }
+};
 
 // 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分其他op到thread上
 class ConvertFriskBaseToThreadLevelIR : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
@@ -1402,6 +1752,9 @@ public:
     if(s_hw == nullptr){
       s_hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, context);
     }
+    // -------- step 0 ： 生命周期分析。buffer 复用优化
+    LivelinessAnalyzer liveliness;
+    liveliness.run(kernel);
 
     // -------- step 1 ：进行 layoutInfer 得到block级别IR上，每个buffer的 访问模式。
     s_info = LowerInfoAnalysis::run(kernel);
@@ -1417,6 +1770,8 @@ public:
     kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
     kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
     
+   
+
     // 根据 layout推定结果，插入 convertLAyoutOp
     insertConvertLayoutOps(*s_info);
 
@@ -1433,24 +1788,41 @@ public:
       gpu::GPUDialect>();
 
     target.addIllegalOp<KernelOp,ParallelOp,ForOp,
-      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp
+      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp, CopyOp, FillOp
     >();
-    // 对于类型转换语义的frisk.copy ,标记为非法。采取Pattern做重写
-    target.addDynamicallyLegalOp<frisk::CopyOp>([](frisk::CopyOp op){
-      auto srctype = mlir::cast<MemRefType>(op.getSrcMemRef().getType());
-      auto dsttype = mlir::cast<MemRefType>(op.getDstMemRef().getType());
-      return !(srctype.getElementType() != dsttype.getElementType() && 
-        srctype.getShape() == dsttype.getShape());
-    });
+
     RewritePatternSet patterns(context);
     patterns.add<
-      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite, ConvertLayoutOpConversion
+      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite, CopyOpRewrite, FillOpRewrite, 
+      ConvertLayoutOpConversion
     >(context);
+
     llvm::outs() << "-- lowerinfo partialconversion\n";llvm::outs().flush();
-    if (failed(applyPartialConversion(kernel, target, std::move(patterns)))){
+    applyPartialConversion(kernel, target, std::move(patterns));
+    
+    // -------- step2 : 替换 allocbuffer -> memref.alloc / alloca
+    ConversionTarget t2(*context);
+    t2.addLegalDialect<
+      frisk::FriskDialect,
+      arith::ArithDialect,
+      affine::AffineDialect,
+      math::MathDialect,
+      func::FuncDialect,
+      memref::MemRefDialect,
+      scf::SCFDialect,
+      gpu::GPUDialect>();
+    t2.addIllegalOp<KernelOp,ParallelOp,ForOp,
+      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp, CopyOp, FillOp, AllocBufferOp
+    >();
+    RewritePatternSet ps2(context);
+    ps2.add<
+      AllocBufferOpConversion
+    >(context);
+    if (failed(applyFullConversion(kernel, t2, std::move(ps2)))){
       return signalPassFailure();
     }
-    llvm::outs() << "-- exit Pass\n";llvm::outs().flush();
+    llvm::outs() << "-- convert to thread level IR done!\n";llvm::outs().flush();
+
   }
 };
 
