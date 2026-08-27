@@ -1,3 +1,4 @@
+#include "deepgengraph/Common.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -7,10 +8,12 @@
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -30,6 +33,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "deepgengraph/Conversion/DeepgengraphToLinalgOnTensor/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
@@ -54,6 +58,18 @@
 #include "deepgengraph/Analysis/ThreadAnalysis.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Export.h"       // 包含 translateModuleToLLVMIR
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/raw_ostream.h"
+#include <string>
 
 using namespace mlir;
 
@@ -61,6 +77,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);
   mlir::registerAllDialects(registry);
+  mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerNVVMDialectTranslation(registry);
+  mlir::registerROCDLDialectTranslation(registry);
   auto ctx = std::make_unique<mlir::MLIRContext>(registry);
 
   // 首先，注册需要的 dialect
@@ -75,16 +95,34 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     math::MathDialect,
     deepgengraph::DeepgengraphDialect,
     deepgengraph::triton::DeepgengraphTritonDialect,
-    frisk::FriskDialect
+    frisk::FriskDialect,
+    LLVM::LLVMDialect,
+    vector::VectorDialect
     >();
 
   
   // 读入文件
   auto src = parseSourceFile<ModuleOp>(argv[1], ctx.get());
+  if (!src) {
+    llvm::errs() << "Failed to parse input MLIR file: " << argv[1] << "\n";
+    return 1;
+  }
   // 简单的输出，在 debug 的时候常用
   analyze::PointerTracer::getPointerInfo(*src);
   src->dump();
   mlir::PassManager pm(ctx.get());
+
+  auto AddPass = [&](std::unique_ptr<Pass> pass){
+    PassManager pm(ctx.get());
+    pm.addPass(std::move(pass));
+    pm.run(src->getOperation());
+  };
+
+  auto AddPassNested = [&](std::unique_ptr<Pass> pass){
+    PassManager pm(ctx.get());
+    pm.addNestedPass<func::FuncOp>(std::move(pass));
+    pm.run(src->getOperation());
+  };
 
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
   pm.addPass(frisk::createAddKernelargPermuteInfoPass());
@@ -135,7 +173,34 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
   
+  AddPass(frisk::createThreadLevelIRLegalizePass());
+  llvm::outs() << "\n---- after threadIR legalize -----\n"; llvm::outs().flush(); src->dump();
+  
+  mlir::ModuleOp mod = *src;
+  frisk::firstLowering(mod, src->getContext());
+  frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm);
+  llvm::outs() << "\n---- after secondLowering -----\n"; llvm::outs().flush(); src->dump();
+  
+  // ------- convert to llvmir text
+  //  创建真正的 LLVM 上下文
+  llvm::LLVMContext llvmContext;
 
+  // 3. 将 MLIR ModuleOp 转换为 llvm::Module
+  std::unique_ptr<llvm::Module> llvmModule =
+      mlir::translateModuleToLLVMIR(mod, llvmContext);
+
+  if (!llvmModule) {
+    llvm::errs() << "Failed to translate MLIR ModuleOp to LLVM IR.\n";
+    return 1;
+  }
+
+  // 4. 将 llvm::Module 打印为文本
+  std::string llvmIrStr;
+  std::error_code ec;
+  llvm::raw_fd_ostream os("finalLLVMText.ll",ec);
+  if(!ec){
+    llvmModule->print(os, /*AssemblyAnnotationWriter=*/nullptr);
+  }
   return 0;
 }
 
@@ -287,10 +352,13 @@ void testCompareAffinemap() {
 }
 
 int main(int argc, char** argv) {
-  readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
+  if (argc < 2) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir>\n";
+    return 1;
+  }
+  return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
   // if (testAffineMapCaluclate())
   //   return 1;
   // testGPULayout();
   // testCompareAffinemap();
-  return 0;
 }

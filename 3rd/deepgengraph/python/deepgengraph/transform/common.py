@@ -76,7 +76,7 @@ def optimize(op, context=None):
   # 将一个已由分析（ParallelismAnalysis）标记了哪些维度可并行 的 KernelOp，重写成一个嵌套在 ParallelForOp 中的形式，从而在这些批量（batch）或复用（reuse）维度上并行执行。
   # 以在指定的「批次维度」（batch）或「复用维度」（reuse）上并行化计算。
   passes.add_deepgengraph_parallelize(pm, True)
-  # top_pm.run(op);print("-------- after add_deepgengraph_parallelize\n",op)
+  top_pm.run(op);print("-------- after add_deepgengraph_parallelize\n",op)
   # top_pm.run(op)
   # top_pm, pm = get_pass_manager(op, context)
   # print("opopopopopopop_parallelize")

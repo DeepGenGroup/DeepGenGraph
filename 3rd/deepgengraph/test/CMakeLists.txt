@@ -19,6 +19,16 @@ target_link_libraries(MyTest PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
+  # LLVM IR 导出/导入核心库
+  MLIRTargetLLVMIRExport
+  MLIRTargetLLVMIRImport
+  # Dialect 到 LLVM IR 的 Translation 库
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRLLVMIRToLLVMTranslation
+  MLIRLLVMToLLVMIRTranslation
+  MLIRNVVMToLLVMIRTranslation
+  MLIRLLVMIRToNVVMTranslation
+  MLIRROCDLToLLVMIRTranslation
 
   DeepgengraphIR
   DeepgengraphTritonIR

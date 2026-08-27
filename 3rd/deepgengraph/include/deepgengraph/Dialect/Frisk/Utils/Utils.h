@@ -107,6 +107,18 @@ enum class FriskDType : int {
   i16
 };
 
+inline std::string FriskDTypeToString(FriskDType d){
+  switch (d) {
+    case mlir::frisk::FriskDType::f16: return "f16";
+    case mlir::frisk::FriskDType::f32 : return "f32";
+    case mlir::frisk::FriskDType::i16 : return "i16";
+    case mlir::frisk::FriskDType::i32 : return "i32";
+    default: break;
+  }
+  return "";
+}
+
+
 // 比较memspace层级大小（）
 static inline int compareMemspace(frisk::attr::MemorySpace lhs, frisk::attr::MemorySpace rhs){
   auto toInt = [](frisk::attr::MemorySpace ms){

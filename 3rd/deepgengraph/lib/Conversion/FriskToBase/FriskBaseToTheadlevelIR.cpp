@@ -57,6 +57,7 @@ namespace mlir::frisk {
 
 namespace {
 #define GEN_PASS_DEF_CONVERTFRISKBASETOTHREADLEVELIR
+
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
 
@@ -393,8 +394,9 @@ public:
       auto newB = threadLevelBufferCreate(infoB, false, infoB.get_thread_widths() , isLocalBuffer(infoB.buffer));
       // C: 创建reg级别buffer 注册到 s_buffer_replace 中，存放最终结果； instWMMA 的acc 临时用，不用注册到全局列表里
       auto newC = threadLevelBufferCreate(infoC, false, infoC.get_thread_own_data_size(), true);
-      auto instC = threadLevelBufferCreate(infoC, false, infoC.get_thread_widths(), false);
-
+      auto instCShape = infoC.get_thread_widths() * infoC.get_warp_repeat();  // 单个指令需要的 instC shape
+      auto instC = threadLevelBufferCreate(infoC, false, instCShape, false);
+      auto instName = op->getAttrOfType<StringAttr>("inst_name");
       auto [br0, br1] = infoC.get_block_repeat();
       auto [wiu0, wiu1] = infoC.warpInstUnroll;
       int wrA0 = infoA.get_warp_repeat()[0];
@@ -475,7 +477,11 @@ public:
                                          mapOperands, map);
         }
         // AB copy ok. 计算wmma（ instC 具有累加语义）
-        rewriter.create<frisk::WarpMmaOp>(op->getLoc(), newA, newB, instC);
+        auto wmma = rewriter.create<frisk::WarpMmaOp>(op->getLoc(), newA, newB, instC);
+        rewriter.modifyOpInPlace(wmma, [&](){
+          wmma->setAttr("inst_name", instName);
+          wmma->setAttr("inst_constraints", op->getAttr("inst_constraints"));
+        });
       }
       // kloop ends. 需要将instC累加结果写回 newC with loopMN
       if (!kLoopOps.empty()) {
@@ -1688,13 +1694,30 @@ public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(frisk::FillOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     // 获取 value，构建for循环。将value 赋值给 memref的每个点
-    auto memref = op.getMemref();
+    auto memref = adaptor.getMemref();
     auto memrefType = mlir::cast<MemRefType>(memref.getType());
     auto loc = op->getLoc();
 
     std::vector<int> loopUpperBounds;
     loopUpperBounds.reserve(memrefType.getRank());
-    for (int64_t dim : memrefType.getShape()) {
+    SmallVector<int64_t> fillShape(memrefType.getShape());
+    if (s_info && isLocalMemref(op.getMemref()) && memrefType.getRank() == 2) {
+      LowerInfo *lowerInfo = s_info->getLowerInfo(op.getMemref(), op.getOperation());
+      if (!lowerInfo) {
+        for (auto &entry : *s_info) {
+          if (entry.second.buffer == op.getMemref()) {
+            lowerInfo = &entry.second;
+            break;
+          }
+        }
+      }
+      if (lowerInfo) {
+        auto threadOwnData = lowerInfo->get_thread_own_data_size();
+        fillShape[0] = threadOwnData[0];
+        fillShape[1] = threadOwnData[1];
+      }
+    }
+    for (int64_t dim : fillShape) {
       if (dim < 0 || dim > std::numeric_limits<int>::max()) {
         return rewriter.notifyMatchFailure(
             op, "fill-to-base expects static int-sized memref shape");
@@ -1738,6 +1761,146 @@ public:
   }
 };
 
+static std::optional<int64_t> getStaticElementCount(MemRefType type) {
+  if (!type.hasStaticShape()) {
+    return std::nullopt;
+  }
+  int64_t count = 1;
+  for (int64_t dim : type.getShape()) {
+    if (dim < 0 || (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
+      return std::nullopt;
+    }
+    count *= dim;
+  }
+  return count;
+}
+
+static SmallVector<int64_t> getContiguousStrides(ArrayRef<int64_t> shape) {
+  SmallVector<int64_t> strides(shape.size(), 1);
+  int64_t stride = 1;
+  for (int64_t i = static_cast<int64_t>(shape.size()) - 1; i >= 0; --i) {
+    strides[i] = stride;
+    stride *= std::max<int64_t>(shape[i], 1);
+  }
+  return strides;
+}
+
+static void applyBufferReuse(func::FuncOp kernel,
+                             const LivelinessAnalyzer &liveliness) {
+  struct ReuseGroup {
+    SmallVector<memref::AllocOp, 4> allocs;
+    MemRefType firstType;
+    Type elementType;
+    Attribute memorySpace;
+    Block *parentBlock = nullptr;
+    int64_t maxElements = 0;
+    uint64_t maxAlignment = 0;
+    bool allSameType = true;
+    bool valid = true;
+  };
+
+  std::map<unsigned, ReuseGroup> groups;
+  kernel.walk([&](memref::AllocOp alloc) {
+    Value buffer = alloc.getMemref();
+    auto colorIt = liveliness.rootShmColors.find(buffer);
+    if (colorIt == liveliness.rootShmColors.end()) {
+      return;
+    }
+
+    auto type = cast<MemRefType>(buffer.getType());
+    if (type.getMemorySpaceAsInt() != int(friskMs::Shared)) {
+      return;
+    }
+    auto elementCount = getStaticElementCount(type);
+    if (!elementCount) {
+      return;
+    }
+    if (llvm::any_of(alloc->getUsers(), [](Operation *user) {
+          return isa<memref::DeallocOp>(user);
+        })) {
+      return;
+    }
+
+    auto &group = groups[colorIt->second];
+    if (group.allocs.empty()) {
+      group.firstType = type;
+      group.elementType = type.getElementType();
+      group.memorySpace = type.getMemorySpace();
+      group.parentBlock = alloc->getBlock();
+    } else {
+      group.allSameType = group.allSameType && type == group.firstType;
+      if (type.getElementType() != group.elementType ||
+          type.getMemorySpace() != group.memorySpace ||
+          alloc->getBlock() != group.parentBlock) {
+        group.valid = false;
+      }
+    }
+
+    group.maxElements = std::max(group.maxElements, *elementCount);
+    if (auto alignment = alloc.getAlignment()) {
+      group.maxAlignment = std::max(group.maxAlignment, *alignment);
+    }
+    group.allocs.push_back(alloc);
+  });
+
+  OpBuilder builder(kernel.getContext());
+  unsigned reusedBuffers = 0;
+  for (auto &[color, group] : groups) {
+    if (!group.valid || group.allocs.size() < 2) {
+      continue;
+    }
+
+    auto firstAlloc = group.allocs.front();
+    builder.setInsertionPoint(firstAlloc);
+    IntegerAttr alignmentAttr;
+    if (group.maxAlignment > 0) {
+      alignmentAttr = builder.getI64IntegerAttr(group.maxAlignment);
+    }
+
+    MemRefType backingType = group.allSameType
+                                 ? group.firstType
+                                 : MemRefType::get({group.maxElements},
+                                                   group.elementType,
+                                                   AffineMap{},
+                                                   group.memorySpace);
+    auto backing =
+        builder.create<memref::AllocOp>(firstAlloc.getLoc(), backingType,
+                                        alignmentAttr);
+    backing->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
+    backing->setAttr("shm_reuse_group_size",
+                     builder.getI64IntegerAttr(group.allocs.size()));
+
+    SmallVector<Operation *> erased;
+    erased.reserve(group.allocs.size());
+    for (auto alloc : group.allocs) {
+      Value replacement = backing.getMemref();
+      auto originalType = cast<MemRefType>(alloc.getMemref().getType());
+      if (!group.allSameType) {
+        builder.setInsertionPoint(alloc);
+        auto shape = originalType.getShape();
+        auto strides = getContiguousStrides(shape);
+        replacement = builder
+                          .create<memref::ReinterpretCastOp>(
+                              alloc.getLoc(), originalType, backing.getMemref(),
+                              /*offset=*/0, shape, strides)
+                          .getResult();
+      }
+      alloc.getMemref().replaceAllUsesWith(replacement);
+      erased.push_back(alloc);
+      ++reusedBuffers;
+    }
+
+    for (Operation *op : erased) {
+      op->erase();
+    }
+  }
+
+  llvm::outs() << "[applyBufferReuse] reused shared buffers: " << reusedBuffers
+               << "\n";
+  llvm::outs().flush();
+
+}
+
 // 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分其他op到thread上
 class ConvertFriskBaseToThreadLevelIR : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
 public:
@@ -1752,9 +1915,6 @@ public:
     if(s_hw == nullptr){
       s_hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, context);
     }
-    // -------- step 0 ： 生命周期分析。buffer 复用优化
-    LivelinessAnalyzer liveliness;
-    liveliness.run(kernel);
 
     // -------- step 1 ：进行 layoutInfer 得到block级别IR上，每个buffer的 访问模式。
     s_info = LowerInfoAnalysis::run(kernel);
@@ -1822,6 +1982,10 @@ public:
       return signalPassFailure();
     }
     llvm::outs() << "-- convert to thread level IR done!\n";llvm::outs().flush();
+    // -------- step 3 生命周期分析。buffer 复用优化
+    LivelinessAnalyzer liveliness;
+    liveliness.run(kernel);
+    applyBufferReuse(kernel, liveliness);
 
   }
 };

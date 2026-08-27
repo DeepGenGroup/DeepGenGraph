@@ -1,5 +1,6 @@
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
+#include "deepgengraph/Common.h"
 #include <tuple>
 
 namespace mlir::frisk {
@@ -48,7 +49,7 @@ Value LivelinessAnalyzer::getRootAllocation(Value value) {
 }
 
 void LivelinessAnalyzer::run(func::FuncOp funcOp) {
-  if(!funcOp->hasAttr("thread_num")){
+  if(!funcOp->hasAttr(frisk::THREAD_NUM)){
     return;
   }
   liveRanges.clear();
@@ -73,6 +74,15 @@ void LivelinessAnalyzer::run(func::FuncOp funcOp) {
   auto classifyRoot = [](Value root) {
     if (root.getDefiningOp<memref::AllocaOp>())
       return MemoryKind::Register;
+
+    if (root.getDefiningOp<memref::AllocOp>()) {
+      auto memrefType = dyn_cast<MemRefType>(root.getType());
+      if (!memrefType)
+        return MemoryKind::Ignore;
+      return memrefType.getMemorySpaceAsInt() == int(frisk::attr::MemorySpace::Shared)
+                 ? MemoryKind::Shm
+                 : MemoryKind::Ignore;
+    }
 
     auto allocBuffer = root.getDefiningOp<frisk::AllocBufferOp>();
     if (!allocBuffer)
@@ -287,6 +297,12 @@ void LivelinessAnalyzer::getColoredShmNodes() {
       allocBuffer->setAttr("shm_reuse_offset", builder.getI64IntegerAttr(offset));
       allocBuffer->setAttr("shm_reuse_bytes",
                            builder.getI64IntegerAttr(node.bytes));
+    } else if (auto alloc = node.root.getDefiningOp<memref::AllocOp>()) {
+      MLIRContext *ctx = alloc->getContext();
+      Builder builder(ctx);
+      alloc->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
+      alloc->setAttr("shm_reuse_offset", builder.getI64IntegerAttr(offset));
+      alloc->setAttr("shm_reuse_bytes", builder.getI64IntegerAttr(node.bytes));
     }
   }
 
