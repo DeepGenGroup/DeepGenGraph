@@ -200,6 +200,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::raw_fd_ostream os("finalLLVMText.ll",ec);
   if(!ec){
     llvmModule->print(os, /*AssemblyAnnotationWriter=*/nullptr);
+    llvm::outs() << "[d] llvmIR 已输出到 finalLLVMText.ll\n" ; llvm::outs().flush();
   }
   return 0;
 }

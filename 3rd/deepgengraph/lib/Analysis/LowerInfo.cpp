@@ -873,10 +873,10 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
   //        "C must be local buffer.");
   // MmaShape mma = getMmaShape(problem, hw);
   MMAInstInfo* instInfo = selectGemmInst(problem, hw);
-  llvm::outs() <<"mma_inst - " << instInfo->name.c_str() << "\n"; llvm::outs().flush();
+  llvm::outs() <<"mma_inst - " << instInfo->asm_str.c_str() << "\n"; llvm::outs().flush();
   IRRewriter rw(op);
   rw.modifyOpInPlace(op, [&](){
-    op->setAttr("inst_name", rw.getStringAttr(instInfo->name));
+    op->setAttr("inst_name", rw.getStringAttr(instInfo->asm_str));
     op->setAttr("inst_constraints", rw.getStringAttr(instInfo->constraints));
   });
 

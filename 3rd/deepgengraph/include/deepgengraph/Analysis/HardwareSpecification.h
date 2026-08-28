@@ -202,7 +202,7 @@ struct SwizzleLayoutDesc {
  * 
  */
 struct MMAInstInfo {
-    std::string name;  // inst的name
+    std::string asm_str;  // inst的name
     std::string constraints;  // inst 的constriants。用于构建 llvmDialect::inlineAsm op
     int m;
     int n;

@@ -346,7 +346,7 @@ public:
                  << infoC.get_block_repeat()[1] << "] buffer=" << op.getC() << "\n";
     
     assert(infoA.get_block_repeat()[1] * infoA.warpInstUnroll[1] == infoB.get_block_repeat()[0] * infoB.warpInstUnroll[0] );  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
-    assert(infoA.mmaInst->name == infoB.mmaInst->name);
+    assert(infoA.mmaInst->asm_str == infoB.mmaInst->asm_str);
     auto typeA = mlir::cast<MemRefType>(adaptor.getA().getType());
     auto typeB = mlir::cast<MemRefType>(adaptor.getB().getType());
     auto isLocalBuffer = [](Value buffer) {
@@ -1935,9 +1935,9 @@ public:
     // 根据 layout推定结果，插入 convertLAyoutOp
     insertConvertLayoutOps(*s_info);
 
-    ConversionTarget target(*context);
+    ConversionTarget t0(*context);
   
-    target.addLegalDialect<
+    t0.addLegalDialect<
       frisk::FriskDialect,
       arith::ArithDialect,
       affine::AffineDialect,
@@ -1947,20 +1947,48 @@ public:
       scf::SCFDialect,
       gpu::GPUDialect>();
 
-    target.addIllegalOp<KernelOp,ParallelOp,ForOp,
+    t0.addIllegalOp<
+      BlockOp, GemmOp, ReduceOp
+    >();
+    t0.addDynamicallyLegalOp<frisk::CopyOp>([](frisk::CopyOp op){
+      auto src = op.getSrc().getType();
+      auto dst = op.getDst().getType();
+      return !(src.getShape() == dst.getShape() && src.getElementType() != dst.getElementType());
+    });
+
+    RewritePatternSet p0(context);
+    p0.add<
+      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite
+    >(context);
+    llvm::outs() << "---- after convert gemm/blockop/reduce/copy(convert datatype)\n";
+    applyPartialConversion(kernel, t0, std::move(p0));
+    llvm::outs() << kernel << "\n"; llvm::outs().flush();
+
+    // -------- step 2 : 替换copy fill convertLayout
+    ConversionTarget t1(*context);
+    t1.addLegalDialect<
+      frisk::FriskDialect,
+      arith::ArithDialect,
+      affine::AffineDialect,
+      math::MathDialect,
+      func::FuncDialect,
+      memref::MemRefDialect,
+      scf::SCFDialect,
+      gpu::GPUDialect>();
+
+    t1.addIllegalOp<
       BlockOp, GemmOp, ReduceOp, ConvertLayoutOp, CopyOp, FillOp
     >();
 
-    RewritePatternSet patterns(context);
-    patterns.add<
-      BlockOpConversion, GemmOpConversion, ReduceOpConversion, CopyConvertOpRewrite, CopyOpRewrite, FillOpRewrite, 
-      ConvertLayoutOpConversion
+    RewritePatternSet p1(context);
+    p1.add<
+      CopyOpRewrite, FillOpRewrite, ConvertLayoutOpConversion
     >(context);
-
-    llvm::outs() << "-- lowerinfo partialconversion\n";llvm::outs().flush();
-    applyPartialConversion(kernel, target, std::move(patterns));
+    llvm::outs() << "---- after convert copy /fill/ convLayout \n" ;
+    applyPartialConversion(kernel, t1, std::move(p1));
+    llvm::outs() << kernel << "\n"; llvm::outs().flush();
     
-    // -------- step2 : 替换 allocbuffer -> memref.alloc / alloca
+    // -------- step 3 : 替换 allocbuffer -> memref.alloc / alloca
     ConversionTarget t2(*context);
     t2.addLegalDialect<
       frisk::FriskDialect,
@@ -1981,8 +2009,8 @@ public:
     if (failed(applyFullConversion(kernel, t2, std::move(ps2)))){
       return signalPassFailure();
     }
-    llvm::outs() << "-- convert to thread level IR done!\n";llvm::outs().flush();
-    // -------- step 3 生命周期分析。buffer 复用优化
+    llvm::outs() << "---- convert to thread level IR done!\n";llvm::outs().flush();
+    // -------- step 4 生命周期分析。buffer 复用优化
     LivelinessAnalyzer liveliness;
     liveliness.run(kernel);
     applyBufferReuse(kernel, liveliness);

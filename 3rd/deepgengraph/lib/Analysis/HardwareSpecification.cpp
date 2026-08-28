@@ -142,14 +142,15 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
             auto get_inst = [](int m, int n, int k, mlir::frisk::FriskDType abTy, mlir::frisk::FriskDType cTy)-> MMAInstInfo {
               MMAInstInfo info;
               // info.name = "__builtin_amdgcn_mmac_f32_16x16x4f32"
-              info.name = "v_mmac_";
-              info.constraints = "=v,v,v,v";  // V4fV4hV4hV4f
-              llvm::raw_string_ostream ss(info.name);
+              info.asm_str = "v_mmac_";
+              info.constraints = "=v,v,v,0";  // 表示最后一个operand的寄存器 必须和输出D的寄存器分配相同
+              // info.constraints = "=v,v,v,v";  // V4fV4hV4hV4f
+              llvm::raw_string_ostream ss(info.asm_str);
               info.m = m;
               info.n = n;
               info.k = k;
-              ss << mlir::frisk::FriskDTypeToString(cTy) << "_" << m << "x" << n << "x" << k << mlir::frisk::FriskDTypeToString(abTy);
-              ss << " $0, $1, $2, $3";  // $0 输出， 123 输入
+              ss << mlir::frisk::FriskDTypeToString(cTy) << "_" << m << "x" << n << "x" << k << "_"<< mlir::frisk::FriskDTypeToString(abTy);
+              ss << " $0, $2, $1, $3";  // $0 输出， 123 输入(b,a,c)
               /*
               <inline asm>:1:2: error: srcD is overlap with srcC
                       v_mmac_f32_16x16x16f16 v[2:5], v[0:1], v[2:3], v[4:7]
