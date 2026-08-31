@@ -8,6 +8,7 @@
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -72,6 +73,13 @@
 #include <string>
 
 using namespace mlir;
+
+frisk::KernelConfig* frisk::GetKernelConfig() {
+  static frisk::KernelConfig cfg;
+  cfg.num_threads = 64;
+  cfg.gridDimXYZ = {64,32,1};
+  return &cfg;
+}
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::DialectRegistry registry;
@@ -162,7 +170,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // llvm::outs() << "\n---------- after createFriskLayoutInferPass ---------\n"; llvm::outs().flush();src->dump();
 
   pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
-  // pm.addNestedPass<func::FuncOp>(mlir::affine::createAffineLoopNormalizePass(true));
+  pm.addNestedPass<func::FuncOp>(mlir::affine::createAffineLoopNormalizePass(true));
+
+  pm.addNestedPass<func::FuncOp>(mlir::createMem2Reg());
+  
+
   pm.addPass(mlir::createCSEPass());
   pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferLoopHoistingPass());
   pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferHoistingPass());

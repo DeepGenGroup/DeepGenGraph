@@ -1,6 +1,7 @@
 #include "deepgengraph/Common.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include <dlfcn.h>
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
@@ -562,17 +563,17 @@ struct LLVMFuncOpAddGPUAttrPass : public PassWrapper<LLVMFuncOpAddGPUAttrPass, O
     auto module = dyn_cast<ModuleOp>(getOperation());
     OpBuilder builder(module);
     module.walk<WalkOrder::PreOrder>([&](LLVM::LLVMFuncOp funcOp) {
-      auto blockdims = mlir::dyn_cast_or_null<DenseI32ArrayAttr>(funcOp->getAttr(THREAD_NUM));
+      auto blockdims = funcOp->getAttrOfType<IntegerAttr>(THREAD_NUM);
       if (!blockdims) {
         llvm::errs() << "[LLVMFuncOpAddGPUAttrPass] missing attr " << THREAD_NUM
                      << " on function: " << funcOp.getName() << "\n";
         return;
       }
-      int32_t flatSize = 1;
-      auto len = blockdims.asArrayRef().size();
-      for (int32_t size : blockdims.asArrayRef()) {
-        flatSize *= size;
-      }
+      int32_t flatSize = blockdims.getInt();
+      // auto len = blockdims.asArrayRef().size();
+      // for (int32_t size : blockdims.asArrayRef()) {
+      //   flatSize *= size;
+      // }
       auto reqdAttr =  DenseI32ArrayAttr::get(funcOp->getContext(), llvm::ArrayRef<int32_t>({flatSize,1,1}));
       if (target == Target::CUDA) {
         funcOp->setAttr(mlir::NVVM::NVVMDialect::getKernelFuncAttrName(), builder.getIntegerAttr(builder.getI1Type(), 1));

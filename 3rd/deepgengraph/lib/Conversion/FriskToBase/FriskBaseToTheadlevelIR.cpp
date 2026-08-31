@@ -213,6 +213,14 @@ static Value floorDivBy(OpBuilder &builder, Location loc, Value operand,
   return createSingleDimAffineApply(builder, loc, d0.floorDiv(divisor), operand);
 }
 
+static Value addIndexValues(OpBuilder &builder, Location loc, Value lhs,
+                            Value rhs) {
+  auto d0 = builder.getAffineDimExpr(0);
+  auto d1 = builder.getAffineDimExpr(1);
+  auto map = AffineMap::get(2, 0, d0 + d1, builder.getContext());
+  return builder.create<affine::AffineApplyOp>(loc, map, ValueRange{lhs, rhs});
+}
+
 static Value flattenXY(OpBuilder &builder, Location loc, ArrayRef<Value> xy,
                        coordXY_t order, coordXY_t layout) {
   assert(xy.size() == 2 && "expected two coordinates");
@@ -344,8 +352,9 @@ public:
                  << infoB.get_block_repeat()[1] << "] buffer=" << op.getB() << "\n";
     llvm::errs() << "[gemm-lower] C br=[" << infoC.get_block_repeat()[0] << ","
                  << infoC.get_block_repeat()[1] << "] buffer=" << op.getC() << "\n";
-    
-    assert(infoA.get_block_repeat()[1] * infoA.warpInstUnroll[1] == infoB.get_block_repeat()[0] * infoB.warpInstUnroll[0] );  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
+    auto ka = infoA.get_block_repeat()[1] * infoA.warpInstUnroll[1];
+    auto kb = infoB.get_block_repeat()[0] * infoB.warpInstUnroll[0];
+    assert(ka==kb );  // k轴上的 for循环次数. A 列迭代数 == B 行迭代数
     assert(infoA.mmaInst->asm_str == infoB.mmaInst->asm_str);
     auto typeA = mlir::cast<MemRefType>(adaptor.getA().getType());
     auto typeB = mlir::cast<MemRefType>(adaptor.getB().getType());
@@ -918,7 +927,7 @@ public:
       if (auto *lowerInfo = s_info->getLowerInfo(buffer, op.getOperation())) {
         recordedInfo.lowerInfo = *lowerInfo;
         collectMaxThreadlevelSz(lowerInfo->get_thread_own_data_size());
-        lowerInfo->show(label);
+        // lowerInfo->show(label);
       } else {
         // 前面的 block conversion 可能已经把原 frisk.alloc_buffer 替换为
         // memref.alloca 形式的 thread tile。这个新 value 已经是 lowered 后
@@ -1515,6 +1524,107 @@ public:
     auto srcInfo = resolveBuffer(srcMem);
     auto dstInfo = resolveBuffer(dstMem);
 
+    auto lowerBufferViewCopyWithThreadMap = [&]() -> LogicalResult {
+      if (!s_info || (!srcInfo.fromView && !dstInfo.fromView) ||
+          (srcInfo.fromView && dstInfo.fromView)) {
+        return failure();
+      }
+      if (srcMemType.getShape() != dstMemType.getShape()) {
+        return failure();
+      }
+
+      LowerInfo *copyInfo = s_info->getLowerInfo(srcMem, op.getOperation());
+      if (copyInfo == nullptr) {
+        copyInfo = s_info->getLowerInfo(dstMem, op.getOperation());
+      }
+      if (copyInfo == nullptr) {
+        return failure();
+      }
+
+      const BufferInfo &viewSide = srcInfo.fromView ? srcInfo : dstInfo;
+      const BufferInfo &directSide = srcInfo.fromView ? dstInfo : srcInfo;
+      unsigned viewRank = srcInfo.fromView ? srcMemType.getRank() : dstMemType.getRank();
+      if (directSide.realType.getRank() != static_cast<int64_t>(viewRank)) {
+        return rewriter.notifyMatchFailure(
+            op, "thread mapped direct side rank must match view rank");
+      }
+      if (viewSide.viewMap.getNumResults() != viewSide.realType.getRank()) {
+        return rewriter.notifyMatchFailure(
+            op, "buffer_view index map result count must match source rank");
+      }
+      if (viewSide.viewMap.getNumInputs() != viewSide.viewOperands.size()) {
+        return rewriter.notifyMatchFailure(
+            op, "buffer_view index map operands do not match map inputs");
+      }
+      if (viewRank > viewSide.realType.getRank()) {
+        return rewriter.notifyMatchFailure(
+            op, "thread mapped view rank is larger than real buffer rank");
+      }
+
+      auto tidx = findThreadIdxOp(op);
+      auto loc = op->getLoc();
+      std::vector<Value> iterVars;
+      auto loops = copyInfo->getForLoops(rewriter, loc, iterVars);
+      assert(iterVars.size() == 6 &&
+             "thread mapped copy expects six LowerInfo loop iterators");
+
+      SmallVector<Value, 7> mapOperands;
+      mapOperands.push_back(tidx);
+      mapOperands.append(iterVars.begin(), iterVars.end());
+      auto tileIndices =
+          applyLowerInfoMap(rewriter, loc, *copyInfo, mapOperands, viewRank);
+
+      auto buildDirectIndices = [&]() -> SmallVector<Value> {
+        return SmallVector<Value>{tileIndices.begin(), tileIndices.end()};
+      };
+
+      auto buildViewIndices = [&](const BufferInfo &viewInfo) -> SmallVector<Value> {
+        unsigned rank = viewInfo.realType.getRank();
+        SmallVector<Value> indices;
+        indices.reserve(rank);
+        unsigned loopStart = rank - tileIndices.size();
+        for (unsigned i = 0; i < rank; ++i) {
+          auto oneResultMap =
+              AffineMap::get(viewInfo.viewMap.getNumDims(),
+                             viewInfo.viewMap.getNumSymbols(),
+                             viewInfo.viewMap.getResult(i),
+                             rewriter.getContext());
+          Value index = rewriter.create<affine::AffineApplyOp>(
+              loc, oneResultMap, viewInfo.viewOperands);
+          if (i >= loopStart) {
+            index = addIndexValues(rewriter, loc, index, tileIndices[i - loopStart]);
+          }
+          indices.push_back(index);
+        }
+        return indices;
+      };
+
+      SmallVector<Value> srcIndices;
+      SmallVector<Value> dstIndices;
+      if (srcInfo.fromView) {
+        srcIndices = buildViewIndices(srcInfo);
+        dstIndices = buildDirectIndices();
+      } else {
+        srcIndices = buildDirectIndices();
+        dstIndices = buildViewIndices(dstInfo);
+      }
+
+      auto value = rewriter.create<affine::AffineLoadOp>(
+          loc, srcInfo.realBuffer, srcIndices);
+      rewriter.create<affine::AffineStoreOp>(
+          loc, value.getResult(), dstInfo.realBuffer, dstIndices);
+
+      if (!loops.empty()) {
+        rewriter.setInsertionPointAfter(loops.front());
+      }
+      rewriter.eraseOp(op);
+      return success();
+    };
+
+    if (succeeded(lowerBufferViewCopyWithThreadMap())) {
+      return success();
+    }
+
     auto productOfShape = [&](ArrayRef<int64_t> shape) -> FailureOr<int64_t> {
       int64_t size = 1;
       for (int64_t dim : shape) {
@@ -1615,14 +1725,6 @@ public:
       return SmallVector<Value>{copyIvs.begin(), copyIvs.end()};
     };
 
-    auto addIndexValues = [&](Value lhs, Value rhs) -> Value {
-      auto d0 = rewriter.getAffineDimExpr(0);
-      auto d1 = rewriter.getAffineDimExpr(1);
-      auto map = AffineMap::get(2, 0, d0 + d1, rewriter.getContext());
-      return rewriter.create<affine::AffineApplyOp>(
-          op->getLoc(), map, ValueRange{lhs, rhs});
-    };
-
     auto buildMappedIndices =
         [&](MemRefType realType) -> FailureOr<SmallVector<Value>> {
       unsigned rank = realType.getRank();
@@ -1652,7 +1754,8 @@ public:
         Value index = rewriter.create<affine::AffineApplyOp>(
             op->getLoc(), oneResultMap, indexMapOperands);
         if (i >= loopStart) {
-          index = addIndexValues(index, copyIvs[i - loopStart]);
+          index = addIndexValues(rewriter, op->getLoc(), index,
+                                 copyIvs[i - loopStart]);
         }
         indices.push_back(index);
       }
@@ -1919,7 +2022,7 @@ public:
     // -------- step 1 ：进行 layoutInfer 得到block级别IR上，每个buffer的 访问模式。
     s_info = LowerInfoAnalysis::run(kernel);
     llvm::outs() << "\n-------------- lowerinfo analyze done\n";llvm::outs().flush();
-    s_info->print();
+    // s_info->print();
     llvm::outs() << "\n-------------- lowerinfo print done!\n";llvm::outs().flush();
 
     auto warpLayout = s_info->begin()->getSecond().get_warp_layout();

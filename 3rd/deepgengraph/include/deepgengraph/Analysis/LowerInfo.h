@@ -116,6 +116,7 @@ public:
   coordXY_t get_warp_widths() const {
     return base_layout.get_warp_widths();
   }
+  // 单个warp级别指令计算的区域
   coordXY_t get_warpInst_widths() const {
     return get_warp_widths() * get_warp_repeat();
   }

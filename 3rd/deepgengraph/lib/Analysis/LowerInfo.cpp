@@ -161,15 +161,14 @@ static void recalcLayout(LowerInfo& info, const coordXY_t& new_thread_own_data_s
   // 单次指令计算区域仍不变，为 warp_layout * warp_repeat * thread_creg -> inst在buffer上平铺次数没变
   // 线程持有数据多了 -> block_repeat 少了，但每次平铺需要额外 unroll k0*k1 次 inst操作
   // 本质是将 k0*k1 次的inst 所用数据都放进 thread_own_data 里。
-
+  auto _shape = mlir::cast<MemRefType>(info.buffer.getType()).getShape();
+  coordXY_t bufferShape = {_shape[0], _shape[1]};
+  auto thread_calc_data = bufferShape / info.get_warp_layout();  // 单个thread需要计算的数据量
   if(pos >= unsigned(LowerInfo::BufPos::Out)){
     // buffer有作为 out参数的时候 ： 需要按最大数据量
-    auto k0 = new_thread_own_data_sz[0] / info.thread_own_data_size[0];
-    auto k1 = new_thread_own_data_sz[1] / info.thread_own_data_size[1];
     info.thread_own_data_size = new_thread_own_data_sz;
-    info.block_repeat[0] /= k0;  // 以 thread_own_data_size 为单位进行的 buffer 平铺次数减少
-    info.block_repeat[1] /= k1;
-    info.warpInstUnroll = {k0,k1};  // 单次平铺内，需额外进行 {k0,k1} inst 展开以算满 new_thread_own_data_sz
+    info.warpInstUnroll = new_thread_own_data_sz / ( info.get_thread_widths() * info.get_warp_repeat() );   // 一次 thread_own_data = inst_unroll 次 warp_inst计算
+    info.block_repeat = thread_calc_data / new_thread_own_data_sz; ;  // 进行多少次 thread_own_data 平铺
   }
   else{
     // buffer 仅作为 in 参数被读取 : 无需修改LowerInfo。
@@ -239,6 +238,7 @@ void LowerInfoMap::conflictResolve() {
         assert(max_tod_sz[0] > 0);
         assert(max_tod_sz[1] > 0);
         // 根据 max_tod_sz, 调整 buffer对应的所有op下的LowerInfo
+        // TODO: 这里需要考虑 gemmop：AB 的k轴循环次数要强制相等吗？——是。否则数学上不成立
         for(auto &info : bufferInfoCandidates){
           if(info.op != nullptr){
             recalcLayout(info, max_tod_sz, bufferPos);
@@ -430,7 +430,7 @@ LowerInfoAnalysis::GemmProblem LowerInfoAnalysis::getGemmProblem(GemmOp gemmOp) 
   problem.inElemBitWidth = problem.aType.getElementTypeBitWidth();
   problem.bm = shapeC[0];
   problem.bn = shapeC[1];
-  problem.bk = gemmOp.getTransA() ? shapeA[1] : shapeA[0];
+  problem.bk = gemmOp.getTransA() ? shapeA[0] : shapeA[1];
   return problem;
 }
 

@@ -74,6 +74,13 @@ struct TargetInfo {
 constexpr char* GRID_DIM =   "grid_dims" ;
 constexpr char* THREAD_NUM =   "thread_num" ;
 
+struct KernelConfig {
+  std::array<int,3> gridDimXYZ = {0,0,0};
+  int num_threads = 0;
+};
+
+KernelConfig* GetKernelConfig();
+
 } // namespace mlir::firsk
 
 #endif  // DEEPGENGRAPH_COMMON_H

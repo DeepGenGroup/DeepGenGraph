@@ -1,3 +1,4 @@
+#include "deepgengraph/Common.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonTypes.h"
@@ -409,7 +410,7 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
     // 4. insert frisk.parallel
     rewriter.setInsertionPointToStart(&newKernelOp->getRegion(0).front());
     auto ranges = cast<DenseI64ArrayAttr>(gridAttr).asArrayRef();
-    auto parallelOp = rewriter.create<frisk::ParallelOp>(loc, ranges, 128);
+    auto parallelOp = rewriter.create<frisk::ParallelOp>(loc, ranges, GetKernelConfig()->num_threads);
     auto parallelEntry = parallelOp.addEntryBlock();
     // move all ops expect frisk.end into frisk.parallel
     auto nextOp = parallelOp->getNextNode();
