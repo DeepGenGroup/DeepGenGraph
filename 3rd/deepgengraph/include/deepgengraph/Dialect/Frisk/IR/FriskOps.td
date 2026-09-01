@@ -28,15 +28,21 @@ class Frisk_Op<string mnemonic, list<Trait> traits = []> :
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
 
 // KernelOp
-def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator, IsolatedFromAbove]> {
+def Frisk_KernelOp : Frisk_Op<"kernel", [
+  ImplicitFriskTerminator, CallableOpInterface, FunctionOpInterface,
+  IsolatedFromAbove
+]> {
     let summary = "Kernel operation";
   let description = [{
     A simple kernel operation that represents a compute kernel.
   }];
 
   let arguments = (ins
-    StrAttr:$sym_name,
-    TypeAttr:$function_type
+    SymbolNameAttr:$sym_name,
+    TypeAttrOf<FunctionType>:$function_type,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
 
   let regions = (region SizedRegion<1>:$region);
@@ -46,6 +52,22 @@ def Frisk_KernelOp : Frisk_Op<"kernel", [ImplicitFriskTerminator, IsolatedFromAb
   ];
 
   let extraClassDeclaration = [{
+    ::mlir::Region *getCallableRegion() { return &getRegion(); }
+
+    ::mlir::ArrayAttr getCallableArgAttrs() {
+      return getArgAttrs().value_or(nullptr);
+    }
+
+    ::mlir::ArrayAttr getCallableResAttrs() {
+      return getResAttrs().value_or(nullptr);
+    }
+
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    bool isDeclaration() { return false; }
+
     unsigned getNumArguments() {
       return getBody(0)->getNumArguments();
     }

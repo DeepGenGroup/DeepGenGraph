@@ -308,6 +308,7 @@ static AffineExpr GetExprOfValue(
 // 
 struct ArgIdViewBuffer {
   frisk::AllocBufferOp shmbuffer = nullptr;
+  AffineMap baseLinearOffsetMap;
   AffineMap baseOffsetMap;
   std::vector<Value> baseOffsetMapOperands;
   std::vector<int64_t> blockShape;
@@ -346,13 +347,83 @@ decomposePhysicalOffset(AffineExpr offset, ArrayRef<int64_t> shape,
   return indices;
 }
 
-static int findPhysicalDimForStride(ArrayRef<int64_t> sourceStrides,
-                                    int64_t stride) {
-  for (auto indexedStride : llvm::enumerate(sourceStrides)) {
-    if (indexedStride.value() == stride)
-      return static_cast<int>(indexedStride.index());
+static FailureOr<std::vector<int64_t>>
+remapBlockStridesToPermutedLayout(ArrayRef<int64_t> blockStrides,
+                                  ArrayRef<int64_t> originalShape,
+                                  ArrayRef<int64_t> permute,
+                                  ArrayRef<int64_t> permutedStrides,
+                                  Operation *op, unsigned argId) {
+  if (permute.size() != originalShape.size() ||
+      permutedStrides.size() != originalShape.size()) {
+    return op->emitError("arg_permutes rank mismatch while remapping strides for argument #")
+           << argId;
   }
-  return -1;
+
+  auto originalStrides = getPhysicalStrides(originalShape);
+  std::vector<int64_t> remappedStrides;
+  remappedStrides.reserve(blockStrides.size());
+  for (int64_t blockStride : blockStrides) {
+    int64_t originalDim = -1;
+    for (auto indexedStride : llvm::enumerate(originalStrides)) {
+      if (indexedStride.value() == blockStride) {
+        originalDim = static_cast<int64_t>(indexedStride.index());
+        break;
+      }
+    }
+    if (originalDim < 0) {
+      return op->emitError("cannot map block pointer stride ")
+             << blockStride << " to original argument #" << argId
+             << " physical layout";
+    }
+
+    int64_t permutedDim = -1;
+    for (auto indexedDim : llvm::enumerate(permute)) {
+      if (indexedDim.value() == originalDim) {
+        permutedDim = static_cast<int64_t>(indexedDim.index());
+        break;
+      }
+    }
+    if (permutedDim < 0) {
+      return op->emitError("cannot map original dim ")
+             << originalDim << " through arg_permutes for argument #"
+             << argId;
+    }
+
+    remappedStrides.push_back(permutedStrides[permutedDim]);
+  }
+  return remappedStrides;
+}
+
+static FailureOr<MemRefType>
+getPermutedMemRefType(MemRefType memrefTy, DenseI64ArrayAttr permuteAttr,
+                      Operation *op, unsigned argId) {
+  ArrayRef<int64_t> permute = permuteAttr.asArrayRef();
+  ArrayRef<int64_t> oldShape = memrefTy.getShape();
+  int64_t rank = memrefTy.getRank();
+  if (static_cast<int64_t>(permute.size()) != rank) {
+    return op->emitError("arg_permutes rank mismatch for argument #")
+           << argId << ": expected " << rank << " dims, got "
+           << permute.size();
+  }
+
+  SmallVector<bool> used(rank, false);
+  SmallVector<int64_t> newShape;
+  newShape.reserve(rank);
+  for (int64_t dim : permute) {
+    if (dim < 0 || dim >= rank) {
+      return op->emitError("arg_permutes dim out of range for argument #")
+             << argId << ": " << dim;
+    }
+    if (used[dim]) {
+      return op->emitError("arg_permutes has duplicated dim for argument #")
+             << argId << ": " << dim;
+    }
+    used[dim] = true;
+    newShape.push_back(oldShape[dim]);
+  }
+
+  return MemRefType::get(newShape, memrefTy.getElementType(),
+                         memrefTy.getLayout(), memrefTy.getMemorySpace());
 }
 
 // =============== Op Conversion Patterns =============
@@ -471,8 +542,16 @@ struct BlockPointerOfConversionPattern
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockPointerOfOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
   {
-    // 根据是否有read属性，建立 allocBufferOp （read：后续有loadOp读取指针指向的数据。 write：后续有storeOp 向指针指向的内存写入数据）
+    auto kernelOp = op->getParentOfType<frisk::KernelOp>();
     auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
+    // 获取参数列表中对应位置的原始memref 类型, 进而得到permute后的shape
+    auto argMemrefType = mlir::cast<MemRefType>( kernelOp.getArgument(argId).getType());
+    auto permutedShape = argMemrefType.getShape();
+    llvm::outs() << "argId["<<argId<<"] " ;
+    llvm::outs() << "permuted : " << permutedShape[0] << "," << permutedShape[1] << "," << permutedShape[2] << "," << permutedShape[3] << ";\n";
+    llvm::outs().flush();
+
+    // 根据是否有read属性，建立 allocBufferOp （read：后续有loadOp读取指针指向的数据。 write：后续有storeOp 向指针指向的内存写入数据）
     auto info = new ArgIdViewBuffer{};
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     auto memTy = mlir::dyn_cast<MemRefType>(resTy);
@@ -492,23 +571,53 @@ struct BlockPointerOfConversionPattern
     }
     auto stride = op.getStride();
 
-    auto basePtrType = mlir::dyn_cast<MemRefType>(adaptor.getBasePointer().getType());
-    auto basePtrOldShape = basePtrType.getShape();  // basePtr 名义上的形状（即参数列表里的形状）
-    auto sourceStrides = getPhysicalStrides(basePtrOldShape);
+    auto sourceStrides = getPhysicalStrides(permutedShape);
+    llvm::outs() << "sourceStrides:" << sourceStrides[0] << "," << sourceStrides[1] << "," << sourceStrides[2] << "," << sourceStrides[3] << "\n";llvm::outs().flush();
+    llvm::outs() << "expr_baseOffset:" << expr_baseOffset << "\n";llvm::outs().flush();
 
-    // base_offset 是按原始物理 memref layout 生成的，不能按 permute 后 shape
-    // 反解。permute 只影响 block 的二维访问方向，真实 GM 下标仍属于原始形状。
-    auto resExprArray = decomposePhysicalOffset(expr_baseOffset, basePtrOldShape,
+    std::vector<int64_t> blockStrides(stride.begin(), stride.end());
+    if (auto argPermutes = kernelOp->getAttrOfType<ArrayAttr>("arg_permutes")) {
+      if (argId >= static_cast<int64_t>(argPermutes.size())) {
+        return op->emitError("arg_permutes missing entry for argument #")
+               << argId;
+      }
+      auto densePermute = mlir::dyn_cast<DenseI64ArrayAttr>(argPermutes[argId]);
+      if (!densePermute) {
+        return op->emitError("arg_permutes entry for argument #")
+               << argId << " must be a dense i64 array attribute";
+      }
+
+      SmallVector<int64_t> originalShape(permutedShape.size(),
+                                         ShapedType::kDynamic);
+      auto permute = densePermute.asArrayRef();
+      for (auto indexedDim : llvm::enumerate(permute)) {
+        originalShape[indexedDim.value()] = permutedShape[indexedDim.index()];
+      }
+
+      auto remappedStrides = remapBlockStridesToPermutedLayout(
+          blockStrides, originalShape, permute, sourceStrides,
+          op.getOperation(), argId);
+      if (failed(remappedStrides)) {
+        return failure();
+      }
+      blockStrides = std::move(*remappedStrides);
+    }
+
+    auto resExprArray = decomposePhysicalOffset(expr_baseOffset, permutedShape,
                                                 sourceStrides, op->getContext());
 
     auto baseOffsetMap = AffineMap::get(dims.size(), 0, resExprArray, op->getContext());
+    auto baseLinearOffsetMap =
+        AffineMap::get(dims.size(), 0, ArrayRef<AffineExpr>{expr_baseOffset},
+                       op->getContext());
 
     // save info
+    info->baseLinearOffsetMap = baseLinearOffsetMap;
     info->baseOffsetMap = baseOffsetMap;
     info->baseOffsetMapOperands = vr_baseOffset;
     info->blockShape = op.getBlockShape();
     info->sourceStrides = std::move(sourceStrides);
-    info->blockStrides.assign(stride.begin(), stride.end());
+    info->blockStrides = std::move(blockStrides);
     s_argId_bufferInfo[argId] = info;
     if(newOp){
       // 含read，需要创建buffer存数据
@@ -646,7 +755,6 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       auto loc = op->getLoc();
       auto indices = info->baseOffsetMapOperands;
       auto offset = ptrAdvance.getOffsets();
-      auto indexExprs = info->baseOffsetMap.getResults();
       // affineMap的操作数 value = 原有 + 新收集的ivs
       std::vector<Value> newIndices;
       for(auto v : indices){
@@ -655,28 +763,20 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       for(auto v : loop_expr_values){
         newIndices.push_back(v);
       }
-      std::vector<AffineExpr> newExprs(indexExprs.begin(), indexExprs.end());
-      // 表达式构建 ：loop = iv0/step0 + iv1/step1 * ub0 + iv2/step2 * (ub0 * ub1) + (iv3/step3) * (ub0*ub1*ub2)
-      // block_advance 的 offset 属于 block_ptr 的二维逻辑轴。该轴对应 GM 的哪一维，
-      // 要通过 block_ptr stride 与源 memref 物理 stride 匹配出来。
+      AffineExpr linearOffset = info->baseLinearOffsetMap.getResult(0);
+      // block_advance 的 offset 属于 block_ptr 的二维逻辑轴。
+      // 先按 permute 后的 GM stride 合成线性 offset，再统一反解为 GM 多维坐标。
       for(int i=0; i < offset.size(); ++i){
         if(offset[i] == 0){
           continue;
         }
-        int physicalDim = -1;
-        if(i < info->blockStrides.size()){
-          physicalDim = findPhysicalDimForStride(info->sourceStrides,
-                                                 info->blockStrides[i]);
-        }
-        if(physicalDim < 0){
-          physicalDim = static_cast<int>(newExprs.size()) -
-                        static_cast<int>(offset.size()) + i;
-        }
-        assert(physicalDim >= 0 &&
-               physicalDim < static_cast<int>(newExprs.size()) &&
-               "block advance maps outside source rank");
-        newExprs[physicalDim] = newExprs[physicalDim] + offset[i] * loop_expr;
+        assert(i < info->blockStrides.size() &&
+               "block advance offset rank must match block pointer strides");
+        linearOffset = linearOffset + (offset[i] * info->blockStrides[i]) * loop_expr;
       }
+      auto globalMemTy = mlir::cast<MemRefType>(globalBuffers[argId].getType());
+      auto newExprs = decomposePhysicalOffset(linearOffset, globalMemTy.getShape(),
+                                              info->sourceStrides, op->getContext());
       // newMap dim增加，symbol不变，expr重建
       auto newMap = AffineMap::get(newdimCount , info->baseOffsetMap.getNumSymbols(), newExprs, op->getContext());
       // newView的indices为newMap的操作数
@@ -1561,8 +1661,7 @@ struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
   }
 };
 
-} // namespace of patterns ends
-
+}  // namespace end
 // =================== Pass Implement ===============
 
 class ConvertMemAndCalcOpToFrisk : public impl::MemAndCalcOpToFriskBase<ConvertMemAndCalcOpToFrisk> {
@@ -1816,7 +1915,63 @@ public:
 
     if (failed(applyPartialConversion(op, target, std::move(ps)))) {
       signalPassFailure();
+      return;
     }
+
+    // Step 2: 根据 arg_permutes 属性，结合 argId 对 kernel 参数的 memref
+    // 类型进行 permute，使后续 GM buffer_view 按融合后的逻辑 layout 反解索引。
+    bool hasFailure = false;
+    getOperation()->walk([&](frisk::KernelOp kernelOp) {
+      if (hasFailure)
+        return;
+
+      auto argPermutes = kernelOp->getAttrOfType<ArrayAttr>("arg_permutes");
+      if (!argPermutes)
+        return;
+
+      auto oldFuncType = kernelOp.getFunctionType();
+      SmallVector<Type> newInputs(oldFuncType.getInputs().begin(),
+                                  oldFuncType.getInputs().end());
+      bool changed = false;
+
+      for (auto [idx, permuteAttr] : llvm::enumerate(argPermutes)) {
+        if (idx >= newInputs.size())
+          break;
+
+        auto memrefTy = dyn_cast<MemRefType>(newInputs[idx]);
+        if (!memrefTy)
+          continue;
+
+        auto densePermute = dyn_cast<DenseI64ArrayAttr>(permuteAttr);
+        if (!densePermute) {
+          kernelOp->emitError("arg_permutes entry for argument #")
+              << idx << " must be a dense i64 array attribute";
+          hasFailure = true;
+          return;
+        }
+
+        FailureOr<MemRefType> newMemrefTy =
+            getPermutedMemRefType(memrefTy, densePermute, kernelOp, idx);
+        if (failed(newMemrefTy)) {
+          hasFailure = true;
+          return;
+        }
+
+        newInputs[idx] = *newMemrefTy;
+        kernelOp.getBody(0)->getArgument(idx).setType(*newMemrefTy);
+        changed = true;
+      }
+
+      if (changed) {
+        auto newFuncType =
+            FunctionType::get(ctx, newInputs, oldFuncType.getResults());
+        kernelOp.setFunctionType(newFuncType);
+      }
+    });
+
+    if (hasFailure)
+      signalPassFailure();
+
   }
 };
 

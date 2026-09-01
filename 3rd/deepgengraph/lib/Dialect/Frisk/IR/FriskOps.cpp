@@ -974,56 +974,23 @@ LogicalResult KernelOp::verify() {
 }
 
 ParseResult KernelOp::parse(OpAsmParser &parser, OperationState &result) {
-  // 解析符号名称
-  StringAttr symName;
-  if (parser.parseSymbolName(symName, "sym_name", result.attributes))
-    return failure();
-  // 解析参数列表
-  SmallVector<Type> argTypes;
-  if (parser.parseLParen() || parser.parseTypeList(argTypes) || parser.parseRParen())
-    return failure();
-  // 解析结果类型 - 可选，如果没有结果就是空
-  SmallVector<Type> resultTypes;
-  if (succeeded(parser.parseOptionalArrow())) {
-    if (parser.parseLParen() || parser.parseTypeList(resultTypes) || parser.parseRParen())
-      return failure();
-  }
-  // 创建函数类型属性
-  auto functionType = parser.getBuilder().getFunctionType(argTypes, resultTypes);
-  result.addAttribute("function_type", TypeAttr::get(functionType));
-  // 解析区域
-  Region *body = result.addRegion();
-  SmallVector<OpAsmParser::Argument> args;
-  for (Type argType : argTypes) {
-    args.emplace_back();
-    args.back().type = argType;
-  }
-  if (parser.parseRegion(*body, args) || 
-      parser.parseOptionalAttrDict(result.attributes))
-    return failure();
-  return success();
+  auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
+                          ArrayRef<Type> results,
+                          function_interface_impl::VariadicFlag,
+                          std::string &) {
+    return builder.getFunctionType(argTypes, results);
+  };
+
+  return function_interface_impl::parseFunctionOp(
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name), buildFuncType,
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
 }
 
 void KernelOp::print(OpAsmPrinter &p) {
-  p << " ";
-  p.printSymbolName(getSymName());
-  // 打印参数类型
-  auto funcType = getFunctionType();
-  auto funcTy = dyn_cast<FunctionType>(funcType);
-  p << "(";
-  llvm::interleaveComma(funcTy.getInputs(), p);
-  p << ")";
-  // 只有当有结果时才打印结果类型
-  if (!funcTy.getResults().empty()) {
-    p << " -> (";
-    llvm::interleaveComma(funcTy.getResults(), p);
-    p << ")";
-  }
-  // 打印区域
-  p << " ";
-  p.printRegion(getRegion(), /*printEntryBlockArgs=*/false, /*printBlockTerminators=*/false);
-  // 打印属性
-  p.printOptionalAttrDict((*this)->getAttrs(), {"sym_name", "function_type"});
+  function_interface_impl::printFunctionOp(
+      p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
 }
 
 //===----------------------------------------------------------------------===//

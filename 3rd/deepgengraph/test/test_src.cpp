@@ -18,6 +18,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Location.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -26,11 +27,13 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
@@ -69,10 +72,183 @@
 #include "mlir/Target/LLVMIR/Export.h"       // 包含 translateModuleToLLVMIR
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <string>
 
 using namespace mlir;
+
+namespace {
+
+bool isUnknownLocation(Location loc) { return isa<UnknownLoc>(loc); }
+
+bool isCandidateOperationLine(llvm::StringRef line) {
+  llvm::StringRef trimmed = line.trim();
+  if (trimmed.empty() || trimmed.starts_with("//") || trimmed.starts_with("#") ||
+      trimmed.starts_with("^") || trimmed.starts_with("}"))
+    return false;
+
+  if (trimmed.starts_with("module") || trimmed.starts_with("func.func") ||
+      trimmed.starts_with("return") || trimmed.starts_with("scf.yield") ||
+      trimmed.starts_with("scf.if") || trimmed.starts_with("scf.for") ||
+      trimmed.starts_with("deepgengraph.") ||
+      trimmed.starts_with("deepgengraph_") || trimmed.starts_with("arith."))
+    return true;
+
+  return trimmed.contains(" = ");
+}
+
+SmallVector<Location> collectSourceOperationLocations(StringRef filename,
+                                                      MLIRContext *ctx) {
+  SmallVector<Location> locs;
+  auto fileOrErr = llvm::MemoryBuffer::getFile(filename);
+  if (!fileOrErr) {
+    llvm::errs() << "warning: failed to read source for debug locations: "
+                 << filename << "\n";
+    return locs;
+  }
+
+  llvm::StringRef buffer = (*fileOrErr)->getBuffer();
+  size_t start = 0;
+  unsigned lineNo = 1;
+  while (start <= buffer.size()) {
+    size_t end = buffer.find('\n', start);
+    llvm::StringRef line =
+        buffer.slice(start, end == llvm::StringRef::npos ? buffer.size() : end);
+    if (isCandidateOperationLine(line)) {
+      size_t col = line.find_first_not_of(" \t");
+      locs.push_back(FileLineColLoc::get(
+          ctx, filename, lineNo,
+          static_cast<unsigned>(col == llvm::StringRef::npos ? 1 : col + 1)));
+    }
+    if (end == llvm::StringRef::npos)
+      break;
+    start = end + 1;
+    ++lineNo;
+  }
+  return locs;
+}
+
+void setUnknownBlockArgLocs(Operation *op, Location loc) {
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      for (BlockArgument arg : block.getArguments()) {
+        if (isUnknownLocation(arg.getLoc()))
+          arg.setLoc(loc);
+      }
+    }
+  }
+}
+
+void attachSourceLocationsFromText(ModuleOp module, StringRef filename) {
+  SmallVector<Location> sourceLocs =
+      collectSourceOperationLocations(filename, module.getContext());
+  if (sourceLocs.empty())
+    return;
+
+  unsigned locIndex = 0;
+  module->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    Location sourceLoc =
+        sourceLocs[std::min<unsigned>(locIndex, sourceLocs.size() - 1)];
+    if (isUnknownLocation(op->getLoc()))
+      op->setLoc(sourceLoc);
+    setUnknownBlockArgLocs(op, sourceLoc);
+    ++locIndex;
+  });
+}
+
+void fillUnknownLocationsFromParents(Operation *op, Location inheritedLoc) {
+  Location currentLoc = op->getLoc();
+  if (isUnknownLocation(currentLoc)) {
+    op->setLoc(inheritedLoc);
+    currentLoc = inheritedLoc;
+  }
+  setUnknownBlockArgLocs(op, currentLoc);
+
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      for (Operation &nestedOp : block)
+        fillUnknownLocationsFromParents(&nestedOp, currentLoc);
+    }
+  }
+}
+
+FileLineColLoc findFileLineColLoc(Location loc) {
+  if (auto fileLoc = dyn_cast<FileLineColLoc>(loc))
+    return fileLoc;
+  if (auto nameLoc = dyn_cast<NameLoc>(loc))
+    return findFileLineColLoc(nameLoc.getChildLoc());
+  if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
+    for (Location nestedLoc : fusedLoc.getLocations()) {
+      if (auto fileLoc = findFileLineColLoc(nestedLoc))
+        return fileLoc;
+    }
+  }
+  if (auto callLoc = dyn_cast<CallSiteLoc>(loc)) {
+    if (auto fileLoc = findFileLineColLoc(callLoc.getCaller()))
+      return fileLoc;
+    return findFileLineColLoc(callLoc.getCallee());
+  }
+  if (auto opaqueLoc = dyn_cast<OpaqueLoc>(loc))
+    return findFileLineColLoc(opaqueLoc.getFallbackLocation());
+  return {};
+}
+
+FileLineColLoc findFileLineColLoc(Operation *op) {
+  if (auto fileLoc = findFileLineColLoc(op->getLoc()))
+    return fileLoc;
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      for (Operation &nestedOp : block) {
+        if (auto fileLoc = findFileLineColLoc(&nestedOp))
+          return fileLoc;
+      }
+    }
+  }
+  return {};
+}
+
+void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
+  MLIRContext *ctx = module.getContext();
+  Builder builder(ctx);
+  llvm::SmallString<128> directory;
+  llvm::SmallString<64> basename;
+  llvm::sys::path::append(directory, llvm::sys::path::parent_path(inputFilename));
+  llvm::sys::path::append(basename, llvm::sys::path::filename(inputFilename));
+  if (directory.empty())
+    directory = ".";
+
+  auto diFile = LLVM::DIFileAttr::get(ctx, basename.str(), directory.str());
+  auto compileUnit = LLVM::DICompileUnitAttr::get(
+      ctx, DistinctAttr::create(UnitAttr::get(ctx)), llvm::dwarf::DW_LANG_C,
+      diFile, builder.getStringAttr("DeepGenGraph MLIR"), false,
+      LLVM::DIEmissionKind::LineTablesOnly, LLVM::DINameTableKind::Default);
+  auto subroutineType =
+      LLVM::DISubroutineTypeAttr::get(ctx, ArrayRef<LLVM::DITypeAttr>{});
+
+  module.walk([&](LLVM::LLVMFuncOp func) {
+    if (func.getBody().empty())
+      return;
+
+    if (func.getLoc()->findInstanceOf<FusedLocWith<LLVM::DISubprogramAttr>>())
+      return;
+
+    FileLineColLoc fileLoc = findFileLineColLoc(func.getOperation());
+    Location funcLoc = fileLoc ? Location(fileLoc) : func.getLoc();
+    unsigned line = fileLoc ? fileLoc.getLine() : 1;
+    auto name = builder.getStringAttr(func.getName());
+    auto subprogram = LLVM::DISubprogramAttr::get(
+        ctx, DistinctAttr::create(UnitAttr::get(ctx)), compileUnit, diFile,
+        name, name, diFile, line, line, LLVM::DISubprogramFlags::Definition,
+        subroutineType, {}, {});
+    func->setLoc(FusedLoc::get(ctx, {funcLoc}, subprogram));
+  });
+}
+
+} // namespace
 
 frisk::KernelConfig* frisk::GetKernelConfig() {
   static frisk::KernelConfig cfg;
@@ -115,6 +291,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::errs() << "Failed to parse input MLIR file: " << argv[1] << "\n";
     return 1;
   }
+  attachSourceLocationsFromText(*src, argv[1]);
   // 简单的输出，在 debug 的时候常用
   analyze::PointerTracer::getPointerInfo(*src);
   src->dump();
@@ -132,6 +309,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     pm.run(src->getOperation());
   };
 
+  auto AddKernelPass = [&](std::unique_ptr<Pass> pass){
+    PassManager pm(ctx.get());
+    pm.addNestedPass<frisk::KernelOp>(std::move(pass));
+    pm.run(src->getOperation());
+  };
+
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
   pm.addPass(frisk::createAddKernelargPermuteInfoPass());
   pm.run(src->getOperation());
@@ -143,25 +326,20 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after scfForConversion ---------\n"; llvm::outs().flush();src->dump();
 
-  pm.addPass(frisk::createConvertKernelOpToFriskPass());
-  pm.run(src->getOperation());
+  AddPass(frisk::createConvertKernelOpToFriskPass());
   llvm::outs() << "\n---------- after createConvertKernelOpToFriskPass ---------\n"; llvm::outs().flush();src->dump();
   
-  pm.addNestedPass<frisk::KernelOp>(frisk::createConvertMemAndCalcOpPass());
-  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-  pm.run(src->getOperation());
+  AddKernelPass(frisk::createConvertMemAndCalcOpPass());
+  AddPass(mlir::createReconcileUnrealizedCastsPass());
   llvm::outs() << "\n---------- after createConvertMemAndCalcOpPass ---------\n"; llvm::outs().flush();src->dump();
   
-  pm.addNestedPass<frisk::KernelOp>(frisk::createFriskFuseBlockOpsPass());
-  pm.run(src->getOperation());
+  AddKernelPass(frisk::createFriskFuseBlockOpsPass());
   llvm::outs() << "\n---------- after createFriskFuseBlockOpsPass ---------\n"; llvm::outs().flush();src->dump();
 
-  pm.addNestedPass<frisk::KernelOp>(frisk::createFuseBlockOpWithDTypeConvertOpPass());
-  pm.run(src->getOperation());
+  AddKernelPass(frisk::createFuseBlockOpWithDTypeConvertOpPass());
   llvm::outs() << "\n---------- after createFuseBlockOpWithDTypeConvertOpPass ---------\n"; llvm::outs().flush();src->dump();
 
-  pm.addPass(frisk::createConvertFriskToBasePass());
-  pm.run(src->getOperation());
+  AddPass(frisk::createConvertFriskToBasePass());
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 
   
@@ -169,20 +347,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // pm.run(src->getOperation());
   // llvm::outs() << "\n---------- after createFriskLayoutInferPass ---------\n"; llvm::outs().flush();src->dump();
 
-  pm.addNestedPass<func::FuncOp>(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
-  pm.addNestedPass<func::FuncOp>(mlir::affine::createAffineLoopNormalizePass(true));
-
-  pm.addNestedPass<func::FuncOp>(mlir::createMem2Reg());
-  
-
-  pm.addPass(mlir::createCSEPass());
-  pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferLoopHoistingPass());
-  pm.addNestedPass<func::FuncOp>(mlir::bufferization::createBufferHoistingPass());
-  pm.addPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
+  AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
+  AddPassNested(mlir::createMem2Reg());
+  AddPass(mlir::createCSEPass());
+  AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
+  AddPassNested(mlir::bufferization::createBufferHoistingPass());
+  AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
+  AddPass(mlir::createCanonicalizerPass());
 
   // pm.addPass(mlir::createSymbolDCEPass());
-  pm.run(src->getOperation());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
   
   AddPass(frisk::createThreadLevelIRLegalizePass());
@@ -192,6 +366,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   frisk::firstLowering(mod, src->getContext());
   frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm);
   llvm::outs() << "\n---- after secondLowering -----\n"; llvm::outs().flush(); src->dump();
+  fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
+  attachLLVMDebugScopes(mod, argv[1]);
   
   // ------- convert to llvmir text
   //  创建真正的 LLVM 上下文
@@ -199,12 +375,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // 3. 将 MLIR ModuleOp 转换为 llvm::Module
   std::unique_ptr<llvm::Module> llvmModule =
-      mlir::translateModuleToLLVMIR(mod, llvmContext);
+      mlir::translateModuleToLLVMIR(mod, llvmContext, argv[1]);
 
   if (!llvmModule) {
     llvm::errs() << "Failed to translate MLIR ModuleOp to LLVM IR.\n";
     return 1;
   }
+  llvmModule->setSourceFileName(argv[1]);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -364,14 +541,137 @@ void testCompareAffinemap() {
   }
 }
 
+// TODO : 实现linalg.copy 实现两个 memref<4x3xf32> 之间的copy
+void testLinalgCopy() {
+  MLIRContext ctx;
+  ctx.loadDialect<affine::AffineDialect, arith::ArithDialect,
+                  func::FuncDialect, gpu::GPUDialect, linalg::LinalgDialect,
+                  memref::MemRefDialect, scf::SCFDialect>();
+
+  OpBuilder builder(&ctx);
+  auto loc = builder.getUnknownLoc();
+  auto mod = builder.create<ModuleOp>(loc);
+  builder.setInsertionPointToStart(mod.getBody());
+
+  constexpr int64_t kRows = 64;
+  constexpr int64_t kCols = 32;
+  constexpr int64_t kThreads = 32;
+  constexpr int64_t kElements = kRows * kCols;
+  auto memrefType = MemRefType::get({64, 32}, builder.getF32Type());
+  auto funcType =
+      builder.getFunctionType(TypeRange{memrefType, memrefType}, TypeRange{});
+  auto func = builder.create<func::FuncOp>(loc, "linalg_copy_memref_test",
+                                           funcType);
+  Block *entry = func.addEntryBlock();
+  builder.setInsertionPointToStart(entry);
+
+  SmallVector<Value, 1> inputs{entry->getArgument(0)};
+  SmallVector<Value, 1> outputs{entry->getArgument(1)};
+  builder.create<linalg::CopyOp>(loc, inputs, outputs);
+  builder.create<func::ReturnOp>(loc);
+
+  if (failed(verify(mod))) {
+    llvm::errs() << "failed to verify linalg.copy test module before pass\n";
+    mod.print(llvm::errs());
+    llvm::errs() << "\n";
+    return;
+  }
+
+  llvm::outs() << "\n---------- before convert-linalg-to-parallel-loops "
+                  "---------\n";
+  mod.print(llvm::outs());
+  llvm::outs() << "\n";
+  llvm::outs().flush();
+
+  // MLIR 自带的 linalg pass 可以把 buffer 语义的 linalg op 降成
+  // scf.parallel。对 linalg.copy 来说，效果就是把三维 copy 切成
+  // parallel loop nest，loop body 里变成一次 load + store。
+  //
+  // 注意：scf.parallel 只是目标无关的并行循环，还没有绑定到具体
+  // gpu.thread_id / threadIdx.x。如果要降到真实线程，后面还需要接
+  // gpu-map-parallel-loops、gpu.launch lowering，或者接入 Frisk 自己的
+  // thread-level lowering 规则。
+  PassManager pm(&ctx);
+  pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
+  if (failed(pm.run(mod))) {
+    llvm::errs() << "failed to run convert-linalg-to-parallel-loops\n";
+    mod.print(llvm::errs());
+    llvm::errs() << "\n";
+    return;
+  }
+
+  if (failed(verify(mod))) {
+    llvm::errs() << "failed to verify linalg.copy test module after pass\n";
+    mod.print(llvm::errs());
+    llvm::errs() << "\n";
+    return;
+  }
+
+  llvm::outs() << "\n---------- after convert-linalg-to-parallel-loops "
+                  "----------\n";
+  mod.print(llvm::outs());
+  llvm::outs() << "\n";
+  llvm::outs().flush();
+
+  // 具体切到 32 个线程的一种直接方案：
+  //   linear = threadIdx.x; linear < 64 * 32; linear += 32
+  //   row = linear / 32
+  //   col = linear % 32
+  // 也就是第 tid 个线程负责线性下标 tid, tid + 32, tid + 64, ...
+  // 每个线程处理 (64 * 32) / 32 = 64 个元素。
+  //
+  // 这里没有再从 scf.parallel 自动 lower，而是手工构造目标形态，
+  // 方便观察后续 Frisk pass 可以生成什么 IR。
+  builder.setInsertionPointToEnd(mod.getBody());
+  auto threadFunc = builder.create<func::FuncOp>(
+      loc, "thread_mapped_copy_32_threads", funcType);
+  Block *threadEntry = threadFunc.addEntryBlock();
+  builder.setInsertionPointToStart(threadEntry);
+
+  auto cElements = builder.create<arith::ConstantIndexOp>(loc, kElements);
+  auto cThreads = builder.create<arith::ConstantIndexOp>(loc, kThreads);
+  auto tidx = builder.create<gpu::ThreadIdOp>(
+      loc, gpu::Dimension::x, builder.getIndexAttr(kThreads));
+  auto forOp = builder.create<scf::ForOp>(loc, tidx.getResult(), cElements,
+                                          cThreads);
+
+  builder.setInsertionPointToStart(forOp.getBody());
+  Value linear = forOp.getInductionVar();
+  auto d0 = builder.getAffineDimExpr(0);
+  auto rowMap = AffineMap::get(1, 0, d0.floorDiv(kCols), &ctx);
+  auto colMap = AffineMap::get(1, 0, d0 % kCols, &ctx);
+  Value row = builder.create<affine::AffineApplyOp>(loc, rowMap, linear);
+  Value col = builder.create<affine::AffineApplyOp>(loc, colMap, linear);
+  Value value = builder.create<memref::LoadOp>(
+      loc, threadEntry->getArgument(0), ValueRange{row, col});
+  builder.create<memref::StoreOp>(loc, value, threadEntry->getArgument(1),
+                                  ValueRange{row, col});
+
+  builder.setInsertionPointAfter(forOp);
+  builder.create<func::ReturnOp>(loc);
+
+  if (failed(verify(mod))) {
+    llvm::errs() << "failed to verify thread mapped copy example\n";
+    mod.print(llvm::errs());
+    llvm::errs() << "\n";
+    return;
+  }
+
+  llvm::outs() << "\n---------- explicit thread mapping, 32 threads "
+                  "----------\n";
+  threadFunc.print(llvm::outs());
+  llvm::outs() << "\n";
+  llvm::outs().flush();
+
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     llvm::errs() << "usage: " << argv[0] << " <input.mlir>\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
-  // if (testAffineMapCaluclate())
-  //   return 1;
-  // testGPULayout();
-  // testCompareAffinemap();
+
+  // testLinalgCopy();
+  // return 0;
 }

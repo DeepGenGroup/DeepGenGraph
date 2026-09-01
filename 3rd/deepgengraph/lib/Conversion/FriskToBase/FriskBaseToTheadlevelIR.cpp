@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <array>
 #include <cstddef>
@@ -21,6 +22,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenACC/OpenACC.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -31,6 +33,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
@@ -72,6 +75,32 @@ static bool isLocalMemref(Value buffer) {
   auto ty = mlir::cast<MemRefType>(buffer.getType());
   auto memorySpace = ty.getMemorySpaceAsInt();
   return memorySpace == int(friskMs::Local) || memorySpace == 5;
+}
+
+static bool isGlobalMemref(Value buffer) {
+  auto ty = mlir::cast<MemRefType>(buffer.getType());
+  return ty.getMemorySpaceAsInt() == int(friskMs::Global);
+}
+
+static bool isSharedMemref(Value buffer) {
+  auto ty = mlir::cast<MemRefType>(buffer.getType());
+  return ty.getMemorySpaceAsInt() == int(friskMs::Shared);
+}
+
+static FailureOr<int64_t> getThreadNum(Operation *op,
+                                       PatternRewriter &rewriter) {
+  auto kernel =
+      getOuterMostOpWithName(op, func::FuncOp::getOperationName().data());
+  if (kernel == nullptr || !kernel->hasAttr("thread_num")) {
+    (void)rewriter.notifyMatchFailure(op, "missing thread_num attribute");
+    return failure();
+  }
+  auto threadNumAttr = dyn_cast<IntegerAttr>(kernel->getAttr("thread_num"));
+  if (!threadNumAttr || threadNumAttr.getInt() <= 0) {
+    (void)rewriter.notifyMatchFailure(op, "invalid thread_num attribute");
+    return failure();
+  }
+  return threadNumAttr.getInt();
 }
 
 static LowerInfo getLowerInfoOrDie(Value buffer, Operation *op) {
@@ -211,6 +240,32 @@ static Value floorDivBy(OpBuilder &builder, Location loc, Value operand,
   }
   auto d0 = builder.getAffineDimExpr(0);
   return createSingleDimAffineApply(builder, loc, d0.floorDiv(divisor), operand);
+}
+
+static SmallVector<Value> buildContiguousIndicesFromLinear(
+    OpBuilder &builder, Location loc, Value linearIndex,
+    ArrayRef<int64_t> shape) {
+  SmallVector<Value> indices;
+  indices.reserve(shape.size());
+  int64_t stride = 1;
+  SmallVector<int64_t> strides(shape.size(), 1);
+  for (int64_t i = static_cast<int64_t>(shape.size()) - 1; i >= 0; --i) {
+    strides[i] = stride;
+    stride *= std::max<int64_t>(shape[i], 1);
+  }
+  for (unsigned i = 0; i < shape.size(); ++i) {
+    int64_t dim = shape[i];
+    if (dim == 1) {
+      indices.push_back(createIndexConstant(builder, loc, 0));
+      continue;
+    }
+    Value index = floorDivBy(builder, loc, linearIndex, strides[i]);
+    if (dim > 1) {
+      index = modBy(builder, loc, index, dim);
+    }
+    indices.push_back(index);
+  }
+  return indices;
 }
 
 static Value addIndexValues(OpBuilder &builder, Location loc, Value lhs,
@@ -396,7 +451,7 @@ public:
         }
       }
     };
-    
+
     if(s_hw->getKind() == HW_KIND_DCU){
       // 若AB为local，将其直接替换为local buffer；否则，添加 copyfrom shm to reg 的逻辑。返回这个reg buffer
       auto newA = threadLevelBufferCreate(infoA, false, infoA.get_thread_widths() , isLocalBuffer(infoA.buffer));
@@ -582,7 +637,7 @@ public:
     if (ShapedType::isDynamic(reduceExtent) || reduceExtent <= 0) {
       return op.emitOpError("thread-level reduce requires a positive static reduce extent");
     }
-    
+
     // 单个线程持有的数据量
     auto [srcTw0, srcTw1] = srcInfo.get_thread_own_data_size();
     auto [srcWr0, srcWr1] = srcInfo.get_warp_repeat();
@@ -1484,6 +1539,10 @@ public:
 // srcSHape 更大，则indexmap作用于src。 dst更大时 map作用于 dst
 // 当src和dst其中一个来自 buffer_view, 那么另一个必然为同 shape。此时map取 buffer_view 的map
 // src dst 一样shape时，直接点对点copy
+// 补充：如果src = global dst=shm，则在最后加一个 frisk::sync（dst） op
+// 如果 src = shm，dst=global， 则在前面加一个 frisk::sync(src) op
+// 补充的两者在copy时，不使用LowerInfo，直接根据 tileSize 和 thread数量进行连续切分。即一个thread拷贝连续几个元素。
+
 class CopyOpRewrite : public OpConversionPattern<frisk::CopyOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1496,6 +1555,7 @@ public:
       return rewriter.notifyMatchFailure(
           op, "copy-to-base only handles same element type copies");
     }
+    // rewriter.create<linalg::CopyOp>()
 
     struct BufferInfo {
       Value realBuffer;
@@ -1521,6 +1581,7 @@ public:
       return info;
     };
 
+    // 获取 srcmem dstmem 的 实际buffer
     auto srcInfo = resolveBuffer(srcMem);
     auto dstInfo = resolveBuffer(dstMem);
 
@@ -1659,48 +1720,254 @@ public:
       return *lhsSize > *rhsSize ? 1 : -1;
     };
 
-    SmallVector<int64_t, 4> copyShape;
-    bool hasMappedSide = false;
-    bool isMapForSrc = true;
-    AffineMap indexMap;
-    SmallVector<Value, 4> indexMapOperands;
+    struct CopyPlan {
+      SmallVector<int64_t, 4> copyShape;
+      bool hasMappedSide = false;
+      bool isMapForSrc = true;
+      AffineMap indexMap;
+      SmallVector<Value, 4> indexMapOperands;
+    };
 
-    if (srcInfo.fromView || dstInfo.fromView) {
-      if (srcInfo.fromView && dstInfo.fromView) {
-        return rewriter.notifyMatchFailure(
-            op, "copy-to-base does not support copy between two buffer_view ops");
+    auto computeCopyPlan = [&]() -> FailureOr<CopyPlan> {
+      CopyPlan plan;
+      if (srcInfo.fromView || dstInfo.fromView) {
+        if (srcInfo.fromView && dstInfo.fromView) {
+          (void)rewriter.notifyMatchFailure(
+              op, "copy-to-base does not support copy between two buffer_view ops");
+          return failure();
+        }
+        if (srcMemType.getShape() != dstMemType.getShape()) {
+          (void)rewriter.notifyMatchFailure(
+              op, "buffer_view copy expects the other buffer to have the same shape");
+          return failure();
+        }
+        plan.hasMappedSide = true;
+        plan.isMapForSrc = srcInfo.fromView;
+        plan.indexMap = srcInfo.fromView ? srcInfo.viewMap : dstInfo.viewMap;
+        plan.indexMapOperands =
+            srcInfo.fromView ? srcInfo.viewOperands : dstInfo.viewOperands;
+        plan.copyShape.assign(srcMemType.getShape().begin(),
+                              srcMemType.getShape().end());
+        return plan;
       }
-      if (srcMemType.getShape() != dstMemType.getShape()) {
-        return rewriter.notifyMatchFailure(
-            op, "buffer_view copy expects the other buffer to have the same shape");
+      if (srcMemType.getShape() == dstMemType.getShape()) {
+        plan.copyShape.assign(srcMemType.getShape().begin(),
+                              srcMemType.getShape().end());
+        return plan;
       }
-      hasMappedSide = true;
-      isMapForSrc = srcInfo.fromView;
-      indexMap = srcInfo.fromView ? srcInfo.viewMap : dstInfo.viewMap;
-      indexMapOperands =
-          srcInfo.fromView ? srcInfo.viewOperands : dstInfo.viewOperands;
-      copyShape.assign(srcMemType.getShape().begin(), srcMemType.getShape().end());
-    } else if (srcMemType.getShape() == dstMemType.getShape()) {
-      copyShape.assign(srcMemType.getShape().begin(), srcMemType.getShape().end());
-    } else {
+
       auto shapeCompare =
           compareShapeSize(srcMemType.getShape(), dstMemType.getShape());
       if (failed(shapeCompare)) {
         return failure();
       }
       if (*shapeCompare == 0) {
-        return rewriter.notifyMatchFailure(
+        (void)rewriter.notifyMatchFailure(
             op, "copy-to-base cannot infer map side for different shapes with the same element count");
+        return failure();
       }
-      hasMappedSide = true;
-      isMapForSrc = *shapeCompare > 0;
-      indexMap = op.getOffsetMap();
-      indexMapOperands.assign(op.getMapOperands().begin(),
-                              op.getMapOperands().end());
+      plan.hasMappedSide = true;
+      plan.isMapForSrc = *shapeCompare > 0;
+      plan.indexMap = op.getOffsetMap();
+      plan.indexMapOperands.assign(op.getMapOperands().begin(),
+                                   op.getMapOperands().end());
       auto copyShapeRef =
-          isMapForSrc ? dstMemType.getShape() : srcMemType.getShape();
-      copyShape.assign(copyShapeRef.begin(), copyShapeRef.end());
+          plan.isMapForSrc ? dstMemType.getShape() : srcMemType.getShape();
+      plan.copyShape.assign(copyShapeRef.begin(), copyShapeRef.end());
+      return plan;
+    };
+
+    auto lowerGlobalSharedCopy = [&]() -> LogicalResult {
+      bool srcIsGlobal = isGlobalMemref(srcInfo.realBuffer);
+      bool dstIsGlobal = isGlobalMemref(dstInfo.realBuffer);
+      bool srcIsShared = isSharedMemref(srcInfo.realBuffer);
+      bool dstIsShared = isSharedMemref(dstInfo.realBuffer);
+      if (!((srcIsGlobal && dstIsShared) || (srcIsShared && dstIsGlobal))) {
+        return failure();
+      }
+
+      auto copyPlan = computeCopyPlan();
+      if (failed(copyPlan)) {
+        return failure();
+      }
+      auto totalElements = productOfShape(copyPlan->copyShape);
+      if (failed(totalElements)) {
+        return failure();
+      }
+      auto threadNum = getThreadNum(op.getOperation(), rewriter);
+      if (failed(threadNum)) {
+        return failure();
+      }
+      int64_t chunkSize = (*totalElements + *threadNum - 1) / *threadNum;
+      if (chunkSize > std::numeric_limits<int>::max()) {
+        return rewriter.notifyMatchFailure(
+            op, "copy-to-base expects int-sized per-thread copy chunk");
+      }
+
+      auto loc = op->getLoc();
+      auto tileRank = copyPlan->copyShape.size();
+      auto validateDirectSide = [&](MemRefType realType) -> LogicalResult {
+        if (realType.getRank() != static_cast<int64_t>(tileRank)) {
+          return rewriter.notifyMatchFailure(
+              op, "direct copy side rank must match copy tile rank");
+        }
+        return success();
+      };
+      auto validateMappedSide = [&](MemRefType realType) -> LogicalResult {
+        if (copyPlan->indexMap.getNumResults() != realType.getRank()) {
+          return rewriter.notifyMatchFailure(
+              op, "index map result count must match mapped buffer rank");
+        }
+        if (copyPlan->indexMap.getNumInputs() !=
+            copyPlan->indexMapOperands.size()) {
+          return rewriter.notifyMatchFailure(
+              op, "index map operand count does not match map input count");
+        }
+        if (tileRank > static_cast<size_t>(realType.getRank())) {
+          return rewriter.notifyMatchFailure(
+              op, "copy tile rank is larger than mapped buffer rank");
+        }
+        return success();
+      };
+      if (!copyPlan->hasMappedSide) {
+        if (failed(validateDirectSide(srcInfo.realType)) ||
+            failed(validateDirectSide(dstInfo.realType))) {
+          return failure();
+        }
+      } else if (copyPlan->isMapForSrc) {
+        if (failed(validateMappedSide(srcInfo.realType)) ||
+            failed(validateDirectSide(dstInfo.realType))) {
+          return failure();
+        }
+      } else {
+        if (failed(validateDirectSide(srcInfo.realType)) ||
+            failed(validateMappedSide(dstInfo.realType))) {
+          return failure();
+        }
+      }
+
+      Value sharedBuffer = srcIsShared ? srcInfo.realBuffer : dstInfo.realBuffer;
+      if (srcIsShared) {
+        rewriter.create<frisk::SyncThreadsInBlockOp>(loc, sharedBuffer);
+      }
+
+      if (*totalElements > 0) {
+        auto tidx = findThreadIdxOp(op);
+        std::vector<Value> copyIvs;
+        auto loops = createNestedAffineFor(
+            rewriter, loc, std::vector<int>{static_cast<int>(chunkSize)}, copyIvs);
+
+        auto d0 = rewriter.getAffineDimExpr(0);
+        auto d1 = rewriter.getAffineDimExpr(1);
+        auto linearMap =
+            AffineMap::get(2, 0, d0 * chunkSize + d1, rewriter.getContext());
+        Value linearIndex = rewriter.create<affine::AffineApplyOp>(
+            loc, linearMap, ValueRange{tidx.getResult(), copyIvs[0]});
+
+        auto inBoundsSet =
+            IntegerSet::get(1, 0,
+                            SmallVector<AffineExpr>{-d0 + (*totalElements - 1)},
+                            SmallVector<bool>{false});
+        auto ifOp = rewriter.create<affine::AffineIfOp>(
+            loc, inBoundsSet, ValueRange{linearIndex}, false);
+        rewriter.setInsertionPointToStart(ifOp.getThenBlock());
+
+        auto tileIndices = buildContiguousIndicesFromLinear(
+            rewriter, loc, linearIndex, copyPlan->copyShape);
+
+        auto buildDirectIndices =
+            [&](unsigned rank) -> FailureOr<SmallVector<Value>> {
+          if (rank != tileIndices.size()) {
+            (void)rewriter.notifyMatchFailure(
+                op, "direct copy side rank must match copy tile rank");
+            return failure();
+          }
+          return SmallVector<Value>{tileIndices.begin(), tileIndices.end()};
+        };
+
+        auto buildMappedIndices =
+            [&](MemRefType realType) -> FailureOr<SmallVector<Value>> {
+          unsigned rank = realType.getRank();
+          if (copyPlan->indexMap.getNumResults() != rank) {
+            (void)rewriter.notifyMatchFailure(
+                op, "index map result count must match mapped buffer rank");
+            return failure();
+          }
+          if (copyPlan->indexMap.getNumInputs() !=
+              copyPlan->indexMapOperands.size()) {
+            (void)rewriter.notifyMatchFailure(
+                op, "index map operand count does not match map input count");
+            return failure();
+          }
+          if (tileIndices.size() > rank) {
+            (void)rewriter.notifyMatchFailure(
+                op, "copy tile rank is larger than mapped buffer rank");
+            return failure();
+          }
+
+          SmallVector<Value> indices;
+          indices.reserve(rank);
+          unsigned loopStart = rank - tileIndices.size();
+          for (unsigned i = 0; i < rank; ++i) {
+            auto oneResultMap =
+                AffineMap::get(copyPlan->indexMap.getNumDims(),
+                               copyPlan->indexMap.getNumSymbols(),
+                               copyPlan->indexMap.getResult(i),
+                               rewriter.getContext());
+            Value index = rewriter.create<affine::AffineApplyOp>(
+                loc, oneResultMap, copyPlan->indexMapOperands);
+            if (i >= loopStart) {
+              index =
+                  addIndexValues(rewriter, loc, index, tileIndices[i - loopStart]);
+            }
+            indices.push_back(index);
+          }
+          return indices;
+        };
+
+        FailureOr<SmallVector<Value>> srcIndices;
+        FailureOr<SmallVector<Value>> dstIndices;
+        if (!copyPlan->hasMappedSide) {
+          srcIndices = buildDirectIndices(srcInfo.realType.getRank());
+          dstIndices = buildDirectIndices(dstInfo.realType.getRank());
+        } else if (copyPlan->isMapForSrc) {
+          srcIndices = buildMappedIndices(srcInfo.realType);
+          dstIndices = buildDirectIndices(dstInfo.realType.getRank());
+        } else {
+          srcIndices = buildDirectIndices(srcInfo.realType.getRank());
+          dstIndices = buildMappedIndices(dstInfo.realType);
+        }
+        if (failed(srcIndices) || failed(dstIndices)) {
+          return failure();
+        }
+
+        auto value = rewriter.create<affine::AffineLoadOp>(
+            loc, srcInfo.realBuffer, *srcIndices);
+        rewriter.create<affine::AffineStoreOp>(
+            loc, value.getResult(), dstInfo.realBuffer, *dstIndices);
+        rewriter.setInsertionPointAfter(loops.front());
+      }
+
+      if (dstIsShared) {
+        rewriter.create<frisk::SyncThreadsInBlockOp>(loc, sharedBuffer);
+      }
+      rewriter.eraseOp(op);
+      return success();
+    };
+
+    if (succeeded(lowerGlobalSharedCopy())) {
+      return success();
     }
+
+    auto copyPlan = computeCopyPlan();
+    if (failed(copyPlan)) {
+      return failure();
+    }
+    auto &copyShape = copyPlan->copyShape;
+    bool hasMappedSide = copyPlan->hasMappedSide;
+    bool isMapForSrc = copyPlan->isMapForSrc;
+    auto indexMap = copyPlan->indexMap;
+    auto &indexMapOperands = copyPlan->indexMapOperands;
 
     std::vector<int> loopUpperBounds;
     loopUpperBounds.reserve(copyShape.size());
@@ -2004,7 +2271,7 @@ static void applyBufferReuse(func::FuncOp kernel,
 
 }
 
-// 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分其他op到thread上
+// 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分op到thread上
 class ConvertFriskBaseToThreadLevelIR : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
 public:
   
