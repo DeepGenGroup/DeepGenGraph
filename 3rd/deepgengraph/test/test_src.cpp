@@ -71,7 +71,9 @@
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"       // 包含 translateModuleToLLVMIR
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -277,6 +279,75 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
   });
 }
 
+void materializeSplatVectorConstants(llvm::Module &module) {
+  llvm::LLVMContext &context = module.getContext();
+  llvm::Type *i32Type = llvm::Type::getInt32Ty(context);
+  llvm::Constant *zero = llvm::ConstantInt::get(i32Type, 0);
+
+  for (llvm::Function &function : module) {
+    for (llvm::BasicBlock &block : function) {
+      for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
+        if (llvm::isa<llvm::PHINode>(inst))
+          continue;
+
+        for (unsigned idx = 0, e = inst.getNumOperands(); idx < e; ++idx) {
+          auto *constant =
+              llvm::dyn_cast<llvm::Constant>(inst.getOperand(idx));
+          if (!constant ||
+              llvm::isa<llvm::ConstantAggregateZero, llvm::UndefValue,
+                        llvm::PoisonValue>(constant))
+            continue;
+
+          auto *vectorType =
+              llvm::dyn_cast<llvm::FixedVectorType>(constant->getType());
+          if (!vectorType)
+            continue;
+
+          llvm::Constant *splatValue = constant->getSplatValue();
+          if (!splatValue ||
+              llvm::isa<llvm::UndefValue, llvm::PoisonValue>(splatValue))
+            continue;
+
+          auto *insert = llvm::InsertElementInst::Create(
+              llvm::PoisonValue::get(vectorType), splatValue, zero,
+              "compat.splat.insert", &inst);
+          insert->setDebugLoc(inst.getDebugLoc());
+          llvm::SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
+          auto *shuffle = new llvm::ShuffleVectorInst(
+              insert, llvm::PoisonValue::get(vectorType), mask, "compat.splat",
+              &inst);
+          shuffle->setDebugLoc(inst.getDebugLoc());
+          inst.setOperand(idx, shuffle);
+        }
+      }
+    }
+  }
+}
+
+void replaceAll(std::string &text, llvm::StringRef from, llvm::StringRef to) {
+  size_t pos = 0;
+  while ((pos = text.find(from.str(), pos)) != std::string::npos) {
+    text.replace(pos, from.size(), to.str());
+    pos += to.size();
+  }
+}
+
+void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
+  std::string text;
+  llvm::raw_string_ostream buffer(text);
+  module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
+  buffer.flush();
+
+  // Keep the textual IR parseable by older llvm-link builds used downstream.
+  replaceAll(text, " captures(none)", "");
+  replaceAll(text, " memory(none)", "");
+  replaceAll(text, " memory(argmem: read)", "");
+  replaceAll(text, " memory(argmem: write)", "");
+  replaceAll(text, " memory(argmem: readwrite)", "");
+
+  os << text;
+}
+
 } // namespace
 
 frisk::KernelConfig* frisk::GetKernelConfig() {
@@ -443,13 +514,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   llvmModule->setSourceFileName(argv[1]);
+  materializeSplatVectorConstants(*llvmModule);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
   std::error_code ec;
   llvm::raw_fd_ostream os("finalLLVMText.ll",ec);
   if(!ec){
-    llvmModule->print(os, /*AssemblyAnnotationWriter=*/nullptr);
+    printLegacyCompatibleLLVMIR(*llvmModule, os);
     llvm::outs() << "[d] llvmIR 已输出到 finalLLVMText.ll\n" ; llvm::outs().flush();
   }
   return 0;

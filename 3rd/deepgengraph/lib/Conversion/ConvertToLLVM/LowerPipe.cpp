@@ -10,6 +10,8 @@
 
 namespace mlir::frisk {
 
+static constexpr unsigned kLLVMIndexBitwidth = 64;
+
 static std::optional<SmallVector<int64_t, 4>>
 computeContiguousStrides(MemRefType memRefType) {
   int64_t offset;
@@ -102,7 +104,7 @@ struct VectorTypeCastOpIndexBitwidthConversion
 struct VectorToLLVMPass : public PassWrapper<VectorToLLVMPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VectorToLLVMPass)
 
-  VectorToLLVMPass(unsigned indexBitWidth_=32) : indexBitWidth(indexBitWidth_) {};
+  VectorToLLVMPass(unsigned indexBitWidth_=kLLVMIndexBitwidth) : indexBitWidth(indexBitWidth_) {};
 
   unsigned indexBitWidth;
 
@@ -184,17 +186,17 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createSCFToControlFlowPass());                    // scf -> cf
 
   ConvertControlFlowToLLVMPassOptions cfOptions;
-  cfOptions.indexBitwidth = 32;
+  cfOptions.indexBitwidth = kLLVMIndexBitwidth;
 
   pm.addPass(mlir::createConvertControlFlowToLLVMPass(
       cfOptions)); // cf -> llvm
   // pm.addPass(createConvertArithIndexToI64Pass());                      // 自定义 将arith中的constantOp的result为index类型的Op全部转成result为i64的op
 
-  pm.addPass(createVectorToLLVMPass(32)); // 自定义 vector to llvm pass
+  pm.addPass(createVectorToLLVMPass(kLLVMIndexBitwidth)); // 自定义 vector to llvm pass
   // pm.addPass(mlir::createConvertVectorToLLVMPass());                       // vector -> llvm
 
   FinalizeMemRefToLLVMConversionPassOptions memrefOptions;
-  memrefOptions.indexBitwidth = 32;                              // 这个32会将malloc func的参数也定义为i32，以及将ptrtointOp的返回也是i32，llvm malloc func不支持i32
+  memrefOptions.indexBitwidth = kLLVMIndexBitwidth;              // 使用 i64 index，避免 malloc 参数/ptrtoint 生成 i32
   // memrefOptions.useAlignedAlloc = true;                                    // 这个如果不开启的话，且上为i32，则llir转换失败，解决使用pass - createMallocFuncOpArgTypeI32ToI64Pass
   pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass(
       memrefOptions)); // memref -> llvm
@@ -204,21 +206,21 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   // pm.addPass(mlir::createSymbolDCEPass());
 
   ConvertFuncToLLVMPassOptions funcOptions;                                 // passes.h.inc文件中有通过tablegen生成的pass base类型 以及createxxx()
-  funcOptions.indexBitwidth = 32;                              // func loewring 到 llvm 时，其index转到llvm上是使用i32类型
+  funcOptions.indexBitwidth = kLLVMIndexBitwidth;              // func lowering 到 llvm 时，其 index 转成 i64
   funcOptions.useBarePtrCallConv = true;                                    // 使用裸指针，而不使用结构体指针表示memref类型
   pm.addPass(mlir::createConvertFuncToLLVMPass(funcOptions)); // func -> llvm
 
   pm.addPass(mlir::frisk::createLLVMFuncOpAddGPUAttrPass(
       target)); // llvmfuncOp add nvvm/rocdl.kernel or nvvm.maxnid
   pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(
-      target, 32)); // GPU indexOp to rocdl/nvvm indexOp
+      target, kLLVMIndexBitwidth)); // GPU indexOp to rocdl/nvvm indexOp
 
   ArithToLLVMConversionPassOptions arithOptions;
-  arithOptions.indexBitwidth = 32;
+  arithOptions.indexBitwidth = kLLVMIndexBitwidth;
   pm.addPass(mlir::createArithToLLVMConversionPass(
       arithOptions)); // arith -> llvm
   UBToLLVMConversionPassOptions ubOptions;
-  ubOptions.indexBitwidth = 32;
+  ubOptions.indexBitwidth = kLLVMIndexBitwidth;
   pm.addPass(mlir::createUBToLLVMConversionPass(ubOptions)); // ub -> llvm
   // pm.addPass(createEraseRedundantUnCCastPass());                         // 手动写的去除多余UnrealizedCast
   pm.addPass(

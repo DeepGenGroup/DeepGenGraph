@@ -30,6 +30,8 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -38,6 +40,70 @@
 
 namespace mlir::frisk{
 using namespace llvm;
+
+static void materializeSplatVectorConstants(Module &module) {
+  LLVMContext &context = module.getContext();
+  llvm::Type *i32Type = llvm::Type::getInt32Ty(context);
+  Constant *zero = ConstantInt::get(i32Type, 0);
+
+  for (Function &function : module) {
+    for (BasicBlock &block : function) {
+      for (Instruction &inst : llvm::make_early_inc_range(block)) {
+        if (isa<PHINode>(inst))
+          continue;
+
+        for (unsigned idx = 0, e = inst.getNumOperands(); idx < e; ++idx) {
+          auto *constant = dyn_cast<Constant>(inst.getOperand(idx));
+          if (!constant || isa<ConstantAggregateZero, UndefValue, PoisonValue>(constant))
+            continue;
+
+          auto *vectorType = dyn_cast<llvm::FixedVectorType>(constant->getType());
+          if (!vectorType)
+            continue;
+
+          Constant *splatValue = constant->getSplatValue();
+          if (!splatValue || isa<UndefValue, PoisonValue>(splatValue))
+            continue;
+
+          auto *insert = InsertElementInst::Create(
+              PoisonValue::get(vectorType), splatValue, zero,
+              "compat.splat.insert", &inst);
+          insert->setDebugLoc(inst.getDebugLoc());
+          SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
+          auto *shuffle = new ShuffleVectorInst(
+              insert, PoisonValue::get(vectorType), mask, "compat.splat",
+              &inst);
+          shuffle->setDebugLoc(inst.getDebugLoc());
+          inst.setOperand(idx, shuffle);
+        }
+      }
+    }
+  }
+}
+
+static void replaceAll(std::string &text, StringRef from, StringRef to) {
+  size_t pos = 0;
+  while ((pos = text.find(from.str(), pos)) != std::string::npos) {
+    text.replace(pos, from.size(), to.str());
+    pos += to.size();
+  }
+}
+
+static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
+  std::string text;
+  raw_string_ostream buffer(text);
+  module.print(buffer, nullptr);
+  buffer.flush();
+
+  // Keep the textual IR parseable by older llvm-link builds used downstream.
+  replaceAll(text, " captures(none)", "");
+  replaceAll(text, " memory(none)", "");
+  replaceAll(text, " memory(argmem: read)", "");
+  replaceAll(text, " memory(argmem: write)", "");
+  replaceAll(text, " memory(argmem: readwrite)", "");
+
+  os << text;
+}
 
 static std::optional<OptimizationLevel> mapToLevel(unsigned optLevel, unsigned sizeLevel) {
   switch (optLevel) {
@@ -137,9 +203,10 @@ std::string translateMLIRToLLVMIR(mlir::ModuleOp module, Target target, const in
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
     return "";
   }  
+  materializeSplatVectorConstants(*llvmModule);
   std::string str;
   llvm::raw_string_ostream os(str);
-  llvmModule->print(os, nullptr);
+  printLegacyCompatibleLLVMIR(*llvmModule, os);
   os.flush();
   return str;
 }

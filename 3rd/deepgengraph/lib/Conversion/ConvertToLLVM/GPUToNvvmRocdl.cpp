@@ -87,20 +87,21 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
-    Operation *newOp;
+    Operation *newOp = nullptr;
+    Type intrinsicType = IntegerType::get(context, 32);
     switch (op.getDimension()) {
     case gpu::Dimension::x:
-      newOp = rewriter.create<XOp>(loc, IntegerType::get(context, indexBitwidth));
+      newOp = rewriter.create<XOp>(loc, intrinsicType);
       break;
     case gpu::Dimension::y:
-      newOp = rewriter.create<YOp>(loc, IntegerType::get(context, indexBitwidth));
+      newOp = rewriter.create<YOp>(loc, intrinsicType);
       break;
     case gpu::Dimension::z:
-      newOp = rewriter.create<ZOp>(loc, IntegerType::get(context, indexBitwidth));
+      newOp = rewriter.create<ZOp>(loc, intrinsicType);
       break;
     }
 
-    Operation *function;
+    Operation *function = nullptr;
     if (auto Func = op->template getParentOfType<func::FuncOp>())
       function = Func;
     if (auto llvmFunc = op->template getParentOfType<LLVM::LLVMFuncOp>())
@@ -611,5 +612,4 @@ namespace mlir::frisk {
 
 
 // ================================================================
-
 

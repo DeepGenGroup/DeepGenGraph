@@ -434,11 +434,14 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
 
   LogicalResult matchAndRewrite(deepgengraph::KernelOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    auto gridAttr = op->getAttr("grid");
+    auto gridAttr = dyn_cast_or_null<DenseI64ArrayAttr>(op->getAttr("grid"));
     auto permuteAttr = op->getAttr("arg_permutes");
     auto loc = op->getLoc();
     auto oldFuncType = op.getFunctionType();
     auto converter = getTypeConverter();
+    if (!gridAttr)
+      return op.emitError("missing or invalid `grid` attribute for kernel"),
+             failure();
 
     llvm::SmallVector<Type> newInputs;
     llvm::SmallVector<Type> newOutputs;
@@ -470,7 +473,8 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
 
     auto newKernelOp = rewriter.create<frisk::KernelOp>(loc, op.getName(), newFuncType);
     newKernelOp->setAttr("grid", gridAttr);
-    newKernelOp->setAttr("arg_permutes", permuteAttr);
+    if (permuteAttr)
+      newKernelOp->setAttr("arg_permutes", permuteAttr);
     rewriter.inlineRegionBefore(op->getRegion(0), newKernelOp.getRegion(), newKernelOp.getRegion().end());
     // 3. replace deepgengraph.return with frisk.end
     auto oldReturn = newKernelOp->getRegion(0).front().getOps<deepgengraph::ReturnOp>().begin();
@@ -480,7 +484,7 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
     
     // 4. insert frisk.parallel
     rewriter.setInsertionPointToStart(&newKernelOp->getRegion(0).front());
-    auto ranges = cast<DenseI64ArrayAttr>(gridAttr).asArrayRef();
+    auto ranges = gridAttr.asArrayRef();
     auto parallelOp = rewriter.create<frisk::ParallelOp>(loc, ranges, GetKernelConfig()->num_threads);
     auto parallelEntry = parallelOp.addEntryBlock();
     // move all ops expect frisk.end into frisk.parallel
