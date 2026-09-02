@@ -30,7 +30,9 @@ struct AmendAllocaOpAddrSpace : public OpRewritePattern<memref::AllocaOp> {
                                          originalType.getLayout(),memorySpaceAttr);
 
     rewriter.setInsertionPoint(allocaOp);
-    auto newAlloca = rewriter.create<memref::AllocaOp>(allocaOp.getLoc(), newType);
+    auto newAlloca = rewriter.create<memref::AllocaOp>(
+        allocaOp.getLoc(), newType, allocaOp.getDynamicSizes(),
+        allocaOp.getSymbolOperands(), allocaOp.getAlignmentAttr());
     rewriter.replaceOp(allocaOp, newAlloca.getResult());
     return success();
   }
@@ -609,6 +611,5 @@ namespace mlir::frisk {
 
 
 // ================================================================
-
 
 

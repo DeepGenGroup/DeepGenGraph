@@ -846,6 +846,7 @@ struct ZeroOpConversionPattern : public OpConversionPattern<dg::ZeroOp> {
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
 
     auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getShape(), op.getElementType(), 16, outMs);
+    AppendNameToLoc(buffer);
     mlir::Attribute valueAttr;
     auto eleTy = op.getElementType();
     if(eleTy.isFloat()){
@@ -857,7 +858,8 @@ struct ZeroOpConversionPattern : public OpConversionPattern<dg::ZeroOp> {
     else{
       assert(false);
     }
-    rewriter.create<frisk::FillOp>(loc, buffer, valueAttr);
+    auto fillOp = rewriter.create<frisk::FillOp>(loc, buffer, valueAttr);
+    AppendNameToLoc(fillOp);
     rewriter.replaceOp(op, buffer);
     return success();
   }

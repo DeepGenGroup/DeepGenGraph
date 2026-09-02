@@ -80,6 +80,7 @@ struct KernelConfig {
 };
 
 KernelConfig* GetKernelConfig();
+void AppendNameToLoc( mlir::Operation* targetOp);
 
 } // namespace mlir::firsk
 

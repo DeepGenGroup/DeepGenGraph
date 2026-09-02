@@ -65,6 +65,8 @@ bool secondLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context, Target targ
   pm.addPass(mlir::createConvertControlFlowToLLVMPass(cfOptions));        // cf -> llvm
   // pm.addPass(createConvertArithIndexToI64Pass());                      // 自定义 将arith中的constantOp的result为index类型的Op全部转成result为i64的op
 
+  pm.addPass(mlir::frisk::createAmendAllocaOpAddrSpacePass(target));  // ROCm local alloca -> addrspace(5)
+
   pm.addPass(createVectorToLLVMPass(32));                    // 自定义 vector to llvm pass
   // pm.addPass(mlir::createConvertVectorToLLVMPass());                       // vector -> llvm
 

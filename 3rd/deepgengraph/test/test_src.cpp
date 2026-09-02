@@ -246,6 +246,34 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
         subroutineType, {}, {});
     func->setLoc(FusedLoc::get(ctx, {funcLoc}, subprogram));
   });
+
+  module.walk([&](LLVM::LLVMFuncOp func) {
+    auto fusedSubprogram =
+        func.getLoc()->findInstanceOf<FusedLocWith<LLVM::DISubprogramAttr>>();
+    if (!fusedSubprogram)
+      return;
+
+    auto subprogram = fusedSubprogram.getMetadata();
+    func.walk([&](Operation *op) {
+      if (op == func.getOperation())
+        return;
+
+      FileLineColLoc fileLoc = findFileLineColLoc(op->getLoc());
+      if (!fileLoc)
+        return;
+
+      StringRef locFilename = fileLoc.getFilename().getValue();
+      if (locFilename == inputFilename)
+        return;
+
+      auto opDiFile = LLVM::DIFileAttr::get(
+          ctx, llvm::sys::path::filename(locFilename),
+          llvm::sys::path::parent_path(locFilename));
+      auto lexicalBlock = LLVM::DILexicalBlockFileAttr::get(
+          ctx, subprogram, opDiFile, /*discriminator=*/0);
+      op->setLoc(FusedLoc::get(ctx, {op->getLoc()}, lexicalBlock));
+    });
+  });
 }
 
 } // namespace
@@ -258,31 +286,27 @@ frisk::KernelConfig* frisk::GetKernelConfig() {
 }
 
 
-mlir::Location frisk::GetNewLoc(mlir::Location origLoc, mlir::Operation* targetOp){
+void frisk::AppendNameToLoc(mlir::Operation* targetOp){
   // 假设 op 是已有的 Operation*，newOpName 是你要追加的信息
+  auto origLoc = targetOp->getLoc();
   mlir::MLIRContext *ctx = targetOp->getContext();
-  llvm::StringRef extraInfo = targetOp->getOperationName().getStringRef();
+  llvm::StringRef extraInfo = targetOp->getName().getStringRef();
   mlir::Location newLoc = origLoc; // 默认降级为原 Loc
 
   // 1. 匹配并提取 FileLineColLoc
   if (auto fileLoc = llvm::dyn_cast<mlir::FileLineColLoc>(origLoc)) {
-      // 获取原 fileName 字符串
-      llvm::StringRef origFileName = fileLoc.getFilename().getValue();
-
-      // 拼接新的 fileName
-      std::string newFileName = (origFileName + "_" + extraInfo).str();
-
-      // 2. 重新构建包含新 fileName 的 FileLineColLoc
-      newLoc = mlir::FileLineColLoc::get(
-          mlir::StringAttr::get(ctx, newFileName),
-          fileLoc.getLine(),
-          fileLoc.getColumn()
-      );
+    // 获取原 fileName 字符串
+    llvm::StringRef origFileName = fileLoc.getFilename().getValue();
+    // 拼接新的 fileName
+    std::string newFileName = (origFileName + "_" + extraInfo).str();
+    // 2. 重新构建包含新 fileName 的 FileLineColLoc
+    newLoc = mlir::FileLineColLoc::get(
+        mlir::StringAttr::get(ctx, newFileName),
+        fileLoc.getLine(),
+        fileLoc.getColumn()
+    );
   }
-
-  // 3. 将新 Loc 赋值给目标 Op（例如通过 OpBuilder 创建时传入，或直接 setLoc）
-  // targetOp->setLoc(newLoc);
-  return newLoc;
+  targetOp->setLoc(newLoc);
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {

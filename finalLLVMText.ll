@@ -1,1032 +1,1135 @@
-; ModuleID = 'LLVMDialectModule'
-source_filename = "LLVMDialectModule"
+; ModuleID = '3rd/deepgengraph/test/test_input.mlir'
+source_filename = "3rd/deepgengraph/test/test_input.mlir"
 
-@shm_5 = addrspace(3) global [128 x [1 x float]] undef, align 16
-@shm_4 = addrspace(3) global [128 x [128 x float]] undef, align 16
-@shm_3 = addrspace(3) global [128 x [128 x half]] undef, align 16
-@shm_2 = addrspace(3) global [128 x [128 x half]] undef, align 16
-@shm_1 = addrspace(3) global [128 x [128 x half]] undef, align 16
-@shm_0 = addrspace(3) global [128 x [128 x half]] undef, align 16
+@shm_5 = addrspace(3) global [64 x [1 x float]] undef, align 16
+@shm_4 = addrspace(3) global [64 x [32 x float]] undef, align 16
+@shm_3 = addrspace(3) global [64 x [32 x half]] undef, align 16
+@shm_2 = addrspace(3) global [32 x [128 x half]] undef, align 16
+@shm_1 = addrspace(3) global [64 x [128 x half]] undef, align 16
+@shm_0 = addrspace(3) global [8192 x half] undef, align 16
 
 declare float @__ocml_exp2_f32(float)
 
-define amdgpu_kernel void @Attn_p2(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3) #0 !reqd_work_group_size !1 {
-  %5 = call i32 @llvm.amdgcn.workgroup.id.y()
-  %6 = call i32 @llvm.amdgcn.workgroup.id.x()
-  %7 = call i32 @llvm.amdgcn.workitem.id.x()
-  %8 = mul nsw i32 %5, 128
-  %9 = icmp slt i32 %6, 0
-  %10 = sub i32 -1, %6
-  %11 = select i1 %9, i32 %10, i32 %6
-  %12 = sdiv i32 %11, 32
-  %13 = sub i32 -1, %12
-  %14 = select i1 %9, i32 %13, i32 %12
-  %15 = add i32 %8, %14
-  %16 = srem i32 %15, 4096
-  %17 = icmp slt i32 %16, 0
-  %18 = add i32 %16, 4096
-  %19 = select i1 %17, i32 %18, i32 %16
-  %20 = mul nsw i32 %14, -32
-  br label %21
+define amdgpu_kernel void @Attn_p2(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3) #0 !dbg !3 !reqd_work_group_size !6 {
+  %5 = call i32 @llvm.amdgcn.workgroup.id.y(), !dbg !7
+  %6 = call i32 @llvm.amdgcn.workgroup.id.x(), !dbg !7
+  %7 = call i32 @llvm.amdgcn.workitem.id.x(), !dbg !7
+  %8 = icmp slt i32 %5, 0, !dbg !8
+  %9 = sub i32 -1, %5, !dbg !8
+  %10 = select i1 %8, i32 %9, i32 %5, !dbg !8
+  %11 = sdiv i32 %10, 64, !dbg !8
+  %12 = sub i32 -1, %11, !dbg !8
+  %13 = select i1 %8, i32 %12, i32 %11, !dbg !8
+  %14 = add i32 %6, %13, !dbg !8
+  %15 = srem i32 %14, 32, !dbg !8
+  %16 = icmp slt i32 %15, 0, !dbg !8
+  %17 = add i32 %15, 32, !dbg !8
+  %18 = select i1 %16, i32 %17, i32 %15, !dbg !8
+  %19 = mul nsw i32 %5, 64, !dbg !8
+  %20 = icmp slt i32 %7, 0, !dbg !8
+  %21 = sub i32 -1, %7, !dbg !8
+  %22 = select i1 %20, i32 %21, i32 %7, !dbg !8
+  %23 = sdiv i32 %22, 16, !dbg !8
+  %24 = sub i32 -1, %23, !dbg !8
+  %25 = select i1 %20, i32 %24, i32 %23, !dbg !8
+  %26 = mul nsw i32 %25, -16, !dbg !8
+  %27 = mul nsw i32 %13, -4096, !dbg !8
+  %28 = mul nsw i32 %25, 4, !dbg !8
+  br label %29, !dbg !8
 
-21:                                               ; preds = %42, %4
-  %22 = phi i32 [ %43, %42 ], [ 0, %4 ]
-  %23 = icmp slt i32 %22, 128
-  br i1 %23, label %24, label %44
+29:                                               ; preds = %64, %4
+  %30 = phi i32 [ %65, %64 ], [ 0, %4 ], !dbg !8
+  %31 = icmp slt i32 %30, 4, !dbg !8
+  br i1 %31, label %32, label %66, !dbg !8
 
-24:                                               ; preds = %21
-  %25 = add i32 %22, %6
-  %26 = add i32 %25, %20
-  br label %27
+32:                                               ; preds = %29
+  %33 = mul nsw i32 %30, 16, !dbg !8
+  %34 = add i32 %33, %19, !dbg !8
+  %35 = add i32 %34, %7, !dbg !8
+  %36 = add i32 %35, %26, !dbg !8
+  %37 = add i32 %36, %27, !dbg !8
+  %38 = add i32 %33, %7, !dbg !8
+  %39 = add i32 %38, %26, !dbg !8
+  br label %40, !dbg !8
 
-27:                                               ; preds = %30, %24
-  %28 = phi i32 [ %41, %30 ], [ 0, %24 ]
-  %29 = icmp slt i32 %28, 128
-  br i1 %29, label %30, label %42
+40:                                               ; preds = %62, %32
+  %41 = phi i32 [ %63, %62 ], [ 0, %32 ], !dbg !8
+  %42 = icmp slt i32 %41, 8, !dbg !8
+  br i1 %42, label %43, label %64, !dbg !8
 
-30:                                               ; preds = %27
-  %31 = mul i32 %19, 4096
-  %32 = add i32 0, %31
-  %33 = mul i32 %26, 128
-  %34 = add i32 %32, %33
-  %35 = add i32 %34, %28
-  %36 = getelementptr half, ptr addrspace(1) %0, i32 %35
-  %37 = load half, ptr addrspace(1) %36, align 2
-  %38 = mul i32 %22, 128
-  %39 = add i32 %38, %28
-  %40 = getelementptr half, ptr addrspace(3) @shm_0, i32 %39
-  store half %37, ptr addrspace(3) %40, align 2
-  %41 = add i32 %28, 1
-  br label %27
+43:                                               ; preds = %40
+  %44 = mul nsw i32 %41, 16, !dbg !8
+  br label %45, !dbg !8
 
-42:                                               ; preds = %27
-  %43 = add i32 %22, 1
-  br label %21
+45:                                               ; preds = %48, %43
+  %46 = phi i32 [ %61, %48 ], [ 0, %43 ], !dbg !8
+  %47 = icmp slt i32 %46, 4, !dbg !8
+  br i1 %47, label %48, label %62, !dbg !8
 
-44:                                               ; preds = %21
-  %45 = icmp slt i32 %7, 0
-  %46 = sub i32 -1, %7
-  %47 = select i1 %45, i32 %46, i32 %7
-  %48 = sdiv i32 %47, 16
-  %49 = sub i32 -1, %48
-  %50 = select i1 %45, i32 %49, i32 %48
-  %51 = mul nsw i32 %50, -16
-  %52 = mul nsw i32 %50, 4
-  br label %53
+48:                                               ; preds = %45
+  %49 = add i32 %44, %46, !dbg !8
+  %50 = add i32 %49, %28, !dbg !8
+  %51 = mul i32 %18, 524288, !dbg !8
+  %52 = add i32 0, %51, !dbg !8
+  %53 = mul i32 %37, 128, !dbg !8
+  %54 = add i32 %52, %53, !dbg !8
+  %55 = add i32 %54, %50, !dbg !8
+  %56 = getelementptr half, ptr addrspace(1) %0, i32 %55, !dbg !8
+  %57 = load half, ptr addrspace(1) %56, align 2, !dbg !8
+  %58 = mul i32 %39, 128, !dbg !8
+  %59 = add i32 %58, %50, !dbg !8
+  %60 = getelementptr half, ptr addrspace(3) @shm_0, i32 %59, !dbg !8
+  store half %57, ptr addrspace(3) %60, align 2, !dbg !8
+  %61 = add i32 %46, 1, !dbg !8
+  br label %45, !dbg !8
 
-53:                                               ; preds = %94, %44
-  %54 = phi i32 [ %95, %94 ], [ 0, %44 ]
-  %55 = icmp slt i32 %54, 4
-  br i1 %55, label %56, label %96
+62:                                               ; preds = %45
+  %63 = add i32 %41, 1, !dbg !8
+  br label %40, !dbg !8
 
-56:                                               ; preds = %53
-  br label %57
+64:                                               ; preds = %40
+  %65 = add i32 %30, 1, !dbg !8
+  br label %29, !dbg !8
 
-57:                                               ; preds = %92, %56
-  %58 = phi i32 [ %93, %92 ], [ 0, %56 ]
-  %59 = icmp slt i32 %58, 32
-  br i1 %59, label %60, label %94
+66:                                               ; preds = %29
+  br label %67, !dbg !9
 
-60:                                               ; preds = %57
-  %61 = icmp slt i32 %58, 0
-  %62 = sub i32 -1, %58
-  %63 = select i1 %61, i32 %62, i32 %58
-  %64 = sdiv i32 %63, 4
-  %65 = sub i32 -1, %64
-  %66 = select i1 %61, i32 %65, i32 %64
-  %67 = mul nsw i32 %66, -4
-  br label %68
+67:                                               ; preds = %116, %66
+  %68 = phi i32 [ %117, %116 ], [ 0, %66 ], !dbg !9
+  %69 = icmp slt i32 %68, 4, !dbg !9
+  br i1 %69, label %70, label %118, !dbg !9
 
-68:                                               ; preds = %90, %60
-  %69 = phi i32 [ %91, %90 ], [ 0, %60 ]
-  %70 = icmp slt i32 %69, 4
-  br i1 %70, label %71, label %92
+70:                                               ; preds = %67
+  %71 = mul nsw i32 %68, 16, !dbg !9
+  %72 = add i32 %71, %7, !dbg !9
+  %73 = add i32 %72, %26, !dbg !9
+  br label %74, !dbg !9
 
-71:                                               ; preds = %68
-  %72 = mul nsw i32 %69, 32
-  %73 = add i32 %72, %7
-  %74 = add i32 %73, %51
-  br label %75
+74:                                               ; preds = %114, %70
+  %75 = phi i32 [ %115, %114 ], [ 0, %70 ], !dbg !9
+  %76 = icmp slt i32 %75, 32, !dbg !9
+  br i1 %76, label %77, label %116, !dbg !9
 
-75:                                               ; preds = %78, %71
-  %76 = phi i32 [ %89, %78 ], [ 0, %71 ]
-  %77 = icmp slt i32 %76, 8
-  br i1 %77, label %78, label %90
+77:                                               ; preds = %74
+  %78 = icmp slt i32 %75, 0, !dbg !9
+  %79 = sub i32 -1, %75, !dbg !9
+  %80 = select i1 %78, i32 %79, i32 %75, !dbg !9
+  %81 = sdiv i32 %80, 4, !dbg !9
+  %82 = sub i32 -1, %81, !dbg !9
+  %83 = select i1 %78, i32 %82, i32 %81, !dbg !9
+  %84 = mul nsw i32 %83, -4, !dbg !9
+  %85 = mul nsw i32 %83, 12, !dbg !9
+  %86 = add i32 %75, %85, !dbg !9
+  %87 = add i32 %86, %28, !dbg !9
+  br label %88, !dbg !9
 
-78:                                               ; preds = %75
-  %79 = mul nsw i32 %76, 16
-  %80 = add i32 %79, %58
-  %81 = add i32 %80, %52
-  %82 = add i32 %81, %67
-  %83 = mul i32 %74, 128
-  %84 = add i32 %83, %82
-  %85 = getelementptr half, ptr addrspace(3) @shm_0, i32 %84
-  %86 = load half, ptr addrspace(3) %85, align 2
-  %87 = fmul half %86, 0xH3015
-  %88 = getelementptr half, ptr addrspace(3) @shm_1, i32 %84
-  store half %87, ptr addrspace(3) %88, align 2
-  %89 = add i32 %76, 1
-  br label %75
+88:                                               ; preds = %112, %77
+  %89 = phi i32 [ %113, %112 ], [ 0, %77 ], !dbg !9
+  %90 = icmp slt i32 %89, 4, !dbg !9
+  br i1 %90, label %91, label %114, !dbg !9
 
-90:                                               ; preds = %75
-  %91 = add i32 %69, 1
-  br label %68
+91:                                               ; preds = %88
+  %92 = mul nsw i32 %89, 16, !dbg !9
+  %93 = add i32 %92, %7, !dbg !9
+  %94 = add i32 %93, %26, !dbg !9
+  br label %95, !dbg !9
 
-92:                                               ; preds = %68
-  %93 = add i32 %58, 1
-  br label %57
+95:                                               ; preds = %98, %91
+  %96 = phi i32 [ %111, %98 ], [ 0, %91 ], !dbg !9
+  %97 = icmp slt i32 %96, 8, !dbg !9
+  br i1 %97, label %98, label %112, !dbg !9
 
-94:                                               ; preds = %57
-  %95 = add i32 %54, 1
-  br label %53
+98:                                               ; preds = %95
+  %99 = mul nsw i32 %96, 16, !dbg !9
+  %100 = add i32 %99, %75, !dbg !9
+  %101 = add i32 %100, %28, !dbg !9
+  %102 = add i32 %101, %84, !dbg !9
+  %103 = mul i32 %94, 128, !dbg !9
+  %104 = add i32 %103, %102, !dbg !9
+  %105 = getelementptr half, ptr addrspace(3) @shm_0, i32 %104, !dbg !9
+  %106 = load half, ptr addrspace(3) %105, align 2, !dbg !9
+  %107 = fmul half %106, 0xH3015, !dbg !9
+  %108 = mul i32 %73, 128, !dbg !9
+  %109 = add i32 %108, %87, !dbg !9
+  %110 = getelementptr half, ptr addrspace(3) @shm_1, i32 %109, !dbg !9
+  store half %107, ptr addrspace(3) %110, align 2, !dbg !9
+  %111 = add i32 %96, 1, !dbg !9
+  br label %95, !dbg !9
 
-96:                                               ; preds = %53
-  %97 = alloca float, i32 128, align 4
-  br label %98
+112:                                              ; preds = %95
+  %113 = add i32 %89, 1, !dbg !9
+  br label %88, !dbg !9
 
-98:                                               ; preds = %110, %96
-  %99 = phi i32 [ %111, %110 ], [ 0, %96 ]
-  %100 = icmp slt i32 %99, 4
-  br i1 %100, label %101, label %112
+114:                                              ; preds = %88
+  %115 = add i32 %75, 1, !dbg !9
+  br label %74, !dbg !9
 
-101:                                              ; preds = %98
-  br label %102
+116:                                              ; preds = %74
+  %117 = add i32 %68, 1, !dbg !9
+  br label %67, !dbg !9
 
-102:                                              ; preds = %105, %101
-  %103 = phi i32 [ %109, %105 ], [ 0, %101 ]
-  %104 = icmp slt i32 %103, 32
-  br i1 %104, label %105, label %110
+118:                                              ; preds = %67
+  %119 = alloca float, i32 128, align 4, !dbg !10
+  br label %120, !dbg !10
 
-105:                                              ; preds = %102
-  %106 = mul i32 %99, 32
-  %107 = add i32 %106, %103
-  %108 = getelementptr float, ptr %97, i32 %107
-  store float 0.000000e+00, ptr %108, align 4
-  %109 = add i32 %103, 1
-  br label %102
+120:                                              ; preds = %132, %118
+  %121 = phi i32 [ %133, %132 ], [ 0, %118 ], !dbg !10
+  %122 = icmp slt i32 %121, 4, !dbg !10
+  br i1 %122, label %123, label %134, !dbg !10
 
-110:                                              ; preds = %102
-  %111 = add i32 %99, 1
-  br label %98
+123:                                              ; preds = %120
+  br label %124, !dbg !10
 
-112:                                              ; preds = %98
-  %113 = alloca float, i32 4, align 4
-  br label %114
+124:                                              ; preds = %127, %123
+  %125 = phi i32 [ %131, %127 ], [ 0, %123 ], !dbg !10
+  %126 = icmp slt i32 %125, 32, !dbg !10
+  br i1 %126, label %127, label %132, !dbg !10
 
-114:                                              ; preds = %117, %112
-  %115 = phi i32 [ %120, %117 ], [ 0, %112 ]
-  %116 = icmp slt i32 %115, 4
-  br i1 %116, label %117, label %121
+127:                                              ; preds = %124
+  %128 = mul i32 %121, 32, !dbg !10
+  %129 = add i32 %128, %125, !dbg !10
+  %130 = getelementptr float, ptr %119, i32 %129, !dbg !10
+  store float 0.000000e+00, ptr %130, align 4, !dbg !10
+  %131 = add i32 %125, 1, !dbg !10
+  br label %124, !dbg !10
 
-117:                                              ; preds = %114
-  %118 = add i32 %115, 0
-  %119 = getelementptr float, ptr %113, i32 %118
-  store float 0.000000e+00, ptr %119, align 4
-  %120 = add i32 %115, 1
-  br label %114
+132:                                              ; preds = %124
+  %133 = add i32 %121, 1, !dbg !10
+  br label %120, !dbg !10
 
-121:                                              ; preds = %114
-  %122 = alloca half, i32 4, align 1
-  %123 = alloca half, i32 4, align 1
-  %124 = alloca float, i32 128, align 1
-  %125 = alloca float, i32 4, align 1
-  %126 = alloca float, align 4
-  %127 = alloca float, i32 4, align 1
-  %128 = alloca half, i32 4, align 1
-  %129 = alloca half, i32 4, align 1
-  %130 = alloca half, i32 4, align 1
-  %131 = alloca float, i32 128, align 1
-  %132 = alloca float, i32 4, align 1
-  %133 = add i32 %8, 128
-  %134 = icmp slt i32 %14, 0
-  %135 = sub i32 -1, %14
-  %136 = select i1 %134, i32 %135, i32 %14
-  %137 = sdiv i32 %136, 4096
-  %138 = sub i32 -1, %137
-  %139 = select i1 %134, i32 %138, i32 %137
-  %140 = mul nsw i32 %139, -4096
-  %141 = srem i32 %7, 64
-  %142 = icmp slt i32 %141, 0
-  %143 = add i32 %141, 64
-  %144 = select i1 %142, i32 %143, i32 %141
-  %145 = icmp slt i32 %144, 0
-  %146 = sub i32 -1, %144
-  %147 = select i1 %145, i32 %146, i32 %144
-  %148 = sdiv i32 %147, 16
-  %149 = sub i32 -1, %148
-  %150 = select i1 %145, i32 %149, i32 %148
-  %151 = icmp eq i32 %150, 0
-  br label %152
+134:                                              ; preds = %120
+  %135 = alloca float, i32 4, align 4, !dbg !11
+  br label %136, !dbg !11
 
-152:                                              ; preds = %603, %121
-  %153 = phi i32 [ %604, %603 ], [ 0, %121 ]
-  %154 = icmp slt i32 %153, %133
-  br i1 %154, label %155, label %605
+136:                                              ; preds = %139, %134
+  %137 = phi i32 [ %142, %139 ], [ 0, %134 ], !dbg !11
+  %138 = icmp slt i32 %137, 4, !dbg !11
+  br i1 %138, label %139, label %143, !dbg !11
 
-155:                                              ; preds = %152
-  %156 = icmp slt i32 %153, 0
-  %157 = sub i32 -1, %153
-  %158 = select i1 %156, i32 %157, i32 %153
-  %159 = sdiv i32 %158, 128
-  %160 = sub i32 -1, %159
-  %161 = select i1 %156, i32 %160, i32 %159
-  %162 = mul nsw i32 %161, 128
-  %163 = add i32 %162, %14
-  %164 = add i32 %163, %140
-  br label %165
+139:                                              ; preds = %136
+  %140 = add i32 %137, 0, !dbg !11
+  %141 = getelementptr float, ptr %135, i32 %140, !dbg !11
+  store float 0.000000e+00, ptr %141, align 4, !dbg !11
+  %142 = add i32 %137, 1, !dbg !11
+  br label %136, !dbg !11
 
-165:                                              ; preds = %186, %155
-  %166 = phi i32 [ %187, %186 ], [ 0, %155 ]
-  %167 = icmp slt i32 %166, 128
-  br i1 %167, label %168, label %188
+143:                                              ; preds = %136
+  %144 = alloca half, i32 4, align 1, !dbg !12
+  %145 = alloca half, i32 4, align 1, !dbg !12
+  %146 = alloca float, i32 32, align 1, !dbg !12
+  %147 = alloca float, i32 4, align 1, !dbg !12
+  %148 = alloca float, align 4, !dbg !13
+  %149 = alloca float, i32 4, align 1, !dbg !14
+  %150 = alloca half, i32 4, align 1, !dbg !14
+  %151 = alloca half, i32 4, align 1, !dbg !15
+  %152 = alloca half, i32 4, align 1, !dbg !15
+  %153 = alloca float, i32 128, align 1, !dbg !15
+  %154 = alloca float, i32 4, align 1, !dbg !15
+  %155 = mul nsw i32 %5, 2, !dbg !16
+  %156 = add i32 %155, 1, !dbg !16
+  %157 = mul nsw i32 %5, 256, !dbg !17
+  %158 = mul nsw i32 %6, 128, !dbg !17
+  %159 = add i32 %155, %158, !dbg !17
+  %160 = srem i32 %7, 64, !dbg !13
+  %161 = icmp slt i32 %160, 0, !dbg !13
+  %162 = add i32 %160, 64, !dbg !13
+  %163 = select i1 %161, i32 %162, i32 %160, !dbg !13
+  %164 = icmp slt i32 %163, 0, !dbg !13
+  %165 = sub i32 -1, %163, !dbg !13
+  %166 = select i1 %164, i32 %165, i32 %163, !dbg !13
+  %167 = sdiv i32 %166, 16, !dbg !13
+  %168 = sub i32 -1, %167, !dbg !13
+  %169 = select i1 %164, i32 %168, i32 %167, !dbg !13
+  %170 = icmp eq i32 %169, 0, !dbg !13
+  br label %171, !dbg !16
 
-168:                                              ; preds = %165
-  %169 = add i32 %166, %6
-  %170 = add i32 %169, %20
-  br label %171
-
-171:                                              ; preds = %174, %168
-  %172 = phi i32 [ %185, %174 ], [ 0, %168 ]
-  %173 = icmp slt i32 %172, 128
-  br i1 %173, label %174, label %186
+171:                                              ; preds = %688, %143
+  %172 = phi i32 [ %689, %688 ], [ 0, %143 ], !dbg !16
+  %173 = icmp slt i32 %172, %156, !dbg !16
+  br i1 %173, label %174, label %690, !dbg !16
 
 174:                                              ; preds = %171
-  %175 = mul i32 %164, 4096
-  %176 = add i32 0, %175
-  %177 = mul i32 %170, 128
-  %178 = add i32 %176, %177
-  %179 = add i32 %178, %172
-  %180 = getelementptr half, ptr addrspace(1) %2, i32 %179
-  %181 = load half, ptr addrspace(1) %180, align 2
-  %182 = mul i32 %166, 128
-  %183 = add i32 %182, %172
-  %184 = getelementptr half, ptr addrspace(3) @shm_0, i32 %183
-  store half %181, ptr addrspace(3) %184, align 2
-  %185 = add i32 %172, 1
-  br label %171
+  %175 = add i32 %172, %155, !dbg !18
+  %176 = icmp slt i32 %175, 0, !dbg !18
+  %177 = sub i32 -1, %175, !dbg !18
+  %178 = select i1 %176, i32 %177, i32 %175, !dbg !18
+  %179 = sdiv i32 %178, 128, !dbg !18
+  %180 = sub i32 -1, %179, !dbg !18
+  %181 = select i1 %176, i32 %180, i32 %179, !dbg !18
+  %182 = add i32 %181, %6, !dbg !18
+  %183 = srem i32 %182, 32, !dbg !18
+  %184 = icmp slt i32 %183, 0, !dbg !18
+  %185 = add i32 %183, 32, !dbg !18
+  %186 = select i1 %184, i32 %185, i32 %183, !dbg !18
+  %187 = mul nsw i32 %172, 32, !dbg !18
+  %188 = mul nsw i32 %181, -4096, !dbg !18
+  br label %189, !dbg !18
 
-186:                                              ; preds = %171
-  %187 = add i32 %166, 1
-  br label %165
-
-188:                                              ; preds = %165
-  br label %189
-
-189:                                              ; preds = %210, %188
-  %190 = phi i32 [ %211, %210 ], [ 0, %188 ]
-  %191 = icmp slt i32 %190, 128
-  br i1 %191, label %192, label %212
+189:                                              ; preds = %225, %174
+  %190 = phi i32 [ %226, %225 ], [ 0, %174 ], !dbg !18
+  %191 = icmp slt i32 %190, 8, !dbg !18
+  br i1 %191, label %192, label %227, !dbg !18
 
 192:                                              ; preds = %189
-  %193 = add i32 %190, %6
-  %194 = add i32 %193, %20
-  br label %195
+  %193 = mul nsw i32 %190, 16, !dbg !18
+  %194 = add i32 %187, %193, !dbg !18
+  br label %195, !dbg !18
 
-195:                                              ; preds = %198, %192
-  %196 = phi i32 [ %209, %198 ], [ 0, %192 ]
-  %197 = icmp slt i32 %196, 128
-  br i1 %197, label %198, label %210
+195:                                              ; preds = %223, %192
+  %196 = phi i32 [ %224, %223 ], [ 0, %192 ], !dbg !18
+  %197 = icmp slt i32 %196, 2, !dbg !18
+  br i1 %197, label %198, label %225, !dbg !18
 
 198:                                              ; preds = %195
-  %199 = mul i32 %164, 4096
-  %200 = add i32 0, %199
-  %201 = mul i32 %194, 128
-  %202 = add i32 %200, %201
-  %203 = add i32 %202, %196
-  %204 = getelementptr half, ptr addrspace(1) %1, i32 %203
-  %205 = load half, ptr addrspace(1) %204, align 2
-  %206 = mul i32 %190, 128
-  %207 = add i32 %206, %196
-  %208 = getelementptr half, ptr addrspace(3) @shm_2, i32 %207
-  store half %205, ptr addrspace(3) %208, align 2
-  %209 = add i32 %196, 1
-  br label %195
-
-210:                                              ; preds = %195
-  %211 = add i32 %190, 1
-  br label %189
-
-212:                                              ; preds = %189
-  br label %213
-
-213:                                              ; preds = %299, %212
-  %214 = phi i32 [ %300, %299 ], [ 0, %212 ]
-  %215 = icmp slt i32 %214, 4
-  br i1 %215, label %216, label %301
-
-216:                                              ; preds = %213
-  %217 = mul nsw i32 %214, 128
-  %218 = add i32 %217, %7
-  %219 = add i32 %218, %51
-  br label %220
-
-220:                                              ; preds = %297, %216
-  %221 = phi i32 [ %298, %297 ], [ 0, %216 ]
-  %222 = icmp slt i32 %221, 8
-  br i1 %222, label %223, label %299
-
-223:                                              ; preds = %220
-  br label %224
-
-224:                                              ; preds = %227, %223
-  %225 = phi i32 [ %230, %227 ], [ 0, %223 ]
-  %226 = icmp slt i32 %225, 4
-  br i1 %226, label %227, label %231
-
-227:                                              ; preds = %224
-  %228 = add i32 0, %225
-  %229 = getelementptr float, ptr %125, i32 %228
-  store float 0.000000e+00, ptr %229, align 4
-  %230 = add i32 %225, 1
-  br label %224
-
-231:                                              ; preds = %224
-  %232 = mul nsw i32 %221, 16
-  %233 = add i32 %232, %7
-  %234 = add i32 %233, %51
-  br label %235
-
-235:                                              ; preds = %267, %231
-  %236 = phi i32 [ %275, %267 ], [ 0, %231 ]
-  %237 = icmp slt i32 %236, 8
-  br i1 %237, label %238, label %276
-
-238:                                              ; preds = %235
-  %239 = mul nsw i32 %236, 16
-  br label %240
-
-240:                                              ; preds = %243, %238
-  %241 = phi i32 [ %252, %243 ], [ 0, %238 ]
-  %242 = icmp slt i32 %241, 4
-  br i1 %242, label %243, label %253
-
-243:                                              ; preds = %240
-  %244 = add i32 %241, %239
-  %245 = add i32 %244, %52
-  %246 = mul i32 %219, 128
-  %247 = add i32 %246, %245
-  %248 = getelementptr half, ptr addrspace(3) @shm_1, i32 %247
-  %249 = load half, ptr addrspace(3) %248, align 2
-  %250 = add i32 0, %241
-  %251 = getelementptr half, ptr %122, i32 %250
-  store half %249, ptr %251, align 2
-  %252 = add i32 %241, 1
-  br label %240
-
-253:                                              ; preds = %240
-  br label %254
-
-254:                                              ; preds = %257, %253
-  %255 = phi i32 [ %266, %257 ], [ 0, %253 ]
-  %256 = icmp slt i32 %255, 4
-  br i1 %256, label %257, label %267
-
-257:                                              ; preds = %254
-  %258 = add i32 %255, %239
-  %259 = add i32 %258, %52
-  %260 = mul i32 %259, 128
-  %261 = add i32 %260, %234
-  %262 = getelementptr half, ptr addrspace(3) @shm_0, i32 %261
-  %263 = load half, ptr addrspace(3) %262, align 2
-  %264 = add i32 %255, 0
-  %265 = getelementptr half, ptr %123, i32 %264
-  store half %263, ptr %265, align 2
-  %266 = add i32 %255, 1
-  br label %254
-
-267:                                              ; preds = %254
-  %268 = getelementptr half, ptr %122, i32 0
-  %269 = load <4 x half>, ptr %268, align 2
-  %270 = getelementptr half, ptr %123, i32 0
-  %271 = load <4 x half>, ptr %270, align 2
-  %272 = getelementptr float, ptr %125, i32 0
-  %273 = load <4 x float>, ptr %272, align 4
-  %274 = call <4 x float> asm sideeffect "v_mmac_f32_16x16x16_f16 $0, $2, $1, $3", "=v,v,v,0"(<4 x half> %269, <4 x half> %271, <4 x float> %273)
-  store <4 x float> %274, ptr %272, align 4
-  %275 = add i32 %236, 1
-  br label %235
-
-276:                                              ; preds = %235
-  %277 = mul nsw i32 %221, 4
-  br label %278
-
-278:                                              ; preds = %295, %276
-  %279 = phi i32 [ %296, %295 ], [ 0, %276 ]
-  %280 = icmp slt i32 %279, 4
-  br i1 %280, label %281, label %297
-
-281:                                              ; preds = %278
-  br label %282
-
-282:                                              ; preds = %285, %281
-  %283 = phi i32 [ %294, %285 ], [ 0, %281 ]
-  %284 = icmp slt i32 %283, 4
-  br i1 %284, label %285, label %295
-
-285:                                              ; preds = %282
-  %286 = add i32 0, %283
-  %287 = getelementptr float, ptr %125, i32 %286
-  %288 = load float, ptr %287, align 4
-  %289 = add i32 %283, %277
-  %290 = add i32 %289, %279
-  %291 = mul i32 %214, 32
-  %292 = add i32 %291, %290
-  %293 = getelementptr float, ptr %124, i32 %292
-  store float %288, ptr %293, align 4
-  %294 = add i32 %283, 1
-  br label %282
-
-295:                                              ; preds = %282
-  %296 = add i32 %279, 1
-  br label %278
-
-297:                                              ; preds = %278
-  %298 = add i32 %221, 1
-  br label %220
-
-299:                                              ; preds = %220
-  %300 = add i32 %214, 1
-  br label %213
-
-301:                                              ; preds = %213
-  br label %302
-
-302:                                              ; preds = %356, %301
-  %303 = phi i32 [ %357, %356 ], [ 0, %301 ]
-  %304 = icmp slt i32 %303, 4
-  br i1 %304, label %305, label %358
-
-305:                                              ; preds = %302
-  br label %306
-
-306:                                              ; preds = %354, %305
-  %307 = phi i32 [ %355, %354 ], [ 0, %305 ]
-  %308 = icmp slt i32 %307, 32
-  br i1 %308, label %309, label %356
-
-309:                                              ; preds = %306
-  %310 = mul nsw i32 %307, 4
-  %311 = icmp slt i32 %307, 0
-  %312 = sub i32 -1, %307
-  %313 = select i1 %311, i32 %312, i32 %307
-  %314 = sdiv i32 %313, 4
-  %315 = sub i32 -1, %314
-  %316 = select i1 %311, i32 %315, i32 %314
-  %317 = mul nsw i32 %316, -16
-  br label %318
-
-318:                                              ; preds = %352, %309
-  %319 = phi i32 [ %353, %352 ], [ 0, %309 ]
-  %320 = icmp slt i32 %319, 4
-  br i1 %320, label %321, label %354
-
-321:                                              ; preds = %318
-  %322 = mul nsw i32 %319, 32
-  %323 = add i32 %322, %7
-  %324 = add i32 %323, %8
-  %325 = add i32 %324, %51
-  %326 = add i32 %325, 1
-  %327 = add i32 %323, %51
-  br label %328
-
-328:                                              ; preds = %331, %321
-  %329 = phi i32 [ %351, %331 ], [ 0, %321 ]
-  %330 = icmp slt i32 %329, 8
-  br i1 %330, label %331, label %352
-
-331:                                              ; preds = %328
-  %332 = mul nsw i32 %329, 16
-  %333 = add i32 %153, %332
-  %334 = add i32 %333, %310
-  %335 = add i32 %334, %317
-  %336 = add i32 %335, %50
-  %337 = icmp ule i32 %326, %336
-  %338 = select i1 %337, float 0xFFF0000000000000, float 0.000000e+00
-  %339 = mul i32 %303, 32
-  %340 = add i32 %339, %307
-  %341 = getelementptr float, ptr %124, i32 %340
-  %342 = load float, ptr %341, align 4
-  %343 = fadd float %342, %338
-  %344 = call float @__ocml_exp2_f32(float %343)
-  %345 = add i32 %332, %310
-  %346 = add i32 %345, %317
-  %347 = add i32 %346, %50
-  %348 = mul i32 %327, 128
-  %349 = add i32 %348, %347
-  %350 = getelementptr float, ptr addrspace(3) @shm_4, i32 %349
-  store float %344, ptr addrspace(3) %350, align 4
-  %351 = add i32 %329, 1
-  br label %328
-
-352:                                              ; preds = %328
-  %353 = add i32 %319, 1
-  br label %318
-
-354:                                              ; preds = %318
-  %355 = add i32 %307, 1
-  br label %306
-
-356:                                              ; preds = %306
-  %357 = add i32 %303, 1
-  br label %302
-
-358:                                              ; preds = %302
-  br label %359
-
-359:                                              ; preds = %404, %358
-  %360 = phi i32 [ %405, %404 ], [ 0, %358 ]
-  %361 = icmp slt i32 %360, 4
-  br i1 %361, label %362, label %406
-
-362:                                              ; preds = %359
-  store float 0.000000e+00, ptr %126, align 4
-  %363 = mul nsw i32 %360, 32
-  %364 = add i32 %363, %7
-  %365 = add i32 %364, %51
-  br label %366
-
-366:                                              ; preds = %369, %362
-  %367 = phi i32 [ %378, %369 ], [ 0, %362 ]
-  %368 = icmp slt i32 %367, 32
-  br i1 %368, label %369, label %379
-
-369:                                              ; preds = %366
-  %370 = load float, ptr %126, align 4
-  %371 = mul nsw i32 %367, 4
-  %372 = add i32 %371, %50
-  %373 = mul i32 %365, 128
-  %374 = add i32 %373, %372
-  %375 = getelementptr float, ptr addrspace(3) @shm_4, i32 %374
-  %376 = load float, ptr addrspace(3) %375, align 4
-  %377 = fadd float %370, %376
-  store float %377, ptr %126, align 4
-  %378 = add i32 %367, 1
-  br label %366
-
-379:                                              ; preds = %366
-  %380 = load float, ptr %126, align 4
-  %381 = call i32 @llvm.amdgcn.mbcnt.lo(i32 -1, i32 0)
-  %382 = call i32 @llvm.amdgcn.mbcnt.hi(i32 -1, i32 %381)
-  %383 = add i32 %382, 64
-  %384 = xor i32 %382, 16
-  %385 = and i32 %383, -64
-  %386 = icmp slt i32 %384, %385
-  %387 = select i1 %386, i32 %384, i32 %382
-  %388 = shl i32 %387, 2
-  %389 = bitcast float %380 to i32
-  %390 = call i32 @llvm.amdgcn.ds.bpermute(i32 %388, i32 %389)
-  %391 = bitcast i32 %390 to float
-  %392 = fadd float %380, %391
-  %393 = xor i32 %382, 32
-  %394 = icmp slt i32 %393, %385
-  %395 = select i1 %394, i32 %393, i32 %382
-  %396 = shl i32 %395, 2
-  %397 = bitcast float %392 to i32
-  %398 = call i32 @llvm.amdgcn.ds.bpermute(i32 %396, i32 %397)
-  %399 = bitcast i32 %398 to float
-  %400 = fadd float %392, %399
-  br i1 %151, label %401, label %404
-
-401:                                              ; preds = %379
-  %402 = add i32 %365, 0
-  %403 = getelementptr float, ptr addrspace(3) @shm_5, i32 %402
-  store float %400, ptr addrspace(3) %403, align 4
-  br label %404
-
-404:                                              ; preds = %401, %379
-  %405 = add i32 %360, 1
-  br label %359
-
-406:                                              ; preds = %359
-  fence syncscope("workgroup") release
-  call void @llvm.amdgcn.s.barrier()
-  fence syncscope("workgroup") acquire
-  br label %407
-
-407:                                              ; preds = %426, %406
-  %408 = phi i32 [ %427, %426 ], [ 0, %406 ]
-  %409 = icmp slt i32 %408, 4
-  br i1 %409, label %410, label %428
-
-410:                                              ; preds = %407
-  br label %411
-
-411:                                              ; preds = %414, %410
-  %412 = phi i32 [ %425, %414 ], [ 0, %410 ]
-  %413 = icmp slt i32 %412, 4
-  br i1 %413, label %414, label %426
-
-414:                                              ; preds = %411
-  %415 = mul nsw i32 %412, 32
-  %416 = add i32 %415, %7
-  %417 = add i32 %416, %51
-  %418 = add i32 %417, 0
-  %419 = getelementptr float, ptr addrspace(3) @shm_5, i32 %418
-  %420 = load float, ptr addrspace(3) %419, align 4
-  %421 = add i32 %408, 0
-  %422 = getelementptr float, ptr %113, i32 %421
-  %423 = load float, ptr %422, align 4
-  %424 = fadd float %423, %420
-  store float %424, ptr %422, align 4
-  %425 = add i32 %412, 1
-  br label %411
-
-426:                                              ; preds = %411
-  %427 = add i32 %408, 1
-  br label %407
-
-428:                                              ; preds = %407
-  fence syncscope("workgroup") release
-  call void @llvm.amdgcn.s.barrier()
-  fence syncscope("workgroup") acquire
-  br label %429
-
-429:                                              ; preds = %481, %428
-  %430 = phi i32 [ %482, %481 ], [ 0, %428 ]
-  %431 = icmp slt i32 %430, 4
-  br i1 %431, label %432, label %483
-
-432:                                              ; preds = %429
-  %433 = mul nsw i32 %430, 32
-  %434 = add i32 %433, %7
-  %435 = add i32 %434, %51
-  br label %436
-
-436:                                              ; preds = %479, %432
-  %437 = phi i32 [ %480, %479 ], [ 0, %432 ]
-  %438 = icmp slt i32 %437, 8
-  br i1 %438, label %439, label %481
-
-439:                                              ; preds = %436
-  %440 = mul nsw i32 %437, 16
-  br label %441
-
-441:                                              ; preds = %444, %439
-  %442 = phi i32 [ %453, %444 ], [ 0, %439 ]
-  %443 = icmp slt i32 %442, 4
-  br i1 %443, label %444, label %454
-
-444:                                              ; preds = %441
-  %445 = add i32 %442, %440
-  %446 = add i32 %445, %52
-  %447 = mul i32 %435, 128
-  %448 = add i32 %447, %446
-  %449 = getelementptr float, ptr addrspace(3) @shm_4, i32 %448
-  %450 = load float, ptr addrspace(3) %449, align 4
-  %451 = add i32 0, %442
-  %452 = getelementptr float, ptr %127, i32 %451
-  store float %450, ptr %452, align 4
-  %453 = add i32 %442, 1
-  br label %441
-
-454:                                              ; preds = %441
-  br label %455
-
-455:                                              ; preds = %458, %454
-  %456 = phi i32 [ %464, %458 ], [ 0, %454 ]
-  %457 = icmp slt i32 %456, 4
-  br i1 %457, label %458, label %465
-
-458:                                              ; preds = %455
-  %459 = add i32 0, %456
-  %460 = getelementptr float, ptr %127, i32 %459
-  %461 = load float, ptr %460, align 4
-  %462 = fptrunc float %461 to half
-  %463 = getelementptr half, ptr %128, i32 %459
-  store half %462, ptr %463, align 2
-  %464 = add i32 %456, 1
-  br label %455
-
-465:                                              ; preds = %455
-  br label %466
-
-466:                                              ; preds = %469, %465
-  %467 = phi i32 [ %478, %469 ], [ 0, %465 ]
-  %468 = icmp slt i32 %467, 4
-  br i1 %468, label %469, label %479
-
-469:                                              ; preds = %466
-  %470 = add i32 0, %467
-  %471 = getelementptr half, ptr %128, i32 %470
-  %472 = load half, ptr %471, align 2
-  %473 = add i32 %467, %440
-  %474 = add i32 %473, %52
-  %475 = mul i32 %435, 128
-  %476 = add i32 %475, %474
-  %477 = getelementptr half, ptr addrspace(3) @shm_3, i32 %476
-  store half %472, ptr addrspace(3) %477, align 2
-  %478 = add i32 %467, 1
-  br label %466
-
-479:                                              ; preds = %466
-  %480 = add i32 %437, 1
-  br label %436
-
-481:                                              ; preds = %436
-  %482 = add i32 %430, 1
-  br label %429
-
-483:                                              ; preds = %429
-  br label %484
-
-484:                                              ; preds = %570, %483
-  %485 = phi i32 [ %571, %570 ], [ 0, %483 ]
-  %486 = icmp slt i32 %485, 4
-  br i1 %486, label %487, label %572
-
-487:                                              ; preds = %484
-  %488 = mul nsw i32 %485, 32
-  %489 = add i32 %488, %7
-  %490 = add i32 %489, %51
-  br label %491
-
-491:                                              ; preds = %568, %487
-  %492 = phi i32 [ %569, %568 ], [ 0, %487 ]
-  %493 = icmp slt i32 %492, 8
-  br i1 %493, label %494, label %570
-
-494:                                              ; preds = %491
-  br label %495
-
-495:                                              ; preds = %498, %494
-  %496 = phi i32 [ %501, %498 ], [ 0, %494 ]
-  %497 = icmp slt i32 %496, 4
-  br i1 %497, label %498, label %502
-
-498:                                              ; preds = %495
-  %499 = add i32 0, %496
-  %500 = getelementptr float, ptr %132, i32 %499
-  store float 0.000000e+00, ptr %500, align 4
-  %501 = add i32 %496, 1
-  br label %495
-
-502:                                              ; preds = %495
-  %503 = mul nsw i32 %492, 16
-  %504 = add i32 %503, %7
-  %505 = add i32 %504, %51
-  br label %506
-
-506:                                              ; preds = %538, %502
-  %507 = phi i32 [ %546, %538 ], [ 0, %502 ]
-  %508 = icmp slt i32 %507, 8
-  br i1 %508, label %509, label %547
-
-509:                                              ; preds = %506
-  %510 = mul nsw i32 %507, 16
-  br label %511
-
-511:                                              ; preds = %514, %509
-  %512 = phi i32 [ %523, %514 ], [ 0, %509 ]
-  %513 = icmp slt i32 %512, 4
-  br i1 %513, label %514, label %524
-
-514:                                              ; preds = %511
-  %515 = add i32 %512, %510
-  %516 = add i32 %515, %52
-  %517 = mul i32 %490, 128
-  %518 = add i32 %517, %516
-  %519 = getelementptr half, ptr addrspace(3) @shm_3, i32 %518
-  %520 = load half, ptr addrspace(3) %519, align 2
-  %521 = add i32 0, %512
-  %522 = getelementptr half, ptr %129, i32 %521
-  store half %520, ptr %522, align 2
-  %523 = add i32 %512, 1
-  br label %511
-
-524:                                              ; preds = %511
-  br label %525
-
-525:                                              ; preds = %528, %524
-  %526 = phi i32 [ %537, %528 ], [ 0, %524 ]
-  %527 = icmp slt i32 %526, 4
-  br i1 %527, label %528, label %538
-
-528:                                              ; preds = %525
-  %529 = add i32 %526, %510
-  %530 = add i32 %529, %52
-  %531 = mul i32 %530, 128
-  %532 = add i32 %531, %505
-  %533 = getelementptr half, ptr addrspace(3) @shm_2, i32 %532
-  %534 = load half, ptr addrspace(3) %533, align 2
-  %535 = add i32 %526, 0
-  %536 = getelementptr half, ptr %130, i32 %535
-  store half %534, ptr %536, align 2
-  %537 = add i32 %526, 1
-  br label %525
-
-538:                                              ; preds = %525
-  %539 = getelementptr half, ptr %129, i32 0
-  %540 = load <4 x half>, ptr %539, align 2
-  %541 = getelementptr half, ptr %130, i32 0
-  %542 = load <4 x half>, ptr %541, align 2
-  %543 = getelementptr float, ptr %132, i32 0
-  %544 = load <4 x float>, ptr %543, align 4
-  %545 = call <4 x float> asm sideeffect "v_mmac_f32_16x16x16_f16 $0, $2, $1, $3", "=v,v,v,0"(<4 x half> %540, <4 x half> %542, <4 x float> %544)
-  store <4 x float> %545, ptr %543, align 4
-  %546 = add i32 %507, 1
-  br label %506
-
-547:                                              ; preds = %506
-  %548 = mul nsw i32 %492, 4
-  br label %549
-
-549:                                              ; preds = %566, %547
-  %550 = phi i32 [ %567, %566 ], [ 0, %547 ]
-  %551 = icmp slt i32 %550, 4
-  br i1 %551, label %552, label %568
-
-552:                                              ; preds = %549
-  br label %553
-
-553:                                              ; preds = %556, %552
-  %554 = phi i32 [ %565, %556 ], [ 0, %552 ]
-  %555 = icmp slt i32 %554, 4
-  br i1 %555, label %556, label %566
-
-556:                                              ; preds = %553
-  %557 = add i32 0, %554
-  %558 = getelementptr float, ptr %132, i32 %557
-  %559 = load float, ptr %558, align 4
-  %560 = add i32 %554, %548
-  %561 = add i32 %560, %550
-  %562 = mul i32 %485, 32
-  %563 = add i32 %562, %561
-  %564 = getelementptr float, ptr %131, i32 %563
-  store float %559, ptr %564, align 4
-  %565 = add i32 %554, 1
-  br label %553
-
-566:                                              ; preds = %553
-  %567 = add i32 %550, 1
-  br label %549
-
-568:                                              ; preds = %549
-  %569 = add i32 %492, 1
-  br label %491
-
-570:                                              ; preds = %491
-  %571 = add i32 %485, 1
-  br label %484
-
-572:                                              ; preds = %484
-  br label %573
-
-573:                                              ; preds = %601, %572
-  %574 = phi i32 [ %602, %601 ], [ 0, %572 ]
-  %575 = icmp slt i32 %574, 4
-  br i1 %575, label %576, label %603
-
-576:                                              ; preds = %573
-  br label %577
-
-577:                                              ; preds = %599, %576
-  %578 = phi i32 [ %600, %599 ], [ 0, %576 ]
-  %579 = icmp slt i32 %578, 32
-  br i1 %579, label %580, label %601
-
-580:                                              ; preds = %577
-  br label %581
-
-581:                                              ; preds = %597, %580
-  %582 = phi i32 [ %598, %597 ], [ 0, %580 ]
-  %583 = icmp slt i32 %582, 4
-  br i1 %583, label %584, label %599
-
-584:                                              ; preds = %581
-  br label %585
-
-585:                                              ; preds = %588, %584
-  %586 = phi i32 [ %596, %588 ], [ 0, %584 ]
-  %587 = icmp slt i32 %586, 8
-  br i1 %587, label %588, label %597
-
-588:                                              ; preds = %585
-  %589 = mul i32 %574, 32
-  %590 = add i32 %589, %578
-  %591 = getelementptr float, ptr %97, i32 %590
-  %592 = load float, ptr %591, align 4
-  %593 = getelementptr float, ptr %131, i32 %590
-  %594 = load float, ptr %593, align 4
-  %595 = fadd float %592, %594
-  store float %595, ptr %591, align 4
-  %596 = add i32 %586, 1
-  br label %585
-
-597:                                              ; preds = %585
-  %598 = add i32 %582, 1
-  br label %581
-
-599:                                              ; preds = %581
-  %600 = add i32 %578, 1
-  br label %577
-
-601:                                              ; preds = %577
-  %602 = add i32 %574, 1
-  br label %573
-
-603:                                              ; preds = %573
-  %604 = add i32 %153, 128
-  br label %152
-
-605:                                              ; preds = %152
-  %606 = alloca half, i32 128, align 2
-  br label %607
-
-607:                                              ; preds = %638, %605
-  %608 = phi i32 [ %639, %638 ], [ 0, %605 ]
-  %609 = icmp slt i32 %608, 4
-  br i1 %609, label %610, label %640
-
-610:                                              ; preds = %607
-  br label %611
-
-611:                                              ; preds = %636, %610
-  %612 = phi i32 [ %637, %636 ], [ 0, %610 ]
-  %613 = icmp slt i32 %612, 32
-  br i1 %613, label %614, label %638
-
-614:                                              ; preds = %611
-  br label %615
-
-615:                                              ; preds = %634, %614
-  %616 = phi i32 [ %635, %634 ], [ 0, %614 ]
-  %617 = icmp slt i32 %616, 4
-  br i1 %617, label %618, label %636
-
-618:                                              ; preds = %615
-  br label %619
-
-619:                                              ; preds = %622, %618
-  %620 = phi i32 [ %633, %622 ], [ 0, %618 ]
-  %621 = icmp slt i32 %620, 8
-  br i1 %621, label %622, label %634
-
-622:                                              ; preds = %619
-  %623 = mul i32 %608, 32
-  %624 = add i32 %623, %612
-  %625 = getelementptr float, ptr %97, i32 %624
-  %626 = load float, ptr %625, align 4
-  %627 = add i32 %608, 0
-  %628 = getelementptr float, ptr %113, i32 %627
-  %629 = load float, ptr %628, align 4
-  %630 = fdiv float %626, %629
-  %631 = fptrunc float %630 to half
-  %632 = getelementptr half, ptr %606, i32 %624
-  store half %631, ptr %632, align 2
-  %633 = add i32 %620, 1
-  br label %619
-
-634:                                              ; preds = %619
-  %635 = add i32 %616, 1
-  br label %615
-
-636:                                              ; preds = %615
-  %637 = add i32 %612, 1
-  br label %611
-
-638:                                              ; preds = %611
-  %639 = add i32 %608, 1
-  br label %607
-
-640:                                              ; preds = %607
-  br label %641
-
-641:                                              ; preds = %662, %640
-  %642 = phi i32 [ %663, %662 ], [ 0, %640 ]
-  %643 = icmp slt i32 %642, 4
-  br i1 %643, label %644, label %664
-
-644:                                              ; preds = %641
-  %645 = add i32 %642, %6
-  %646 = add i32 %645, %20
-  br label %647
-
-647:                                              ; preds = %650, %644
-  %648 = phi i32 [ %661, %650 ], [ 0, %644 ]
-  %649 = icmp slt i32 %648, 32
-  br i1 %649, label %650, label %662
-
-650:                                              ; preds = %647
-  %651 = mul i32 %642, 32
-  %652 = add i32 %651, %648
-  %653 = getelementptr half, ptr %606, i32 %652
-  %654 = load half, ptr %653, align 2
-  %655 = mul i32 %19, 4096
-  %656 = add i32 0, %655
-  %657 = mul i32 %646, 128
-  %658 = add i32 %656, %657
-  %659 = add i32 %658, %648
-  %660 = getelementptr half, ptr addrspace(1) %3, i32 %659
-  store half %654, ptr addrspace(1) %660, align 2
-  %661 = add i32 %648, 1
-  br label %647
-
-662:                                              ; preds = %647
-  %663 = add i32 %642, 1
-  br label %641
-
-664:                                              ; preds = %641
-  ret void
+  %199 = mul nsw i32 %196, 16, !dbg !18
+  %200 = add i32 %199, %7, !dbg !18
+  %201 = add i32 %200, %26, !dbg !18
+  br label %202, !dbg !18
+
+202:                                              ; preds = %205, %198
+  %203 = phi i32 [ %222, %205 ], [ 0, %198 ], !dbg !18
+  %204 = icmp slt i32 %203, 4, !dbg !18
+  br i1 %204, label %205, label %223, !dbg !18
+
+205:                                              ; preds = %202
+  %206 = add i32 %194, %203, !dbg !18
+  %207 = add i32 %206, %19, !dbg !18
+  %208 = add i32 %207, %188, !dbg !18
+  %209 = add i32 %208, %28, !dbg !18
+  %210 = mul i32 %186, 524288, !dbg !18
+  %211 = add i32 0, %210, !dbg !18
+  %212 = mul i32 %209, 128, !dbg !18
+  %213 = add i32 %211, %212, !dbg !18
+  %214 = add i32 %213, %201, !dbg !18
+  %215 = getelementptr half, ptr addrspace(1) %2, i32 %214, !dbg !18
+  %216 = load half, ptr addrspace(1) %215, align 2, !dbg !18
+  %217 = add i32 %193, %203, !dbg !18
+  %218 = add i32 %217, %28, !dbg !18
+  %219 = mul i32 %218, 32, !dbg !18
+  %220 = add i32 %219, %201, !dbg !18
+  %221 = getelementptr half, ptr addrspace(3) @shm_0, i32 %220, !dbg !18
+  store half %216, ptr addrspace(3) %221, align 2, !dbg !18
+  %222 = add i32 %203, 1, !dbg !18
+  br label %202, !dbg !18
+
+223:                                              ; preds = %202
+  %224 = add i32 %196, 1, !dbg !18
+  br label %195, !dbg !18
+
+225:                                              ; preds = %195
+  %226 = add i32 %190, 1, !dbg !18
+  br label %189, !dbg !18
+
+227:                                              ; preds = %189
+  %228 = add i32 %172, %157, !dbg !17
+  %229 = icmp slt i32 %228, 0, !dbg !17
+  %230 = sub i32 -1, %228, !dbg !17
+  %231 = select i1 %229, i32 %230, i32 %228, !dbg !17
+  %232 = sdiv i32 %231, 16384, !dbg !17
+  %233 = sub i32 -1, %232, !dbg !17
+  %234 = select i1 %229, i32 %233, i32 %232, !dbg !17
+  %235 = add i32 %234, %6, !dbg !17
+  %236 = srem i32 %235, 32, !dbg !17
+  %237 = icmp slt i32 %236, 0, !dbg !17
+  %238 = add i32 %236, 32, !dbg !17
+  %239 = select i1 %237, i32 %238, i32 %236, !dbg !17
+  %240 = icmp slt i32 %172, 0, !dbg !17
+  %241 = sub i32 -1, %172, !dbg !17
+  %242 = select i1 %240, i32 %241, i32 %172, !dbg !17
+  %243 = sdiv i32 %242, 128, !dbg !17
+  %244 = sub i32 -1, %243, !dbg !17
+  %245 = select i1 %240, i32 %244, i32 %243, !dbg !17
+  %246 = add i32 %245, %159, !dbg !17
+  %247 = icmp slt i32 %246, 0, !dbg !17
+  %248 = sub i32 -1, %246, !dbg !17
+  %249 = select i1 %247, i32 %248, i32 %246, !dbg !17
+  %250 = sdiv i32 %249, 128, !dbg !17
+  %251 = sub i32 -1, %250, !dbg !17
+  %252 = select i1 %247, i32 %251, i32 %250, !dbg !17
+  %253 = mul nsw i32 %252, -128, !dbg !17
+  %254 = mul nsw i32 %245, -4096, !dbg !17
+  br label %255, !dbg !17
+
+255:                                              ; preds = %295, %227
+  %256 = phi i32 [ %296, %295 ], [ 0, %227 ], !dbg !17
+  %257 = icmp slt i32 %256, 2, !dbg !17
+  br i1 %257, label %258, label %297, !dbg !17
+
+258:                                              ; preds = %255
+  %259 = mul nsw i32 %256, 16, !dbg !17
+  br label %260, !dbg !17
+
+260:                                              ; preds = %293, %258
+  %261 = phi i32 [ %294, %293 ], [ 0, %258 ], !dbg !17
+  %262 = icmp slt i32 %261, 8, !dbg !17
+  br i1 %262, label %263, label %295, !dbg !17
+
+263:                                              ; preds = %260
+  %264 = mul nsw i32 %261, 16, !dbg !17
+  %265 = add i32 %187, %264, !dbg !17
+  %266 = add i32 %265, %7, !dbg !17
+  %267 = add i32 %266, %254, !dbg !17
+  %268 = add i32 %267, %26, !dbg !17
+  %269 = add i32 %264, %7, !dbg !17
+  %270 = add i32 %269, %26, !dbg !17
+  br label %271, !dbg !17
+
+271:                                              ; preds = %274, %263
+  %272 = phi i32 [ %292, %274 ], [ 0, %263 ], !dbg !17
+  %273 = icmp slt i32 %272, 4, !dbg !17
+  br i1 %273, label %274, label %293, !dbg !17
+
+274:                                              ; preds = %271
+  %275 = add i32 %259, %272, !dbg !17
+  %276 = add i32 %275, %155, !dbg !17
+  %277 = add i32 %276, %158, !dbg !17
+  %278 = add i32 %277, %245, !dbg !17
+  %279 = add i32 %278, %253, !dbg !17
+  %280 = add i32 %279, %28, !dbg !17
+  %281 = mul i32 %239, 524288, !dbg !17
+  %282 = add i32 0, %281, !dbg !17
+  %283 = mul i32 %280, 4096, !dbg !17
+  %284 = add i32 %282, %283, !dbg !17
+  %285 = add i32 %284, %268, !dbg !17
+  %286 = getelementptr half, ptr addrspace(1) %1, i32 %285, !dbg !17
+  %287 = load half, ptr addrspace(1) %286, align 2, !dbg !17
+  %288 = add i32 %275, %28, !dbg !17
+  %289 = mul i32 %288, 128, !dbg !17
+  %290 = add i32 %289, %270, !dbg !17
+  %291 = getelementptr half, ptr addrspace(3) @shm_2, i32 %290, !dbg !17
+  store half %287, ptr addrspace(3) %291, align 2, !dbg !17
+  %292 = add i32 %272, 1, !dbg !17
+  br label %271, !dbg !17
+
+293:                                              ; preds = %271
+  %294 = add i32 %261, 1, !dbg !17
+  br label %260, !dbg !17
+
+295:                                              ; preds = %260
+  %296 = add i32 %256, 1, !dbg !17
+  br label %255, !dbg !17
+
+297:                                              ; preds = %255
+  br label %298, !dbg !12
+
+298:                                              ; preds = %384, %297
+  %299 = phi i32 [ %385, %384 ], [ 0, %297 ], !dbg !12
+  %300 = icmp slt i32 %299, 4, !dbg !12
+  br i1 %300, label %301, label %386, !dbg !12
+
+301:                                              ; preds = %298
+  %302 = mul nsw i32 %299, 64, !dbg !12
+  %303 = add i32 %302, %7, !dbg !12
+  %304 = add i32 %303, %26, !dbg !12
+  br label %305, !dbg !12
+
+305:                                              ; preds = %382, %301
+  %306 = phi i32 [ %383, %382 ], [ 0, %301 ], !dbg !12
+  %307 = icmp slt i32 %306, 2, !dbg !12
+  br i1 %307, label %308, label %384, !dbg !12
+
+308:                                              ; preds = %305
+  br label %309, !dbg !12
+
+309:                                              ; preds = %312, %308
+  %310 = phi i32 [ %315, %312 ], [ 0, %308 ], !dbg !12
+  %311 = icmp slt i32 %310, 4, !dbg !12
+  br i1 %311, label %312, label %316, !dbg !12
+
+312:                                              ; preds = %309
+  %313 = add i32 0, %310, !dbg !12
+  %314 = getelementptr float, ptr %147, i32 %313, !dbg !12
+  store float 0.000000e+00, ptr %314, align 4, !dbg !12
+  %315 = add i32 %310, 1, !dbg !12
+  br label %309, !dbg !12
+
+316:                                              ; preds = %309
+  %317 = mul nsw i32 %306, 16, !dbg !12
+  %318 = add i32 %317, %7, !dbg !12
+  %319 = add i32 %318, %26, !dbg !12
+  br label %320, !dbg !12
+
+320:                                              ; preds = %352, %316
+  %321 = phi i32 [ %360, %352 ], [ 0, %316 ], !dbg !12
+  %322 = icmp slt i32 %321, 8, !dbg !12
+  br i1 %322, label %323, label %361, !dbg !12
+
+323:                                              ; preds = %320
+  %324 = mul nsw i32 %321, 16, !dbg !12
+  br label %325, !dbg !12
+
+325:                                              ; preds = %328, %323
+  %326 = phi i32 [ %337, %328 ], [ 0, %323 ], !dbg !12
+  %327 = icmp slt i32 %326, 4, !dbg !12
+  br i1 %327, label %328, label %338, !dbg !12
+
+328:                                              ; preds = %325
+  %329 = add i32 %326, %324, !dbg !12
+  %330 = add i32 %329, %28, !dbg !12
+  %331 = mul i32 %304, 128, !dbg !12
+  %332 = add i32 %331, %330, !dbg !12
+  %333 = getelementptr half, ptr addrspace(3) @shm_1, i32 %332, !dbg !12
+  %334 = load half, ptr addrspace(3) %333, align 2, !dbg !12
+  %335 = add i32 0, %326, !dbg !12
+  %336 = getelementptr half, ptr %144, i32 %335, !dbg !12
+  store half %334, ptr %336, align 2, !dbg !12
+  %337 = add i32 %326, 1, !dbg !12
+  br label %325, !dbg !12
+
+338:                                              ; preds = %325
+  br label %339, !dbg !12
+
+339:                                              ; preds = %342, %338
+  %340 = phi i32 [ %351, %342 ], [ 0, %338 ], !dbg !12
+  %341 = icmp slt i32 %340, 4, !dbg !12
+  br i1 %341, label %342, label %352, !dbg !12
+
+342:                                              ; preds = %339
+  %343 = add i32 %340, %324, !dbg !12
+  %344 = add i32 %343, %28, !dbg !12
+  %345 = mul i32 %344, 32, !dbg !12
+  %346 = add i32 %345, %319, !dbg !12
+  %347 = getelementptr half, ptr addrspace(3) @shm_0, i32 %346, !dbg !12
+  %348 = load half, ptr addrspace(3) %347, align 2, !dbg !12
+  %349 = add i32 %340, 0, !dbg !12
+  %350 = getelementptr half, ptr %145, i32 %349, !dbg !12
+  store half %348, ptr %350, align 2, !dbg !12
+  %351 = add i32 %340, 1, !dbg !12
+  br label %339, !dbg !12
+
+352:                                              ; preds = %339
+  %353 = getelementptr half, ptr %144, i32 0, !dbg !12
+  %354 = load <4 x half>, ptr %353, align 2, !dbg !12
+  %355 = getelementptr half, ptr %145, i32 0, !dbg !12
+  %356 = load <4 x half>, ptr %355, align 2, !dbg !12
+  %357 = getelementptr float, ptr %147, i32 0, !dbg !12
+  %358 = load <4 x float>, ptr %357, align 4, !dbg !12
+  %359 = call <4 x float> asm sideeffect "v_mmac_f32_16x16x16_f16 $0, $2, $1, $3", "=v,v,v,0"(<4 x half> %354, <4 x half> %356, <4 x float> %358), !dbg !12
+  store <4 x float> %359, ptr %357, align 4, !dbg !12
+  %360 = add i32 %321, 1, !dbg !12
+  br label %320, !dbg !12
+
+361:                                              ; preds = %320
+  %362 = mul nsw i32 %306, 4, !dbg !12
+  br label %363, !dbg !12
+
+363:                                              ; preds = %380, %361
+  %364 = phi i32 [ %381, %380 ], [ 0, %361 ], !dbg !12
+  %365 = icmp slt i32 %364, 4, !dbg !12
+  br i1 %365, label %366, label %382, !dbg !12
+
+366:                                              ; preds = %363
+  br label %367, !dbg !12
+
+367:                                              ; preds = %370, %366
+  %368 = phi i32 [ %379, %370 ], [ 0, %366 ], !dbg !12
+  %369 = icmp slt i32 %368, 4, !dbg !12
+  br i1 %369, label %370, label %380, !dbg !12
+
+370:                                              ; preds = %367
+  %371 = add i32 0, %368, !dbg !12
+  %372 = getelementptr float, ptr %147, i32 %371, !dbg !12
+  %373 = load float, ptr %372, align 4, !dbg !12
+  %374 = add i32 %368, %362, !dbg !12
+  %375 = add i32 %374, %364, !dbg !12
+  %376 = mul i32 %299, 8, !dbg !12
+  %377 = add i32 %376, %375, !dbg !12
+  %378 = getelementptr float, ptr %146, i32 %377, !dbg !12
+  store float %373, ptr %378, align 4, !dbg !12
+  %379 = add i32 %368, 1, !dbg !12
+  br label %367, !dbg !12
+
+380:                                              ; preds = %367
+  %381 = add i32 %364, 1, !dbg !12
+  br label %363, !dbg !12
+
+382:                                              ; preds = %363
+  %383 = add i32 %306, 1, !dbg !12
+  br label %305, !dbg !12
+
+384:                                              ; preds = %305
+  %385 = add i32 %299, 1, !dbg !12
+  br label %298, !dbg !12
+
+386:                                              ; preds = %298
+  br label %387, !dbg !19
+
+387:                                              ; preds = %441, %386
+  %388 = phi i32 [ %442, %441 ], [ 0, %386 ], !dbg !19
+  %389 = icmp slt i32 %388, 4, !dbg !19
+  br i1 %389, label %390, label %443, !dbg !19
+
+390:                                              ; preds = %387
+  br label %391, !dbg !19
+
+391:                                              ; preds = %439, %390
+  %392 = phi i32 [ %440, %439 ], [ 0, %390 ], !dbg !19
+  %393 = icmp slt i32 %392, 8, !dbg !19
+  br i1 %393, label %394, label %441, !dbg !19
+
+394:                                              ; preds = %391
+  %395 = mul nsw i32 %392, 4, !dbg !19
+  %396 = icmp slt i32 %392, 0, !dbg !19
+  %397 = sub i32 -1, %392, !dbg !19
+  %398 = select i1 %396, i32 %397, i32 %392, !dbg !19
+  %399 = sdiv i32 %398, 4, !dbg !19
+  %400 = sub i32 -1, %399, !dbg !19
+  %401 = select i1 %396, i32 %400, i32 %399, !dbg !19
+  %402 = mul nsw i32 %401, -16, !dbg !19
+  br label %403, !dbg !19
+
+403:                                              ; preds = %437, %394
+  %404 = phi i32 [ %438, %437 ], [ 0, %394 ], !dbg !19
+  %405 = icmp slt i32 %404, 4, !dbg !19
+  br i1 %405, label %406, label %439, !dbg !19
+
+406:                                              ; preds = %403
+  %407 = mul nsw i32 %404, 16, !dbg !19
+  %408 = add i32 %407, %7, !dbg !19
+  %409 = add i32 %408, %19, !dbg !19
+  %410 = add i32 %409, %26, !dbg !19
+  %411 = add i32 %410, 1, !dbg !20
+  %412 = add i32 %408, %26, !dbg !21
+  br label %413, !dbg !19
+
+413:                                              ; preds = %416, %406
+  %414 = phi i32 [ %436, %416 ], [ 0, %406 ], !dbg !19
+  %415 = icmp slt i32 %414, 2, !dbg !19
+  br i1 %415, label %416, label %437, !dbg !19
+
+416:                                              ; preds = %413
+  %417 = mul nsw i32 %414, 16, !dbg !19
+  %418 = add i32 %187, %417, !dbg !19
+  %419 = add i32 %418, %395, !dbg !19
+  %420 = add i32 %419, %402, !dbg !19
+  %421 = add i32 %420, %25, !dbg !19
+  %422 = icmp ule i32 %411, %421, !dbg !22
+  %423 = select i1 %422, float 0xFFF0000000000000, float 0.000000e+00, !dbg !19
+  %424 = mul i32 %388, 8, !dbg !23
+  %425 = add i32 %424, %392, !dbg !23
+  %426 = getelementptr float, ptr %146, i32 %425, !dbg !23
+  %427 = load float, ptr %426, align 4, !dbg !23
+  %428 = fadd float %427, %423, !dbg !23
+  %429 = call float @__ocml_exp2_f32(float %428), !dbg !21
+  %430 = add i32 %417, %395, !dbg !21
+  %431 = add i32 %430, %402, !dbg !21
+  %432 = add i32 %431, %25, !dbg !21
+  %433 = mul i32 %412, 32, !dbg !21
+  %434 = add i32 %433, %432, !dbg !21
+  %435 = getelementptr float, ptr addrspace(3) @shm_4, i32 %434, !dbg !21
+  store float %429, ptr addrspace(3) %435, align 4, !dbg !21
+  %436 = add i32 %414, 1, !dbg !19
+  br label %413, !dbg !19
+
+437:                                              ; preds = %413
+  %438 = add i32 %404, 1, !dbg !19
+  br label %403, !dbg !19
+
+439:                                              ; preds = %403
+  %440 = add i32 %392, 1, !dbg !19
+  br label %391, !dbg !19
+
+441:                                              ; preds = %391
+  %442 = add i32 %388, 1, !dbg !19
+  br label %387, !dbg !19
+
+443:                                              ; preds = %387
+  br label %444, !dbg !13
+
+444:                                              ; preds = %489, %443
+  %445 = phi i32 [ %490, %489 ], [ 0, %443 ], !dbg !13
+  %446 = icmp slt i32 %445, 4, !dbg !13
+  br i1 %446, label %447, label %491, !dbg !13
+
+447:                                              ; preds = %444
+  store float 0.000000e+00, ptr %148, align 4, !dbg !13
+  %448 = mul nsw i32 %445, 16, !dbg !13
+  %449 = add i32 %448, %7, !dbg !13
+  %450 = add i32 %449, %26, !dbg !13
+  br label %451, !dbg !13
+
+451:                                              ; preds = %454, %447
+  %452 = phi i32 [ %463, %454 ], [ 0, %447 ], !dbg !13
+  %453 = icmp slt i32 %452, 8, !dbg !13
+  br i1 %453, label %454, label %464, !dbg !13
+
+454:                                              ; preds = %451
+  %455 = load float, ptr %148, align 4, !dbg !13
+  %456 = mul nsw i32 %452, 4, !dbg !13
+  %457 = add i32 %456, %25, !dbg !13
+  %458 = mul i32 %450, 32, !dbg !13
+  %459 = add i32 %458, %457, !dbg !13
+  %460 = getelementptr float, ptr addrspace(3) @shm_4, i32 %459, !dbg !13
+  %461 = load float, ptr addrspace(3) %460, align 4, !dbg !13
+  %462 = fadd float %455, %461, !dbg !13
+  store float %462, ptr %148, align 4, !dbg !13
+  %463 = add i32 %452, 1, !dbg !13
+  br label %451, !dbg !13
+
+464:                                              ; preds = %451
+  %465 = load float, ptr %148, align 4, !dbg !13
+  %466 = call i32 @llvm.amdgcn.mbcnt.lo(i32 -1, i32 0), !dbg !13
+  %467 = call i32 @llvm.amdgcn.mbcnt.hi(i32 -1, i32 %466), !dbg !13
+  %468 = add i32 %467, 64, !dbg !13
+  %469 = xor i32 %467, 16, !dbg !13
+  %470 = and i32 %468, -64, !dbg !13
+  %471 = icmp slt i32 %469, %470, !dbg !13
+  %472 = select i1 %471, i32 %469, i32 %467, !dbg !13
+  %473 = shl i32 %472, 2, !dbg !13
+  %474 = bitcast float %465 to i32, !dbg !13
+  %475 = call i32 @llvm.amdgcn.ds.bpermute(i32 %473, i32 %474), !dbg !13
+  %476 = bitcast i32 %475 to float, !dbg !13
+  %477 = fadd float %465, %476, !dbg !13
+  %478 = xor i32 %467, 32, !dbg !13
+  %479 = icmp slt i32 %478, %470, !dbg !13
+  %480 = select i1 %479, i32 %478, i32 %467, !dbg !13
+  %481 = shl i32 %480, 2, !dbg !13
+  %482 = bitcast float %477 to i32, !dbg !13
+  %483 = call i32 @llvm.amdgcn.ds.bpermute(i32 %481, i32 %482), !dbg !13
+  %484 = bitcast i32 %483 to float, !dbg !13
+  %485 = fadd float %477, %484, !dbg !13
+  br i1 %170, label %486, label %489, !dbg !13
+
+486:                                              ; preds = %464
+  %487 = add i32 %450, 0, !dbg !13
+  %488 = getelementptr float, ptr addrspace(3) @shm_5, i32 %487, !dbg !13
+  store float %485, ptr addrspace(3) %488, align 4, !dbg !13
+  br label %489, !dbg !13
+
+489:                                              ; preds = %486, %464
+  %490 = add i32 %445, 1, !dbg !13
+  br label %444, !dbg !13
+
+491:                                              ; preds = %444
+  fence syncscope("workgroup") release, !dbg !13
+  call void @llvm.amdgcn.s.barrier(), !dbg !13
+  fence syncscope("workgroup") acquire, !dbg !13
+  br label %492, !dbg !13
+
+492:                                              ; preds = %511, %491
+  %493 = phi i32 [ %512, %511 ], [ 0, %491 ], !dbg !13
+  %494 = icmp slt i32 %493, 4, !dbg !13
+  br i1 %494, label %495, label %513, !dbg !13
+
+495:                                              ; preds = %492
+  br label %496, !dbg !13
+
+496:                                              ; preds = %499, %495
+  %497 = phi i32 [ %510, %499 ], [ 0, %495 ], !dbg !13
+  %498 = icmp slt i32 %497, 4, !dbg !13
+  br i1 %498, label %499, label %511, !dbg !13
+
+499:                                              ; preds = %496
+  %500 = mul nsw i32 %497, 16, !dbg !13
+  %501 = add i32 %500, %7, !dbg !13
+  %502 = add i32 %501, %26, !dbg !13
+  %503 = add i32 %502, 0, !dbg !13
+  %504 = getelementptr float, ptr addrspace(3) @shm_5, i32 %503, !dbg !13
+  %505 = load float, ptr addrspace(3) %504, align 4, !dbg !13
+  %506 = add i32 %493, 0, !dbg !13
+  %507 = getelementptr float, ptr %135, i32 %506, !dbg !13
+  %508 = load float, ptr %507, align 4, !dbg !13
+  %509 = fadd float %508, %505, !dbg !13
+  store float %509, ptr %507, align 4, !dbg !13
+  %510 = add i32 %497, 1, !dbg !13
+  br label %496, !dbg !13
+
+511:                                              ; preds = %496
+  %512 = add i32 %493, 1, !dbg !13
+  br label %492, !dbg !13
+
+513:                                              ; preds = %492
+  fence syncscope("workgroup") release, !dbg !14
+  call void @llvm.amdgcn.s.barrier(), !dbg !14
+  fence syncscope("workgroup") acquire, !dbg !14
+  br label %514, !dbg !14
+
+514:                                              ; preds = %566, %513
+  %515 = phi i32 [ %567, %566 ], [ 0, %513 ], !dbg !14
+  %516 = icmp slt i32 %515, 4, !dbg !14
+  br i1 %516, label %517, label %568, !dbg !14
+
+517:                                              ; preds = %514
+  %518 = mul nsw i32 %515, 16, !dbg !14
+  %519 = add i32 %518, %7, !dbg !14
+  %520 = add i32 %519, %26, !dbg !14
+  br label %521, !dbg !14
+
+521:                                              ; preds = %564, %517
+  %522 = phi i32 [ %565, %564 ], [ 0, %517 ], !dbg !14
+  %523 = icmp slt i32 %522, 2, !dbg !14
+  br i1 %523, label %524, label %566, !dbg !14
+
+524:                                              ; preds = %521
+  %525 = mul nsw i32 %522, 16, !dbg !14
+  br label %526, !dbg !14
+
+526:                                              ; preds = %529, %524
+  %527 = phi i32 [ %538, %529 ], [ 0, %524 ], !dbg !14
+  %528 = icmp slt i32 %527, 4, !dbg !14
+  br i1 %528, label %529, label %539, !dbg !14
+
+529:                                              ; preds = %526
+  %530 = add i32 %527, %525, !dbg !14
+  %531 = add i32 %530, %28, !dbg !14
+  %532 = mul i32 %520, 32, !dbg !14
+  %533 = add i32 %532, %531, !dbg !14
+  %534 = getelementptr float, ptr addrspace(3) @shm_4, i32 %533, !dbg !14
+  %535 = load float, ptr addrspace(3) %534, align 4, !dbg !14
+  %536 = add i32 0, %527, !dbg !14
+  %537 = getelementptr float, ptr %149, i32 %536, !dbg !14
+  store float %535, ptr %537, align 4, !dbg !14
+  %538 = add i32 %527, 1, !dbg !14
+  br label %526, !dbg !14
+
+539:                                              ; preds = %526
+  br label %540, !dbg !14
+
+540:                                              ; preds = %543, %539
+  %541 = phi i32 [ %549, %543 ], [ 0, %539 ], !dbg !14
+  %542 = icmp slt i32 %541, 4, !dbg !14
+  br i1 %542, label %543, label %550, !dbg !14
+
+543:                                              ; preds = %540
+  %544 = add i32 0, %541, !dbg !14
+  %545 = getelementptr float, ptr %149, i32 %544, !dbg !14
+  %546 = load float, ptr %545, align 4, !dbg !14
+  %547 = fptrunc float %546 to half, !dbg !14
+  %548 = getelementptr half, ptr %150, i32 %544, !dbg !14
+  store half %547, ptr %548, align 2, !dbg !14
+  %549 = add i32 %541, 1, !dbg !14
+  br label %540, !dbg !14
+
+550:                                              ; preds = %540
+  br label %551, !dbg !14
+
+551:                                              ; preds = %554, %550
+  %552 = phi i32 [ %563, %554 ], [ 0, %550 ], !dbg !14
+  %553 = icmp slt i32 %552, 4, !dbg !14
+  br i1 %553, label %554, label %564, !dbg !14
+
+554:                                              ; preds = %551
+  %555 = add i32 0, %552, !dbg !14
+  %556 = getelementptr half, ptr %150, i32 %555, !dbg !14
+  %557 = load half, ptr %556, align 2, !dbg !14
+  %558 = add i32 %552, %525, !dbg !14
+  %559 = add i32 %558, %28, !dbg !14
+  %560 = mul i32 %520, 32, !dbg !14
+  %561 = add i32 %560, %559, !dbg !14
+  %562 = getelementptr half, ptr addrspace(3) @shm_3, i32 %561, !dbg !14
+  store half %557, ptr addrspace(3) %562, align 2, !dbg !14
+  %563 = add i32 %552, 1, !dbg !14
+  br label %551, !dbg !14
+
+564:                                              ; preds = %551
+  %565 = add i32 %522, 1, !dbg !14
+  br label %521, !dbg !14
+
+566:                                              ; preds = %521
+  %567 = add i32 %515, 1, !dbg !14
+  br label %514, !dbg !14
+
+568:                                              ; preds = %514
+  br label %569, !dbg !15
+
+569:                                              ; preds = %655, %568
+  %570 = phi i32 [ %656, %655 ], [ 0, %568 ], !dbg !15
+  %571 = icmp slt i32 %570, 4, !dbg !15
+  br i1 %571, label %572, label %657, !dbg !15
+
+572:                                              ; preds = %569
+  %573 = mul nsw i32 %570, 16, !dbg !15
+  %574 = add i32 %573, %7, !dbg !15
+  %575 = add i32 %574, %26, !dbg !15
+  br label %576, !dbg !15
+
+576:                                              ; preds = %653, %572
+  %577 = phi i32 [ %654, %653 ], [ 0, %572 ], !dbg !15
+  %578 = icmp slt i32 %577, 8, !dbg !15
+  br i1 %578, label %579, label %655, !dbg !15
+
+579:                                              ; preds = %576
+  br label %580, !dbg !15
+
+580:                                              ; preds = %583, %579
+  %581 = phi i32 [ %586, %583 ], [ 0, %579 ], !dbg !15
+  %582 = icmp slt i32 %581, 4, !dbg !15
+  br i1 %582, label %583, label %587, !dbg !15
+
+583:                                              ; preds = %580
+  %584 = add i32 0, %581, !dbg !15
+  %585 = getelementptr float, ptr %154, i32 %584, !dbg !15
+  store float 0.000000e+00, ptr %585, align 4, !dbg !15
+  %586 = add i32 %581, 1, !dbg !15
+  br label %580, !dbg !15
+
+587:                                              ; preds = %580
+  %588 = mul nsw i32 %577, 16, !dbg !15
+  %589 = add i32 %588, %7, !dbg !15
+  %590 = add i32 %589, %26, !dbg !15
+  br label %591, !dbg !15
+
+591:                                              ; preds = %623, %587
+  %592 = phi i32 [ %631, %623 ], [ 0, %587 ], !dbg !15
+  %593 = icmp slt i32 %592, 2, !dbg !15
+  br i1 %593, label %594, label %632, !dbg !15
+
+594:                                              ; preds = %591
+  %595 = mul nsw i32 %592, 16, !dbg !15
+  br label %596, !dbg !15
+
+596:                                              ; preds = %599, %594
+  %597 = phi i32 [ %608, %599 ], [ 0, %594 ], !dbg !15
+  %598 = icmp slt i32 %597, 4, !dbg !15
+  br i1 %598, label %599, label %609, !dbg !15
+
+599:                                              ; preds = %596
+  %600 = add i32 %597, %595, !dbg !15
+  %601 = add i32 %600, %28, !dbg !15
+  %602 = mul i32 %575, 32, !dbg !15
+  %603 = add i32 %602, %601, !dbg !15
+  %604 = getelementptr half, ptr addrspace(3) @shm_3, i32 %603, !dbg !15
+  %605 = load half, ptr addrspace(3) %604, align 2, !dbg !15
+  %606 = add i32 0, %597, !dbg !15
+  %607 = getelementptr half, ptr %151, i32 %606, !dbg !15
+  store half %605, ptr %607, align 2, !dbg !15
+  %608 = add i32 %597, 1, !dbg !15
+  br label %596, !dbg !15
+
+609:                                              ; preds = %596
+  br label %610, !dbg !15
+
+610:                                              ; preds = %613, %609
+  %611 = phi i32 [ %622, %613 ], [ 0, %609 ], !dbg !15
+  %612 = icmp slt i32 %611, 4, !dbg !15
+  br i1 %612, label %613, label %623, !dbg !15
+
+613:                                              ; preds = %610
+  %614 = add i32 %611, %595, !dbg !15
+  %615 = add i32 %614, %28, !dbg !15
+  %616 = mul i32 %615, 128, !dbg !15
+  %617 = add i32 %616, %590, !dbg !15
+  %618 = getelementptr half, ptr addrspace(3) @shm_2, i32 %617, !dbg !15
+  %619 = load half, ptr addrspace(3) %618, align 2, !dbg !15
+  %620 = add i32 %611, 0, !dbg !15
+  %621 = getelementptr half, ptr %152, i32 %620, !dbg !15
+  store half %619, ptr %621, align 2, !dbg !15
+  %622 = add i32 %611, 1, !dbg !15
+  br label %610, !dbg !15
+
+623:                                              ; preds = %610
+  %624 = getelementptr half, ptr %151, i32 0, !dbg !15
+  %625 = load <4 x half>, ptr %624, align 2, !dbg !15
+  %626 = getelementptr half, ptr %152, i32 0, !dbg !15
+  %627 = load <4 x half>, ptr %626, align 2, !dbg !15
+  %628 = getelementptr float, ptr %154, i32 0, !dbg !15
+  %629 = load <4 x float>, ptr %628, align 4, !dbg !15
+  %630 = call <4 x float> asm sideeffect "v_mmac_f32_16x16x16_f16 $0, $2, $1, $3", "=v,v,v,0"(<4 x half> %625, <4 x half> %627, <4 x float> %629), !dbg !15
+  store <4 x float> %630, ptr %628, align 4, !dbg !15
+  %631 = add i32 %592, 1, !dbg !15
+  br label %591, !dbg !15
+
+632:                                              ; preds = %591
+  %633 = mul nsw i32 %577, 4, !dbg !15
+  br label %634, !dbg !15
+
+634:                                              ; preds = %651, %632
+  %635 = phi i32 [ %652, %651 ], [ 0, %632 ], !dbg !15
+  %636 = icmp slt i32 %635, 4, !dbg !15
+  br i1 %636, label %637, label %653, !dbg !15
+
+637:                                              ; preds = %634
+  br label %638, !dbg !15
+
+638:                                              ; preds = %641, %637
+  %639 = phi i32 [ %650, %641 ], [ 0, %637 ], !dbg !15
+  %640 = icmp slt i32 %639, 4, !dbg !15
+  br i1 %640, label %641, label %651, !dbg !15
+
+641:                                              ; preds = %638
+  %642 = add i32 0, %639, !dbg !15
+  %643 = getelementptr float, ptr %154, i32 %642, !dbg !15
+  %644 = load float, ptr %643, align 4, !dbg !15
+  %645 = add i32 %639, %633, !dbg !15
+  %646 = add i32 %645, %635, !dbg !15
+  %647 = mul i32 %570, 32, !dbg !15
+  %648 = add i32 %647, %646, !dbg !15
+  %649 = getelementptr float, ptr %153, i32 %648, !dbg !15
+  store float %644, ptr %649, align 4, !dbg !15
+  %650 = add i32 %639, 1, !dbg !15
+  br label %638, !dbg !15
+
+651:                                              ; preds = %638
+  %652 = add i32 %635, 1, !dbg !15
+  br label %634, !dbg !15
+
+653:                                              ; preds = %634
+  %654 = add i32 %577, 1, !dbg !15
+  br label %576, !dbg !15
+
+655:                                              ; preds = %576
+  %656 = add i32 %570, 1, !dbg !15
+  br label %569, !dbg !15
+
+657:                                              ; preds = %569
+  br label %658, !dbg !24
+
+658:                                              ; preds = %686, %657
+  %659 = phi i32 [ %687, %686 ], [ 0, %657 ], !dbg !24
+  %660 = icmp slt i32 %659, 4, !dbg !24
+  br i1 %660, label %661, label %688, !dbg !24
+
+661:                                              ; preds = %658
+  br label %662, !dbg !24
+
+662:                                              ; preds = %684, %661
+  %663 = phi i32 [ %685, %684 ], [ 0, %661 ], !dbg !24
+  %664 = icmp slt i32 %663, 32, !dbg !24
+  br i1 %664, label %665, label %686, !dbg !24
+
+665:                                              ; preds = %662
+  br label %666, !dbg !24
+
+666:                                              ; preds = %682, %665
+  %667 = phi i32 [ %683, %682 ], [ 0, %665 ], !dbg !24
+  %668 = icmp slt i32 %667, 4, !dbg !24
+  br i1 %668, label %669, label %684, !dbg !24
+
+669:                                              ; preds = %666
+  br label %670, !dbg !24
+
+670:                                              ; preds = %673, %669
+  %671 = phi i32 [ %681, %673 ], [ 0, %669 ], !dbg !24
+  %672 = icmp slt i32 %671, 8, !dbg !24
+  br i1 %672, label %673, label %682, !dbg !24
+
+673:                                              ; preds = %670
+  %674 = mul i32 %659, 32, !dbg !24
+  %675 = add i32 %674, %663, !dbg !24
+  %676 = getelementptr float, ptr %119, i32 %675, !dbg !24
+  %677 = load float, ptr %676, align 4, !dbg !24
+  %678 = getelementptr float, ptr %153, i32 %675, !dbg !24
+  %679 = load float, ptr %678, align 4, !dbg !24
+  %680 = fadd float %677, %679, !dbg !24
+  store float %680, ptr %676, align 4, !dbg !24
+  %681 = add i32 %671, 1, !dbg !24
+  br label %670, !dbg !24
+
+682:                                              ; preds = %670
+  %683 = add i32 %667, 1, !dbg !24
+  br label %666, !dbg !24
+
+684:                                              ; preds = %666
+  %685 = add i32 %663, 1, !dbg !24
+  br label %662, !dbg !24
+
+686:                                              ; preds = %662
+  %687 = add i32 %659, 1, !dbg !24
+  br label %658, !dbg !24
+
+688:                                              ; preds = %658
+  %689 = add i32 %172, 1, !dbg !16
+  br label %171, !dbg !16
+
+690:                                              ; preds = %171
+  %691 = alloca half, i32 128, align 2, !dbg !25
+  br label %692, !dbg !26
+
+692:                                              ; preds = %723, %690
+  %693 = phi i32 [ %724, %723 ], [ 0, %690 ], !dbg !26
+  %694 = icmp slt i32 %693, 4, !dbg !26
+  br i1 %694, label %695, label %725, !dbg !26
+
+695:                                              ; preds = %692
+  br label %696, !dbg !26
+
+696:                                              ; preds = %721, %695
+  %697 = phi i32 [ %722, %721 ], [ 0, %695 ], !dbg !26
+  %698 = icmp slt i32 %697, 32, !dbg !26
+  br i1 %698, label %699, label %723, !dbg !26
+
+699:                                              ; preds = %696
+  br label %700, !dbg !26
+
+700:                                              ; preds = %719, %699
+  %701 = phi i32 [ %720, %719 ], [ 0, %699 ], !dbg !26
+  %702 = icmp slt i32 %701, 4, !dbg !26
+  br i1 %702, label %703, label %721, !dbg !26
+
+703:                                              ; preds = %700
+  br label %704, !dbg !26
+
+704:                                              ; preds = %707, %703
+  %705 = phi i32 [ %718, %707 ], [ 0, %703 ], !dbg !26
+  %706 = icmp slt i32 %705, 8, !dbg !26
+  br i1 %706, label %707, label %719, !dbg !26
+
+707:                                              ; preds = %704
+  %708 = mul i32 %693, 32, !dbg !26
+  %709 = add i32 %708, %697, !dbg !26
+  %710 = getelementptr float, ptr %119, i32 %709, !dbg !26
+  %711 = load float, ptr %710, align 4, !dbg !26
+  %712 = add i32 %693, 0, !dbg !26
+  %713 = getelementptr float, ptr %135, i32 %712, !dbg !26
+  %714 = load float, ptr %713, align 4, !dbg !26
+  %715 = fdiv float %711, %714, !dbg !26
+  %716 = fptrunc float %715 to half, !dbg !7
+  %717 = getelementptr half, ptr %691, i32 %709, !dbg !7
+  store half %716, ptr %717, align 2, !dbg !7
+  %718 = add i32 %705, 1, !dbg !26
+  br label %704, !dbg !26
+
+719:                                              ; preds = %704
+  %720 = add i32 %701, 1, !dbg !26
+  br label %700, !dbg !26
+
+721:                                              ; preds = %700
+  %722 = add i32 %697, 1, !dbg !26
+  br label %696, !dbg !26
+
+723:                                              ; preds = %696
+  %724 = add i32 %693, 1, !dbg !26
+  br label %692, !dbg !26
+
+725:                                              ; preds = %692
+  br label %726, !dbg !27
+
+726:                                              ; preds = %747, %725
+  %727 = phi i32 [ %748, %747 ], [ 0, %725 ], !dbg !27
+  %728 = icmp slt i32 %727, 4, !dbg !27
+  br i1 %728, label %729, label %749, !dbg !27
+
+729:                                              ; preds = %726
+  %730 = add i32 %727, %19, !dbg !27
+  %731 = add i32 %730, %27, !dbg !27
+  br label %732, !dbg !27
+
+732:                                              ; preds = %735, %729
+  %733 = phi i32 [ %746, %735 ], [ 0, %729 ], !dbg !27
+  %734 = icmp slt i32 %733, 32, !dbg !27
+  br i1 %734, label %735, label %747, !dbg !27
+
+735:                                              ; preds = %732
+  %736 = mul i32 %727, 32, !dbg !27
+  %737 = add i32 %736, %733, !dbg !27
+  %738 = getelementptr half, ptr %691, i32 %737, !dbg !27
+  %739 = load half, ptr %738, align 2, !dbg !27
+  %740 = mul i32 %18, 524288, !dbg !27
+  %741 = add i32 0, %740, !dbg !27
+  %742 = mul i32 %731, 128, !dbg !27
+  %743 = add i32 %741, %742, !dbg !27
+  %744 = add i32 %743, %733, !dbg !27
+  %745 = getelementptr half, ptr addrspace(1) %3, i32 %744, !dbg !27
+  store half %739, ptr addrspace(1) %745, align 2, !dbg !27
+  %746 = add i32 %733, 1, !dbg !27
+  br label %732, !dbg !27
+
+747:                                              ; preds = %732
+  %748 = add i32 %727, 1, !dbg !27
+  br label %726, !dbg !27
+
+749:                                              ; preds = %726
+  ret void, !dbg !7
 }
 
 ; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
@@ -1050,13 +1153,40 @@ declare i32 @llvm.amdgcn.mbcnt.hi(i32, i32) #3
 ; Function Attrs: convergent nocallback nofree nounwind willreturn memory(none)
 declare i32 @llvm.amdgcn.ds.bpermute(i32, i32) #4
 
-attributes #0 = { "amdgpu-flat-work-group-size"="128,128" "uniform-work-group-size"="true" }
+attributes #0 = { "amdgpu-flat-work-group-size"="64,64" "uniform-work-group-size"="true" }
 attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
 attributes #2 = { convergent nocallback nofree nounwind willreturn }
 attributes #3 = { nocallback nofree nosync nounwind willreturn memory(none) }
 attributes #4 = { convergent nocallback nofree nounwind willreturn memory(none) }
 
-!llvm.module.flags = !{!0}
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2}
 
-!0 = !{i32 2, !"Debug Info Version", i32 3}
-!1 = !{i32 128, i32 1, i32 1}
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "DeepGenGraph MLIR", isOptimized: false, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "test_input.mlir", directory: "3rd/deepgengraph/test")
+!2 = !{i32 2, !"Debug Info Version", i32 3}
+!3 = distinct !DISubprogram(name: "Attn_p2", linkageName: "Attn_p2", scope: !1, file: !1, line: 22, type: !4, scopeLine: 22, spFlags: DISPFlagDefinition, unit: !0)
+!4 = !DISubroutineType(types: !5)
+!5 = !{}
+!6 = !{i32 64, i32 1, i32 1}
+!7 = !DILocation(line: 22, column: 3, scope: !3)
+!8 = !DILocation(line: 48, column: 13, scope: !3)
+!9 = !DILocation(line: 51, column: 13, scope: !3)
+!10 = !DILocation(line: 52, column: 13, scope: !3)
+!11 = !DILocation(line: 53, column: 13, scope: !3)
+!12 = !DILocation(line: 62, column: 15, scope: !3)
+!13 = !DILocation(line: 76, column: 15, scope: !3)
+!14 = !DILocation(line: 77, column: 15, scope: !3)
+!15 = !DILocation(line: 78, column: 15, scope: !3)
+!16 = !DILocation(line: 59, column: 15, scope: !3)
+!17 = !DILocation(line: 61, column: 15, scope: !3)
+!18 = !DILocation(line: 60, column: 15, scope: !3)
+!19 = !DILocation(line: 63, column: 15, scope: !3)
+!20 = !DILocation(line: 65, column: 17, scope: !3)
+!21 = !DILocation(line: 75, column: 15, scope: !3)
+!22 = !DILocation(line: 66, column: 17, scope: !3)
+!23 = !DILocation(line: 74, column: 15, scope: !3)
+!24 = !DILocation(line: 79, column: 15, scope: !3)
+!25 = !DILocation(line: 85, column: 13, scope: !3)
+!26 = !DILocation(line: 84, column: 13, scope: !3)
+!27 = !DILocation(line: 86, column: 7, scope: !3)
