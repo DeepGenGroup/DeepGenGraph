@@ -3,6 +3,7 @@
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
+#include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
@@ -401,11 +402,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
-  AddPassNested(mlir::createMem2Reg());
   AddPass(mlir::createCSEPass());
   AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
   AddPassNested(mlir::bufferization::createBufferHoistingPass());
   AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
+  AddPass(mlir::createCanonicalizerPass());
+  mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
+  AddPassNested(mlir::affine::createAffineVectorize(opt));
+  AddPassNested( mlir::affine::createLoopUnrollPass() );
+  AddPassNested( mlir::affine::createLoopFusionPass( int(frisk::friskMs::Local) ) );
+
+  AddPassNested(mlir::createMem2Reg());
+
+  AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
 
   // pm.addPass(mlir::createSymbolDCEPass());

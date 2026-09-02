@@ -1,6 +1,7 @@
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Common.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include <tuple>
 
 namespace mlir::frisk {
@@ -52,6 +53,7 @@ void LivelinessAnalyzer::run(func::FuncOp funcOp) {
   if(!funcOp->hasAttr(frisk::THREAD_NUM)){
     return;
   }
+  auto threadCount = funcOp->getAttrOfType<IntegerAttr>(frisk::THREAD_NUM).getInt();
   liveRanges.clear();
   rootRegCounts.clear();
   rootShmBytes.clear();
@@ -180,7 +182,7 @@ void LivelinessAnalyzer::run(func::FuncOp funcOp) {
 
   // 打印分析结果
   llvm::outs() << "[MemRefLivelinessAnalyzePass] Function: " << funcOp.getName() << "\n";
-  llvm::outs() << "  -> Peak Register Count: " << peakRegs << " (32-bit units)\n";
+  llvm::outs() << "  -> Peak Register Count: " << peakRegs << " (32-bit units) " << "Per thread("<< threadCount <<")=" << (peakRegs + threadCount - 1) / threadCount;
   llvm::outs() << "  -> Peak Register Occurred Near Operation Index: " << peakRegOpIdx << "\n";
   llvm::outs() << "  -> Peak Shared Memory: " << peakShmBytes << " bytes\n";
   llvm::outs() << "  -> Peak Shared Memory Occurred Near Operation Index: " << peakShmOpIdx << "\n";
