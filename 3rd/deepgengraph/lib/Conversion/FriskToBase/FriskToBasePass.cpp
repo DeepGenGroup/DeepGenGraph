@@ -157,13 +157,13 @@ struct ParallelOpConversion : public OpConversionPattern<ParallelOp> {
     for (unsigned i = 0; i < grid.size(); i++) {
       auto bidOp = rewriter.create<gpu::BlockIdOp>(loc, dims[i]);
       // 对于新创建的 Op，直接 setAttr 是安全的，因为它们还未对其他 Pass 可见
-      bidOp->setAttr("range", rewriter.getI32IntegerAttr(grid[i]));
+      bidOp->setAttr("range", rewriter.getIndexAttr(grid[i]));
       bids.push_back(bidOp);
     }
 
     // 2. 生成 gpu threadIdx
     auto tidOp = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
-    tidOp->setAttr("range", rewriter.getI32IntegerAttr(parallelOp.getThreadNum()));
+    tidOp->setAttr("range", rewriter.getIndexAttr(parallelOp.getThreadNum()));
 
     // 3. 规范化修改 Parent Op（原代码这里用得很标准）
     Operation *parentOp = parallelOp->getParentOp();

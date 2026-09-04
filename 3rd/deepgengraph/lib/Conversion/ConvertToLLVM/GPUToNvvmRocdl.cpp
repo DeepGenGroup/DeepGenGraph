@@ -2,6 +2,7 @@
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include <dlfcn.h>
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
@@ -88,6 +89,8 @@ public:
     auto loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
     Operation *newOp = nullptr;
+    // ROCDL/NVVM hardware id intrinsics return i32. Extend the result only
+    // after creating the intrinsic so its native LLVM type stays correct.
     Type intrinsicType = IntegerType::get(context, 32);
     switch (op.getDimension()) {
     case gpu::Dimension::x:
@@ -107,10 +110,10 @@ public:
     if (auto llvmFunc = op->template getParentOfType<LLVM::LLVMFuncOp>())
       function = llvmFunc;
     if (!boundsAttrName.empty() && function) {
-      if (auto attr = function->template getAttrOfType<DenseI32ArrayAttr>(
+      if (auto attr = function->template getAttrOfType<DenseI64ArrayAttr>(
               boundsAttrName)) {
         int32_t maximum = attr[static_cast<uint32_t>(op.getDimension())];
-        newOp->setAttr("range", rewriter.getDenseI32ArrayAttr({0, maximum}));
+        newOp->setAttr("range", rewriter.getDenseI64ArrayAttr({0, maximum}));
       }
     }
 
@@ -127,14 +130,14 @@ public:
   }
 };
 
-Value getLaneId(ConversionPatternRewriter &rewriter, Location loc,
-                const unsigned indexBitwidth) {
-  auto int32Type = IntegerType::get(rewriter.getContext(), 32);
+Value getLaneId(ConversionPatternRewriter &rewriter, Location loc) {
+  // Mbcnt operates on 32-bit masks and returns a 32-bit lane index.
+  auto i32 = rewriter.getI32Type();
   Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   Value minus1 = rewriter.create<arith::ConstantIntOp>(loc, -1, 32);
-  Value mbcntLo = rewriter.create<ROCDL::MbcntLoOp>(loc, int32Type,
+  Value mbcntLo = rewriter.create<ROCDL::MbcntLoOp>(loc, i32,
                                                     ValueRange{minus1, zero});
-  Value laneId = rewriter.create<ROCDL::MbcntHiOp>(loc, int32Type,
+  Value laneId = rewriter.create<ROCDL::MbcntHiOp>(loc, i32,
                                                   ValueRange{minus1, mbcntLo});
   return laneId;
 }
@@ -241,12 +244,12 @@ struct GPUShuffleOpToROCDLLowering : public OpConversionPattern<gpu::ShuffleOp> 
     Location loc = op->getLoc();
     Value initShflValue = adaptor.getValue();
 
-    const unsigned indexBitwidth = 32;
-    Value srcLaneId = getLaneId(rewriter, loc, indexBitwidth);
+    auto int32Type = rewriter.getI32Type();
+    Value srcLaneId = getLaneId(rewriter, loc);
 
-    auto int32Type = IntegerType::get(rewriter.getContext(), 32);
     auto boolType = mlir::IntegerType::get(rewriter.getContext(), 1);
     Value width = adaptor.getWidth();
+    Value offset = adaptor.getOffset();
     Value trueVal = rewriter.create<LLVM::ConstantOp>(loc, boolType, 1);
 
     Value add = rewriter.create<LLVM::AddOp>(loc, int32Type, srcLaneId, width);  // selfLane + width
@@ -256,19 +259,18 @@ struct GPUShuffleOpToROCDLLowering : public OpConversionPattern<gpu::ShuffleOp> 
     switch (op.getMode()) {
     case gpu::ShuffleMode::UP:
       dstLane = rewriter.create<LLVM::SubOp>(loc, int32Type, srcLaneId,
-                                             adaptor.getOffset());  // read from lane[srcLaneId - offs]
+                                             offset);  // read from lane[srcLaneId - offs]
       break;
     case gpu::ShuffleMode::DOWN:
       dstLane = rewriter.create<LLVM::AddOp>(loc, int32Type, srcLaneId,
-                                             adaptor.getOffset());  // read from lane[srcLaneId + offs]
+                                             offset);  // read from lane[srcLaneId + offs]
       break;
     case gpu::ShuffleMode::XOR:
       dstLane = rewriter.create<LLVM::XOrOp>(loc, int32Type, srcLaneId,
-                                             adaptor.getOffset());
+                                             offset);
       break;
     case gpu::ShuffleMode::IDX:
       // width 代表了划分的组长度。 offset 表示组内偏移
-      auto offset = adaptor.getOffset();
       auto rem = rewriter.create<LLVM::SRemOp>(loc, int32Type, srcLaneId, width);
       auto sub = rewriter.create<LLVM::SubOp>(loc, int32Type, srcLaneId, rem);  
       dstLane = rewriter.create<LLVM::AddOp>(loc, int32Type, sub, offset);  // read from lane[srcLaneId - srcLaneId % width + offset]
@@ -331,7 +333,7 @@ struct GPUShuffleOpToNVVMLowering : public OpConversionPattern<gpu::ShuffleOp> {
     Location loc = op->getLoc();
 
     auto valueTy = adaptor.getValue().getType();
-    auto int32Type = IntegerType::get(rewriter.getContext(), 32);
+    auto int32Type = IntegerType::get(rewriter.getContext(), 64);
     auto f32Type = Float32Type::get(rewriter.getContext());
     auto predTy = IntegerType::get(rewriter.getContext(), 1);
 
@@ -365,7 +367,7 @@ struct GPUShuffleOpToNVVMLowering : public OpConversionPattern<gpu::ShuffleOp> {
     auto width = intAttr.getInt();
     // llvm::outs() << "witdh: " << width;
     if (width < 32) {
-      segmaskAndClamp = rewriter.create<LLVM::ConstantOp>(loc, int32Type, ((32 - width) << 8) + 31);
+      segmaskAndClamp = rewriter.create<LLVM::ConstantOp>(loc, int32Type, ((64 - width) << 8) + 31);
     } else {
       segmaskAndClamp = rewriter.create<LLVM::ConstantOp>(loc, int32Type, width - 1);;
     }
@@ -586,6 +588,9 @@ struct LLVMFuncOpAddGPUAttrPass : public PassWrapper<LLVMFuncOpAddGPUAttrPass, O
         funcOp->setAttr(ROCDL::ROCDLDialect::getReqdWorkGroupSizeAttrName(), reqdAttr);
         StringAttr flatSizeAttr = StringAttr::get(funcOp->getContext(), Twine(flatSize) + "," + Twine(flatSize));
         funcOp->setAttr(ROCDL::ROCDLDialect::getFlatWorkGroupSizeAttrName(),flatSizeAttr);
+        auto wavesPerEU = IntegerAttr::get(IntegerType::get(funcOp->getContext(), 32), 1 );
+        auto wavesPerEUAttrName = ROCDL::ROCDLDialect::WavesPerEuAttrHelper::getNameStr();
+        funcOp->setAttr("rocdl.waves_per_eu", wavesPerEU);
       }
     });
   }
@@ -612,4 +617,3 @@ namespace mlir::frisk {
 
 
 // ================================================================
-

@@ -14,6 +14,7 @@
 
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
@@ -49,6 +50,7 @@
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
@@ -878,6 +880,77 @@ public:
   }
 };
 
+struct RegInfoNode {
+  RegInfoNode* next = nullptr;
+  mlir::Value repVector {};
+};
+
+static void GetRegToVectorMapping(func::FuncOp kernel, OpBuilder& b){
+
+  static DenseMap<mlir::Value, RegInfoNode*> localBufferMap;  // key=memref local, val=替换的vector。
+
+  DenseMap<mlir::Operation*, int> opOrder;
+  int order = 0;
+  kernel->walk<WalkOrder::PreOrder>([&](mlir::Operation* childOp){
+    opOrder.insert({childOp, order++});
+  });
+
+  // 遍历 allocbufferOp，建立vector 初始值
+  kernel.walk([&](frisk::AllocBufferOp alloc){
+    if(alloc.getMemorySpace() == uint64_t(friskMs::Local)){
+      auto oldRegMemref = alloc.getResult();
+      auto memTy = oldRegMemref.getType();
+      auto vecTy = VectorType::get(memTy.getShape(), memTy.getElementType());
+      auto valAttr = DenseElementsAttr::get(vecTy, 0.0f);
+      b.setInsertionPoint(alloc);
+      auto newVec = b.create<arith::ConstantOp>(alloc->getLoc(), vecTy, valAttr);
+      auto it = localBufferMap.find(oldRegMemref);
+      if(it == localBufferMap.end()){
+        auto node = new RegInfoNode{ nullptr, newVec };
+        localBufferMap.insert({oldRegMemref, node});
+      }
+      else{
+        auto workPtr = localBufferMap[oldRegMemref];
+        while(workPtr->next == nullptr) { 
+          workPtr = workPtr->next; 
+        }
+        workPtr->next = new RegInfoNode{ nullptr, newVec };
+      }
+    }
+  });
+
+  // 对 localbuffer 做分析。构建数据链（RW顺序）
+  kernel->walk<WalkOrder::PreOrder>([&](mlir::affine::AffineLoadOp load){
+    ;
+  });
+  kernel->walk<WalkOrder::PreOrder>([&](mlir::affine::AffineStoreOp store){
+    ;
+  });
+
+}
+
+// 用vector 替换 local
+class BlockOpVectorImpConversion : public OpConversionPattern<frisk::BlockOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(BlockOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    op->walk([&](mlir::Operation* childOp){
+      if(auto temp = mlir::dyn_cast<affine::AffineLoadOp>(childOp)){
+        // affineLoad 判断其 ms
+        auto memTy = mlir::cast<MemRefType>(temp.getMemref().getType());
+        auto ms = memTy.getMemorySpaceAsInt();
+        if(ms == int(friskMs::Local)){
+          // 从全局表中获取该 reg 对应的 vector
+
+        }
+      }
+    });
+    return success();
+  }
+};
+
+
 /**
   frisk.block (%arg5, %arg6) to (128, 128) {
     %c0_2 = arith.constant 0 : index
@@ -1037,6 +1110,7 @@ public:
     // local/register block buffer 会物化成每个线程自己的 tile；shared buffer
     // 仍然保持 block-sized，后面通过 LowerInfo map 生成真实 block 坐标。
     // 对每个loadOp/storeOp，寻找thread 级别buffer是否已有注册。没有则创建+注册
+    #if 0
     for (auto &[srcDefOp, sz] : allocLocalsToReplace) {
       rewriter.setInsertionPoint(srcDefOp);
       auto oldBuffer = srcDefOp->getResult(0);
@@ -1295,6 +1369,11 @@ public:
         rewriter.eraseOp(srcDefOp);
       }
     }
+    #endif
+    
+    // 新逻辑：
+    // op.walk([](mlir::){});
+    
     // 删除原 blockOp（连同其 body 一起消除）
     rewriter.eraseOp(op);
 
@@ -2058,6 +2137,40 @@ public:
   }
 };
 
+
+/// 获取与 affine.store 索引直接或间接相关的全部 AffineForOp
+template<typename LoadStoreOp>
+static std::vector<affine::AffineForOp> getIndexAssociatedForLoops(LoadStoreOp storeOp) {
+    llvm::SetVector<affine::AffineForOp> associatedLoops;
+    llvm::SetVector<Value> worklist;
+
+    // 1. 获取 affine.store 的所有索引映射操作数 (Map Operands)
+    for (Value operand : storeOp.getMapOperands()) {
+        worklist.insert(operand);
+    }
+    // 2. BFS/DFS 追溯 SSA 依赖
+    size_t index = 0;
+    while (index < worklist.size()) {
+      Value current = worklist[index++];
+      // 检查 A：当前 Value 是否为某个 affine.for 的循环变量 (IV)
+      if (affine::AffineForOp forOp = affine::getForInductionVarOwner(current)) {
+        associatedLoops.insert(forOp);
+        continue;
+      }
+      // 检查 B：如果是由其他计算指令（如 affine.apply）生成的，追溯其输入 operands
+      if (Operation *defOp = current.getDefiningOp()) {
+        for (Value operand : defOp->getOperands()) {
+          worklist.insert(operand);
+        }
+      }
+    }
+    std::vector<affine::AffineForOp> forOps {associatedLoops.begin() , associatedLoops.end()};
+    llvm::sort(forOps, [](affine::AffineForOp a, affine::AffineForOp b) {
+      return a->isAncestor(b);
+    });
+    return forOps;
+}
+
 // fillop -> 点对点赋值
 class FillOpRewrite : public OpConversionPattern<frisk::FillOp> {
 public:
@@ -2067,11 +2180,13 @@ public:
     auto memref = adaptor.getMemref();
     auto memrefType = mlir::cast<MemRefType>(memref.getType());
     auto loc = op->getLoc();
+    // Local memory spaces (including the legacy value 5) represent registers.
+    bool isRegFill = isLocalMemref(memref);
 
     std::vector<int> loopUpperBounds;
     loopUpperBounds.reserve(memrefType.getRank());
     SmallVector<int64_t> fillShape(memrefType.getShape());
-    if (s_info && isLocalMemref(op.getMemref()) && memrefType.getRank() == 2) {
+    if (s_info && isRegFill && memrefType.getRank() == 2) {
       LowerInfo *lowerInfo = s_info->getLowerInfo(op.getMemref(), op.getOperation());
       if (!lowerInfo) {
         for (auto &entry : *s_info) {
@@ -2099,6 +2214,28 @@ public:
     if (!valueAttr) {
       return rewriter.notifyMatchFailure(op, "fill value must be typed");
     }
+    // if(isRegFill){
+    //   auto vecType = VectorType::get(fillShape, memrefType.getElementType());
+    //   auto initValAttr = mlir::DenseElementsAttr::get(vecType, 0.0f);
+    //   auto newVector = rewriter.create<arith::ConstantOp>(op->getLoc(), vecType,  initValAttr);
+      
+    //   auto oldBuffer = op.getMemref();
+    //   DenseMap<mlir::Operation*, mlir::Operation*> mapping;
+    //   for(auto user : oldBuffer.getUsers()){
+    //     rewriter.setInsertionPoint(user);
+    //     if(auto userOp = mlir::dyn_cast<affine::AffineStoreOp>(user)){
+    //       auto loops = getIndexAssociatedForLoops(userOp);
+    //       for()
+    //     }
+    //     if(auto userOp = mlir::dyn_cast<affine::AffineLoadOp>(user)){
+          
+    //     }
+    //   }
+    // }
+
+    // Keep the memref value type in this conversion.  Replacing an alloc's
+    // memref result with a vector here would invalidate all affine users;
+    // vectorization must rewrite the complete use-def chain in a later pass.
     auto val = rewriter.create<arith::ConstantOp>(
         loc, memrefType.getElementType(), valueAttr);
     std::vector<Value> ivs;
@@ -2107,6 +2244,11 @@ public:
                                            ValueRange{ivs});
     if (!loops.empty()) {
       rewriter.setInsertionPointAfter(loops.front());
+    }
+    if(isRegFill && !loops.empty()){
+      rewriter.modifyOpInPlace(loops.front(), [&](){
+        loops.front()->setAttr(REG_FILL_SEMATIC, valueAttr);
+      });
     }
     rewriter.eraseOp(op);
     return success();
@@ -2305,6 +2447,7 @@ public:
     // 根据 layout推定结果，插入 convertLAyoutOp
     insertConvertLayoutOps(*s_info);
 
+
     ConversionTarget t0(*context);
   
     t0.addLegalDialect<
@@ -2335,6 +2478,19 @@ public:
     llvm::outs() << kernel << "\n"; llvm::outs().flush();
 
     // -------- step 2 : 替换copy fill convertLayout
+  
+    TypeConverter tc;
+    tc.addConversion([](Type type) { return type; });
+
+    tc.addTargetMaterialization(
+        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+          return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
+        });
+    tc.addSourceMaterialization(
+        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+          return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
+        });
+
     ConversionTarget t1(*context);
     t1.addLegalDialect<
       frisk::FriskDialect,
@@ -2353,7 +2509,7 @@ public:
     RewritePatternSet p1(context);
     p1.add<
       CopyOpRewrite, FillOpRewrite, ConvertLayoutOpConversion
-    >(context);
+    >(tc, context);
     llvm::outs() << "---- after convert copy /fill/ convLayout \n" ;
     applyPartialConversion(kernel, t1, std::move(p1));
     llvm::outs() << kernel << "\n"; llvm::outs().flush();
@@ -2383,7 +2539,7 @@ public:
     // -------- step 4 生命周期分析。buffer 复用优化
     LivelinessAnalyzer liveliness;
     liveliness.run(kernel);
-    applyBufferReuse(kernel, liveliness);
+    // applyBufferReuse(kernel, liveliness);
 
   }
 };

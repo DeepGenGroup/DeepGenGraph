@@ -460,8 +460,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddKernelPass(frisk::createFriskFuseBlockOpsPass());
   llvm::outs() << "\n---------- after createFriskFuseBlockOpsPass ---------\n"; llvm::outs().flush();src->dump();
 
-  AddKernelPass(frisk::createFuseBlockOpWithDTypeConvertOpPass());
-  llvm::outs() << "\n---------- after createFuseBlockOpWithDTypeConvertOpPass ---------\n"; llvm::outs().flush();src->dump();
+  // AddKernelPass(frisk::createFuseBlockOpWithDTypeConvertOpPass());   // 有问题
+  // llvm::outs() << "\n---------- after createFuseBlockOpWithDTypeConvertOpPass ---------\n"; llvm::outs().flush();src->dump();
 
   AddPass(frisk::createConvertFriskToBasePass());
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
@@ -478,13 +478,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPassNested(mlir::bufferization::createBufferHoistingPass());
   AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
   AddPass(mlir::createCanonicalizerPass());
-  mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
-  AddPassNested(mlir::affine::createAffineVectorize(opt));
-  AddPassNested( mlir::affine::createLoopUnrollPass() );
-  AddPassNested( mlir::affine::createLoopFusionPass( int(frisk::friskMs::Local) ) );
-
-  AddPassNested(mlir::createMem2Reg());
-
+  // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
+  // AddPassNested(mlir::affine::createAffineVectorize(opt));
+  
+  AddPassNested( mlir::affine::createLoopFusionPass());
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
 
@@ -492,8 +489,27 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
   
   AddPass(frisk::createThreadLevelIRLegalizePass());
+  AddPass(mlir::createLoopInvariantCodeMotionPass());
+  AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after threadIR legalize -----\n"; llvm::outs().flush(); src->dump();
+  // legalize 后，对剩余表示 reg的memref进行处理，将其 变成vector
+  // AddPassNested(mlir::frisk::createRegMemrefVectorizePass());
+  // llvm::outs() << "\n---------- after createRegMemrefVectorizePass ---------\n"; llvm::outs().flush();src->dump();
   
+  mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
+  AddPassNested(mlir::affine::createAffineVectorize(opt));
+  AddPass(mlir::createCSEPass());
+  AddPass(mlir::createCanonicalizerPass());
+  llvm::outs() << "\n---- after first vectorize -----\n"; llvm::outs().flush(); src->dump();
+  AddPassNested(mlir::affine::createAffineScalarReplacementPass());
+  AddPassNested(mlir::affine::createLoopUnrollPass());
+  AddPassNested(mlir::affine::createAffineLoopNormalizePass());
+  AddPassNested(mlir::createMem2Reg());
+  AddPass(mlir::createCanonicalizerPass());
+  llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
+
+  
+  #if 0
   mlir::ModuleOp mod = *src;
   frisk::firstLowering(mod, src->getContext());
   frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm);
@@ -524,6 +540,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     printLegacyCompatibleLLVMIR(*llvmModule, os);
     llvm::outs() << "[d] llvmIR 已输出到 finalLLVMText.ll\n" ; llvm::outs().flush();
   }
+  #endif
   return 0;
 }
 

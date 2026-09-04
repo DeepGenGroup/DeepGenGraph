@@ -890,11 +890,11 @@ struct ConvertOpConversionPattern : public OpConversionPattern<dg::ConvertOp> {
       auto newMemTy = mlir::dyn_cast<MemRefType>(convertedTy);
       auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
       frisk::AllocBufferOp allocBuffer {};
-      {
-        RewriterBase::InsertionGuard ig{rewriter};
-        rewriter.setInsertionPoint(outerMostFor);
+      
+        // RewriterBase::InsertionGuard ig{rewriter};
+        // rewriter.setInsertionPoint(outerMostFor);
         allocBuffer = rewriter.create<frisk::AllocBufferOp>(loc, newMemTy.getShape(), newMemTy.getElementType(), 16, outMs);
-      }
+      
       auto copyOp = rewriter.create<frisk::CopyOp>(loc, adaptor.getOperand(), allocBuffer);
       
       rewriter.replaceOp(op, allocBuffer);
@@ -1227,8 +1227,8 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
     mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
     frisk::AllocBufferOp memC {} ;
     {
-      RewriterBase::InsertionGuard ig{rewriter};
-      rewriter.setInsertionPoint(currOp);
+      // RewriterBase::InsertionGuard ig{rewriter};
+      // rewriter.setInsertionPoint(currOp);
       memC = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), cshape, op.getAccType(), 16, outMs[0]);
     }
     if(CalcOpToFriskOption::useTensorCore){
@@ -1313,8 +1313,8 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
     mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
     frisk::AllocBufferOp alloc {} ;
     {
-      RewriterBase::InsertionGuard ig{rewriter};
-      rewriter.setInsertionPoint(currOp);
+      // RewriterBase::InsertionGuard ig{rewriter};
+      // rewriter.setInsertionPoint(currOp);
       alloc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), resultShape, resultTensorType.getElementType(), 16, outMs[0]);
     }
     std::vector<int64_t> ranges(resultShape.begin(), resultShape.end());
@@ -1376,6 +1376,7 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
       }
 
       Value ret;
+      mlir::Operation* newOp {};
       Type lhsType = lhs.getType();
       if (isa<dg::AddOp>(op.getOperation())) {
         if (isa<FloatType>(lhsType))
@@ -1392,6 +1393,7 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
           ret = rewriter.create<arith::MulFOp>(blockOp->getLoc(), lhs, rhs);
         else
           ret = rewriter.create<arith::MulIOp>(blockOp->getLoc(), lhs, rhs);
+        // frisk::AppendNameToLoc();
       } else if (isa<dg::DivOp>(op.getOperation())) {
         if (isa<FloatType>(lhsType))
           ret = rewriter.create<arith::DivFOp>(blockOp->getLoc(), lhs, rhs);
@@ -1451,8 +1453,8 @@ struct Exp2OpConversionPattern : public OpConversionPattern<dg::Exp2Op> {
     mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
     frisk::AllocBufferOp buffer {};
     {
-      RewriterBase::InsertionGuard ig{rewriter};
-      rewriter.setInsertionPoint(currOp);
+      // RewriterBase::InsertionGuard ig{rewriter};
+      // rewriter.setInsertionPoint(currOp);
       buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType(), 16, outMs[0]);
     }
 
@@ -1487,8 +1489,8 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
     mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
     frisk::AllocBufferOp buffer {};
     {
-      RewriterBase::InsertionGuard ig{rewriter};
-      rewriter.setInsertionPoint(currOp);
+      // RewriterBase::InsertionGuard ig{rewriter};
+      // rewriter.setInsertionPoint(currOp);
       buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType(), 16, outMs[0]);
     }
       // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value src, ::mlir::Value dst, ::mlir::StringAttr kind, ::mlir::IntegerAttr dim);
@@ -1588,9 +1590,9 @@ struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
     frisk::AllocBufferOp buffer = nullptr;
     {
-      RewriterBase::InsertionGuard ig{rewriter};
-      auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
-      rewriter.setInsertionPoint(outerMostFor);
+      // RewriterBase::InsertionGuard ig{rewriter};
+      // auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
+      // rewriter.setInsertionPoint(outerMostFor);
       buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getSizes(), op.getElementType(), 16, outMs[0]);
     }
     auto starts = op.getStarts();

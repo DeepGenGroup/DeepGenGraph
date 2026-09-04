@@ -192,8 +192,8 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
       cfOptions)); // cf -> llvm
   // pm.addPass(createConvertArithIndexToI64Pass());                      // 自定义 将arith中的constantOp的result为index类型的Op全部转成result为i64的op
 
-  pm.addPass(createVectorToLLVMPass(kLLVMIndexBitwidth)); // 自定义 vector to llvm pass
-  // pm.addPass(mlir::createConvertVectorToLLVMPass());                       // vector -> llvm
+  // pm.addPass(createVectorToLLVMPass(kLLVMIndexBitwidth)); // 自定义 vector to llvm pass
+  pm.addPass(mlir::createConvertVectorToLLVMPass());                       // vector -> llvm
 
   FinalizeMemRefToLLVMConversionPassOptions memrefOptions;
   memrefOptions.indexBitwidth = kLLVMIndexBitwidth;              // 使用 i64 index，避免 malloc 参数/ptrtoint 生成 i32

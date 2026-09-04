@@ -13,6 +13,7 @@
 
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
@@ -101,7 +102,11 @@ struct MemAllocOpConversion : public OpConversionPattern<memref::AllocOp> {
   LogicalResult matchAndRewrite(memref::AllocOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     auto memTy = mlir::cast<MemRefType>(op.getResult().getType());
     if(memTy.getMemorySpaceAsInt() != (int)friskMs::Shared){
-      return failure();
+      // 出现了 memref.alloc 分配local mem的句子。需要转为 alloca
+      assert(memTy.getMemorySpaceAsInt() == (int)friskMs::Local);
+      auto newAlloca = rewriter.create<memref::AllocaOp>(op->getLoc(), memTy );
+      rewriter.replaceOp(op, newAlloca);
+      return success();
     }
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     assert(mod != nullptr);
@@ -196,7 +201,7 @@ public:
     std::vector<mlir::func::FuncOp> funcToRemove{};
     std::vector<mlir::func::FuncOp> validKernels{};
     module->walk([&funcToRemove, &validKernels](mlir::func::FuncOp f){
-      if(!f->hasAttr("thread_num")){
+      if(!f->hasAttr(THREAD_NUM)){
         funcToRemove.push_back(f);
       }
       else{

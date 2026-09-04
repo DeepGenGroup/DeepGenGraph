@@ -3,6 +3,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   GPUToNvvmRocdl.cpp
   TranslateToLLVM.cpp
   LowerPipe.cpp
+  VectorizeRegMemref.cpp
 
   DEPENDS
   ThreadToLLVMPasseIncGen

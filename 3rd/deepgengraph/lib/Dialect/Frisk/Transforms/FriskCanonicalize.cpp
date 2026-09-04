@@ -30,6 +30,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
 #include <cstdint>
@@ -55,6 +56,7 @@ struct BlockOpBorderInfo{
   BlockOp blockOp  {};
   SmallVector<affine::AffineLoadOp> ins {};
   affine::AffineStoreOp out {};
+  std::set<mlir::Operation*> bufferDefOps {};  // frisk.allocbuffer 分配mem，用来进行load和store
 };
 
 // 获取 blockOp内的边界RW buffer（外界通信buffer）
@@ -64,12 +66,14 @@ static BlockOpBorderInfo* GetInterfaceRWBufferOfBlockOps(BlockOp blockOp){
     auto loadDefOp = loadOp.getMemref().getDefiningOp();
     if(loadDefOp== nullptr || loadDefOp->getParentOp() != blockOp){
       info->ins.push_back(loadOp);
+      info->bufferDefOps.insert(loadDefOp);
     }
   });
   blockOp->walk([&](affine::AffineStoreOp storeOp){
     auto storeDefOp = storeOp.getMemref().getDefiningOp();
     if(storeDefOp==nullptr || storeDefOp->getParentOp() != blockOp){
       info->out = storeOp;
+      info->bufferDefOps.insert(storeDefOp);
     }
   });
   if(info->ins.empty() && info->out == nullptr){
@@ -236,74 +240,65 @@ struct FuseBlockOps : public PassWrapper<FuseBlockOps, OperationPass<frisk::Kern
     
     std::vector<BlockOpBorderInfo*> infoArr;
     kernelOp->walk<WalkOrder::PreOrder>([&](frisk::BlockOp blockOp){
-      auto info = GetInterfaceRWBufferOfBlockOps( blockOp);
+      auto info = GetInterfaceRWBufferOfBlockOps(blockOp);
       infoArr.push_back(info);
     });
-    
-    int i = 0;
-    while(i+1 < infoArr.size()){
-      // 以 infoArr[baseIndex] 为基准，尽可能将后续 blockOp融合进该Op内
-      while(infoArr[i] == nullptr && i < infoArr.size()){
+
+    DenseMap<mlir::Operation*, int> opOrder;
+    int order = 0;
+    kernelOp.walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
+      opOrder.insert({subOp, order++});
+    });
+
+    size_t i = 0;
+    while (i + 1 < infoArr.size()){
+      while (i < infoArr.size() && infoArr[i] == nullptr){
         i++;
       }
-      if(i+1 >= infoArr.size()){
+      if (i + 1 >= infoArr.size()){
         break;
       }
+
       BlockOp baseOp = infoArr[i]->blockOp;
       affine::AffineStoreOp baseStore = infoArr[i]->out;
-      // 检查base之后的info。如果info[j].ins 含有 base.outs, 则将 info[j].blockOp 融合进 base.blockOp
-      for(int j=i+1;j<infoArr.size();++j){
-        if(infoArr[j] == nullptr){
-          continue;
-        }
-        if(infoArr[j]->blockOp->getBlock() != baseOp->getBlock()){
-          continue;
-        }
+
+      for (size_t j = i + 1; j < infoArr.size(); ++j){
+        if (infoArr[j] == nullptr) continue;
+        if (infoArr[j]->blockOp->getBlock() != baseOp->getBlock()) continue;
+
         auto ld = checkStoreDstMemIsLoadSrcMem(infoArr[j]->ins, baseStore.getMemref());
-        if(ld != nullptr){
-          // load的结果直接替换为 baseStore 的value
-          // 删除冗余的 store/load 对
-          ld.replaceAllUsesWith(baseStore.getValue());
+        if (ld != nullptr) {
+          // 1. 将目标 BlockOp 的 Buffer 定义指令前移到基准 BlockOp 之前
+          for(auto defOp : infoArr[j]->bufferDefOps) {
+            if(opOrder[defOp] > opOrder[infoArr[i]->blockOp]){
+              defOp->moveBefore(infoArr[i]->blockOp);
+            }
+          }
+          // 2. 将 load 的结果直接替换为 baseStore 的 value
+          ld.getResult().replaceAllUsesWith(baseStore.getValue());
+
+          // 3. 【关键改动】先擦除对中间 Buffer 引用的 load 与 store 指令
           ld->erase();
           baseStore->erase();
-          MergeBlockOps(infoArr[j]->blockOp, baseOp);  // 融合
-          baseStore = infoArr[j]->out;  // 更新baseStore
+
+          // 4. 执行 BlockOp 的融合逻辑
+          auto nextOut = infoArr[j]->out;
+          MergeBlockOps(infoArr[j]->blockOp, baseOp);
+          // 5. 更新 baseStore 为后一个 BlockOp 的输出 Store
+          baseStore = nextOut;
+
           delete infoArr[j]; 
-          infoArr[j] = nullptr;  // 释放无用信息
+          infoArr[j] = nullptr;
         }
       }
+      
+      // 清理当前 base 的 info 内存（防泄漏）
+      delete infoArr[i];
+      infoArr[i] = nullptr;
       i++;
-    }
-    
-    SmallVector<frisk::AllocBufferOp> dumpBufferAllocOps ;
-    kernelOp->walk([&](frisk::AllocBufferOp allocOp){
-      if(allocOp->getUsers().empty()){
-        dumpBufferAllocOps.push_back(allocOp);
-      }
-    });
-    for(auto op : dumpBufferAllocOps){
-      op->erase();
-    }
-
-    SmallVector<BlockOp, 8> blockOps;
-    kernelOp->walk<WalkOrder::PreOrder>([&](BlockOp blockOp) {
-      blockOps.push_back(blockOp);
-    });
-
-    OpBuilder builder(kernelOp->getContext());
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (BlockOp blockOp : blockOps) {
-        if (blockOp->getParentOp() == nullptr) {
-          continue;
-        }
-        changed |= sinkBlockStoreToCopyDst(blockOp, builder);
-      }
     }
   }
 };
-
 
 // blockOp与 相连的 frisk.copy 融合（当copy具有 dtype类型转换的语义时）
 struct FuseBlockOpWithTypeConversion : public PassWrapper<FuseBlockOpWithTypeConversion, OperationPass<frisk::KernelOp>> {
@@ -378,7 +373,7 @@ struct FuseBlockOpWithTypeConversion : public PassWrapper<FuseBlockOpWithTypeCon
           auto affineStoreMemrefDefOp = info->out.getMemref().getDefiningOp();
           info->out->erase();
           cp->erase();
-          if(affineStoreMemrefDefOp){
+          if(affineStoreMemrefDefOp && affineStoreMemrefDefOp->use_empty()){
             // 删除原本用于进行 类型转换创建的 中介memref allocOp
             affineStoreMemrefDefOp->erase();
           }

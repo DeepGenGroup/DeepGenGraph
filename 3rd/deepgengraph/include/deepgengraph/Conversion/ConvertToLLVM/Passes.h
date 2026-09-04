@@ -8,6 +8,7 @@ namespace mlir::frisk {
 
 std::unique_ptr<Pass> createGPUToROCDLOrNVVMPass(Target target, unsigned indexBitwidth);
 std::unique_ptr<mlir::Pass> createThreadLevelIRLegalizePass();
+std::unique_ptr<mlir::Pass> createRegMemrefVectorizePass();
 std::unique_ptr<OperationPass<ModuleOp>> createLLVMFuncOpAddGPUAttrPass(Target target);
 std::unique_ptr<OperationPass<ModuleOp>> createAmendAllocaOpAddrSpacePass(Target target);
 

@@ -15,4 +15,15 @@ def ThreadLevelIRLegalize: Pass<"thread-ir-legalize", "::mlir::ModuleOp"> {
   ];
 }
 
+def RegMemrefVectorize: Pass<"reg-memref-vectorize", "func::FuncOp"> {
+  let summary = "legalize后，将表达reg的memref改为 vector类型";
+  let description = [{}];
+
+  let constructor = "mlir::frisk::createRegMemrefVectorizePass()";
+
+  let dependentDialects = [
+    "mlir::frisk::FriskDialect"
+  ];
+}
+
 #endif // THREADIR_TO_LLVM_CONVERSION_PASSES

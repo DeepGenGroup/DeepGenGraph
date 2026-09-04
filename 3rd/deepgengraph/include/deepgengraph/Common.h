@@ -73,6 +73,7 @@ struct TargetInfo {
 
 constexpr char* GRID_DIM =   "grid_dims" ;
 constexpr char* THREAD_NUM =   "thread_num" ;
+constexpr char* REG_FILL_SEMATIC =   "reg_fill_sematic" ;
 
 struct KernelConfig {
   std::array<int,3> gridDimXYZ = {0,0,0};
