@@ -880,21 +880,27 @@ public:
   }
 };
 
-struct RegInfoNode {
-  RegInfoNode* next = nullptr;
-  mlir::Value repVector {};
+struct BufferUseRecord {
+  int opId = 0;
+  mlir::Value repVector {};  // 替换memref的vector
 };
 
+struct Recorder {
+  std::vector<BufferUseRecord> records;
+  int curr = 0;  // 表示当前应该使用哪个做替换
+};
+
+
 static void GetRegToVectorMapping(func::FuncOp kernel, OpBuilder& b){
-
-  static DenseMap<mlir::Value, RegInfoNode*> localBufferMap;  // key=memref local, val=替换的vector。
-
+  
+  static DenseMap<mlir::Value, Recorder*> localBufferMap;  // key=memref local, val=替换的vector。
+  
   DenseMap<mlir::Operation*, int> opOrder;
   int order = 0;
   kernel->walk<WalkOrder::PreOrder>([&](mlir::Operation* childOp){
     opOrder.insert({childOp, order++});
   });
-
+  
   // 遍历 allocbufferOp，建立vector 初始值
   kernel.walk([&](frisk::AllocBufferOp alloc){
     if(alloc.getMemorySpace() == uint64_t(friskMs::Local)){
@@ -906,15 +912,15 @@ static void GetRegToVectorMapping(func::FuncOp kernel, OpBuilder& b){
       auto newVec = b.create<arith::ConstantOp>(alloc->getLoc(), vecTy, valAttr);
       auto it = localBufferMap.find(oldRegMemref);
       if(it == localBufferMap.end()){
-        auto node = new RegInfoNode{ nullptr, newVec };
-        localBufferMap.insert({oldRegMemref, node});
+        Recorder* r = new Recorder();
+        BufferUseRecord record;
+        record.repVector = newVec;  
+        record.opId= -1;  // 表示初始生产者
+        r->records.push_back(record);
+        localBufferMap.insert({oldRegMemref, r});
       }
       else{
-        auto workPtr = localBufferMap[oldRegMemref];
-        while(workPtr->next == nullptr) { 
-          workPtr = workPtr->next; 
-        }
-        workPtr->next = new RegInfoNode{ nullptr, newVec };
+        assert(false);  // 不可能比alloc 更早
       }
     }
   });
@@ -923,9 +929,51 @@ static void GetRegToVectorMapping(func::FuncOp kernel, OpBuilder& b){
   kernel->walk<WalkOrder::PreOrder>([&](mlir::affine::AffineLoadOp load){
     ;
   });
+  // 写memref ： 按照vector语义 会产生一个新的vector。需用新的替代 membuf
   kernel->walk<WalkOrder::PreOrder>([&](mlir::affine::AffineStoreOp store){
-    ;
+    // 伪代码
+    auto oldmem = store.getMemref();
+    auto it = localBufferMap.find(oldmem);
+    assert(it != localBufferMap.end());
+    b.setInsertionPoint(store);
+    auto vecInsert = b.create<vector::Insertop>();
+    BufferUseRecord record;
+        record.repVector = vecInsert.getResult();  
+        record.opId= opOrder.find(store)->second;  
+    it->second->records.push_back(record);
   });
+  kernel->walk<WalkOrder::PreOrder>([&](frisk::CopyOp copy){
+    // 伪代码
+    auto oldmem = copy.getDst();
+    auto it = localBufferMap.find(oldmem);
+    assert(it != localBufferMap.end());
+    b.setInsertionPoint(copy);
+    // 从memref copy到reg，暂且用 vec.transfer_read 表示
+    auto newOp = b.create<vector::TransferReadOp>();
+    BufferUseRecord record;
+    record.repVector = newOp.getResult();  
+    record.opId= opOrder.find(copy)->second;  
+    it->second->records.push_back(record);
+  });
+  kernel->walk<WalkOrder::PreOrder>([&](frisk::GemmOp gemm){
+    // 伪代码
+    auto oldmem = gemm.getAcc();
+    auto it = localBufferMap.find(oldmem);
+    assert(it != localBufferMap.end());
+    b.setInsertionPoint(gemm);
+    // gemm 直接写入到 vector，需要修改下 gemmOp。让其返回一个 vector（or新建一个 gemmOp？）
+    auto newOp = b.create<frisk::GemmOpUseVec>();
+    BufferUseRecord record;
+        record.repVector = newOp.getResult();  
+        record.opId= opOrder.find(store)->second;  
+    it->second->records.push_back(record);
+  });
+  
+
+  // 对 localBufferMap 的每一项，按opId排序
+  // Pattern 里：
+    // 按顺序扫描 每一个record，替换掉 memref。替换时，vector的大小应该符合 thread_own_data_sz
+
 
 }
 
