@@ -181,3 +181,16 @@ git clone https://github.com/monellz/FlashTensor-AE.git ppopp25_ae
 cd ~/ppopp25_ae
 ./script/install.sh
 ```
+
+## 补充：基于asuka的MLIR后端编译器（FriskIR）
+设计：
+```
+asuka(tensor, ptr<tensor>)   
+-> block-level friskIR(memref) 用memref 统一buffer表达，去掉指针语义，明确使用索引代替。计算部分也采用memref表达，暂且不用blockOp打散        
+-> memspace 分析。明确buffer的内存空间   
+-> 给 memref加 memspace 属性（type修改）  
+-> block-level friskIR+vector(memref + vector) 明确寄存器(vector) 和显存/shm(memref),区分可寻址/不可寻址   
+-> LowerInfoAnalysis, 进行布局推定(gemmOp作为基准，向两侧传播。遇到冲突时按TheadOwnDataSz 最大值协商)  
+-> thread-level friskIR+vector(根据LowerInfo 切分到线程级别表示.此时可引入blockOp，便于融合loop )    
+-> 复用Deepgen Lower Piepline，完成后续下降到llvm+rocdl/nvvm    
+```
