@@ -22,13 +22,10 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultRank
 
 
 // Op Base
-class Frisk_Op<string mnemonic, list<Trait> traits = []> : 
+class Frisk_Op<string mnemonic, list<Trait> traits = []> :
   Op<Frisk_Dialect, mnemonic, traits>;
 
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
-
-// def MemRefOrVector : AnyTypeOf<[AnyMemRef], "memref or vector type">;
-// def MemRefOrVector : AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank], "memref or vector type">;
 
 // KernelOp
 def Frisk_KernelOp : Frisk_Op<"kernel", [
@@ -106,7 +103,7 @@ def Frisk_KernelOp : Frisk_Op<"kernel", [
 // parallelOp
 def Frisk_ParallelOp : Frisk_Op<"parallel", [
   HasParent<"KernelOp">,
-  ImplicitFriskTerminator, AffineScope, 
+  ImplicitFriskTerminator, AffineScope,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>
 ]> {
   let summary = "parallel opeartion";
@@ -134,8 +131,8 @@ def Frisk_ParallelOp : Frisk_Op<"parallel", [
       return ranges;
     }
 
-    unsigned getGridDims() { 
-      return getRangesAttr().size(); 
+    unsigned getGridDims() {
+      return getRangesAttr().size();
     }
 
     int64_t getThreadNum() {
@@ -183,7 +180,7 @@ def Frisk_BlockOp : Frisk_Op<"block", [RecursiveMemoryEffects, ImplicitFriskTerm
   let regions = (region SizedRegion<1>:$region);
 
   let builders = [
-    OpBuilder<(ins "ArrayRef<int64_t>":$ranges, 
+    OpBuilder<(ins "ArrayRef<int64_t>":$ranges,
                CArg<"function_ref<void(ValueRange)>", "nullptr">:$bodyBuilder)>
   ];
 
@@ -230,11 +227,11 @@ def Frisk_ForOp : Frisk_Op<"for", [RecursiveMemoryEffects, ImplicitFriskTerminat
 
   let regions = (region SizedRegion<1>:$region);
 
-  let builders = [OpBuilder<(ins "int64_t":$lowerBound, 
+  let builders = [OpBuilder<(ins "int64_t":$lowerBound,
                   "int64_t":$upperBound,
-              CArg<"int64_t", "1">:$step, 
+              CArg<"int64_t", "1">:$step,
               CArg<"function_ref<void(Value)>", "nullptr">:$bodyBuilder)>];
-  
+
   let extraClassDeclaration = [{
     using BodyBuilderFn = function_ref<void(Value)>;
 
@@ -279,15 +276,16 @@ def Frisk_GemmOp: Frisk_Op<"gemm", [MemoryEffects<[MemWrite]>, MemoryEffects<[Me
   let summary = "General matrix multiplication operation";
   let description = [{}];
   let arguments = (ins
-    AnyMemRef:$A,  // shm
-    AnyMemRef:$B,
-    AnyMemRef:$C,
+    Frisk_ScalarOrMemRefOrVector:$A,  // shm
+    Frisk_ScalarOrMemRefOrVector:$B,
 
     BoolAttr:$transA,
-    BoolAttr:$transB 
+    BoolAttr:$transB
   );
 
-  let results = (outs);
+  let results = (outs
+    Frisk_ScalarOrMemRefOrVector:$C
+  );
 
   let extraClassDeclaration = [{
     Value getMatrixA() { return getA(); }
@@ -300,9 +298,8 @@ def Frisk_GemmOp: Frisk_Op<"gemm", [MemoryEffects<[MemWrite]>, MemoryEffects<[Me
                                       llvm::DenseMap<::mlir::Value, ::mlir::Attribute> &layoutMap);
   }];
 
-
   let hasVerifier = 1;
-  let assemblyFormat = " `(` $A `,` $B `)` `to` $C attr-dict `:` type($A) `,` type($B) `,` type($C)";
+  let assemblyFormat = " `(` $A `,` $B `)` attr-dict `:` type($A) `,` type($B) `->` type($C)";
 }
 
 // ifOp
@@ -336,7 +333,7 @@ def Frisk_WarpGroupOp : Frisk_Op<"warp_group", [RecursiveMemoryEffects, Implicit
   let builders = [
     OpBuilder<(ins "uint64_t":$warpGroupNum)>
   ];
-  
+
   let extraClassDeclaration = [{
 
   }];
@@ -398,18 +395,18 @@ def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [MemoryEffects<[MemRead]>]> {
 // alloc buffer
 def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [MemoryEffects<[MemAlloc]>]> {
   let summary = "allocate buffer operation";
-  let description = [{ 
+  let description = [{
     Allocates a buffer with the specified shape, element type and optional attributes.
   }];
 
-  let arguments = (ins 
+  let arguments = (ins
     DenseI64ArrayAttr:$shape,
     TypeAttr:$elementType,
     DefaultValuedAttr<I64Attr, "0">:$alignment,
     DefaultValuedAttr<I64Attr, "0">:$memorySpace
   );
 
-  let results = (outs 
+  let results = (outs
     Res<AnyMemRef>:$result
   );
 
@@ -420,15 +417,15 @@ def Frisk_AllocBufferOp: Frisk_Op<"alloc_buffer", [MemoryEffects<[MemAlloc]>]> {
   ];
 
   let extraClassDeclaration = [{
-    MemRefType getMemRefType() { 
-      return cast<MemRefType>(getResult().getType()); 
+    MemRefType getMemRefType() {
+      return cast<MemRefType>(getResult().getType());
     }
-    
+
     // 根据 memorySpace 获取 scope
     StringRef getScope() {
       switch (getMemorySpace()) {
         case 0: return "local";
-        case 1: return "global"; 
+        case 1: return "global";
         case 3: return "shared";
         case 5: return "local";
         default: return "unknown";
@@ -448,17 +445,17 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   let summary = "copy data with affine-based destination offset";
   let description = [{
     The `copy` operation performs a memory copy from a source memref to a destination memref.
-    The destination address is calculated using an affine map applied to the provided 
+    The destination address is calculated using an affine map applied to the provided
     map_operands.
-    
+
     Example:
-      frisk.copy %src to %dst at (%i, %j) [affine_map<(d0, d1) -> (0, 0, d0, d1)>] 
+      frisk.copy %src to %dst at (%i, %j) [affine_map<(d0, d1) -> (0, 0, d0, d1)>]
         : memref<64x32xf32>, memref<1x32x1024x128xf32>
   }];
 
-  let arguments = (ins 
-    Arg<AnyMemRef>:$src,
-    Arg<AnyMemRef>:$dst,
+  let arguments = (ins
+    Arg<Frisk_MemRefOrVector>:$src,
+    Arg<Frisk_MemRefOrVector>:$dst,
     Variadic<Index>:$map_operands,
     AffineMapAttr:$offset_map
   );
@@ -466,7 +463,7 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   let builders = [
     // 构造器 1: 默认构造器，自动生成全零偏移映射
     OpBuilder<(ins "Value":$src, "Value":$dst), [{
-      auto dstType = cast<MemRefType>(dst.getType());
+      auto dstType = cast<ShapedType>(dst.getType());
       auto offsetMap = AffineMap::getConstantMap(dstType.getRank(), $_builder.getContext());
       build($_builder, $_state, src, dst, ValueRange{}, offsetMap);
     }]>
@@ -480,7 +477,7 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   ];
 
   let assemblyFormat = [{
-    $src `to` $dst (`at` `(` $map_operands^ `)`)? `[` $offset_map `]` attr-dict 
+    $src `to` $dst (`at` `(` $map_operands^ `)`)? `[` $offset_map `]` attr-dict
     `:` type($src) `,` type($dst)
   }];
 
@@ -492,15 +489,126 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
   }];
 }
 
+// copy
+def Frisk_CopyToRegOp : Frisk_Op<"copy_to_reg", [
+    MemoryEffects<[MemRead, MemWrite]>,
+    DeclareOpInterfaceMethods<OpAsmOpInterface>
+]> {
+  let summary = "copy data with affine-based destination offset";
+  let description = [{
+    The `copy` operation performs a memory copy from a source memref to a destination memref.
+    The destination address is calculated using an affine map applied to the provided
+    map_operands.
+
+    Example:
+      frisk.copy %src to %dst at (%i, %j) [affine_map<(d0, d1) -> (0, 0, d0, d1)>]
+        : memref<64x32xf32>, memref<1x32x1024x128xf32>
+  }];
+
+  let arguments = (ins
+    Arg<AnyMemRef>:$src,
+    Variadic<Index>:$map_operands,
+    AffineMapAttr:$offset_map
+  );
+
+  let results = (outs
+    AnyVectorOfNonZeroRank:$result
+  );
+
+  let builders = [
+    // 构造器: 传入返回类型 (vector) 与输入 memref
+    OpBuilder<(ins "Type":$resultType, "Value":$src), [{
+      auto srcType = cast<MemRefType>(src.getType());
+      auto offsetMap = AffineMap::getConstantMap(srcType.getRank(), $_builder.getContext());
+      build($_builder, $_state, resultType, src, ValueRange{}, offsetMap);
+    }]>
+  ];
+
+
+  let assemblyFormat = [{
+    $src (`at` `(` $map_operands^ `)`)? `[` $offset_map `]` attr-dict
+    `:` type($src) `->` type($result)
+  }];
+
+  // let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    Value getSrcMemRef() { return getOperand(0); }
+  }];
+}
+
+
+
+// 2. 定义通用的二元算子基类模板
+class Frisk_ArithmeticOp<string mnemonic, list<Trait> traits = []> :
+    Frisk_Op<mnemonic, !listconcat(traits, [MemoryEffects<[MemRead]>])> {
+
+  let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
+  let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
+
+  let arguments = (ins
+    Frisk_ScalarOrMemRefOrVector:$lhs,
+    Frisk_ScalarOrMemRefOrVector:$rhs
+  );
+
+  let results = (outs
+    Frisk_MemRefOrVector:$result
+  );
+
+  let extraClassDeclaration = [{
+    ::mlir::Type getLhsType() { return getLhs().getType(); }
+    ::mlir::Type getRhsType() { return getRhs().getType(); }
+    ::mlir::Type getResultType() { return getResult().getType(); }
+
+    bool isLhsScalar() { return ::llvm::isa<::mlir::FloatType>(getLhsType()); }
+    bool isRhsScalar() { return ::llvm::isa<::mlir::FloatType>(getRhsType()); }
+  }];
+
+  // let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)";
+}
+
+class Frisk_UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
+    Frisk_Op<mnemonic, !listconcat(traits, [MemoryEffects<[MemRead]>])> {
+
+  let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
+  let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
+
+  let arguments = (ins
+    Frisk_ScalarOrMemRefOrVector:$operand
+  );
+
+  let results = (outs
+    Frisk_MemRefOrVector:$result
+  );
+
+  let extraClassDeclaration = [{
+    ::mlir::Type getOperandType() { return getOperand().getType(); }
+    ::mlir::Type getResultType() { return getResult().getType(); }
+
+    bool isOperandScalar() { return ::llvm::isa<::mlir::FloatType>(getOperandType()); }
+  }];
+
+  // let hasVerifier = 1;
+  let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+}
+
+// 3. 实例化具体的算子
+def Frisk_AddOp : Frisk_ArithmeticOp<"add", [Commutative]>; // 加法支持交换律 Trait
+def Frisk_SubOp : Frisk_ArithmeticOp<"sub">;
+def Frisk_MulOp : Frisk_ArithmeticOp<"mul", [Commutative]>; // 乘法支持交换律 Trait
+def Frisk_DivOp : Frisk_ArithmeticOp<"div">;
+def Frisk_Exp2Op : Frisk_UnaryArithmeticOp<"exp2">;
+
 
 // convert layout op
 def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, MemRead]>]> {
   let summary = "layout conversion";
-  let description = [{ 
+  let description = [{
     layout convert
   }];
 
-  let arguments = (ins 
+  let arguments = (ins
     Arg<AnyMemRef, "", [MemWrite, MemRead]>:$memref,
     AnyAttr:$value
   );
@@ -514,14 +622,14 @@ def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, 
   let assemblyFormat = "$memref attr-dict `:` type($memref)";
 }
 
-// 
+//
 def Frisk_FillOp: Frisk_Op<"fill", [MemoryEffects<[MemWrite]>]> {
   let summary = "fill";
-  let description = [{ 
+  let description = [{
     fill
   }];
 
-  let arguments = (ins 
+  let arguments = (ins
     Arg<AnyMemRef, "", [MemWrite]>:$memref,
     AnyAttr:$value
   );
@@ -535,14 +643,76 @@ def Frisk_FillOp: Frisk_Op<"fill", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "$memref attr-dict `:` type($memref)";
 }
 
+//
+def Frisk_ZeroOp: Frisk_Op<"zero", [Pure]> {
+  let summary = "zero";
+  let description = [{
+    zero
+  }];
+
+  let arguments = (ins
+  );
+  let results = (outs
+    AnyMemRef:$result
+  );
+  // let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = " attr-dict `:`  type($result)";
+}
+
+
+def MaskYieldOp: Frisk_Op<"mask_yield", [Pure, ReturnLike, Terminator, HasParent<"frisk::MaskOp">]> {
+  let summary = "";
+  let description = [{}];
+  let arguments = (ins Variadic<AnyType> :$srcs);
+
+  let builders = [OpBuilder<(ins), [{
+    build($_builder, $_state, std::nullopt);
+  }]>];
+
+  let assemblyFormat = "attr-dict $srcs `:` type($srcs)";
+}
+
+def MaskOp: Frisk_Op<"mask", [Pure, SingleBlockImplicitTerminator<"frisk::MaskYieldOp">, InferTypeOpAdaptor]> {
+  let summary = "";
+  let description = [{}];
+
+  let arguments = (ins
+    Variadic<Index>:$starts,
+    DenseI64ArrayAttr:$sizes,
+    TypeAttr:$element_type
+  );
+
+  let results = (outs AnyMemRef:$result);
+
+  let regions = (region SizedRegion<1>:$region);
+
+  // let builders = [
+  // ];
+
+  let extraClassDeclaration = [{
+    Value getStart(int i) {
+      return getOperation()->getOperand(i);
+    }
+    Value getIterArgInEntry(int i) {
+      auto entry = &getRegion().front();
+      return entry->getArgument(i);
+    }
+  }];
+
+  let assemblyFormat = "`starts` `=` `[` $starts `]` `,` `sizes` `=` $sizes `,` `type` `=` $element_type $region attr-dict `:` functional-type(operands, results)";
+
+  // let hasVerifier = 1;
+}
+
+
 // reduceOp
 def Frisk_ReduceOp: Frisk_Op<"reduce", [MemoryEffects<[MemWrite]>, MemoryEffects<[MemRead]>]> {
   let summary = "reduce";
-  let description = [{ 
+  let description = [{
     reduce
   }];
 
-  let arguments = (ins 
+  let arguments = (ins
     Arg<AnyMemRef, "", [MemRead]>:$src,  // read
     Arg<AnyMemRef, "", [MemWrite]>:$dst,  // write
     StrAttr:$kind,
@@ -647,7 +817,7 @@ def Frisk_AsyncCopy : Frisk_Op<"async_copy", []> {
     ```mlir
     // 对应伪代码中的 coords=[0, %by*128]
     #map = affine_map<(d0) -> (0, d0 * 128)>
-    
+
     frisk.async_copy %smem, %tma_desc [%by]
       map: #map, barrier: %barrier
       : memref<1x128xf32, 3>, type(%tma_desc), type(%barrier)
@@ -664,7 +834,7 @@ def Frisk_AsyncCopy : Frisk_Op<"async_copy", []> {
 
   // 语法格式化，使其接近标准的 Affine 风格
   let assemblyFormat = [{
-    $dst_smem `,` $tma_desc `[` $map_operands `]` 
+    $dst_smem `,` $tma_desc `[` $map_operands `]`
     `map` `:` $coordinate_map `,` `barrier` `:` $barrier
     attr-dict `:` type($dst_smem) `,` type($tma_desc) `,` type($barrier)
   }];
@@ -797,7 +967,7 @@ def Frisk_WgMmaAsyncLSOp : Frisk_Op<"wgmma_ls_async", []> {
   let results = (outs);
 
   let assemblyFormat = [{
-    $localA 
+    $localA
     $smB `[` $smBMap
       ( `(` $smBMapOperands^ `)` )?
     `]`
@@ -810,7 +980,7 @@ def Frisk_WgMmaAsyncLSOp : Frisk_Op<"wgmma_ls_async", []> {
 }
 
 // 在instSelect阶段，我们以确保参数正确性。因此这里不需要特意强调acc和operator的type以及尺寸。一切由lowerinfo记录
-def Frisk_WarpMmaOp : Frisk_Op<"warp_mma", [
+def Frisk_WarpMmaRROp : Frisk_Op<"warp_mma_rr", [
     // 声明该 Op 具有内存副作用 (MemRead 和 MemWrite)
     MemoryEffects<[MemRead, MemWrite]>
 ]> {
@@ -826,17 +996,18 @@ def Frisk_WarpMmaOp : Frisk_Op<"warp_mma", [
 
   // 定义输入参数：A, B, C
   // 使用 AnyMemRef 强调内存引用语义，但不限制其元素类型与 Shape
-  let arguments = (ins 
-    Arg<AnyMemRef, "只读输入 A", [MemRead]>:$a,
-    Arg<AnyMemRef, "只读输入 B", [MemRead]>:$b,
-    Arg<AnyMemRef, "读写累加器 C", [MemRead, MemWrite]>:$c
+  let arguments = (ins
+    Arg<AnyVectorOfNonZeroRank, "只读输入 A", [MemRead]>:$a,
+    Arg<AnyVectorOfNonZeroRank, "只读输入 B", [MemRead]>:$b,
+    Arg<AnyVectorOfNonZeroRank, "读写累加器 C", [MemRead, MemWrite]>:$c
   );
 
-  // 原地修改累加器，无 SSA 返回值
-  let results = (outs);
+  let results = (outs
+    AnyVectorOfNonZeroRank:$result
+  );
 
   // 指定自定义汇编格式
-  let assemblyFormat = "$a `,` $b `,` $c attr-dict `:` type($a) `,` type($b) `,` type($c)";
+  let assemblyFormat = "$a `,` $b `,` $c attr-dict `:` type($a) `,` type($b) `,` type($c) `->` type($result)";
 }
 
 def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [

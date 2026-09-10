@@ -297,9 +297,9 @@ public:
     Value A;
     Value B;
     Value C;
-    MemRefType aType;
-    MemRefType bType;
-    MemRefType cType;
+    mlir::Type aType;
+    mlir::Type bType;
+    mlir::Type cType;
     unsigned inElemBitWidth;
     int64_t bm;
     int64_t bn;
@@ -344,6 +344,8 @@ private:
                               HWSpecification *hw, bool preferBefore = true);
   static bool inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps,
                             bool preferBefore = true);
+  static bool inferArithmeticOp(Operation *op, LowerInfoMap &buf_info_maps,
+                                bool preferBefore = true);
 
   // void getTest() {
   //   llvm::outs() << "[D]need_infer_ops size: " << need_infer_ops.size() << "\n";

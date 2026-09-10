@@ -17,6 +17,15 @@ def Frisk_BarrierType : Frisk_Type<"Barrier", "barrier"> {
   }];
 }
 
+// 1. 定义统一的类型约束
+def Frisk_ScalarOrMemRefOrVector :
+    AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank, F16, F32],
+              "memref, vector, or f16/f32 float scalar">;
+              
+def Frisk_MemRefOrVector :
+    AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank],
+              "memref or vector">;
+
 // 假设这是在你的 Frisk_Dialect 中
 def Frisk_TmaDescType : Frisk_Type<"TmaDesc", "tma_desc"> {
   let summary = "TMA descriptor type encapsulating global tensor metadata";

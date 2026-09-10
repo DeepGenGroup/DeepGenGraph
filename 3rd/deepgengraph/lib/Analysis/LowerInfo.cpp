@@ -9,6 +9,7 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
@@ -363,7 +364,43 @@ static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
   if (auto *info = infoMap.getNearestInferedInfo(buffer, currOp, preferBefore)) {
     return info;
   }
-  return infoMap.getNearestInferedInfo(buffer, currOp, !preferBefore);
+  if (auto *info = infoMap.getNearestInferedInfo(buffer, currOp, !preferBefore)) {
+    return info;
+  }
+
+  auto result = dyn_cast<OpResult>(buffer);
+  if (!result) {
+    return nullptr;
+  }
+  auto forOp = dyn_cast<affine::AffineForOp>(result.getOwner());
+  if (!forOp || result.getResultNumber() >= forOp.getNumRegionIterArgs()) {
+    return nullptr;
+  }
+  Value iterArg = forOp.getRegionIterArgs()[result.getResultNumber()];
+  if (auto *info = infoMap.getNearestInferedInfo(iterArg, currOp, preferBefore)) {
+    return info;
+  }
+  return infoMap.getNearestInferedInfo(iterArg, currOp, !preferBefore);
+}
+
+static bool isFriskArithmeticOp(Operation *op) {
+  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op>(op);
+}
+
+static void
+collectArithmeticMemrefs(Operation *op,
+                         SmallVectorImpl<std::pair<Value, LowerInfo::BufPos>>
+                             &memrefs) {
+  for (Value operand : op->getOperands()) {
+    if (isa<ShapedType>(operand.getType())) {
+      memrefs.push_back({operand, LowerInfo::BufPos::In});
+    }
+  }
+  for (Value result : op->getResults()) {
+    if (isa<ShapedType>(result.getType())) {
+      memrefs.push_back({result, LowerInfo::BufPos::Out});
+    }
+  }
 }
 
 llvm::SmallVector<Operation*, 5>
@@ -375,7 +412,8 @@ LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
 
   llvm::SmallVector<Operation*, 5> need_infer_ops{};
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op)) {
+    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op) ||
+        isFriskArithmeticOp(op)) {
       need_infer_ops.push_back(op);
     }
   });
@@ -425,9 +463,9 @@ LowerInfoAnalysis::GemmProblem LowerInfoAnalysis::getGemmProblem(GemmOp gemmOp) 
   problem.aType = gemmOp.getA().getType();
   problem.bType = gemmOp.getB().getType();
   problem.cType = gemmOp.getC().getType();
-  auto shapeC = problem.cType.getShape();
-  auto shapeA = problem.aType.getShape();
-  problem.inElemBitWidth = problem.aType.getElementTypeBitWidth();
+  auto shapeC = mlir::cast<ShapedType>(problem.cType).getShape();
+  auto shapeA = mlir::cast<ShapedType>(problem.aType).getShape();
+  problem.inElemBitWidth =  mlir::cast<ShapedType>(problem.aType).getElementTypeBitWidth();
   problem.bm = shapeC[0];
   problem.bn = shapeC[1];
   problem.bk = gemmOp.getTransA() ? shapeA[0] : shapeA[1];
@@ -438,8 +476,8 @@ LowerInfoAnalysis::GemmProblem LowerInfoAnalysis::getGemmProblem(GemmOp gemmOp) 
 MMAInstInfo* LowerInfoAnalysis::selectGemmInst(LowerInfoAnalysis::GemmProblem problem, HWSpecification* hw){
   MMAInstInfo* ret = nullptr;
   int max_m = 0, max_n = 0, max_k = 0;
-  auto _GetFriskDTypeFromBuffer = [](MemRefType ty){
-    auto ety = ty.getElementType();
+  auto _GetFriskDTypeFromBuffer = [](Type ty){
+    auto ety = mlir::cast<ShapedType>(ty).getElementType();
     if(ety.isF16()){
       return FriskDType::f16;
     }
@@ -996,6 +1034,40 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   return true;
 }
 
+bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
+                                          LowerInfoMap &buf_info_maps,
+                                          bool preferBefore) {
+  if (!isFriskArithmeticOp(op)) {
+    return false;
+  }
+
+  SmallVector<std::pair<Value, LowerInfo::BufPos>, 4> memrefs;
+  collectArithmeticMemrefs(op, memrefs);
+
+  LowerInfo *sourceInfo = nullptr;
+  for (const auto &[memref, pos] : memrefs) {
+    (void)pos;
+    sourceInfo = getNearestInferedInfoEither(buf_info_maps, memref, op,
+                                             preferBefore);
+    if (sourceInfo != nullptr) {
+      break;
+    }
+  }
+
+  if (sourceInfo == nullptr) {
+    LLVM_OUT_MSG("---- inferArithmeticOp error");
+    return false;
+  }
+
+  for (const auto &[memref, pos] : memrefs) {
+    LowerInfo candidateInfo = *sourceInfo;
+    candidateInfo.buffer = memref;
+    candidateInfo.pos = pos;
+    buf_info_maps.addLowerInfo(op, candidateInfo);
+  }
+  return true;
+}
+
 bool LowerInfoAnalysis::inferDirectOp(Operation *op, LowerInfoMap &buf_info_maps,
                                       HWSpecification *hw) {
   if (auto gemmOp = dyn_cast<GemmOp>(op)) {
@@ -1011,8 +1083,15 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
   // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
   for (const auto &opd : op->getOperands()) {
-    if (isa<MemRefType>(opd.getType())) {
+    if (isa<ShapedType>(opd.getType())) {
       memrefsToCheck.push_back(opd);
+    }
+  }
+  if (isFriskArithmeticOp(op)) {
+    for (Value result : op->getResults()) {
+      if (isa<ShapedType>(result.getType())) {
+        memrefsToCheck.push_back(result);
+      }
     }
   }
   if (auto blockOp = dyn_cast<BlockOp>(op)) {
@@ -1064,6 +1143,9 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
     return true;
   }
   if (inferReduceOp(op, buf_info_maps, preferBefore)) {
+    return true;
+  }
+  if (inferArithmeticOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
 
@@ -1121,7 +1203,9 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
   // 放入 m_candidates，最后通过 conflictResolve() 统一处理。
 
   auto isInferTargetOp = [](Operation *op) {
-    return op != nullptr && isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op);
+    return op != nullptr &&
+           (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op) ||
+            isFriskArithmeticOp(op));
   };
   auto tryInferAt = [&](int opId, bool collectConflict, bool preferBefore) -> bool {
     if (opId <= 0 || opId >= static_cast<int>(opOrderVec.size())) {

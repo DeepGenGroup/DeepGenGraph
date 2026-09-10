@@ -487,7 +487,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // pm.addPass(mlir::createSymbolDCEPass());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
-  
+  #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
   AddPass(mlir::createLoopInvariantCodeMotionPass());
   AddPass(mlir::createCSEPass());
@@ -509,7 +509,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
 
   
-  #if 0
+
   mlir::ModuleOp mod = *src;
   frisk::firstLowering(mod, src->getContext());
   frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm);

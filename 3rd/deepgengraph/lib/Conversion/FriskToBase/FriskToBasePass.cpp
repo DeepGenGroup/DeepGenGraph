@@ -1,11 +1,20 @@
 #include <map>
+#include <functional>
 #include <string>
 
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Visitors.h"
@@ -14,12 +23,15 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 // #include "deepgengraph/Analysis/LowerInfo.h"
 
 namespace mlir::frisk {
 #define GEN_PASS_DEF_CONVERTFRISKTOBASE
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
+
+using friskMs = frisk::attr::MemorySpace;
 
 // struct KernelOpConversion : public OpConversionPattern<KernelOp> {
 //   using OpConversionPattern::OpConversionPattern;
@@ -220,6 +232,359 @@ struct ForOpConversion : public OpConversionPattern<ForOp> {
   }
 };
 
+
+class AffineForOpConversion : public OpConversionPattern<affine::AffineForOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(affine::AffineForOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    // 分析affineFor。 如果内部存在 frisk.copy 到 memref local 的情况，替换为 vector，并用yield做 loop-carried 处理
+    if(op->hasAttr("local_yield_transformed")){
+      return failure();
+    }
+
+    auto isLocalMemRef = [](Value value) -> bool {
+      auto type = dyn_cast<MemRefType>(value.getType());
+      return type && type.getMemorySpaceAsInt() == int(friskMs::Local);
+    };
+
+    auto canPromoteInLoop = [&](Value value) -> bool {
+      if (!isLocalMemRef(value)) {
+        return false;
+      }
+      Operation *defOp = value.getDefiningOp();
+      return !defOp || !op->isAncestor(defOp);
+    };
+
+    SmallVector<Value> localBuffers;
+    auto addLocalBuffer = [&](Value value) {
+      if (!canPromoteInLoop(value)) {
+        return;
+      }
+      if (!llvm::is_contained(localBuffers, value)) {
+        localBuffers.push_back(value);
+      }
+    };
+
+    op->walk([&](frisk::CopyOp copy) {
+      addLocalBuffer(copy.getSrcMemRef());
+      addLocalBuffer(copy.getDstMemRef());
+    });
+    op->walk([&](frisk::FillOp fill) {
+      addLocalBuffer(fill.getMemref());
+    });
+    op->walk([&](affine::AffineLoadOp load) {
+      addLocalBuffer(load.getMemref());
+    });
+    op->walk([&](affine::AffineStoreOp store) {
+      addLocalBuffer(store.getMemref());
+    });
+    op->walk([&](frisk::WarpMmaRROp wmma) {
+      addLocalBuffer(wmma.getA());
+      addLocalBuffer(wmma.getB());
+      addLocalBuffer(wmma.getC());
+    });
+
+    if (localBuffers.empty()) {
+      rewriter.modifyOpInPlace(op, [&]() {
+        op->setAttr("local_yield_transformed", rewriter.getBoolAttr(true));
+      });
+      return success();
+    }
+
+    SmallVector<VectorType> vectorTypes;
+    SmallVector<Value> vectorInits;
+    vectorTypes.reserve(localBuffers.size());
+    vectorInits.reserve(localBuffers.size());
+    rewriter.setInsertionPoint(op);
+    for (Value buffer : localBuffers) {
+      auto memrefType = dyn_cast<MemRefType>(buffer.getType());
+      if (!memrefType || !memrefType.hasStaticShape()) {
+        return failure();
+      }
+      auto vectorType =
+          VectorType::get(memrefType.getShape(), memrefType.getElementType());
+      Attribute zeroAttr = rewriter.getZeroAttr(memrefType.getElementType());
+      if (!zeroAttr) {
+        return failure();
+      }
+      auto denseAttr = DenseElementsAttr::get(vectorType, zeroAttr);
+      auto init =
+          rewriter.create<arith::ConstantOp>(op.getLoc(), vectorType, denseAttr);
+      vectorTypes.push_back(vectorType);
+      vectorInits.push_back(init.getResult());
+    }
+
+    auto copyNonStructuralForAttrs = [&](affine::AffineForOp from,
+                                         affine::AffineForOp to) {
+      for (NamedAttribute attr : from->getAttrs()) {
+        StringRef name = attr.getName().getValue();
+        if (name == "lowerBoundMap" || name == "upperBoundMap" ||
+            name == "operandSegmentSizes" || name == "step") {
+          continue;
+        }
+        to->setAttr(attr.getName(), attr.getValue());
+      }
+    };
+
+    SmallVector<Value> newInits(adaptor.getInits().begin(), adaptor.getInits().end());
+    newInits.append(vectorInits.begin(), vectorInits.end());
+
+    auto newForOp = rewriter.create<affine::AffineForOp>(
+        op.getLoc(), adaptor.getLowerBoundOperands(), op.getLowerBoundMap(),
+        adaptor.getUpperBoundOperands(), op.getUpperBoundMap(),
+        op.getStepAsInt(), newInits);
+    copyNonStructuralForAttrs(op, newForOp);
+    newForOp->setAttr("local_yield_transformed", rewriter.getBoolAttr(true));
+
+    auto getBufferIndex = [&](Value value) -> std::optional<unsigned> {
+      for (auto [idx, buffer] : llvm::enumerate(localBuffers)) {
+        if (buffer == value) {
+          return idx;
+        }
+      }
+      return std::nullopt;
+    };
+
+    auto makeSplatAttr = [&](Attribute attr, Type elementType) -> Attribute {
+      if (auto typedAttr = dyn_cast<TypedAttr>(attr)) {
+        if (typedAttr.getType() == elementType) {
+          return attr;
+        }
+      }
+      if (auto floatAttr = dyn_cast<FloatAttr>(attr)) {
+        if (auto floatType = dyn_cast<FloatType>(elementType)) {
+          return rewriter.getFloatAttr(floatType, floatAttr.getValue());
+        }
+      }
+      if (auto integerAttr = dyn_cast<IntegerAttr>(attr)) {
+        if (auto integerType = dyn_cast<IntegerType>(elementType)) {
+          return rewriter.getIntegerAttr(integerType, integerAttr.getValue());
+        }
+        if (isa<IndexType>(elementType)) {
+          return rewriter.getIndexAttr(integerAttr.getInt());
+        }
+      }
+      return Attribute();
+    };
+
+    std::function<LogicalResult(Block *, Block *, IRMapping &, SmallVector<Value> &)>
+        cloneBody = [&](Block *oldBlock, Block *newBlock, IRMapping &mapper,
+                        SmallVector<Value> &currentVectors) -> LogicalResult {
+      auto remapValue = [&](Value value) -> Value {
+        if (auto idx = getBufferIndex(value)) {
+          return currentVectors[*idx];
+        }
+        return mapper.lookupOrDefault(value);
+      };
+
+      auto setCurrentVector = [&](Value buffer, Value value) {
+        if (auto idx = getBufferIndex(buffer)) {
+          currentVectors[*idx] = value;
+          mapper.map(buffer, value);
+        }
+      };
+
+      auto remapValueRange = [&](ValueRange values) {
+        SmallVector<Value> remapped;
+        remapped.reserve(values.size());
+        for (Value value : values) {
+          remapped.push_back(remapValue(value));
+        }
+        return remapped;
+      };
+
+      auto buildAffineAccessIndices = [&](Location loc, AffineMap map,
+                                          ValueRange operands) {
+        SmallVector<Value> mappedOperands = remapValueRange(operands);
+        SmallVector<Value> indices;
+        indices.reserve(map.getNumResults());
+        for (AffineExpr expr : map.getResults()) {
+          auto resultMap = AffineMap::get(map.getNumDims(), map.getNumSymbols(),
+                                          expr, rewriter.getContext());
+          indices.push_back(
+              rewriter.create<affine::AffineApplyOp>(loc, resultMap,
+                                                     mappedOperands));
+        }
+        return indices;
+      };
+
+      // rewriter.eraseOp(newBlock->getTerminator());
+      rewriter.setInsertionPointToEnd(newBlock);
+      for (Operation &childOp : oldBlock->without_terminator()) {
+        if (auto nestedFor = dyn_cast<affine::AffineForOp>(childOp)) {
+          SmallVector<Value> nestedInits =
+              remapValueRange(nestedFor.getInits());
+          nestedInits.append(currentVectors.begin(), currentVectors.end());
+          SmallVector<Value> lowerBoundOperands =
+              remapValueRange(nestedFor.getLowerBoundOperands());
+          SmallVector<Value> upperBoundOperands =
+              remapValueRange(nestedFor.getUpperBoundOperands());
+          auto newNestedFor = rewriter.create<affine::AffineForOp>(
+              nestedFor.getLoc(), lowerBoundOperands,
+              nestedFor.getLowerBoundMap(), upperBoundOperands,
+              nestedFor.getUpperBoundMap(), nestedFor.getStepAsInt(),
+              nestedInits);
+          copyNonStructuralForAttrs(nestedFor, newNestedFor);
+          newNestedFor->setAttr("local_yield_transformed",
+                                rewriter.getBoolAttr(true));
+
+          IRMapping nestedMapper;
+          nestedMapper.map(nestedFor.getBody()->getArgument(0),
+                           newNestedFor.getBody()->getArgument(0));
+          for (auto [oldArg, newArg] :
+               llvm::zip(nestedFor.getRegionIterArgs(),
+                         newNestedFor.getRegionIterArgs().take_front(
+                             nestedFor.getNumIterOperands()))) {
+            nestedMapper.map(oldArg, newArg);
+          }
+
+          SmallVector<Value> nestedCurrentVectors;
+          nestedCurrentVectors.reserve(localBuffers.size());
+          unsigned vectorArgStart = 1 + nestedFor.getNumIterOperands();
+          for (unsigned i = 0; i < localBuffers.size(); ++i) {
+            Value arg = newNestedFor.getBody()->getArgument(vectorArgStart + i);
+            nestedCurrentVectors.push_back(arg);
+            nestedMapper.map(localBuffers[i], arg);
+          }
+
+          if (failed(cloneBody(nestedFor.getBody(), newNestedFor.getBody(),
+                               nestedMapper, nestedCurrentVectors))) {
+            return failure();
+          }
+
+          for (auto [oldResult, newResult] :
+               llvm::zip(nestedFor.getResults().take_front(
+                             nestedFor.getNumResults()),
+                         newNestedFor.getResults().take_front(
+                             nestedFor.getNumResults()))) {
+            mapper.map(oldResult, newResult);
+          }
+          for (unsigned i = 0; i < localBuffers.size(); ++i) {
+            setCurrentVector(localBuffers[i],
+                             newNestedFor->getResult(nestedFor.getNumResults() + i));
+          }
+          rewriter.setInsertionPointAfter(newNestedFor);
+          continue;
+        }
+
+        if (auto loadOp = dyn_cast<affine::AffineLoadOp>(childOp)) {
+          if (auto idx = getBufferIndex(loadOp.getMemref())) {
+            SmallVector<Value> indices = buildAffineAccessIndices(
+                loadOp.getLoc(), loadOp.getAffineMap(), loadOp.getMapOperands());
+            SmallVector<int64_t> staticPosition(indices.size(),
+                                                ShapedType::kDynamic);
+            auto positionAttr = rewriter.getDenseI64ArrayAttr(staticPosition);
+            auto extractOp = rewriter.create<vector::ExtractOp>(
+                loadOp.getLoc(), loadOp.getType(), currentVectors[*idx],
+                indices, positionAttr);
+            mapper.map(loadOp.getResult(), extractOp.getResult());
+            continue;
+          }
+        }
+
+        if (auto storeOp = dyn_cast<affine::AffineStoreOp>(childOp)) {
+          if (auto idx = getBufferIndex(storeOp.getMemref())) {
+            SmallVector<Value> indices =
+                buildAffineAccessIndices(storeOp.getLoc(), storeOp.getAffineMap(),
+                                         storeOp.getMapOperands());
+            SmallVector<OpFoldResult> position;
+            position.reserve(indices.size());
+            for (Value index : indices) {
+              position.push_back(index);
+            }
+            auto insertOp = rewriter.create<vector::InsertOp>(
+                storeOp.getLoc(), remapValue(storeOp.getValueToStore()),
+                currentVectors[*idx], position);
+            setCurrentVector(storeOp.getMemref(), insertOp.getResult());
+            continue;
+          }
+        }
+
+        if (auto fillOp = dyn_cast<frisk::FillOp>(childOp)) {
+          if (auto idx = getBufferIndex(fillOp.getMemref())) {
+            Attribute splat =
+                makeSplatAttr(fillOp.getValueAttr(), vectorTypes[*idx].getElementType());
+            if (!splat) {
+              return failure();
+            }
+            auto denseAttr = DenseElementsAttr::get(vectorTypes[*idx], splat);
+            auto constantOp = rewriter.create<arith::ConstantOp>(
+                fillOp.getLoc(), vectorTypes[*idx], denseAttr);
+            setCurrentVector(fillOp.getMemref(), constantOp.getResult());
+            continue;
+          }
+        }
+
+        auto *cloned = rewriter.clone(childOp, mapper);
+        for (auto [oldResult, newResult] :
+             llvm::zip(childOp.getResults(), cloned->getResults())) {
+          if (!mapper.lookupOrNull(oldResult)) {
+            mapper.map(oldResult, newResult);
+          }
+        }
+        if (auto oldWmma = dyn_cast<frisk::WarpMmaRROp>(childOp)) {
+          if (auto newWmma = dyn_cast<frisk::WarpMmaRROp>(cloned)) {
+            if (oldWmma->getNumResults() == 1 && newWmma->getNumResults() == 1) {
+              setCurrentVector(oldWmma.getC(), newWmma.getResult());
+            }
+          }
+        }
+      }
+
+      auto oldYield = cast<affine::AffineYieldOp>(oldBlock->getTerminator());
+      SmallVector<Value> yieldValues = remapValueRange(oldYield.getOperands());
+      yieldValues.append(currentVectors.begin(), currentVectors.end());
+      rewriter.setInsertionPointToEnd(newBlock);
+      rewriter.create<affine::AffineYieldOp>(oldYield.getLoc(), yieldValues);
+      return success();
+    };
+
+    IRMapping mapper;
+    mapper.map(op.getBody()->getArgument(0), newForOp.getBody()->getArgument(0));
+    for (auto [oldArg, newArg] :
+         llvm::zip(op.getRegionIterArgs(),
+                   newForOp.getRegionIterArgs().take_front(op.getNumIterOperands()))) {
+      mapper.map(oldArg, newArg);
+    }
+
+    SmallVector<Value> currentVectors;
+    currentVectors.reserve(localBuffers.size());
+    unsigned vectorArgStart = 1 + op.getNumIterOperands();
+    for (unsigned i = 0; i < localBuffers.size(); ++i) {
+      Value arg = newForOp.getBody()->getArgument(vectorArgStart + i);
+      currentVectors.push_back(arg);
+      mapper.map(localBuffers[i], arg);
+    }
+
+    if (failed(cloneBody(op.getBody(), newForOp.getBody(), mapper,
+                         currentVectors))) {
+      return failure();
+    }
+
+    SmallVector<Value> replacementResults(
+        newForOp.getResults().take_front(op.getNumResults()).begin(),
+        newForOp.getResults().take_front(op.getNumResults()).end());
+    rewriter.replaceOp(op, replacementResults);
+
+    for (auto [idx, buffer] : llvm::enumerate(localBuffers)) {
+      Value result = newForOp->getResult(op.getNumResults() + idx);
+      buffer.replaceUsesWithIf(result, [&](OpOperand &use) {
+        Operation *user = use.getOwner();
+        return user->getBlock() == newForOp->getBlock() &&
+               newForOp->isBeforeInBlock(user);
+      });
+      Operation *defOp = buffer.getDefiningOp();
+      if (defOp && defOp->use_empty()) {
+        rewriter.eraseOp(defOp);
+      }
+    }
+
+    return success();
+  }
+};
+
+
+
 class ConvertFriskToBase : public impl::ConvertFriskToBaseBase<ConvertFriskToBase> {
 public:
   
@@ -237,15 +602,20 @@ public:
       func::FuncDialect,
       memref::MemRefDialect,
       scf::SCFDialect,
-      gpu::GPUDialect>();
+      gpu::GPUDialect,
+      vector::VectorDialect>();
 
     target.addIllegalOp<KernelOp>();
     target.addIllegalOp<ParallelOp>();
     target.addIllegalOp<ForOp>();
+    target.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op) {
+      return op->hasAttr("local_yield_transformed");
+    });
     RewritePatternSet patterns(context);
     patterns.add<KernelOpConversion>(context);
     patterns.add<ParallelOpConversion>(context);
     patterns.add<ForOpConversion>(context);
+    patterns.add<AffineForOpConversion>(context);
     if (failed(applyPartialConversion(mod, target, std::move(patterns)))){
       return signalPassFailure();
     }

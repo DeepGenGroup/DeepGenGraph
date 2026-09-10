@@ -34,6 +34,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/IRMapping.h"
@@ -147,51 +148,109 @@ struct FriskSyncOpConversion : public OpConversionPattern<frisk::SyncThreadsInBl
 };
 
 // warp mma op conversion
-struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaOp> {
+struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp> {
   using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(frisk::WarpMmaOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(frisk::WarpMmaRROp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, /*optional*/::mlir::Type res, ::mlir::ValueRange operands, ::llvm::StringRef asm_string, ::llvm::StringRef constraints, /*optional*/bool has_side_effects, /*optional*/bool is_align_stack, /*optional*/::mlir::LLVM::AsmDialectAttr asm_dialect, /*optional*/::mlir::ArrayAttr operand_attrs);
-    auto memA = mlir::cast<MemRefType>(adaptor.getA().getType());
-    auto memB = mlir::cast<MemRefType>(adaptor.getB().getType());
-    auto memC = mlir::cast<MemRefType>(adaptor.getC().getType());
-    auto m = memA.getShape()[0];
-    auto k = memA.getShape()[1];
-    auto n = memB.getShape()[1];
     auto asm_string = op->getAttrOfType<StringAttr>("inst_name").data();
     auto constraints = op->getAttrOfType<StringAttr>("inst_constraints").data();
-    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Type result, ::mlir::Value base, ::mlir::ValueRange indices, /*optional*/bool nontemporal = false);
-    auto zero = rewriter.create<arith::ConstantIndexOp>(op->getLoc(), 0);
-    std::vector<Value> indices = {zero, zero};
-    auto convertMemToVectorPack  = [&](Value buffer) -> vector::LoadOp {
-      auto memTy = mlir::cast<MemRefType>(buffer.getType());
-      int count = 1;
-      for(int i : memTy.getShape()){
-        count*=i;
-      } 
-      auto vecPack = VectorType::get({count}, memTy.getElementType());
-      auto vectorLoad = rewriter.create<vector::LoadOp>(op->getLoc(), vecPack, buffer, indices);
-      return vectorLoad;
+    
+    auto getCollapsed = [&](mlir::Value oldValue){
+      auto typeA = mlir::cast<ShapedType>(oldValue.getType());
+      std::vector<int64_t> shapeAfterCollapse{};
+      bool needConvert = false;
+      for(auto s : typeA.getShape()){
+        if(s != 1){
+          shapeAfterCollapse.push_back(s);
+        }
+        else{
+          needConvert = true;
+        }
+      }
+      if(shapeAfterCollapse.empty()){
+        shapeAfterCollapse.push_back(1);
+      }
+      mlir::Value newVal;
+      if(needConvert){
+        auto collapsedType = VectorType::get(shapeAfterCollapse, typeA.getElementType());
+        newVal = rewriter.create<vector::ShapeCastOp>(op->getLoc(), collapsedType, oldValue);
+      }
+      else{
+        newVal = oldValue;
+      }
+      return newVal;
     };
-    
-    auto vA = convertMemToVectorPack(adaptor.getA());
-    auto vB = convertMemToVectorPack(adaptor.getB());
-    auto vC = convertMemToVectorPack(adaptor.getC());
-    
-    std::vector<Value> vr = {vA.getResult(), vB.getResult(), vC.getResult()};
-    // auto retTy = LLVM::LLVMVoidType::get(rewriter.getContext());
-    auto retTy = VectorType::get({4}, memC.getElementType());
+
+    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Type result, ::mlir::Value source);
+    auto typeB = mlir::cast<ShapedType>(adaptor.getB().getType());
+    auto typeC = mlir::cast<ShapedType>(adaptor.getC().getType());
+    auto newA = getCollapsed(adaptor.getA());
+    auto newB = getCollapsed(adaptor.getB());
+    auto newC = getCollapsed(adaptor.getC());
+    std::vector<Value> vr = {newA, newB, newC};
+    auto retTy = mlir::cast<VectorType>(op.getResult().getType());
+    std::vector<int64_t> collapsedResShape{};
+    bool isConverted = false;
+      for(auto s : retTy.getShape()){
+        if(s != 1){
+          collapsedResShape.push_back(s);
+        }
+        else{
+          isConverted = true;
+        }
+      }
+    if(collapsedResShape.empty()){
+      collapsedResShape.push_back(1);
+    }
+    auto newRetTy = VectorType::get(collapsedResShape, retTy.getElementType());
     auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
-        op->getLoc(),retTy , vr, asm_string, constraints,
+        op->getLoc(),newRetTy , vr, asm_string, constraints,
         /*has_side_effects=*/true, /*is_align_stack=*/false,
         /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr);
+    auto ret = asmOp.getResult(0);
 
-    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value valueToStore, ::mlir::Value base, ::mlir::ValueRange indices, /*optional*/bool nontemporal = false);
-    rewriter.create<vector::StoreOp>(op->getLoc(), asmOp->getResult(0), adaptor.getC(), indices);
-    rewriter.eraseOp(op);
+    if(isConverted){
+      ret = rewriter.create<vector::ShapeCastOp>(op->getLoc(), retTy, asmOp->getResult(0));
+    }
+    rewriter.replaceOp(op, ret);
     return success();
   }
 };
 
+struct FlattenDynamicVectorInsert : public OpRewritePattern<vector::InsertOp> {
+  using OpRewritePattern<vector::InsertOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::InsertOp op,
+                                PatternRewriter &rewriter) const override {
+    VectorType destType = op.getDestVectorType();
+    // 仅处理 2D 向量且包含动态索引的情况
+    if (destType.getRank() != 2) return failure();
+
+    Location loc = op.getLoc();
+    Value val = op.getValueToStore();
+    Value destVec = op.getDest();
+    auto offsets = op.getDynamicPosition(); // 获取索引列表
+
+    int64_t dim0 = destType.getDimSize(0);
+    int64_t dim1 = destType.getDimSize(1);
+    int64_t totalSize = dim0 * dim1;
+
+    // 1. 展平向量类型
+    VectorType flatType = VectorType::get({totalSize}, destType.getElementType());
+    Value flatVec = rewriter.create<vector::ShapeCastOp>(loc, flatType, destVec);
+
+    // 2. 计算 1D 线性偏移量 (offset0 * dim1 + offset1)
+    Value dim1Const = rewriter.create<arith::ConstantIndexOp>(loc, dim1);
+    Value rowOff = rewriter.create<arith::MulIOp>(loc, offsets[0], dim1Const);
+    Value flatIdx = rewriter.create<arith::AddIOp>(loc, rowOff, offsets[1]);
+
+    // 3. 替换为 1D 动态 insert 与 shape_cast
+    Value flatInserted = rewriter.create<vector::InsertOp>(loc, val, flatVec, flatIdx);
+    rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(op, destType, flatInserted);
+
+    return success();
+  }
+};
 
 class ThreadLevelIRLegalizePass : public impl::ThreadLevelIRLegalizeBase<ThreadLevelIRLegalizePass> {
 public:
@@ -258,7 +317,16 @@ public:
     if (failed(applyPartialConversion(module, target, std::move(patterns)))){
       return signalPassFailure();
     }
-    
+    // --- step 3 : vector 去除退化维度
+    {
+      ConversionTarget t2(*context);
+      RewritePatternSet patterns(&getContext());
+      vector::populateDropUnitDimWithShapeCastPatterns(patterns);
+
+      if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
+        signalPassFailure();
+      }
+    }
     // --- step 3 : 将剩下的frisk op 转为对应的底层op
     ConversionTarget t2(*context);
 
@@ -275,11 +343,18 @@ public:
       vector::VectorDialect
       >();
 
-    t2.addIllegalOp< frisk::WarpMmaOp, frisk::SyncThreadsInBlockOp>();
+    t2.addIllegalOp< frisk::WarpMmaRROp, frisk::SyncThreadsInBlockOp>();
     RewritePatternSet p2(context);
     p2.add<FriskSyncOpConversion, FriskWarpMMAOpConversion>(context);
     if (failed(applyPartialConversion(module, t2, std::move(p2)))){
       return signalPassFailure();
+    }
+    {
+      // RewritePatternSet patterns(context);
+      // patterns.add<FlattenDynamicVectorInsert>(context);
+      // if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
+      //   signalPassFailure();
+      // }
     }
   }
 };

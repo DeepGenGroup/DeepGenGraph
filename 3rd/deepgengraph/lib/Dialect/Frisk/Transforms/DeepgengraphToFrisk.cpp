@@ -9,6 +9,7 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -143,6 +144,33 @@ static Value stripMemrefTensorRoundTrip(Value v, MemRefType dstTy) {
     }
     curr = input;
   }
+  return v;
+}
+
+static Value applyProducerMemspaceToMaterializedMemref(Value v) {
+  auto castOp = v.getDefiningOp<UnrealizedConversionCastOp>();
+  if (!castOp || castOp.getInputs().size() != 1) {
+    return v;
+  }
+
+  auto memTy = dyn_cast<MemRefType>(v.getType());
+  if (!memTy || !isa<TensorType>(castOp.getInputs()[0].getType())) {
+    return v;
+  }
+
+  Operation *producer = castOp.getInputs()[0].getDefiningOp();
+  if (!producer) {
+    return v;
+  }
+
+  auto outMs = getOpOutputMemspaceAttr(producer);
+  if (!outMs || outMs.asArrayRef().empty()) {
+    return v;
+  }
+
+  auto newTy = MemRefType::get(memTy.getShape(), memTy.getElementType(),
+                               AffineMap{}, outMs.asArrayRef()[0]);
+  v.setType(newTy);
   return v;
 }
 
@@ -849,22 +877,26 @@ struct ZeroOpConversionPattern : public OpConversionPattern<dg::ZeroOp> {
     auto loc = op->getLoc();
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
 
-    auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getShape(), op.getElementType(), 16, outMs);
-    AppendNameToLoc(buffer);
-    mlir::Attribute valueAttr;
-    auto eleTy = op.getElementType();
-    if(eleTy.isFloat()){
-      valueAttr = rewriter.getFloatAttr(eleTy, 0.0);
-    }
-    else if(eleTy.isInteger()){
-      valueAttr = rewriter.getIntegerAttr(eleTy, 0);
-    }
-    else{
-      assert(false);
-    }
-    auto fillOp = rewriter.create<frisk::FillOp>(loc, buffer, valueAttr);
-    AppendNameToLoc(fillOp);
-    rewriter.replaceOp(op, buffer);
+    // auto buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getShape(), op.getElementType(), 16, outMs);
+    // AppendNameToLoc(buffer);
+    // mlir::Attribute valueAttr;
+    // auto eleTy = op.getElementType();
+    // if(eleTy.isFloat()){
+    //   valueAttr = rewriter.getFloatAttr(eleTy, 0.0);
+    // }
+    // else if(eleTy.isInteger()){
+    //   valueAttr = rewriter.getIntegerAttr(eleTy, 0);
+    // }
+    // else{
+    //   assert(false);
+    // }
+    // auto fillOp = rewriter.create<frisk::FillOp>(loc, buffer, valueAttr);
+    // AppendNameToLoc(fillOp);
+    
+
+    auto type = getTypeConverter()->convertType(op.getType());
+    auto newop = rewriter.create<frisk::ZeroOp>(op->getLoc(), type);
+    rewriter.replaceOp(op, newop);
     return success();
   }
 };
@@ -1108,8 +1140,8 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
     // 对应 init buffer，才能保留 SSA iter_arg 的累加语义。
     auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(oldBlock->getTerminator());
     for (auto [idx, initVal] : llvm::enumerate(op.getInits())) {
-      auto initAlloc = initVal.getDefiningOp<frisk::AllocBufferOp>();
-      if (!initAlloc) {
+      Operation *initDef = initVal.getDefiningOp();
+      if (!initDef || !isa<frisk::AllocBufferOp, frisk::ZeroOp>(initDef)) {
         continue;
       }
       if (idx >= oldYieldOp.getNumOperands()) {
@@ -1117,6 +1149,7 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       }
       auto dstTy = dyn_cast<MemRefType>(initVal.getType());
       auto src = mapping.lookupOrDefault(oldYieldOp.getOperand(idx));
+      src = applyProducerMemspaceToMaterializedMemref(src);
       if (dstTy) {
         src = stripMemrefTensorRoundTrip(src, dstTy);
       }
@@ -1223,66 +1256,16 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
 
     std::vector<int64_t> cshape = {sizeM, sizeN};
 
-    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
-    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
-    frisk::AllocBufferOp memC {} ;
-    {
-      // RewriterBase::InsertionGuard ig{rewriter};
-      // rewriter.setInsertionPoint(currOp);
-      memC = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), cshape, op.getAccType(), 16, outMs[0]);
-    }
     if(CalcOpToFriskOption::useTensorCore){
       // tensorcore 计算 gemm
-      auto friskGEMM = rewriter.create<frisk::GemmOp>(op->getLoc(), adaptor.getLhs(), adaptor.getRhs(), memC, false,false);
+      auto typeC = getTypeConverter()->convertType(op.getType());
+      auto friskGEMM = rewriter.create<frisk::GemmOp>(op->getLoc(), typeC, adaptor.getLhs(), adaptor.getRhs(),  false,false);
+      rewriter.replaceOp(op, friskGEMM);
     }
     else{
       // cudacore 计算 gemm
-      std::vector<int64_t> ranges = {sizeM, sizeN};
-      auto block = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
-      auto loc = block->getLoc();
-      RewriterBase::InsertionGuard guard{rewriter};
-      rewriter.setInsertionPointToStart(block.getBody(0));
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value lowerBound, Value upperBound, Value step, ValueRange initArgs = std::nullopt, function_ref<void(OpBuilder &, Location, Value, ValueRange)> odsArg4 = nullptr);
-      auto zero = rewriter.create<arith::ConstantIndexOp>(loc,0);
-      auto step_one = rewriter.create<arith::ConstantIndexOp>(loc,1);
-      auto k = rewriter.create<arith::ConstantIndexOp>(loc, sizeK);
-
-      auto forOp = rewriter.create<affine::AffineForOp>(block->getLoc(), 0, sizeK, 1);
-      rewriter.setInsertionPointToStart(forOp.getBody(0));
-      auto iter_k = forOp.getInductionVar();
-      auto i = block.getBody(0)->getArgument(0);
-      auto j = block.getBody(0)->getArgument(1);
-      std::vector<Value> indices = {i,j,iter_k};
-
-      // {i,j,k} : [i,k] [k,j] [i,j]
-      auto ctx = op->getContext();
-      auto dimI = mlir::getAffineDimExpr(0, ctx);
-      auto dimJ = mlir::getAffineDimExpr(1, ctx);
-      auto dimK = mlir::getAffineDimExpr(2, ctx);
-      auto affineMapA= AffineMap::get(3, 0, {dimI, dimK}, ctx); 
-      auto affineMapB= AffineMap::get(3, 0, {dimK, dimJ}, ctx); 
-      auto affineMapC= AffineMap::get(3, 0, {dimI, dimJ}, ctx); 
-      auto a = rewriter.create<affine::AffineLoadOp>(loc, memA, affineMapA, indices);
-      auto b = rewriter.create<affine::AffineLoadOp>(loc, memB, affineMapB, indices);
-      auto acc = rewriter.create<affine::AffineLoadOp>(loc, memC, affineMapC, indices);
-
-      Value prod = rewriter.create<arith::MulFOp>(loc, a, b);
-      if (prod.getType() != acc.getType()) {
-        if (!isa<FloatType>(prod.getType()) || !isa<FloatType>(acc.getType()))
-          return failure();
-        auto prodFloatTy = cast<FloatType>(prod.getType());
-        auto accFloatTy = cast<FloatType>(acc.getType());
-        if (prodFloatTy.getWidth() < accFloatTy.getWidth()) {
-          prod = rewriter.create<arith::ExtFOp>(loc, acc.getType(), prod);
-        } else if (prodFloatTy.getWidth() > accFloatTy.getWidth()) {
-          prod = rewriter.create<arith::TruncFOp>(loc, acc.getType(), prod);
-        }
-      }
-      auto added = rewriter.create<arith::AddFOp>(loc, prod, acc);
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Value valueToStore, Value memref, AffineMap map, ValueRange mapOperands);
-      rewriter.create<affine::AffineStoreOp>(loc, added, memC, affineMapC, indices);
+      // 
     }
-    rewriter.replaceOp(op, memC);
     return success();
   }
 };
@@ -1308,133 +1291,24 @@ struct BinaryOpConversionPattern : public OpInterfaceConversionPattern<dg::Broad
     if (!resultTensorType)
       return failure();
     auto resultShape = resultTensorType.getShape();
-
-    // 找到父级最外层的forOp(如果没有,就直接在前面插入), 插入结果buffer的alloc
-    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
-    frisk::AllocBufferOp alloc {} ;
-    {
-      // RewriterBase::InsertionGuard ig{rewriter};
-      // rewriter.setInsertionPoint(currOp);
-      alloc = rewriter.create<frisk::AllocBufferOp>(op->getLoc(), resultShape, resultTensorType.getElementType(), 16, outMs[0]);
+    mlir::Operation* newop = nullptr;
+    if(mlir::isa<dg::AddOp>(op)){
+      auto memTy = MemRefType::get(resultShape, resultTensorType.getElementType(), AffineMap{}, outMs[0]);
+      newop = rewriter.create<frisk::AddOp>(op->getLoc(), memTy , memLhs, memRhs);
     }
-    std::vector<int64_t> ranges(resultShape.begin(), resultShape.end());
-    auto blockOp = rewriter.create<frisk::BlockOp>(op->getLoc(), ranges, nullptr);
-    {
-      PatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(blockOp.getBody(0));
-      SmallVector<Value, 4> indices(blockOp.getBody(0)->getArguments().begin(),
-                                    blockOp.getBody(0)->getArguments().end());
-      auto zero = rewriter.create<arith::ConstantIndexOp>(blockOp->getLoc(), 0);
-      auto buildOperandIndices = [&](Value mem, Value originalTensorVal) -> FailureOr<SmallVector<Value, 4>> {
-        auto memTy = dyn_cast<MemRefType>(mem.getType());
-        if (!memTy)
-          return failure();
-        auto srcTy = dyn_cast<RankedTensorType>(originalTensorVal.getType());
-        if (!srcTy)
-          return failure();
-        int64_t operandRank = memTy.getRank();
-        int64_t resultRank = static_cast<int64_t>(indices.size());
-        if (operandRank > resultRank)
-          return failure();
-        if (srcTy.getRank() != operandRank)
-          return failure();
-
-        int64_t offset = resultRank - operandRank;
-        SmallVector<Value, 4> operandIndices;
-        operandIndices.reserve(operandRank);
-        for (int64_t i = 0; i < operandRank; ++i) {
-          int64_t dim = offset + i;
-          // Broadcasted dimensions always read index 0 from the source tensor.
-          if (srcTy.getShape()[i] == 1) {
-            operandIndices.push_back(zero);
-          } else {
-            operandIndices.push_back(indices[dim]);
-          }
-        }
-        return operandIndices;
-      };
-      Value lhs {}, rhs {};
-      if(mlir::isa<MemRefType>(memLhs.getType())){
-        auto lhsIndicesOr = buildOperandIndices(memLhs, op.getLhs());
-        if (failed(lhsIndicesOr)){
-          return failure();
-        }
-        lhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memLhs, *lhsIndicesOr);
-      }
-      else{
-        lhs = memLhs;
-      }
-      if(mlir::isa<MemRefType>(memRhs.getType())){
-        auto rhsIndicesOr = buildOperandIndices(memRhs, op.getRhs());
-        if (failed(rhsIndicesOr)){
-          return failure();
-        }
-        rhs = rewriter.create<affine::AffineLoadOp>(blockOp->getLoc(), memRhs, *rhsIndicesOr);
-      }
-      else{
-        rhs = memRhs;
-      }
-
-      Value ret;
-      mlir::Operation* newOp {};
-      Type lhsType = lhs.getType();
-      if (isa<dg::AddOp>(op.getOperation())) {
-        if (isa<FloatType>(lhsType))
-          ret = rewriter.create<arith::AddFOp>(blockOp->getLoc(), lhs, rhs);
-        else
-          ret = rewriter.create<arith::AddIOp>(blockOp->getLoc(), lhs, rhs);
-      } else if (isa<dg::SubOp>(op.getOperation())) {
-        if (isa<FloatType>(lhsType))
-          ret = rewriter.create<arith::SubFOp>(blockOp->getLoc(), lhs, rhs);
-        else
-          ret = rewriter.create<arith::SubIOp>(blockOp->getLoc(), lhs, rhs);
-      } else if (isa<dg::MulOp>(op.getOperation())) {
-        if (isa<FloatType>(lhsType))
-          ret = rewriter.create<arith::MulFOp>(blockOp->getLoc(), lhs, rhs);
-        else
-          ret = rewriter.create<arith::MulIOp>(blockOp->getLoc(), lhs, rhs);
-        // frisk::AppendNameToLoc();
-      } else if (isa<dg::DivOp>(op.getOperation())) {
-        if (isa<FloatType>(lhsType))
-          ret = rewriter.create<arith::DivFOp>(blockOp->getLoc(), lhs, rhs);
-        else
-          ret = rewriter.create<arith::DivSIOp>(blockOp->getLoc(), lhs, rhs);
-      } else if (isa<dg::PowOp>(op.getOperation())) {
-        if (isa<FloatType>(lhsType))
-          ret = rewriter.create<math::PowFOp>(blockOp->getLoc(), lhs, rhs);
-        else if (isa<IntegerType>(lhsType))
-          ret = rewriter.create<math::IPowIOp>(blockOp->getLoc(), lhs, rhs);
-        else
-          return failure();
-      } else if (auto cmpOp = dyn_cast<dg::CmpOp>(op.getOperation())) {
-        Value pred;
-        if (isa<FloatType>(lhsType)) {
-          arith::CmpFPredicate fpred =
-              cmpOp.getCmpType() == dg::CmpType::GT ? arith::CmpFPredicate::OGT : arith::CmpFPredicate::OGE;
-          pred = rewriter.create<arith::CmpFOp>(blockOp->getLoc(), fpred, lhs, rhs);
-        } else if (isa<IntegerType, IndexType>(lhsType)) {
-          arith::CmpIPredicate ipred =
-              cmpOp.getCmpType() == dg::CmpType::GT ? arith::CmpIPredicate::sgt : arith::CmpIPredicate::sge;
-          pred = rewriter.create<arith::CmpIOp>(blockOp->getLoc(), ipred, lhs, rhs);
-        } else {
-          return failure();
-        }
-
-        Type outElemTy = resultTensorType.getElementType();
-        if (pred.getType() == outElemTy) {
-          ret = pred;
-        } else if (isa<IntegerType>(outElemTy)) {
-          ret = rewriter.create<arith::ExtUIOp>(blockOp->getLoc(), outElemTy, pred);
-        } else {
-          return failure();
-        }
-      } else {
-        return failure();
-      }
-
-      rewriter.create<affine::AffineStoreOp>(blockOp->getLoc(), ret, alloc, indices);
+    if(mlir::isa<dg::SubOp>(op)){
+      auto memTy = MemRefType::get(resultShape, resultTensorType.getElementType(), AffineMap{}, outMs[0]);
+      newop = rewriter.create<frisk::SubOp>(op->getLoc(), memTy , memLhs, memRhs);
     }
-    rewriter.replaceOp(op, alloc.getResult());
+    if(mlir::isa<dg::MulOp>(op)){
+      auto memTy = MemRefType::get(resultShape, resultTensorType.getElementType(), AffineMap{}, outMs[0]);
+      newop = rewriter.create<frisk::MulOp>(op->getLoc(), memTy , memLhs, memRhs);
+    }
+    if(mlir::isa<dg::DivOp>(op)){
+      auto memTy = MemRefType::get(resultShape, resultTensorType.getElementType(), AffineMap{}, outMs[0]);
+      newop = rewriter.create<frisk::DivOp>(op->getLoc(), memTy , memLhs, memRhs);
+    }
+    rewriter.replaceOp(op, newop);
     return success();
   }
 };
@@ -1448,28 +1322,9 @@ struct Exp2OpConversionPattern : public OpConversionPattern<dg::Exp2Op> {
     auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
     auto operandType = mlir::dyn_cast<MemRefType>(adaptor.getOperand().getType());
-
-    // 找到父级最外层的forOp(如果没有,就直接在前面插入)
-    mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
-    frisk::AllocBufferOp buffer {};
-    {
-      // RewriterBase::InsertionGuard ig{rewriter};
-      // rewriter.setInsertionPoint(currOp);
-      buffer = rewriter.create<frisk::AllocBufferOp>(loc, operandType.getShape(), operandType.getElementType(), 16, outMs[0]);
-    }
-
-    auto blockOp = rewriter.create<frisk::BlockOp>(loc, operandType.getShape(), nullptr);
-    {
-      RewriterBase::InsertionGuard g{rewriter};
-      rewriter.setInsertionPointToStart(blockOp.getBody(0));
-      std::vector<Value> indices = {blockOp.getBody(0)->getArguments().begin(), blockOp.getBody(0)->getArguments().end()};
-      auto operand = adaptor.getOperand();
-      AppendMemspaceToMemrefValue(operand, inMs[0]);
-      auto val = rewriter.create<affine::AffineLoadOp>(loc, operand, indices);
-      auto ret = rewriter.create<math::Exp2Op>(loc, val);
-      auto store = rewriter.create<affine::AffineStoreOp>(loc, ret, buffer, indices);
-    }
-    rewriter.replaceOp(op, buffer);
+    auto retType = getTypeConverter()->convertType(op.getType());
+    auto newop = rewriter.create<frisk::Exp2Op>(op->getLoc(), retType, adaptor.getOperand());
+    rewriter.replaceOp(op, newop);
     return success();
   }
 };
@@ -1487,13 +1342,8 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
     auto inMemTy = mlir::dyn_cast<MemRefType>( adaptor.getOperand().getType());
     // 找到父级最外层的forOp(如果没有,就直接在前面插入)
     mlir::Operation* currOp = getOuterMostOp<affine::AffineForOp>(op);
-    frisk::AllocBufferOp buffer {};
-    {
-      // RewriterBase::InsertionGuard ig{rewriter};
-      // rewriter.setInsertionPoint(currOp);
-      buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType(), 16, outMs[0]);
-    }
-      // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Value src, ::mlir::Value dst, ::mlir::StringAttr kind, ::mlir::IntegerAttr dim);
+    frisk::AllocBufferOp buffer = rewriter.create<frisk::AllocBufferOp>(loc, outMemTy.getShape(), outMemTy.getElementType(), 16, outMs[0]);
+
     std::string kind;
     switch (op.getReduceType()) {
       case dg::ReduceType::ADD: kind = "add";break;
@@ -1504,63 +1354,8 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
     auto operand = adaptor.getOperand();
     AppendMemspaceToMemrefValue(operand, inMs[0]);
     auto reduce = rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
-
-    if (auto init = adaptor.getInit()) {
-      if (op.getReduceType() != dg::ReduceType::ADD &&
-          op.getReduceType() != dg::ReduceType::MUL) {
-        return failure();
-      }
-      AppendMemspaceToMemrefValue(init, inMs[1]);
-      auto initMemTy = dyn_cast<MemRefType>(init.getType());
-      if (!initMemTy || initMemTy.getShape() != outMemTy.getShape()) {
-        return failure();
-      }
-
-      auto block = rewriter.create<frisk::BlockOp>(loc, outMemTy.getShape(), nullptr);
-      {
-        RewriterBase::InsertionGuard guard{rewriter};
-        rewriter.setInsertionPointToStart(block.getBody(0));
-        SmallVector<Value, 4> indices(block.getBody(0)->getArguments().begin(),
-                                      block.getBody(0)->getArguments().end());
-        auto reducedVal = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
-        auto initVal = rewriter.create<affine::AffineLoadOp>(loc, init, indices);
-        Value combined;
-        if (op.getReduceType() == dg::ReduceType::ADD) {
-          if (isa<FloatType>(outMemTy.getElementType())) {
-            combined = rewriter.create<arith::AddFOp>(loc, initVal, reducedVal);
-          } else {
-            combined = rewriter.create<arith::AddIOp>(loc, initVal, reducedVal);
-          }
-        } else {
-          if (isa<FloatType>(outMemTy.getElementType())) {
-            combined = rewriter.create<arith::MulFOp>(loc, initVal, reducedVal);
-          } else {
-            combined = rewriter.create<arith::MulIOp>(loc, initVal, reducedVal);
-          }
-        }
-        rewriter.create<affine::AffineStoreOp>(loc, combined, buffer, indices);
-      }
-    }
-
-    SmallVector<UnrealizedConversionCastOp, 4> memrefCastUsers;
-    for (Operation *user : op.getResult().getUsers()) {
-      auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
-      if (!castOp || castOp->getNumResults() != 1) {
-        continue;
-      }
-      auto castMemTy = dyn_cast<MemRefType>(castOp.getResult(0).getType());
-      if (!castMemTy || castMemTy.getShape() != outMemTy.getShape() ||
-          castMemTy.getElementType() != outMemTy.getElementType()) {
-        continue;
-      }
-      memrefCastUsers.push_back(castOp);
-    }
-    for (auto castOp : memrefCastUsers) {
-      rewriter.replaceAllUsesWith(castOp.getResult(0), buffer.getResult());
-      rewriter.eraseOp(castOp);
-    }
-
-    rewriter.replaceOp(op, buffer);
+    auto addToOld = rewriter.create<frisk::AddOp>(loc,buffer.getType(), buffer, adaptor.getInit());
+    rewriter.replaceOp(op, addToOld);
     return success();
   }
 };
@@ -1582,89 +1377,60 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
 */
 struct MaskOpConversionPattern : public OpConversionPattern<dg::MaskOp> {
   using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(dg::MaskOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const override
-  {
+
+  LogicalResult matchAndRewrite(
+      dg::MaskOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    auto inMs = getOpInputMemspaceAttr(op).asArrayRef();
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef();
-    frisk::AllocBufferOp buffer = nullptr;
-    {
-      // RewriterBase::InsertionGuard ig{rewriter};
-      // auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
-      // rewriter.setInsertionPoint(outerMostFor);
-      buffer = rewriter.create<frisk::AllocBufferOp>(loc, op.getSizes(), op.getElementType(), 16, outMs[0]);
-    }
-    auto starts = op.getStarts();
-    
-    auto newOp = rewriter.create<frisk::BlockOp>(loc, op.getSizes(), nullptr);
-    auto *newBody = newOp.getBody(0);
-    auto ivs = newBody->getArguments();
-    if (starts.size() != ivs.size()){
+
+    // 1. 类型转换：获取新 Op 的返回类型
+    auto retMemType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!retMemType)
       return failure();
-    }
-    
-    // starts 转为 affineExpr，与 blockOp的arg结合，构成 shiftedIndices
-    rewriter.setInsertionPointToStart(newBody);
-    SmallVector<Value, 2> shiftedIndices;
-    for(int i=0;i<starts.size();++i){
-      std::map<std::string, AffineExpr> dims{}; std::map<int, Value> arglist {};
-      AffineExpr indiceExpr = GetExprOfValue(starts[i], dims, arglist);
-      int dimCount = dims.size();
-      indiceExpr = indiceExpr + getAffineDimExpr(dimCount, op->getContext());
-      arglist[dimCount] = ivs[i];
-      std::vector<AffineExpr> exprs = {indiceExpr};
 
-      SmallVector<Value,4> mapOperands {};
-      for(int i=0;i<arglist.size();++i){
-        mapOperands.push_back(arglist.at(i));
-      }
-      auto newIndex = rewriter.create<affine::AffineApplyOp>(op->getLoc(), exprs, mapOperands);
-      shiftedIndices.push_back(newIndex);
+    // 2. 创建新的 frisk::MaskOp (此时 Region 内部为空，没有 Block)
+    auto newMask = rewriter.create<frisk::MaskOp>(
+        loc, retMemType, adaptor.getStarts(), op.getSizes(), op.getElementType());
+
+    // 3. 获取旧 Block 并为 newMask 创建新的 Block
+    Block *oldBlock = op.getBody(0); // 原 dg::MaskOp 的 Block
+    Region &newRegion = newMask.getRegion(); // 或 newMask.getBodyRegion()
+
+    // 为 newBlock 添加对应的 Block Arguments（如果旧 Block 有参数）
+    Block *newBlock = rewriter.createBlock(&newRegion);
+    for (BlockArgument oldArg : oldBlock->getArguments()) {
+      Type convertedType = getTypeConverter()->convertType(oldArg.getType());
+      newBlock->addArgument(convertedType ? convertedType : oldArg.getType(), loc);
     }
 
-    // Replace source block arguments at inline time, avoiding RAUW on IVs.
-    // 用全局的shiftIndice 替换原有的blockArg
-    rewriter.inlineBlockBefore(op.getBody(0), newBody, newBody->getTerminator()->getIterator(), shiftedIndices);
+    // 4. 将 oldBlock 规整地合并入 newBlock
+    // rewriter.mergeBlocks 会：
+    //  a) 将 oldBlock 里的所有指令移到 newBlock
+    //  b) 自动将 oldBlock 的 BlockArgs 映射/替换为 newBlock->getArguments()
+    //  c) 销毁 oldBlock
+    rewriter.mergeBlocks(oldBlock, newBlock, newBlock->getArguments());
 
-    // 查找mask 内的scf.if else 语句块，获取true false两个值
-    std::vector<scf::IfOp> ifOPs{};
-    newBody->walk([&](scf::IfOp ifOp){
-      ifOPs.push_back(ifOp);
+    // 5. 替换 Terminator (将 dg::MaskYieldOp 替换为 frisk::MaskYieldOp)
+    // 注意：因为 mergeBlocks 已经将指令移到了 newBlock 中，此时在 newBlock 里查找 Yield
+    dg::MaskYieldOp oldYield = nullptr;
+    newBlock->walk([&](dg::MaskYieldOp yield) {
+      oldYield = yield;
     });
-    // 替换 scf.if else 为 arith.select
-    for(auto ifOp : ifOPs){
-      mlir::Value cond{};
-      mlir::Value thenYield {};
-      mlir::Value elseYield {};
-      cond = ifOp.getCondition();
-      ifOp.getThenRegion().walk([&](scf::YieldOp yield){
-        thenYield = yield->getOperand(0);
-      });
-      ifOp.getElseRegion().walk([&](scf::YieldOp yield){
-        elseYield = yield->getOperand(0);
-      });
-      rewriter.setInsertionPoint(ifOp);
-      auto select = rewriter.create<arith::SelectOp>(op->getLoc(), cond, thenYield, elseYield);
-      rewriter.replaceOp(ifOp, select);
+
+    if (oldYield) {
+      rewriter.setInsertionPoint(oldYield);
+      // 使用转换后的 Yield 操作数创建新的 frisk::MaskYieldOp
+      rewriter.create<frisk::MaskYieldOp>(oldYield.getLoc(), oldYield.getOperands());
+      rewriter.eraseOp(oldYield);
+    } else {
+      // 如果没有找到对应的 MaskYieldOp，根据业务选择报错或补充逻辑
+      return rewriter.notifyMatchFailure(op, "dg::MaskYieldOp not found in body");
     }
 
-    SmallVector<dg::MaskYieldOp, 2> yields;
-    newOp->walk([&](dg::MaskYieldOp yield) { yields.push_back(yield); });
-    for (dg::MaskYieldOp yield : yields) {
-      RewriterBase::InsertionGuard guard{rewriter};
-      rewriter.setInsertionPoint(yield);
-      if(outMs[0] == int(friskMs::Local)){
-        // 对maskOp，若 dst为local，只需要考虑线程自己持有的数据即可。不需要全局的shiftIndice
-        rewriter.create<affine::AffineStoreOp>(loc, yield->getOperand(0), buffer, newBody->getArguments());
-      }
-      else{
-        assert(false && "dg::maskOp 的dst只能是local!检查前面的推断代码是否有错");
-      }
-      rewriter.eraseOp(yield);
-    }
+    // 6. 替换原 Operation
+    rewriter.replaceOp(op, newMask.getResult());
 
-    rewriter.replaceOp(op, buffer);
     return success();
   }
 };

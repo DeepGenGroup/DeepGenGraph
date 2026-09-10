@@ -39,13 +39,11 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/AnalysisManager.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -437,10 +435,7 @@ public:
       int kWarpInstUnroll = infoA.warpInstUnroll[1];
 
       auto regCShape = infoC.get_thread_own_data_size();
-      auto regC_singleInstShape = infoC.get_thread_widths() * infoC.get_warp_repeat();
       auto regCTy = VectorType::get(regCShape, typeC.getElementType());
-      auto tempVecTy =
-          VectorType::get(regC_singleInstShape, typeC.getElementType());
       auto regCInit = rewriter.create<arith::ConstantOp>(
           op->getLoc(), regCTy,
           mlir::cast<TypedAttr>(rewriter.getZeroAttr(regCTy)));
@@ -461,12 +456,8 @@ public:
       Value cBr1 = modBy(rewriter, op->getLoc(), cTmp, br1);
       Value cBr0 = floorDivBy(rewriter, op->getLoc(), cTmp, br1);
 
-      auto tempVecInit = rewriter.create<arith::ConstantOp>(
-          op->getLoc(), tempVecTy,
-          mlir::cast<TypedAttr>(rewriter.getZeroAttr(tempVecTy)));
       auto kFor = rewriter.create<affine::AffineForOp>(
-          op->getLoc(), 0, kLoopCount, 1,
-          ValueRange{tempVecInit.getResult()});
+          op->getLoc(), 0, kLoopCount, 1, ValueRange{regC});
       kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
       rewriter.setInsertionPointToStart(kFor.getBody());
 
@@ -595,90 +586,18 @@ public:
       }
 
       auto wmma = rewriter.create<frisk::WarpMmaRROp>(
-          op->getLoc(), tempVecTy, thBufferA, thBufferB, kRegC);
+          op->getLoc(), regCTy, thBufferA, thBufferB, kRegC);
       rewriter.modifyOpInPlace(wmma, [&](){
         wmma->setAttr("inst_name", instName);
         wmma->setAttr("inst_constraints", op->getAttr("inst_constraints"));
       });
-
       // auto *oldKTerm = kFor.getBody()->getTerminator();
       rewriter.create<affine::AffineYieldOp>(op->getLoc(), wmma.getResult());
       // rewriter.eraseOp(oldKTerm);
 
-      rewriter.setInsertionPointAfter(kFor);
-      auto insertTempVecIntoRegC = [&](Value tempVec, Value fullRegC) -> Value {
-        SmallVector<Value, 2> tempIvs;
-        auto cOffsetMap = buildThreadTileOffsetMap(rewriter, infoC);
-        Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
-
-        std::function<Value(unsigned, Value)> emitLoopNest =
-            [&](unsigned dim, Value currentFullRegC) -> Value {
-          if (dim != static_cast<unsigned>(tempVecTy.getRank())) {
-            auto forOp = rewriter.create<affine::AffineForOp>(
-                op->getLoc(), /*lowerBound=*/0, tempVecTy.getDimSize(dim),
-                /*step=*/1, ValueRange{currentFullRegC});
-            rewriter.setInsertionPointToStart(forOp.getBody());
-            tempIvs.push_back(forOp.getInductionVar());
-            Value nested =
-                emitLoopNest(dim + 1, forOp.getRegionIterArgs()[0]);
-            rewriter.create<affine::AffineYieldOp>(op->getLoc(), nested);
-            tempIvs.pop_back();
-            rewriter.setInsertionPointAfter(forOp);
-            return forOp.getResult(0);
-          }
-
-          SmallVector<int64_t, 2> staticTempPosition(
-              tempIvs.size(), ShapedType::kDynamic);
-          auto scalar = rewriter.create<vector::ExtractOp>(
-              op->getLoc(), tempVecTy.getElementType(), tempVec, tempIvs,
-              rewriter.getDenseI64ArrayAttr(staticTempPosition));
-
-          SmallVector<Value, 2> wrIvs;
-          SmallVector<Value, 2> regIvs;
-          wrIvs.reserve(2);
-          regIvs.reserve(2);
-          for (int i = 0; i < 2; ++i) {
-            Value iv = i < static_cast<int>(tempIvs.size()) ? tempIvs[i] : zero;
-            int64_t threadWidth = infoC.get_thread_widths()[i];
-            wrIvs.push_back(
-                floorDivBy(rewriter, op->getLoc(), iv, threadWidth));
-            regIvs.push_back(modBy(rewriter, op->getLoc(), iv, threadWidth));
-          }
-          Value wrFlat = flattenXY(rewriter, op->getLoc(), wrIvs,
-                                   infoC.base_layout.warp_repeat_order,
-                                   infoC.get_warp_repeat());
-          Value regFlat = flattenXY(rewriter, op->getLoc(), regIvs,
-                                    infoC.base_layout.thread_creg_order,
-                                    infoC.get_thread_widths());
-          SmallVector<Value, 6> mapOperands{cBr0, cBr1, cWiu0,
-                                            cWiu1, wrFlat, regFlat};
-          SmallVector<OpFoldResult, 2> fullPosition;
-          fullPosition.reserve(regCTy.getRank());
-          for (int64_t i = 0; i < regCTy.getRank(); ++i) {
-            auto oneResultMap =
-                AffineMap::get(cOffsetMap.getNumDims(),
-                               cOffsetMap.getNumSymbols(),
-                               cOffsetMap.getResult(i),
-                               rewriter.getContext());
-            fullPosition.push_back(
-                rewriter
-                    .create<affine::AffineApplyOp>(op->getLoc(), oneResultMap,
-                                                   mapOperands)
-                    .getResult());
-          }
-
-          return rewriter
-              .create<vector::InsertOp>(op->getLoc(), scalar.getResult(),
-                                        currentFullRegC, fullPosition)
-              .getResult();
-        };
-
-        return emitLoopNest(0, fullRegC);
-      };
-      Value updatedRegC = insertTempVecIntoRegC(kFor.getResult(0), regC);
-
+      rewriter.setInsertionPointToEnd(mnFor.getBody());
       // auto *oldMnTerm = mnFor.getBody()->getTerminator();
-      rewriter.create<affine::AffineYieldOp>(op->getLoc(), updatedRegC);
+      rewriter.create<affine::AffineYieldOp>(op->getLoc(), kFor.getResult(0));
       // rewriter.eraseOp(oldMnTerm);
 
       s_buffer_replace[op.getC()] = mnFor.getResult(0);
@@ -1024,289 +943,6 @@ static void eraseDeadUnrealizedConversionCasts(Operation *root) {
   }
 }
 
-static void eraseTriviallyDeadOps(Operation *root) {
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    SmallVector<Operation *> deadOps;
-    root->walk<WalkOrder::PostOrder>([&](Operation *op) {
-      if (op != root && isOpTriviallyDead(op)) {
-        deadOps.push_back(op);
-      }
-    });
-    for (Operation *op : deadOps) {
-      op->erase();
-      changed = true;
-    }
-  }
-}
-
-static bool isBroadcastCompatible(VectorType srcTy, VectorType dstTy) {
-  if (!srcTy || !dstTy ||
-      srcTy.getElementType() != dstTy.getElementType() ||
-      srcTy.getRank() > dstTy.getRank()) {
-    return false;
-  }
-
-  int64_t rankOffset = dstTy.getRank() - srcTy.getRank();
-  for (int64_t i = 0; i < srcTy.getRank(); ++i) {
-    int64_t srcDim = srcTy.getDimSize(i);
-    int64_t dstDim = dstTy.getDimSize(i + rankOffset);
-    if (srcDim != 1 && srcDim != dstDim) {
-      return false;
-    }
-  }
-  return true;
-}
-
-static FailureOr<Value> broadcastVectorIfCompatible(
-    Value vector, VectorType dstTy, ConversionPatternRewriter &rewriter,
-    Location loc) {
-  auto srcTy = mlir::dyn_cast<VectorType>(vector.getType());
-  if (!srcTy || !isBroadcastCompatible(srcTy, dstTy)) {
-    return failure();
-  }
-  if (srcTy == dstTy) {
-    return vector;
-  }
-  return rewriter.create<vector::BroadcastOp>(loc, dstTy, vector).getResult();
-}
-
-static bool isZeroLike(Value value) {
-  if (matchPattern(value, m_Zero())) {
-    return true;
-  }
-  auto constant = value.getDefiningOp<arith::ConstantOp>();
-  if (!constant) {
-    return false;
-  }
-  Attribute attr = constant.getValue();
-  if (auto elements = dyn_cast<ElementsAttr>(attr)) {
-    if (!elements.isSplat()) {
-      return false;
-    }
-    attr = elements.getSplatValue<Attribute>();
-  }
-  if (auto floatAttr = dyn_cast<FloatAttr>(attr)) {
-    return floatAttr.getValue().isZero();
-  }
-  if (auto integerAttr = dyn_cast<IntegerAttr>(attr)) {
-    return integerAttr.getValue().isZero();
-  }
-  return false;
-}
-
-static std::optional<LowerInfo>
-findThreadCarrierLowerInfo(Value value, Operation *anchor) {
-  if (!s_info) {
-    return std::nullopt;
-  }
-
-  SmallVector<Value, 8> worklist{value};
-  SmallVector<Value, 8> visited;
-
-  auto enqueue = [&](Value candidate) {
-    if (candidate && !llvm::is_contained(visited, candidate) &&
-        !llvm::is_contained(worklist, candidate)) {
-      worklist.push_back(candidate);
-    }
-  };
-
-  auto lookup = [&](Value candidate,
-                    Operation *op) -> std::optional<LowerInfo> {
-    if (op) {
-      if (auto *info = s_info->getLowerInfo(candidate, op)) {
-        return *info;
-      }
-      if (auto *info = s_info->getNearestInferedInfo(candidate, op, true)) {
-        return *info;
-      }
-      if (auto *info = s_info->getNearestInferedInfo(candidate, op, false)) {
-        return *info;
-      }
-    }
-    for (Operation *user : candidate.getUsers()) {
-      if (auto *info = s_info->getLowerInfo(candidate, user)) {
-        return *info;
-      }
-    }
-    for (auto &entry : *s_info) {
-      if (entry.second.buffer == candidate) {
-        return entry.second;
-      }
-    }
-    return std::nullopt;
-  };
-
-  while (!worklist.empty()) {
-    Value candidate = worklist.pop_back_val();
-    visited.push_back(candidate);
-
-    if (auto info = lookup(candidate, anchor)) {
-      return info;
-    }
-
-    if (auto castOp = candidate.getDefiningOp<UnrealizedConversionCastOp>();
-        castOp && castOp.getInputs().size() == 1) {
-      enqueue(castOp.getInputs()[0]);
-    }
-
-    for (Operation *user : candidate.getUsers()) {
-      for (Value result : user->getResults()) {
-        enqueue(result);
-      }
-      if (auto copyOp = dyn_cast<frisk::CopyOp>(user)) {
-        enqueue(copyOp.getSrcMemRef());
-        enqueue(copyOp.getDstMemRef());
-      }
-    }
-  }
-
-  return std::nullopt;
-}
-
-static std::optional<VectorType>
-inferThreadOwnedVectorTypeForCarrier(Value carrier, VectorType oldTy,
-                                     Operation *anchor) {
-  auto info = findThreadCarrierLowerInfo(carrier, anchor);
-  if (!info) {
-    return std::nullopt;
-  }
-
-  auto threadOwnData = info->get_thread_own_data_size();
-  SmallVector<int64_t, 2> shape;
-  shape.reserve(oldTy.getRank());
-  for (int64_t i = 0; i < oldTy.getRank(); ++i) {
-    int64_t dim = i < static_cast<int64_t>(threadOwnData.size())
-                      ? threadOwnData[i]
-                      : oldTy.getDimSize(i);
-    if (dim <= 0) {
-      return std::nullopt;
-    }
-    shape.push_back(dim);
-  }
-
-  auto newTy = VectorType::get(shape, oldTy.getElementType());
-  if (newTy == oldTy) {
-    return std::nullopt;
-  }
-  return newTy;
-}
-
-static bool normalizeLoopCarriedBlockVectors(func::FuncOp kernel) {
-  SmallVector<affine::AffineForOp, 8> loops;
-  kernel.walk([&](affine::AffineForOp forOp) {
-    loops.push_back(forOp);
-  });
-
-  bool changed = false;
-  IRRewriter rewriter(kernel.getContext());
-
-  for (affine::AffineForOp forOp : llvm::reverse(loops)) {
-    if (!forOp || forOp->hasAttr("thread_yield_normalized") ||
-        forOp.getNumRegionIterArgs() == 0) {
-      continue;
-    }
-
-    SmallVector<Value> newInits;
-    SmallVector<Type> newResultTypes;
-    newInits.reserve(forOp.getInits().size());
-    newResultTypes.reserve(forOp.getNumResults());
-
-    bool shouldRewrite = false;
-    bool canRewrite = true;
-    for (auto [idx, init] : llvm::enumerate(forOp.getInits())) {
-      Value regionArg = forOp.getRegionIterArgs()[idx];
-      auto oldTy = mlir::dyn_cast<VectorType>(regionArg.getType());
-      if (!oldTy) {
-        newInits.push_back(init);
-        newResultTypes.push_back(regionArg.getType());
-        continue;
-      }
-
-      auto newTy =
-          inferThreadOwnedVectorTypeForCarrier(regionArg, oldTy, forOp);
-      if (!newTy) {
-        newInits.push_back(init);
-        newResultTypes.push_back(regionArg.getType());
-        continue;
-      }
-      if (!isZeroLike(init)) {
-        canRewrite = false;
-        break;
-      }
-
-      rewriter.setInsertionPoint(forOp);
-      auto zeroAttr = rewriter.getZeroAttr(newTy->getElementType());
-      auto denseAttr = DenseElementsAttr::get(*newTy, zeroAttr);
-      auto zero =
-          rewriter.create<arith::ConstantOp>(forOp.getLoc(), *newTy, denseAttr);
-      newInits.push_back(zero.getResult());
-      newResultTypes.push_back(*newTy);
-      shouldRewrite = true;
-    }
-
-    if (!canRewrite || !shouldRewrite) {
-      rewriter.modifyOpInPlace(forOp, [&]() {
-        forOp->setAttr("thread_yield_normalized",
-                       rewriter.getBoolAttr(true));
-      });
-      continue;
-    }
-
-    rewriter.setInsertionPoint(forOp);
-    auto newForOp = rewriter.create<affine::AffineForOp>(
-        forOp.getLoc(), forOp.getLowerBoundOperands(), forOp.getLowerBoundMap(),
-        forOp.getUpperBoundOperands(), forOp.getUpperBoundMap(),
-        forOp.getStepAsInt(), newInits);
-    for (NamedAttribute attr : forOp->getAttrs()) {
-      StringRef name = attr.getName().getValue();
-      if (name == "lowerBoundMap" || name == "upperBoundMap" ||
-          name == "operandSegmentSizes" || name == "step") {
-        continue;
-      }
-      newForOp->setAttr(attr.getName(), attr.getValue());
-    }
-    newForOp->setAttr("thread_yield_normalized", rewriter.getBoolAttr(true));
-
-    IRMapping mapper;
-    Block *oldBlock = forOp.getBody();
-    Block *newBlock = newForOp.getBody();
-    for (auto [oldArg, newArg] :
-         llvm::zip(oldBlock->getArguments(), newBlock->getArguments())) {
-      mapper.map(oldArg, newArg);
-    }
-
-    rewriter.setInsertionPointToStart(newBlock);
-    for (Operation &child : oldBlock->without_terminator()) {
-      rewriter.clone(child, mapper);
-    }
-
-    auto oldYield = cast<affine::AffineYieldOp>(oldBlock->getTerminator());
-    SmallVector<Value> yieldValues;
-    yieldValues.reserve(oldYield.getNumOperands());
-    for (auto [idx, operand] : llvm::enumerate(oldYield.getOperands())) {
-      Value mapped = mapper.lookupOrDefault(operand);
-      if (mapped.getType() != newResultTypes[idx]) {
-        canRewrite = false;
-        break;
-      }
-      yieldValues.push_back(mapped);
-    }
-    if (!canRewrite) {
-      rewriter.eraseOp(newForOp);
-      continue;
-    }
-
-    rewriter.setInsertionPointToEnd(newBlock);
-    rewriter.create<affine::AffineYieldOp>(oldYield.getLoc(), yieldValues);
-    rewriter.replaceOp(forOp, newForOp.getResults());
-    changed = true;
-  }
-
-  return changed;
-}
-
 static FailureOr<Value> castFloatVectorElementType(
     Value vector, Type dstElementType, ConversionPatternRewriter &rewriter,
     Location loc) {
@@ -1404,17 +1040,12 @@ public:
 
 	    auto materializeVector = [&](Value original, Value adapted,
 	                                 LowerInfo &info) -> FailureOr<Value> {
-      if (Value vector = getVectorReplacement(original, op.getOperation())) {
-        auto vecTy = mlir::cast<VectorType>(vector.getType());
-        if (vecTy != resultVecTy) {
-          if (auto broadcasted = broadcastVectorIfCompatible(
-                  vector, resultVecTy, rewriter, op->getLoc());
-              succeeded(broadcasted)) {
-            return *broadcasted;
-          }
-          auto tile = extractThreadTileFromVector(vector, resultVecTy, info,
-                                                  rewriter, op->getLoc(),
-                                                  op.getOperation());
+	      if (Value vector = getVectorReplacement(original, op.getOperation())) {
+	        auto vecTy = mlir::cast<VectorType>(vector.getType());
+	        if (vecTy != resultVecTy) {
+	          auto tile = extractThreadTileFromVector(vector, resultVecTy, info,
+	                                                  rewriter, op->getLoc(),
+	                                                  op.getOperation());
 	          if (succeeded(tile)) {
 	            return *tile;
 	          }
@@ -1424,13 +1055,8 @@ public:
 	        return vector;
 	      }
 
-      if (auto vecTy = mlir::dyn_cast<VectorType>(adapted.getType())) {
-        if (vecTy != resultVecTy) {
-          if (auto broadcasted = broadcastVectorIfCompatible(
-                  adapted, resultVecTy, rewriter, op->getLoc());
-              succeeded(broadcasted)) {
-            return *broadcasted;
-          }
+	      if (auto vecTy = mlir::dyn_cast<VectorType>(adapted.getType())) {
+	        if (vecTy != resultVecTy) {
           auto tile = extractThreadTileFromVector(adapted, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
@@ -1449,11 +1075,6 @@ public:
         Value castInput = castOp.getInputs()[0];
         auto vecTy = mlir::cast<VectorType>(castInput.getType());
         if (vecTy != resultVecTy) {
-          if (auto broadcasted = broadcastVectorIfCompatible(
-                  castInput, resultVecTy, rewriter, op->getLoc());
-              succeeded(broadcasted)) {
-            return *broadcasted;
-          }
           auto tile = extractThreadTileFromVector(castInput, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
@@ -1768,8 +1389,8 @@ public:
     auto dstInfo = *dstInfoOr;
     srcInfo.buffer = op.getSrc();
     dstInfo.buffer = op.getDst();
-    // srcInfo.show("reduce_src");
-    // dstInfo.show("reduce_dst");
+    srcInfo.show("reduce_src");
+    dstInfo.show("reduce_dst");
     // 获取src 的 memrefType
     auto srcTy = mlir::cast<MemRefType>(adaptor.getSrc().getType());
     auto dstTy = mlir::cast<MemRefType>(adaptor.getDst().getType());
@@ -2911,100 +2532,40 @@ public:
     auto dstMem = op.getDstMemRef();
 
     auto getCopyValueInfo = [&](Value value) -> std::optional<LowerInfo> {
-      SmallVector<Value, 8> worklist{value};
-      SmallVector<Value, 8> visited;
-
-      auto enqueue = [&](Value candidate) {
-        if (candidate && !llvm::is_contained(visited, candidate) &&
-            !llvm::is_contained(worklist, candidate)) {
-          worklist.push_back(candidate);
-        }
-      };
-
-      auto getAffineForInitForIterArg = [](Value candidate) -> Value {
-        auto blockArg = mlir::dyn_cast<BlockArgument>(candidate);
-        if (!blockArg || blockArg.getArgNumber() == 0) {
-          return {};
-        }
-        auto forOp =
-            mlir::dyn_cast<affine::AffineForOp>(blockArg.getOwner()->getParentOp());
-        if (!forOp) {
-          return {};
-        }
-        unsigned initIndex = blockArg.getArgNumber() - 1;
-        if (initIndex >= forOp.getInits().size()) {
-          return {};
-        }
-        return forOp.getInits()[initIndex];
-      };
-
-      auto findDirectInfo = [&](Value candidate) -> std::optional<LowerInfo> {
-        if (auto *info = s_info->getLowerInfo(candidate, op.getOperation())) {
+      if (auto *info = s_info->getLowerInfo(value, op.getOperation())) {
+        return *info;
+      }
+      for (auto user : value.getUsers()) {
+        if (auto *info = s_info->getLowerInfo(value, user)) {
           return *info;
         }
-        for (auto user : candidate.getUsers()) {
-          if (auto *info = s_info->getLowerInfo(candidate, user)) {
+      }
+      if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>();
+          castOp && castOp.getInputs().size() == 1) {
+        Value source = castOp.getInputs()[0];
+        if (auto *info = s_info->getLowerInfo(source, op.getOperation())) {
+          return *info;
+        }
+        for (auto user : source.getUsers()) {
+          if (auto *info = s_info->getLowerInfo(source, user)) {
             return *info;
           }
         }
-        for (auto &entry : *s_info) {
-          if (entry.second.buffer == candidate) {
-            return entry.second;
-          }
-        }
-        for (auto &entry : s_buffer_replace) {
-          if (entry.second == candidate) {
-            if (auto *info = s_info->getLowerInfo(entry.first, op.getOperation())) {
-              return *info;
-            }
-            for (auto user : entry.first.getUsers()) {
-              if (auto *info = s_info->getLowerInfo(entry.first, user)) {
-                return *info;
-              }
-            }
-            for (auto &infoEntry : *s_info) {
-              if (infoEntry.second.buffer == entry.first) {
-                return infoEntry.second;
-              }
-            }
-          }
-        }
-        return std::nullopt;
-      };
-
-      while (!worklist.empty()) {
-        Value candidate = worklist.pop_back_val();
-        visited.push_back(candidate);
-
-        if (auto info = findDirectInfo(candidate)) {
-          return info;
-        }
-
-        if (auto castOp = candidate.getDefiningOp<UnrealizedConversionCastOp>();
-            castOp && castOp.getInputs().size() == 1) {
-          enqueue(castOp.getInputs()[0]);
-        }
-
-        if (auto init = getAffineForInitForIterArg(candidate)) {
-          enqueue(init);
-        }
-
-        if (auto result = mlir::dyn_cast<OpResult>(candidate)) {
-          if (auto forOp = mlir::dyn_cast<affine::AffineForOp>(result.getOwner());
-              forOp && result.getResultNumber() < forOp.getNumRegionIterArgs()) {
-            enqueue(forOp.getRegionIterArgs()[result.getResultNumber()]);
-            enqueue(forOp.getInits()[result.getResultNumber()]);
-          }
+      }
+      for (auto &entry : *s_info) {
+        if (entry.second.buffer == value) {
+          return entry.second;
         }
       }
-
       return std::nullopt;
     };
 
     auto lowerVectorCopy = [&]() -> LogicalResult {
       Value srcVector = getVectorReplacement(srcMem, op.getOperation());
       Value dstVector = getVectorValue(dstMem);
-      auto srcMemType = mlir::dyn_cast<MemRefType>(srcMem.getType());
+      if (!srcVector) {
+        return failure();
+      }
       auto dstMemType = mlir::dyn_cast<MemRefType>(dstMem.getType());
       auto eraseUnusedAllocBuffer = [&](Value value) {
         if (auto alloc = value.getDefiningOp<frisk::AllocBufferOp>()) {
@@ -3020,135 +2581,6 @@ public:
           }
         }
       };
-      auto castScalarForVectorElement = [&](Value scalar, Type dstElementType)
-          -> FailureOr<Value> {
-        if (scalar.getType() == dstElementType) {
-          return scalar;
-        }
-        auto srcFloatTy = mlir::dyn_cast<FloatType>(scalar.getType());
-        auto dstFloatTy = mlir::dyn_cast<FloatType>(dstElementType);
-        if (!srcFloatTy || !dstFloatTy) {
-          return failure();
-        }
-        if (srcFloatTy.getWidth() < dstFloatTy.getWidth()) {
-          return rewriter.create<arith::ExtFOp>(op->getLoc(), dstFloatTy, scalar)
-              .getResult();
-        }
-        if (srcFloatTy.getWidth() > dstFloatTy.getWidth()) {
-          return rewriter.create<arith::TruncFOp>(op->getLoc(), dstFloatTy, scalar)
-              .getResult();
-        }
-        return scalar;
-      };
-      auto replaceTerminatorUseOrRegister = [&](Value oldDst, Value updatedDst) {
-        if (!mlir::isa<BlockArgument>(oldDst)) {
-          s_buffer_replace[oldDst] = updatedDst;
-          if (auto castOp = oldDst.getDefiningOp<UnrealizedConversionCastOp>();
-              castOp && castOp.getInputs().size() == 1) {
-            s_buffer_replace[castOp.getInputs()[0]] = updatedDst;
-          }
-        }
-
-        Operation *terminator = op->getBlock()->getTerminator();
-        if (terminator && op->isBeforeInBlock(terminator)) {
-          rewriter.modifyOpInPlace(terminator, [&]() {
-            for (OpOperand &operand : terminator->getOpOperands()) {
-              if (operand.get() == oldDst) {
-                operand.set(updatedDst);
-              }
-            }
-          });
-        }
-      };
-
-      if (!srcVector && dstVector && srcMemType) {
-        auto dstVecTy = mlir::cast<VectorType>(dstVector.getType());
-        if (srcMemType.getRank() > dstVecTy.getRank()) {
-          return rewriter.notifyMatchFailure(
-              op, "memref-to-vector copy source rank exceeds destination rank");
-        }
-
-        bool fullShapeCopy =
-            srcMemType.getRank() == dstVecTy.getRank() &&
-            llvm::equal(srcMemType.getShape(), dstVecTy.getShape());
-        auto copyInfo = getCopyValueInfo(srcMem);
-        if (!copyInfo) {
-          copyInfo = getCopyValueInfo(dstMem);
-        }
-        if (!fullShapeCopy && !copyInfo) {
-          return rewriter.notifyMatchFailure(
-              op, "memref-to-vector copy LowerInfo not found");
-        }
-
-        std::vector<int> loopUpperBounds;
-        loopUpperBounds.reserve(srcMemType.getRank());
-        for (int64_t dim : srcMemType.getShape()) {
-          if (dim < 0 || dim > std::numeric_limits<int>::max()) {
-            return rewriter.notifyMatchFailure(
-                op, "memref-to-vector copy expects static int-sized source shape");
-          }
-          loopUpperBounds.push_back(static_cast<int>(dim));
-        }
-
-        SmallVector<Value, 2> copyIvs;
-        std::function<Value(unsigned, Value)> emitLoopNest =
-            [&](unsigned dim, Value currentVector) -> Value {
-          if (dim != static_cast<unsigned>(srcMemType.getRank())) {
-            auto forOp = rewriter.create<affine::AffineForOp>(
-                op->getLoc(), /*lowerBound=*/0, loopUpperBounds[dim],
-                /*step=*/1, ValueRange{currentVector});
-            rewriter.setInsertionPointToStart(forOp.getBody());
-            copyIvs.push_back(forOp.getInductionVar());
-            Value nested =
-                emitLoopNest(dim + 1, forOp.getRegionIterArgs()[0]);
-            rewriter.create<affine::AffineYieldOp>(op->getLoc(), nested);
-            copyIvs.pop_back();
-            rewriter.setInsertionPointAfter(forOp);
-            return forOp.getResult(0);
-          }
-
-          SmallVector<Value> srcIndices(copyIvs.begin(), copyIvs.end());
-          Value scalar = rewriter.create<affine::AffineLoadOp>(
-              op->getLoc(), srcMem, srcIndices);
-          auto castedScalar =
-              castScalarForVectorElement(scalar, dstVecTy.getElementType());
-          if (failed(castedScalar)) {
-            return Value{};
-          }
-
-          SmallVector<Value, 4> dstIndices;
-          if (fullShapeCopy) {
-            dstIndices.append(copyIvs.begin(), copyIvs.end());
-          } else {
-            dstIndices = buildMappedAccessIndices(
-                rewriter, op->getLoc(), *copyInfo, findThreadIdxOp(op),
-                copyIvs, static_cast<unsigned>(dstVecTy.getRank()));
-          }
-          SmallVector<OpFoldResult, 4> dstPosition;
-          dstPosition.reserve(dstIndices.size());
-          for (Value index : dstIndices) {
-            dstPosition.push_back(index);
-          }
-          return rewriter
-              .create<vector::InsertOp>(op->getLoc(), *castedScalar,
-                                        currentVector, dstPosition)
-              .getResult();
-        };
-
-        Value updatedDst = emitLoopNest(0, dstVector);
-        if (!updatedDst) {
-          return rewriter.notifyMatchFailure(
-              op, "memref-to-vector copy element type conversion is unsupported");
-        }
-        replaceTerminatorUseOrRegister(dstMem, updatedDst);
-        rewriter.eraseOp(op);
-        eraseUnusedAllocBuffer(srcMem);
-        return success();
-      }
-
-      if (!srcVector) {
-        return failure();
-      }
 
       if (!dstVector && dstMemType) {
         auto casted = castFloatVectorElementType(
@@ -3281,7 +2713,25 @@ public:
         updatedDst = *inserted;
       }
 
-      replaceTerminatorUseOrRegister(dstMem, updatedDst);
+      if (!mlir::isa<BlockArgument>(dstMem)) {
+        s_buffer_replace[dstMem] = updatedDst;
+        if (auto castOp = dstMem.getDefiningOp<UnrealizedConversionCastOp>();
+            castOp && castOp.getInputs().size() == 1) {
+          s_buffer_replace[castOp.getInputs()[0]] = updatedDst;
+        }
+      }
+
+      Operation *terminator = op->getBlock()->getTerminator();
+      if (terminator && op->isBeforeInBlock(terminator)) {
+        rewriter.modifyOpInPlace(terminator, [&]() {
+          for (OpOperand &operand : terminator->getOpOperands()) {
+            if (operand.get() == dstMem) {
+              operand.set(updatedDst);
+            }
+          }
+        });
+      }
+
       rewriter.eraseOp(op);
       eraseUnusedCast(srcMem);
       return success();
@@ -4097,38 +3547,66 @@ public:
     // s_info->print();
     llvm::outs() << "\n-------------- lowerinfo print done!\n";llvm::outs().flush();
 
-    auto setKernelLayoutAttrs = [&]() {
-      auto warpLayout = s_info->begin()->getSecond().get_warp_layout();
-      auto blockLayout = s_info->begin()->getSecond().get_block_layout();
-      auto blockLayoutOrder = s_info->begin()->getSecond().get_block_layout_order();
-      kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, warpLayout));
-      kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
-      kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
-    };
-    setKernelLayoutAttrs();
+    auto warpLayout = s_info->begin()->getSecond().get_warp_layout();
+    auto blockLayout = s_info->begin()->getSecond().get_block_layout();
+    auto blockLayoutOrder = s_info->begin()->getSecond().get_block_layout_order();
 
-    if (normalizeLoopCarriedBlockVectors(kernel)) {
-      s_info = LowerInfoAnalysis::run(kernel);
-      setKernelLayoutAttrs();
-      llvm::outs() << "\n-------------- after normalizeLoopCarriedBlockVectors\n"
-                   << getOperation() << "\n";
-      llvm::outs().flush();
-    }
+    kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, warpLayout));
+    kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
+    kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
 
     // 根据 layout推定结果，插入 convertLAyoutOp
     insertConvertLayoutOps(*s_info);
     llvm::outs() << "\n-------------- after insertConvertLayoutOps\n" << getOperation() << "\n";llvm::outs().flush();
 
-    TypeConverter tc_memToVec{};
-
-
-    tc_memToVec.addConversion([](Type type) { return type; });
-    tc_memToVec.addTargetMaterialization(
-        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+    TypeConverter tc_blockTileToThreadTile{};
+    tc_blockTileToThreadTile.addConversion([](Type type) { return type; });
+    tc_blockTileToThreadTile.addTargetMaterialization(  // old -> new (blocktile -> threadtile)
+        [&](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+          // 1. 获取当前 builder 准备插入代码的位置对应的 Op
+          // resultType 此时为 blocktile 类型
+          Block::iterator insertPt = builder.getInsertionPoint();
+          Operation *consumerOp {};
+          // 确保插入点有效且不是 Block 结尾
+          if (insertPt != builder.getBlock()->end()) {
+            consumerOp = &*insertPt;
+            
+            // consumerOp 就是当前正在被转换、期待使用该 Value 的下游 Op（例如 addOp）
+            llvm::outs() << "Current Consumer Op: " << *consumerOp << "\n";
+          }
+          auto inputVal = inputs[0];
+          auto lowerInfo = s_info->getLowerInfo( inputVal , consumerOp);
+          if(lowerInfo){
+            auto threadTileShape = lowerInfo->get_thread_own_data_size();
+            Type newResType{};
+            if(auto realTy = mlir::dyn_cast<MemRefType>(resultType)){
+              newResType = MemRefType::get(threadTileShape, realTy.getElementType());
+            }
+            else if(auto realTy = mlir::dyn_cast<VectorType>(resultType)){
+              newResType = VectorType::get(threadTileShape, realTy.getElementType());
+            }
+            auto castOp = builder.create<UnrealizedConversionCastOp>(loc, newResType, inputs);
+            castOp->setAttr("b->t", builder.getBoolAttr(true));
+            return castOp.getResult(0);
+          }
           return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
         });
-    tc_memToVec.addSourceMaterialization(
-        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+    tc_blockTileToThreadTile.addSourceMaterialization(  // threadtile -> blocktile
+        [&](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
+          // auto inputVal = inputs[0];  // 未转换value  。 resultType为 threadtile 类型
+          // Operation *defOp = inputVal.getDefiningOp();
+          // auto lowerInfo = s_info->getLowerInfo( inputVal , defOp);
+          // if(lowerInfo){
+          //   auto threadTileShape = lowerInfo->get_thread_own_data_size();
+          //   Type newResType{};
+          //   if(auto realTy = mlir::dyn_cast<MemRefType>(resultType)){
+          //     newResType = MemRefType::get(threadTileShape, realTy.getElementType());
+          //   }
+          //   else if(auto realTy = mlir::dyn_cast<VectorType>(resultType)){
+          //     newResType = VectorType::get(threadTileShape, realTy.getElementType());
+          //   }
+          //   return builder.create<UnrealizedConversionCastOp>(loc, newResType, inputs).getResult(0);
+          // }
           return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
         });
 
@@ -4163,9 +3641,8 @@ public:
 
     RewritePatternSet p0(context);
     p0.add<
-      BlockOpConversion, CopyConvertOpRewrite
-    >(context);
-    p0.add<GemmOpConversion, MaskOpConversion>(tc_memToVec, context);
+      BlockOpConversion, CopyConvertOpRewrite, GemmOpConversion, MaskOpConversion
+    >(tc_blockTileToThreadTile, context);
     llvm::outs() << "---- after convert gemm/blockop/reduce/copy(convert datatype)\n";
     applyPartialConversion(kernel, t0, std::move(p0));
     eraseDeadUnrealizedConversionCasts(kernel);
@@ -4197,7 +3674,7 @@ public:
         FriskBinaryOpConversion<frisk::DivOp, arith::DivFOp>,
         FriskBinaryOpConversion<frisk::MulOp, arith::MulFOp>,
         FriskExp2OpConversion
-      >(tc_memToVec, context);
+      >(tc_blockTileToThreadTile, context);
       llvm::outs() << "---- after convert binary elementwise ops\n";
       applyPartialConversion(kernel, target, std::move(p0));
       RewritePatternSet copyToRegCleanup(context);
@@ -4223,30 +3700,18 @@ public:
       target.addLegalOp<UnrealizedConversionCastOp>();
 
       RewritePatternSet reducePatterns(context);
-      reducePatterns.add<ReduceOpConversion>(context);
+      reducePatterns.add<ReduceOpConversion>(tc_blockTileToThreadTile, context);
       llvm::outs() << "---- after convert reduce ops\n";
       applyPartialConversion(kernel, target, std::move(reducePatterns));
       RewritePatternSet copyToRegCleanup(context);
-      copyToRegCleanup.add<CopyToRegCastRewrite>(context);
+      copyToRegCleanup.add<CopyToRegCastRewrite>( context);
       (void)applyPatternsGreedily(kernel, std::move(copyToRegCleanup));
       eraseDeadUnrealizedConversionCasts(kernel);
       llvm::outs() << kernel << "\n"; llvm::outs().flush();
     }
 
-
-
     // -------- step 2 : 替换copy fill convertLayout
-    TypeConverter tc;
-    tc.addConversion([](Type type) { return type; });
 
-    tc.addTargetMaterialization(
-        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
-          return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
-        });
-    tc.addSourceMaterialization(
-        [](OpBuilder &builder, Type resultType, ValueRange inputs, Location loc) -> Value {
-          return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs).getResult(0);
-        });
 
     ConversionTarget t1(*context);
     t1.addLegalDialect<
@@ -4268,7 +3733,7 @@ public:
     RewritePatternSet p1(context);
     p1.add<
       CopyOpRewrite, FillOpRewrite, ConvertLayoutOpConversion
-    >(tc, context);
+    >(tc_blockTileToThreadTile, context);
     llvm::outs() << "---- after convert copy /fill/ convLayout \n" ;
     applyPartialConversion(kernel, t1, std::move(p1));
     RewritePatternSet copyToRegCleanup(context);
@@ -4299,9 +3764,17 @@ public:
     if (failed(applyFullConversion(kernel, t2, std::move(ps2)))){
       return signalPassFailure();
     }
-
+  
     //  --------- finally : dce
-    eraseTriviallyDeadOps(kernel);
+    std::vector<Operation*> deadCodes{};
+    kernel->walk([&](mlir::Operation* childOp){
+      if(childOp != kernel.getOperation() && childOp->getUsers().empty()){
+        deadCodes.push_back(childOp);
+      }
+    });
+    for(auto d : deadCodes){
+      d->erase();
+    }
 
     llvm::outs() << "---- convert to thread level IR done!\n";llvm::outs().flush();
     // -------- step 4 生命周期分析。buffer 复用优化

@@ -2263,6 +2263,14 @@ LogicalResult GetGlobalDescOp::verify(){
   return success();
 }
 
+LogicalResult MaskOp::inferReturnTypes(::mlir::MLIRContext *context, std::optional<::mlir::Location> location,
+                                       Adaptor adaptor, ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+  auto shape = adaptor.getSizes();
+  auto type = adaptor.getElementType();
+  auto ret_type = MemRefType::get(shape, type);
+  inferredReturnTypes.push_back(ret_type);
+  return success();
+}
 
 } // namespace frisk
 } // namespace mlir

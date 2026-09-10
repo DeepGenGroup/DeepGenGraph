@@ -18,6 +18,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
@@ -317,8 +318,10 @@ struct FuseBlockOpWithTypeConversion : public PassWrapper<FuseBlockOpWithTypeCon
     });
     SmallVector<CopyOp> typeConversionOps {};
     kernelOp.walk<WalkOrder::PreOrder>([&](frisk::CopyOp copyOp){
-      bool isTypeSame = copyOp.getDst().getType().getElementType() == copyOp.getSrc().getType().getElementType();
-      bool isShapeSame = copyOp.getDst().getType().getShape() == copyOp.getSrc().getType().getShape();
+      auto shapedTyDst = mlir::cast<ShapedType>(copyOp.getDst().getType());
+      auto shapedTySrc = mlir::cast<ShapedType>(copyOp.getSrc().getType());
+      bool isTypeSame = shapedTyDst.getElementType() == shapedTySrc.getElementType();
+      bool isShapeSame = shapedTyDst.getShape() == shapedTySrc.getShape();
       if(isShapeSame && !isTypeSame){
         // 具有类型转化的语义
         typeConversionOps.push_back(copyOp);
@@ -340,8 +343,9 @@ struct FuseBlockOpWithTypeConversion : public PassWrapper<FuseBlockOpWithTypeCon
         */
         b.setInsertionPoint(info->out);
         auto srcBitWidth = info->out.getMemref().getType().getElementTypeBitWidth();
-        auto dstBitWidth = cp.getDst().getType().getElementTypeBitWidth();
-        auto eleType = cp.getDst().getType().getElementType();
+        auto shapedType = mlir::cast<ShapedType>(cp.getDst().getType());
+        auto dstBitWidth = shapedType.getElementTypeBitWidth();
+        auto eleType = shapedType.getElementType();
         // 插入extf或 truncf 直接转化value，存入 frisk.copy 的 dstMem 
         mlir::Operation* convertOp {};
         if(srcBitWidth < dstBitWidth){
@@ -399,8 +403,8 @@ class FriskCanonicalizePass : public impl::FriskCanonicalizeBase<FriskCanonicali
     // find frisk.copy op作为 数值类型转换的场景
     SmallVector<CopyOp, 4> convertDtypeOps;
     kernelOp->walk([&](CopyOp copy){
-      auto srcTy = copy.getSrc().getType();
-      auto dstTy = copy.getDst().getType();
+      auto srcTy = mlir::cast<ShapedType>( copy.getSrc().getType());
+      auto dstTy = mlir::cast<ShapedType>( copy.getDst().getType());
       if(srcTy.getElementType() != dstTy.getElementType()){
         // 元素类型不同。为数值类型转换语义
         convertDtypeOps.push_back(copy);

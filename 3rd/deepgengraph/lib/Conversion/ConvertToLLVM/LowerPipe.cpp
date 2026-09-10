@@ -1,6 +1,7 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
@@ -11,6 +12,81 @@
 namespace mlir::frisk {
 
 static constexpr unsigned kLLVMIndexBitwidth = 64;
+
+// LLVM represents an n-D vector as nested arrays of 1-D vectors.  Array
+// indices on llvm.extractvalue/insertvalue have to be constants, so the
+// standard Vector-to-LLVM patterns cannot lower a scalar access with a
+// dynamic index in any non-trailing dimension.  Flatten those accesses while
+// they are still in the Vector dialect; the resulting 1-D dynamic access maps
+// directly to llvm.extractelement/insertelement.
+static Value linearizeVectorPosition(PatternRewriter &rewriter, Location loc,
+                                     VectorType vectorType,
+                                     ArrayRef<OpFoldResult> position) {
+  assert(static_cast<int64_t>(position.size()) == vectorType.getRank() &&
+         "expected a full-rank vector position");
+
+  Value linear = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  for (auto [dim, index] : llvm::enumerate(position)) {
+    Value dimSize = rewriter.create<arith::ConstantIndexOp>(
+        loc, vectorType.getDimSize(dim));
+    linear = rewriter.create<arith::MulIOp>(loc, linear, dimSize);
+    linear = rewriter.create<arith::AddIOp>(
+        loc, linear,
+        getValueOrCreateConstantIndexOp(rewriter, loc, index));
+  }
+  return linear;
+}
+
+struct FlattenDynamicVectorExtract
+    : public OpRewritePattern<vector::ExtractOp> {
+  using OpRewritePattern<vector::ExtractOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::ExtractOp op,
+                                PatternRewriter &rewriter) const override {
+    VectorType sourceType = op.getSourceVectorType();
+    if (sourceType.getRank() < 2 || !op.hasDynamicPosition() ||
+        op.getNumIndices() != static_cast<unsigned>(sourceType.getRank()) ||
+        isa<VectorType>(op.getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    VectorType flatType = VectorType::get(
+        {sourceType.getNumElements()}, sourceType.getElementType());
+    Value flatVector = rewriter.create<vector::ShapeCastOp>(
+        loc, flatType, op.getVector());
+    Value linearIndex = linearizeVectorPosition(
+        rewriter, loc, sourceType, op.getMixedPosition());
+    rewriter.replaceOpWithNewOp<vector::ExtractOp>(op, flatVector,
+                                                    linearIndex);
+    return success();
+  }
+};
+
+struct FlattenDynamicVectorInsert
+    : public OpRewritePattern<vector::InsertOp> {
+  using OpRewritePattern<vector::InsertOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::InsertOp op,
+                                PatternRewriter &rewriter) const override {
+    VectorType destType = op.getDestVectorType();
+    if (destType.getRank() < 2 || !op.hasDynamicPosition() ||
+        op.getNumIndices() != static_cast<unsigned>(destType.getRank()) ||
+        isa<VectorType>(op.getValueToStoreType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    VectorType flatType = VectorType::get(
+        {destType.getNumElements()}, destType.getElementType());
+    Value flatVector =
+        rewriter.create<vector::ShapeCastOp>(loc, flatType, op.getDest());
+    Value linearIndex = linearizeVectorPosition(
+        rewriter, loc, destType, op.getMixedPosition());
+    Value flatResult = rewriter.create<vector::InsertOp>(
+        loc, op.getValueToStore(), flatVector, linearIndex);
+    rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(op, destType, flatResult);
+    return success();
+  }
+};
 
 static std::optional<SmallVector<int64_t, 4>>
 computeContiguousStrides(MemRefType memRefType) {
@@ -133,6 +209,8 @@ struct VectorToLLVMPass : public PassWrapper<VectorToLLVMPass, OperationPass<Mod
       mlir::vector::populateVectorStepLoweringPatterns(patterns);
       mlir::vector::populateVectorRankReducingFMAPattern(patterns);
       mlir::vector::populateVectorGatherLoweringPatterns(patterns);
+      patterns.add<FlattenDynamicVectorExtract, FlattenDynamicVectorInsert>(
+          &getContext(), PatternBenefit(2));
       (void)applyPatternsGreedily(getOperation(), std::move(patterns));
     }
 
@@ -140,6 +218,7 @@ struct VectorToLLVMPass : public PassWrapper<VectorToLLVMPass, OperationPass<Mod
     target.addLegalDialect<arith::ArithDialect>();
     target.addLegalDialect<memref::MemRefDialect>();
     target.addLegalOp<UnrealizedConversionCastOp>();
+    target.addIllegalDialect<vector::VectorDialect>();
 
     LLVMTypeConverter converter(&getContext(), options);
     RewritePatternSet patterns(&getContext());
@@ -175,69 +254,61 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
                     Target target) {
   mlir::PassManager pm(context);
-  // pm.addPass(createROCDLIdOpModifyPass());                      // 自定义 rocdl idop加attr (弃用)
-  pm.addNestedPass<mlir::func::FuncOp>(createLoopInvariantCodeMotionPass());
-  pm.addPass(mlir::frisk::createAmendAllocaOpAddrSpacePass(
-      target)); // ROCm local alloca -> addrspace(5)
+
+  // 1. 结构与高阶方言转换 (SCF, Affine, Vector -> SCF)
+  pm.addNestedPass<mlir::func::FuncOp>(mlir::createLoopInvariantCodeMotionPass());
+  pm.addPass(mlir::frisk::createAmendAllocaOpAddrSpacePass(target));
   pm.addPass(mlir::createConvertVectorToSCFPass());
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  pm.addPass(mlir::createSCFToControlFlowPass());                    // scf -> cf
+  pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
 
+  // 2. 基础控制流、MemRef、Func 降级到 LLVM
   ConvertControlFlowToLLVMPassOptions cfOptions;
   cfOptions.indexBitwidth = kLLVMIndexBitwidth;
-
-  pm.addPass(mlir::createConvertControlFlowToLLVMPass(
-      cfOptions)); // cf -> llvm
-  // pm.addPass(createConvertArithIndexToI64Pass());                      // 自定义 将arith中的constantOp的result为index类型的Op全部转成result为i64的op
-
-  // pm.addPass(createVectorToLLVMPass(kLLVMIndexBitwidth)); // 自定义 vector to llvm pass
-  pm.addPass(mlir::createConvertVectorToLLVMPass());                       // vector -> llvm
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass(cfOptions));
 
   FinalizeMemRefToLLVMConversionPassOptions memrefOptions;
-  memrefOptions.indexBitwidth = kLLVMIndexBitwidth;              // 使用 i64 index，避免 malloc 参数/ptrtoint 生成 i32
-  // memrefOptions.useAlignedAlloc = true;                                    // 这个如果不开启的话，且上为i32，则llir转换失败，解决使用pass - createMallocFuncOpArgTypeI32ToI64Pass
-  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass(
-      memrefOptions)); // memref -> llvm
+  memrefOptions.indexBitwidth = kLLVMIndexBitwidth;
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass(memrefOptions));
 
-  // pm.addPass(mlir::createCanonicalizerPass());
-  // pm.addPass(mlir::createCSEPass());
-  // pm.addPass(mlir::createSymbolDCEPass());
+  ConvertFuncToLLVMPassOptions funcOptions;
+  funcOptions.indexBitwidth = kLLVMIndexBitwidth;
+  funcOptions.useBarePtrCallConv = true;
+  pm.addPass(mlir::createConvertFuncToLLVMPass(funcOptions));
 
-  ConvertFuncToLLVMPassOptions funcOptions;                                 // passes.h.inc文件中有通过tablegen生成的pass base类型 以及createxxx()
-  funcOptions.indexBitwidth = kLLVMIndexBitwidth;              // func lowering 到 llvm 时，其 index 转成 i64
-  funcOptions.useBarePtrCallConv = true;                                    // 使用裸指针，而不使用结构体指针表示memref类型
-  pm.addPass(mlir::createConvertFuncToLLVMPass(funcOptions)); // func -> llvm
+  // 3. GPU / ROCDL / NVVM 降级
+  pm.addPass(mlir::frisk::createLLVMFuncOpAddGPUAttrPass(target));
+  pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(target, kLLVMIndexBitwidth));
 
-  pm.addPass(mlir::frisk::createLLVMFuncOpAddGPUAttrPass(
-      target)); // llvmfuncOp add nvvm/rocdl.kernel or nvvm.maxnid
-  pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(
-      target, kLLVMIndexBitwidth)); // GPU indexOp to rocdl/nvvm indexOp
+  // 4. Vector lowering can create arith constants and UB poison values, so it
+  // must run before the scalar dialects are finalized.
+  pm.addPass(createVectorToLLVMPass(kLLVMIndexBitwidth));
 
+  // 5. 标量类型与计算降级 (Arith, UB, Index)
   ArithToLLVMConversionPassOptions arithOptions;
   arithOptions.indexBitwidth = kLLVMIndexBitwidth;
-  pm.addPass(mlir::createArithToLLVMConversionPass(
-      arithOptions)); // arith -> llvm
+  pm.addPass(mlir::createArithToLLVMConversionPass(arithOptions));
+
   UBToLLVMConversionPassOptions ubOptions;
   ubOptions.indexBitwidth = kLLVMIndexBitwidth;
-  pm.addPass(mlir::createUBToLLVMConversionPass(ubOptions)); // ub -> llvm
-  // pm.addPass(createEraseRedundantUnCCastPass());                         // 手动写的去除多余UnrealizedCast
-  pm.addPass(
-      mlir::createReconcileUnrealizedCastsPass()); // 内置去除多余cast的pass
+  pm.addPass(mlir::createUBToLLVMConversionPass(ubOptions));
+
+  ConvertIndexToLLVMPassOptions convertIndexToLLVMPassOpt;
+  convertIndexToLLVMPassOpt.indexBitwidth = kLLVMIndexBitwidth; // 修复：统一使用 kLLVMIndexBitwidth
+  pm.addPass(mlir::createConvertIndexToLLVMPass(convertIndexToLLVMPassOpt));
+
+  // 6. 清理多余的类型转换 Cast 及优化
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
-  // pm.addPass(createMallocFuncOpArgTypeI32ToI64Pass());                      // 将malloc 的 func 的函数签名换成 i64，ptrtointOp/callOp跟着换（因为如果强制使用malloci32，后续llvmtranslation报错，llvm malloc只支持i64）
-  // pm.addPass(mlir::createLowerGpuOpsToROCDLOpsPass());
-  // pm.addPass(createConvertGPUPrintToLLVMPass());
 
-  // pm.addPass(mlir::createGpuToLLVMConversionPass());
   if (mlir::failed(pm.run(mod))) {
     return false;
   }
 
   return true;
 }
-
 }  // namespace mlir::frisk
