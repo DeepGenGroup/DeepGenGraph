@@ -352,7 +352,7 @@ void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
 
 frisk::KernelConfig* frisk::GetKernelConfig() {
   static frisk::KernelConfig cfg;
-  cfg.num_threads = 64;
+  cfg.num_threads = 128;
   cfg.gridDimXYZ = {64,32,1};
   return &cfg;
 }
@@ -508,7 +508,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCanonicalizerPass());
   llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
 
-  
+  // mlir::affine::loopUnrollByFactor
 
   mlir::ModuleOp mod = *src;
   frisk::firstLowering(mod, src->getContext());

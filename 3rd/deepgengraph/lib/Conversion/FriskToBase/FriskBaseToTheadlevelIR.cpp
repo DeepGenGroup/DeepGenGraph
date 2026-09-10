@@ -3960,121 +3960,121 @@ static SmallVector<int64_t> getContiguousStrides(ArrayRef<int64_t> shape) {
   return strides;
 }
 
-static void applyBufferReuse(func::FuncOp kernel,
-                             const LivelinessAnalyzer &liveliness) {
-  struct ReuseGroup {
-    SmallVector<memref::AllocOp, 4> allocs;
-    MemRefType firstType;
-    Type elementType;
-    Attribute memorySpace;
-    Block *parentBlock = nullptr;
-    int64_t maxElements = 0;
-    uint64_t maxAlignment = 0;
-    bool allSameType = true;
-    bool valid = true;
-  };
+// static void applyBufferReuse(func::FuncOp kernel,
+//                              const LivelinessAnalyzer &liveliness) {
+//   struct ReuseGroup {
+//     SmallVector<memref::AllocOp, 4> allocs;
+//     MemRefType firstType;
+//     Type elementType;
+//     Attribute memorySpace;
+//     Block *parentBlock = nullptr;
+//     int64_t maxElements = 0;
+//     uint64_t maxAlignment = 0;
+//     bool allSameType = true;
+//     bool valid = true;
+//   };
 
-  std::map<unsigned, ReuseGroup> groups;
-  kernel.walk([&](memref::AllocOp alloc) {
-    Value buffer = alloc.getMemref();
-    auto colorIt = liveliness.rootShmColors.find(buffer);
-    if (colorIt == liveliness.rootShmColors.end()) {
-      return;
-    }
+//   std::map<unsigned, ReuseGroup> groups;
+//   kernel.walk([&](memref::AllocOp alloc) {
+//     Value buffer = alloc.getMemref();
+//     auto colorIt = liveliness.rootShmColors.find(buffer);
+//     if (colorIt == liveliness.rootShmColors.end()) {
+//       return;
+//     }
 
-    auto type = cast<MemRefType>(buffer.getType());
-    if (type.getMemorySpaceAsInt() != int(friskMs::Shared)) {
-      return;
-    }
-    auto elementCount = getStaticElementCount(type);
-    if (!elementCount) {
-      return;
-    }
-    if (llvm::any_of(alloc->getUsers(), [](Operation *user) {
-          return isa<memref::DeallocOp>(user);
-        })) {
-      return;
-    }
+//     auto type = cast<MemRefType>(buffer.getType());
+//     if (type.getMemorySpaceAsInt() != int(friskMs::Shared)) {
+//       return;
+//     }
+//     auto elementCount = getStaticElementCount(type);
+//     if (!elementCount) {
+//       return;
+//     }
+//     if (llvm::any_of(alloc->getUsers(), [](Operation *user) {
+//           return isa<memref::DeallocOp>(user);
+//         })) {
+//       return;
+//     }
 
-    auto &group = groups[colorIt->second];
-    if (group.allocs.empty()) {
-      group.firstType = type;
-      group.elementType = type.getElementType();
-      group.memorySpace = type.getMemorySpace();
-      group.parentBlock = alloc->getBlock();
-    } else {
-      group.allSameType = group.allSameType && type == group.firstType;
-      if (type.getElementType() != group.elementType ||
-          type.getMemorySpace() != group.memorySpace ||
-          alloc->getBlock() != group.parentBlock) {
-        group.valid = false;
-      }
-    }
+//     auto &group = groups[colorIt->second];
+//     if (group.allocs.empty()) {
+//       group.firstType = type;
+//       group.elementType = type.getElementType();
+//       group.memorySpace = type.getMemorySpace();
+//       group.parentBlock = alloc->getBlock();
+//     } else {
+//       group.allSameType = group.allSameType && type == group.firstType;
+//       if (type.getElementType() != group.elementType ||
+//           type.getMemorySpace() != group.memorySpace ||
+//           alloc->getBlock() != group.parentBlock) {
+//         group.valid = false;
+//       }
+//     }
 
-    group.maxElements = std::max(group.maxElements, *elementCount);
-    if (auto alignment = alloc.getAlignment()) {
-      group.maxAlignment = std::max(group.maxAlignment, *alignment);
-    }
-    group.allocs.push_back(alloc);
-  });
+//     group.maxElements = std::max(group.maxElements, *elementCount);
+//     if (auto alignment = alloc.getAlignment()) {
+//       group.maxAlignment = std::max(group.maxAlignment, *alignment);
+//     }
+//     group.allocs.push_back(alloc);
+//   });
 
-  OpBuilder builder(kernel.getContext());
-  unsigned reusedBuffers = 0;
-  for (auto &[color, group] : groups) {
-    if (!group.valid || group.allocs.size() < 2) {
-      continue;
-    }
+//   OpBuilder builder(kernel.getContext());
+//   unsigned reusedBuffers = 0;
+//   for (auto &[color, group] : groups) {
+//     if (!group.valid || group.allocs.size() < 2) {
+//       continue;
+//     }
 
-    auto firstAlloc = group.allocs.front();
-    builder.setInsertionPoint(firstAlloc);
-    IntegerAttr alignmentAttr;
-    if (group.maxAlignment > 0) {
-      alignmentAttr = builder.getI64IntegerAttr(group.maxAlignment);
-    }
+//     auto firstAlloc = group.allocs.front();
+//     builder.setInsertionPoint(firstAlloc);
+//     IntegerAttr alignmentAttr;
+//     if (group.maxAlignment > 0) {
+//       alignmentAttr = builder.getI64IntegerAttr(group.maxAlignment);
+//     }
 
-    MemRefType backingType = group.allSameType
-                                 ? group.firstType
-                                 : MemRefType::get({group.maxElements},
-                                                   group.elementType,
-                                                   AffineMap{},
-                                                   group.memorySpace);
-    auto backing =
-        builder.create<memref::AllocOp>(firstAlloc.getLoc(), backingType,
-                                        alignmentAttr);
-    backing->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
-    backing->setAttr("shm_reuse_group_size",
-                     builder.getI64IntegerAttr(group.allocs.size()));
+//     MemRefType backingType = group.allSameType
+//                                  ? group.firstType
+//                                  : MemRefType::get({group.maxElements},
+//                                                    group.elementType,
+//                                                    AffineMap{},
+//                                                    group.memorySpace);
+//     auto backing =
+//         builder.create<memref::AllocOp>(firstAlloc.getLoc(), backingType,
+//                                         alignmentAttr);
+//     backing->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
+//     backing->setAttr("shm_reuse_group_size",
+//                      builder.getI64IntegerAttr(group.allocs.size()));
 
-    SmallVector<Operation *> erased;
-    erased.reserve(group.allocs.size());
-    for (auto alloc : group.allocs) {
-      Value replacement = backing.getMemref();
-      auto originalType = cast<MemRefType>(alloc.getMemref().getType());
-      if (!group.allSameType) {
-        builder.setInsertionPoint(alloc);
-        auto shape = originalType.getShape();
-        auto strides = getContiguousStrides(shape);
-        replacement = builder
-                          .create<memref::ReinterpretCastOp>(
-                              alloc.getLoc(), originalType, backing.getMemref(),
-                              /*offset=*/0, shape, strides)
-                          .getResult();
-      }
-      alloc.getMemref().replaceAllUsesWith(replacement);
-      erased.push_back(alloc);
-      ++reusedBuffers;
-    }
+//     SmallVector<Operation *> erased;
+//     erased.reserve(group.allocs.size());
+//     for (auto alloc : group.allocs) {
+//       Value replacement = backing.getMemref();
+//       auto originalType = cast<MemRefType>(alloc.getMemref().getType());
+//       if (!group.allSameType) {
+//         builder.setInsertionPoint(alloc);
+//         auto shape = originalType.getShape();
+//         auto strides = getContiguousStrides(shape);
+//         replacement = builder
+//                           .create<memref::ReinterpretCastOp>(
+//                               alloc.getLoc(), originalType, backing.getMemref(),
+//                               /*offset=*/0, shape, strides)
+//                           .getResult();
+//       }
+//       alloc.getMemref().replaceAllUsesWith(replacement);
+//       erased.push_back(alloc);
+//       ++reusedBuffers;
+//     }
 
-    for (Operation *op : erased) {
-      op->erase();
-    }
-  }
+//     for (Operation *op : erased) {
+//       op->erase();
+//     }
+//   }
 
-  llvm::outs() << "[applyBufferReuse] reused shared buffers: " << reusedBuffers
-               << "\n";
-  llvm::outs().flush();
+//   llvm::outs() << "[applyBufferReuse] reused shared buffers: " << reusedBuffers
+//                << "\n";
+//   llvm::outs().flush();
 
-}
+// }
 
 // 在frisk改写为base表达后（去掉了parallel，引入了tx） 进一步切分op到thread上
 class ConvertFriskBaseToThreadLevelIR : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
@@ -4305,8 +4305,7 @@ public:
 
     llvm::outs() << "---- convert to thread level IR done!\n";llvm::outs().flush();
     // -------- step 4 生命周期分析。buffer 复用优化
-    LivelinessAnalyzer liveliness;
-    liveliness.run(kernel);
+    dumpRegPressure(kernel, 1) ;
     // applyBufferReuse(kernel, liveliness);
 
   }

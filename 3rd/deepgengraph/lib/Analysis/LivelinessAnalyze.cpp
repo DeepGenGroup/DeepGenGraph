@@ -1,323 +1,438 @@
-#include "deepgengraph/Analysis/LivelinessAnalyze.h"
-#include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
-#include "deepgengraph/Common.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include <tuple>
+#include "mlir/Analysis/Liveness.h"
+#include "mlir/IR/AsmState.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
-namespace mlir::frisk {
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/raw_ostream.h"
 
-// 1. 估算 MemRefType 对应的寄存器需求（以 32-bit 寄存器为单位）
-int64_t LivelinessAnalyzer::calculateRegisters(MemRefType type) {
-  if (!type.hasStaticShape()) return 0; // 动态 Shape 暂不纳入静态峰值统计
-  
-  int64_t totalElements = type.getNumElements();
-  unsigned bitWidth = type.getElementType().getIntOrFloatBitWidth();
-  constexpr unsigned RegBitWidth = 32; // 假设架构寄存器宽度为 32-bit
-  
-  return (totalElements * bitWidth + RegBitWidth - 1) / RegBitWidth;
+#include <algorithm>
+#include <cstdint>
+
+using namespace mlir;
+
+namespace mlir::frisk{
+
+struct RegPressurePoint {
+  Operation *op = nullptr;
+
+  /// 整个 block tile 上的 logical reg32 数量。
+  uint64_t regUnits = 0;
+
+  /// regUnits / threadNum。
+  uint64_t regsPerThread = 0;
+
+  /// 此处 live 的 register values。
+  SmallVector<std::pair<Value, uint64_t>> liveValues;
+};
+
+struct RegPressureResult {
+  uint64_t peakRegUnits = 0;
+  uint64_t peakRegsPerThread = 0;
+
+  Operation *peakOp = nullptr;
+  SmallVector<std::pair<Value, uint64_t>> peakValues;
+
+  /// 按 IR lexical order 保存 pressure curve。
+  SmallVector<RegPressurePoint> curve;
+};
+
+static uint64_t ceilDiv(uint64_t x, uint64_t y) {
+  return (x + y - 1) / y;
 }
 
-int64_t LivelinessAnalyzer::calculateBytes(MemRefType type) {
-  if (!type.hasStaticShape()) return 0; // 动态 Shape 暂不纳入静态峰值统计
+static uint64_t getElementBitWidth(Type type,
+                                   unsigned indexBitWidth = 64) {
+  if (auto intTy = dyn_cast<IntegerType>(type))
+    return intTy.getWidth();
 
-  int64_t totalElements = type.getNumElements();
-  unsigned bitWidth = type.getElementType().getIntOrFloatBitWidth();
-  constexpr unsigned ByteBitWidth = 8;
+  if (auto floatTy = dyn_cast<FloatType>(type))
+    return floatTy.getWidth();
 
-  return (totalElements * bitWidth + ByteBitWidth - 1) / ByteBitWidth;
+  if (isa<IndexType>(type))
+    return indexBitWidth;
+
+  return 0;
 }
 
-// 2. 追溯 View 算子至底层 Root Alloc (如 memref.alloca)
-Value LivelinessAnalyzer::getRootAllocation(Value value) {
-  while (true) {
-    Operation *defOp = value.getDefiningOp();
-    if (!defOp) break;
+static int64_t getMemorySpace(MemRefType type) {
+  Attribute space = type.getMemorySpace();
 
-    if (auto subView = dyn_cast<memref::SubViewOp>(defOp)) {
-      value = subView.getSource();
-    } else if (auto cast = dyn_cast<memref::CastOp>(defOp)) {
-      value = cast.getSource();
-    } else if (auto collapse = dyn_cast<memref::CollapseShapeOp>(defOp)) {
-      value = collapse.getSrc();
-    } else if (auto expand = dyn_cast<memref::ExpandShapeOp>(defOp)) {
-      value = expand.getSrc();
-    } 
-    else {
-      break;
+  if (!space)
+    return 0;
+
+  if (auto intAttr = dyn_cast<IntegerAttr>(space))
+    return intAttr.getInt();
+
+  return -1;
+}
+
+/// 返回 Value 对应的 logical 32-bit register unit。
+static uint64_t getRegUnits(Value value,
+                            unsigned regBitWidth = 32,
+                            unsigned indexBitWidth = 64) {
+  Type type = value.getType();
+
+  // vector -> register tile
+  if (auto vecTy = dyn_cast<VectorType>(type)) {
+    if (!vecTy.hasStaticShape())
+      return 0;
+
+    uint64_t numElements = vecTy.getNumElements();
+    uint64_t elemBits =
+        getElementBitWidth(vecTy.getElementType(), indexBitWidth);
+
+    if (!elemBits)
+      return 0;
+
+    return ceilDiv(numElements * elemBits, regBitWidth);
+  }
+
+  // memref
+  if (auto memrefTy = dyn_cast<MemRefType>(type)) {
+    int64_t space = getMemorySpace(memrefTy);
+
+    //
+    // 按你的 Frisk 语义：
+    //
+    // memory space 3 : shared memory
+    // memory space 1 : global memory / global view
+    //
+    // payload 都不计入 register tile。
+    //
+    if (space == 3 || space == 1)
+      return 0;
+
+    if (!memrefTy.hasStaticShape())
+      return 0;
+
+    uint64_t numElements = memrefTy.getNumElements();
+    uint64_t elemBits =
+        getElementBitWidth(memrefTy.getElementType(), indexBitWidth);
+
+    if (!elemBits)
+      return 0;
+
+    return ceilDiv(numElements * elemBits, regBitWidth);
+  }
+
+  // scalar
+  if (isa<IntegerType, FloatType, IndexType>(type)) {
+    uint64_t bits = getElementBitWidth(type, indexBitWidth);
+
+    if (!bits)
+      return 0;
+
+    // 一个独立 scalar SSA 至少占一个 logical reg。
+    return std::max<uint64_t>(
+        1, ceilDiv(bits, regBitWidth));
+  }
+
+  return 0;
+}
+
+/// 分析一个具体 Operation 所在位置的 pressure。
+static RegPressurePoint
+analyzePressureAtOp(Operation *op,
+                    const Liveness &liveness,
+                    unsigned threadNum) {
+  RegPressurePoint point;
+  point.op = op;
+
+  Block *block = op->getBlock();
+  if (!block)
+    return point;
+
+  const LivenessBlockInfo *blockInfo =
+      liveness.getLiveness(block);
+
+  if (!blockInfo)
+    return point;
+
+  auto liveValues =
+      blockInfo->currentlyLiveValues(op);
+
+  for (Value value : liveValues) {
+    uint64_t units = getRegUnits(value);
+
+    if (!units)
+      continue;
+
+    point.regUnits += units;
+    point.liveValues.emplace_back(value, units);
+  }
+
+  point.regsPerThread =
+      ceilDiv(point.regUnits, threadNum);
+
+  return point;
+}
+
+/// 按 lexical IR order 递归遍历。
+///
+/// 注意这里不依赖 Operation::walk() 的具体 traversal order。
+static void collectRegionPressure(
+    Region &region,
+    const Liveness &liveness,
+    unsigned threadNum,
+    SmallVectorImpl<RegPressurePoint> &curve) {
+
+  for (Block &block : region) {
+    for (Operation &op : block) {
+
+      //
+      // 对 region-owning op 本身不做 pressure 统计。
+      //
+      // 例如：
+      //   affine.for
+      //   scf.if
+      //   frisk.mask
+      //
+      // currentlyLiveValues() 对包含 region 的 op 是 expansive 的，
+      // 容易把 region 内的值都合并到父 op 上，使结果虚高。
+      //
+      if (op.getNumRegions() == 0) {
+        curve.push_back(
+            analyzePressureAtOp(
+                &op, liveness, threadNum));
+      }
+
+      //
+      // 然后继续分析 nested region。
+      //
+      for (Region &nestedRegion : op.getRegions()) {
+        collectRegionPressure(
+            nestedRegion,
+            liveness,
+            threadNum,
+            curve);
+      }
     }
   }
-  return value;
 }
 
-void LivelinessAnalyzer::run(func::FuncOp funcOp) {
-  if(!funcOp->hasAttr(frisk::THREAD_NUM)){
+static RegPressureResult
+analyzeRegPressure(func::FuncOp funcOp,
+                   unsigned threadNum = 64) {
+  RegPressureResult result;
+
+  Liveness liveness(funcOp.getOperation());
+
+  //
+  // 收集所有 op 的 pressure。
+  //
+  for (Region &region : funcOp->getRegions()) {
+    collectRegionPressure(
+        region,
+        liveness,
+        threadNum,
+        result.curve);
+  }
+
+  //
+  // 找峰值。
+  //
+  for (const RegPressurePoint &point : result.curve) {
+    if (point.regUnits <= result.peakRegUnits)
+      continue;
+
+    result.peakRegUnits = point.regUnits;
+    result.peakRegsPerThread =
+        point.regsPerThread;
+    result.peakOp = point.op;
+    result.peakValues = point.liveValues;
+  }
+
+  return result;
+}
+
+static void dumpPressureCurve(
+    func::FuncOp funcOp,
+    const RegPressureResult &result,
+    unsigned threadNum = 64,
+    bool printFullOp = false) {
+
+  llvm::errs()
+      << "\n"
+      << "================ Register Pressure Curve ================\n";
+
+  llvm::errs()
+      << "Function: "
+      << funcOp.getName()
+      << "\n";
+
+  llvm::errs()
+      << "Threads/block: "
+      << threadNum
+      << "\n\n";
+
+  uint64_t previousRegsPerThread = 0;
+
+  for (size_t i = 0; i < result.curve.size(); ++i) {
+    const RegPressurePoint &point =
+        result.curve[i];
+
+    int64_t delta =
+        static_cast<int64_t>(point.regsPerThread) -
+        static_cast<int64_t>(previousRegsPerThread);
+
+    //
+    // index
+    //
+    llvm::errs()
+        << "["
+        << llvm::format("%4zu", i)
+        << "] ";
+
+    //
+    // block 总 logical reg32
+    //
+    llvm::errs()
+        << "reg32/block="
+        << llvm::format("%7llu",
+             static_cast<unsigned long long>(
+                 point.regUnits))
+        << "  ";
+
+    //
+    // per-thread
+    //
+    llvm::errs()
+        << "reg/thread="
+        << llvm::format("%4llu",
+             static_cast<unsigned long long>(
+                 point.regsPerThread))
+        << "  ";
+
+    //
+    // 与上一条 op 的变化
+    //
+    llvm::errs()
+        << "delta="
+        << llvm::format("%+5lld",
+             static_cast<long long>(delta))
+        << "  ";
+
+    //
+    // op name
+    //
+    llvm::errs()
+        << point.op->getName().getStringRef();
+
+    if (point.op == result.peakOp)
+      llvm::errs() << "    <--- PEAK";
+
+    llvm::errs() << "\n";
+
+    //
+    // 可选：把完整 operation 打印出来。
+    //
+    if (printFullOp) {
+      llvm::errs() << "       ";
+      point.op->print(llvm::errs());
+      llvm::errs() << "\n";
+    }
+
+    previousRegsPerThread =
+        point.regsPerThread;
+  }
+
+  llvm::errs()
+      << "\nPeak reg32/block : "
+      << result.peakRegUnits
+      << "\n";
+
+  llvm::errs()
+      << "Peak regs/thread : "
+      << result.peakRegsPerThread
+      << "\n";
+
+  if (result.peakOp) {
+    llvm::errs()
+        << "Peak op          : ";
+
+    result.peakOp->print(llvm::errs());
+    llvm::errs() << "\n";
+  }
+
+  llvm::errs()
+      << "=========================================================\n";
+}
+
+static void dumpPeakLiveValues(
+    func::FuncOp funcOp,
+    const RegPressureResult &result,
+    unsigned threadNum = 64) {
+
+  if (!result.peakOp)
     return;
+
+  SmallVector<std::pair<Value, uint64_t>>
+      values = result.peakValues;
+
+  llvm::sort(
+      values,
+      [](const auto &lhs, const auto &rhs) {
+        return lhs.second > rhs.second;
+      });
+
+  AsmState asmState(funcOp);
+
+  llvm::errs()
+      << "\n"
+      << "================ Peak Live Values =======================\n";
+
+  for (auto &[value, units] : values) {
+    llvm::errs() << "  ";
+
+    value.printAsOperand(
+        llvm::errs(), asmState);
+
+    llvm::errs()
+        << " : "
+        << value.getType()
+        << "\n"
+        << "      reg32/block = "
+        << units
+        << ", approx/thread = "
+        << ceilDiv(units, threadNum)
+        << "\n";
   }
-  auto threadCount = funcOp->getAttrOfType<IntegerAttr>(frisk::THREAD_NUM).getInt();
-  liveRanges.clear();
-  rootRegCounts.clear();
-  rootShmBytes.clear();
-  shmInterferenceMap.clear();
-  rootShmColors.clear();
-  rootShmOffsets.clear();
-  shmColorBytes.clear();
 
-  // // 初始化 MLIR 标准 Liveness 分析
-  // Liveness liveness(funcOp);
-
-  // 给 Block 内所有 Operation 建立线性拓扑索引
-  llvm::DenseMap<Operation *, unsigned> opIndexMap;
-  unsigned opIdx = 0;
-  funcOp.walk([&](Operation *op) {
-    opIndexMap[op] = opIdx++;
-  });
-
-  enum class MemoryKind { Register, Shm, Ignore };
-  auto classifyRoot = [](Value root) {
-    if (root.getDefiningOp<memref::AllocaOp>())
-      return MemoryKind::Register;
-
-    if (root.getDefiningOp<memref::AllocOp>()) {
-      auto memrefType = dyn_cast<MemRefType>(root.getType());
-      if (!memrefType)
-        return MemoryKind::Ignore;
-      return memrefType.getMemorySpaceAsInt() == int(frisk::attr::MemorySpace::Shared)
-                 ? MemoryKind::Shm
-                 : MemoryKind::Ignore;
-    }
-
-    auto allocBuffer = root.getDefiningOp<frisk::AllocBufferOp>();
-    if (!allocBuffer)
-      return MemoryKind::Ignore;
-
-    switch (allocBuffer.getMemorySpace()) {
-    case 0:
-    case 5:
-      return MemoryKind::Register;
-    case 3:
-      return MemoryKind::Shm;
-    default:
-      return MemoryKind::Ignore;
-    }
-  };
-
-  // 3. 遍历算子提取 Root MemRef 的活跃区间，并按 reg/shm 分类统计大小
-  funcOp.walk([&](Operation *op) {
-    unsigned currentIdx = opIndexMap[op];
-
-    auto processValue = [&](Value val) {
-      auto memrefType = dyn_cast<MemRefType>(val.getType());
-      if (!memrefType) return;
-
-      // 仅关注片上分配：local/register 与 shared memory。
-      Value root = getRootAllocation(val);
-      auto rootType = dyn_cast<MemRefType>(root.getType());
-      if (!rootType) return;
-
-      MemoryKind kind = classifyRoot(root);
-      if (kind == MemoryKind::Ignore) return;
-
-      if (kind == MemoryKind::Register && !rootRegCounts.count(root)) {
-        rootRegCounts[root] = calculateRegisters(rootType);
-      } else if (kind == MemoryKind::Shm && !rootShmBytes.count(root)) {
-        rootShmBytes[root] = calculateBytes(rootType);
-      }
-
-      // 更新存活区间起点与终点
-      if (!liveRanges.count(root)) {
-        liveRanges[root] = {currentIdx, currentIdx};
-      } else {
-        liveRanges[root].first = std::min(liveRanges[root].first, currentIdx);
-        liveRanges[root].second = std::max(liveRanges[root].second, currentIdx);
-      }
-    };
-
-    for (Value operand : op->getOperands()) processValue(operand);
-    for (Value result : op->getResults()) processValue(result);
-  });
-
-  // 4. 构建扫描线事件 (Sweep-Line Events)。区间不重叠的 shm buffer
-  // 可复用同一段共享内存，峰值即复用后的最小并发需求。
-  struct Event {
-    unsigned time;
-    int64_t delta; // +Resource (Alloc/Start), -Resource (Dealloc/End)
-  };
-
-  auto calculatePeak = [&](const llvm::DenseMap<Value, int64_t> &rootSizes) {
-    std::vector<Event> events;
-
-    for (auto &[root, size] : rootSizes) {
-      auto rangeIt = liveRanges.find(root);
-      if (rangeIt == liveRanges.end()) continue;
-
-      auto range = rangeIt->second;
-      events.push_back({range.first, size});       // Start: 增加资源占用
-      events.push_back({range.second + 1, -size}); // End+1: 释放资源占用
-    }
-
-    // 优先按时间升序排序；同一时间点先释放(-Resource)再分配(+Resource)
-    std::sort(events.begin(), events.end(), [](const Event &a, const Event &b) {
-      if (a.time != b.time) return a.time < b.time;
-      return a.delta < b.delta;
-    });
-
-    int64_t current = 0;
-    int64_t peak = 0;
-    unsigned peakOpIdx = 0;
-
-    for (const auto &event : events) {
-      current += event.delta;
-      if (current > peak) {
-        peak = current;
-        peakOpIdx = event.time;
-      }
-    }
-
-    return std::pair<int64_t, unsigned>{peak, peakOpIdx};
-  };
-
-  // 5. 模拟扫描过程，分别计算 reg 与 shm 的复用后峰值
-  auto [peakRegs, peakRegOpIdx] = calculatePeak(rootRegCounts);
-  auto [peakShmBytes, peakShmOpIdx] = calculatePeak(rootShmBytes);
-
-  // 打印分析结果
-  llvm::outs() << "[MemRefLivelinessAnalyzePass] Function: " << funcOp.getName() << "\n";
-  llvm::outs() << "  -> Peak Register Count: " << peakRegs << " (32-bit units) " << "Per thread("<< threadCount <<")=" << (peakRegs + threadCount - 1) / threadCount;
-  llvm::outs() << "  -> Peak Register Occurred Near Operation Index: " << peakRegOpIdx << "\n";
-  llvm::outs() << "  -> Peak Shared Memory: " << peakShmBytes << " bytes\n";
-  llvm::outs() << "  -> Peak Shared Memory Occurred Near Operation Index: " << peakShmOpIdx << "\n";
-  getColoredShmNodes();
-  llvm::outs() << "  -> Reused Shared Memory Slots: " << shmColorBytes.size() << "\n";
+  llvm::errs()
+      << "=========================================================\n";
 }
 
-void LivelinessAnalyzer::getColoredShmNodes() {
-  rootShmColors.clear();
-  rootShmOffsets.clear();
-  shmColorBytes.clear();
-  shmInterferenceMap.clear();
+/// 最外层调用接口。
+void dumpRegPressure(
+    func::FuncOp funcOp,
+    unsigned threadNum = 64,
+    bool printFullOp = false) {
 
-  struct ShmNode {
-    Value root;
-    std::pair<unsigned, unsigned> range;
-    int64_t bytes;
-    MemRefType type;
-  };
+  RegPressureResult result =
+      analyzeRegPressure(
+          funcOp,
+          threadNum);
 
-  SmallVector<ShmNode> nodes;
-  nodes.reserve(rootShmBytes.size());
-  for (auto &[root, bytes] : rootShmBytes) {
-    auto rangeIt = liveRanges.find(root);
-    if (rangeIt == liveRanges.end()) continue;
+  //
+  // 1. 输出逐 op pressure 曲线
+  //
+  dumpPressureCurve(
+      funcOp,
+      result,
+      threadNum,
+      printFullOp);
 
-    auto type = dyn_cast<MemRefType>(root.getType());
-    if (!type) continue;
-
-    nodes.push_back({root, rangeIt->second, bytes, type});
-  }
-
-  auto rangesOverlap = [](std::pair<unsigned, unsigned> lhs,
-                          std::pair<unsigned, unsigned> rhs) {
-    return lhs.first <= rhs.second && rhs.first <= lhs.second;
-  };
-
-  auto canShareSlot = [&](const ShmNode &lhs, const ShmNode &rhs) {
-    return lhs.type.getElementType() == rhs.type.getElementType() &&
-           !rangesOverlap(lhs.range, rhs.range);
-  };
-
-  for (const ShmNode &node : nodes)
-    shmInterferenceMap[node.root];
-
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    for (size_t j = i + 1; j < nodes.size(); ++j) {
-      if (canShareSlot(nodes[i], nodes[j])) continue;
-      shmInterferenceMap[nodes[i].root].insert(nodes[j].root);
-      shmInterferenceMap[nodes[j].root].insert(nodes[i].root);
-    }
-  }
-
-  SmallVector<ShmNode> coloringOrder(nodes.begin(), nodes.end());
-  std::sort(coloringOrder.begin(), coloringOrder.end(),
-            [&](const ShmNode &lhs, const ShmNode &rhs) {
-              size_t lhsDegree = shmInterferenceMap[lhs.root].size();
-              size_t rhsDegree = shmInterferenceMap[rhs.root].size();
-              if (lhsDegree != rhsDegree) return lhsDegree > rhsDegree;
-              if (lhs.bytes != rhs.bytes) return lhs.bytes > rhs.bytes;
-              return std::tie(lhs.range.first, lhs.range.second) <
-                     std::tie(rhs.range.first, rhs.range.second);
-            });
-
-  for (const ShmNode &node : coloringOrder) {
-    llvm::DenseSet<unsigned> forbiddenColors;
-    auto neighborIt = shmInterferenceMap.find(node.root);
-    if (neighborIt != shmInterferenceMap.end()) {
-      for (Value neighbor : neighborIt->second) {
-        auto colorIt = rootShmColors.find(neighbor);
-        if (colorIt != rootShmColors.end())
-          forbiddenColors.insert(colorIt->second);
-      }
-    }
-
-    unsigned color = 0;
-    while (forbiddenColors.contains(color))
-      ++color;
-
-    rootShmColors[node.root] = color;
-    auto colorBytesIt = shmColorBytes.find(color);
-    if (colorBytesIt == shmColorBytes.end()) {
-      shmColorBytes[color] = node.bytes;
-    } else {
-      colorBytesIt->second = std::max(colorBytesIt->second, node.bytes);
-    }
-  }
-
-  SmallVector<unsigned> colors;
-  colors.reserve(shmColorBytes.size());
-  for (auto &[color, bytes] : shmColorBytes)
-    colors.push_back(color);
-  std::sort(colors.begin(), colors.end());
-
-  llvm::DenseMap<unsigned, int64_t> colorOffsets;
-  int64_t nextOffset = 0;
-  for (unsigned color : colors) {
-    colorOffsets[color] = nextOffset;
-    nextOffset += shmColorBytes[color];
-  }
-
-  for (const ShmNode &node : nodes) {
-    auto colorIt = rootShmColors.find(node.root);
-    if (colorIt == rootShmColors.end()) continue;
-
-    unsigned color = colorIt->second;
-    int64_t offset = colorOffsets[color];
-    rootShmOffsets[node.root] = offset;
-
-    if (auto allocBuffer = node.root.getDefiningOp<frisk::AllocBufferOp>()) {
-      MLIRContext *ctx = allocBuffer->getContext();
-      Builder builder(ctx);
-      allocBuffer->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
-      allocBuffer->setAttr("shm_reuse_offset", builder.getI64IntegerAttr(offset));
-      allocBuffer->setAttr("shm_reuse_bytes",
-                           builder.getI64IntegerAttr(node.bytes));
-    } else if (auto alloc = node.root.getDefiningOp<memref::AllocOp>()) {
-      MLIRContext *ctx = alloc->getContext();
-      Builder builder(ctx);
-      alloc->setAttr("shm_reuse_color", builder.getI64IntegerAttr(color));
-      alloc->setAttr("shm_reuse_offset", builder.getI64IntegerAttr(offset));
-      alloc->setAttr("shm_reuse_bytes", builder.getI64IntegerAttr(node.bytes));
-    }
-  }
-
-  llvm::outs() << "  -> Shared Memory Reuse Total: " << nextOffset
-               << " bytes\n";
-  for (unsigned color : colors) {
-    llvm::outs() << "     color " << color << ": " << shmColorBytes[color]
-                 << " bytes";
-    auto offsetIt = colorOffsets.find(color);
-    if (offsetIt != colorOffsets.end())
-      llvm::outs() << ", offset " << offsetIt->second;
-    llvm::outs() << "\n";
-  }
+  //
+  // 2. 输出峰值处具体哪些 Value 活跃
+  //
+  dumpPeakLiveValues(
+      funcOp,
+      result,
+      threadNum);
 }
 
-} // namespace mlir:frisk
+} // namespace
