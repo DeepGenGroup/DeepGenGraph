@@ -1,6 +1,7 @@
 add_deepgengraph_library(FriskToBase
   FriskToBasePass.cpp
-  FriskBaseToTheadlevelIR.cpp
+  # FriskBaseToTheadlevelIR.cpp
+  FriskBaseToTheadlevelIR_selfTry.cpp
   
   DEPENDS
   FriskToBaseConversionPassIncGen

@@ -2041,10 +2041,12 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
   OpAsmParser::UnresolvedOperand source;
   SmallVector<OpAsmParser::UnresolvedOperand, 4> indices;
   SmallVector<int64_t, 4> ranges;
+  Attribute indexMapAttr;
   Type sourceType, viewType;
 
-  if (parser.parseOperand(source) || parser.parseLSquare() ||
-      parser.parseOperandList(indices) || parser.parseRSquare() ||
+  if (parser.parseOperand(source) ||
+      parser.parseAffineMapOfSSAIds(indices, indexMapAttr, "indexMap",
+                                    result.attributes) ||
       parser.parseComma() || parser.parseKeyword("ranges") ||
       parser.parseEqual() || parser.parseLSquare())
     return failure();
@@ -2070,10 +2072,12 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
                             "source and result types must be memref");
 
   auto srcMemRef = cast<MemRefType>(sourceType);
-  if (indices.size() != static_cast<size_t>(srcMemRef.getRank())) {
+  auto indexMap = cast<AffineMapAttr>(indexMapAttr).getValue();
+  if (indexMap.getNumResults() != static_cast<unsigned>(srcMemRef.getRank())) {
     return parser.emitError(parser.getCurrentLocation())
            << "expected " << srcMemRef.getRank()
-           << " indices for source rank, but got " << indices.size();
+           << " affine results for source rank, but got "
+           << indexMap.getNumResults();
   }
 
   if (parser.resolveOperand(source, sourceType, result.operands))
@@ -2081,9 +2085,6 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.resolveOperands(indices, parser.getBuilder().getIndexType(), result.operands))
     return failure();
 
-  auto identity = AffineMap::getMultiDimIdentityMap(indices.size(),
-                                                     parser.getContext());
-  result.addAttribute("indexMap", AffineMapAttr::get(identity));
   result.addAttribute("ranges", parser.getBuilder().getDenseI64ArrayAttr(ranges));
 
   if (parser.parseOptionalAttrDict(result.attributes))

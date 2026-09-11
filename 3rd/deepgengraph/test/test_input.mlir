@@ -44,16 +44,16 @@ module {
       %7 = arith.muli %bx, %c64 : index  // bx * 64
       %70 = arith.muli %7, %c128 : index  // bx * 64 * 128
       %8 = arith.addi %6, %70 : index  // by * 128 * 4096 + bx * 64 * 128  [bz , by , bx*64 , 128]
-      %9 = deepgengraph_triton.block_ptr_of base = %argQ, base_offset = %8, shape = [64, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x128xf16>}>
+      %9 = deepgengraph_triton.block_ptr_of base = %argQ, base_offset = %8, shape = [64, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x128xf16>}>  // 逻辑上[64,128] , 行连续
       %10 = deepgengraph_triton.block_load %9 : (!deepgengraph_triton<block_ptr{tensor<64x128xf16>}>) -> tensor<64x128xf16>
-      %11 = deepgengraph_triton.block_ptr_of base = %argO, base_offset = %8, shape = [64, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x128xf16>}>
+      %11 = deepgengraph_triton.block_ptr_of base = %argO, base_offset = %8, shape = [64, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x128xf16>}>  // 逻辑上[64,128] , 行连续
       %12 = deepgengraph.convert %cst, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
       %13 = deepgengraph.mul %10, %12 : (tensor<64x128xf16>, tensor<1xf16>) -> tensor<64x128xf16>
       %14 = deepgengraph.zero shape = [64, 128], type = f32 : () -> tensor<64x128xf32>
       %15 = deepgengraph.zero shape = [64, 1], type = f32 : () -> tensor<64x1xf32>
       %16 = arith.addi %5, %c64 : index  // by * 128 + 64
-      %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %8, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128
-      %18 = deepgengraph_triton.block_ptr_of base = %argV, base_offset = %8, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [32, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+    %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %8, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128  逻辑上[128,32] , 列连续。global需按照 [1,32,128,4096] 做permute 
+      %18 = deepgengraph_triton.block_ptr_of base = %argV, base_offset = %8, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [32, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>  // 逻辑上[32,128] 行连续
       %temp = arith.muli %bx , %c64 : index 
       %loopUb = arith.addi %temp , %c32 : index // BM * bx + BN
       %19:4 = scf.for %arg10 = %c0 to %loopUb step %c32 iter_args(%tempK = %17, %tempV = %18, %arg13 = %14, %arg14 = %15) -> (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>, tensor<64x128xf32>, tensor<64x1xf32>) {

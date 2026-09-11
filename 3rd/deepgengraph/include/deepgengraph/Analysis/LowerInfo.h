@@ -47,14 +47,14 @@ public:
   Value buffer = nullptr;
   mlir::Operation* op = nullptr;
   int warp_threads;
-  BufPos pos = LowerInfo::BufPos::In;
+  BufPos pos = LowerInfo::BufPos::In;  // 入参 出参
   coordXY_t warpInstUnroll = {1,1};
-  int ignoreDim = -1;
+  int ignoreDim = -1;  // 需要忽略的维度（只看有效维度）
   LowerInfo* convertFrom = nullptr;  // 表示该Layout使用前，需要添加 LayoutConvertOp，从 convertFrom Layout转换到到自己（即：reg->shm->reg）
 
 public:
   explicit LowerInfo(int _warp_threads);
-  MMAInstInfo*  mmaInst = nullptr;
+  MMAInstInfo*  mmaInst = nullptr;  // 是否绑定了mma指令
 
 /**
   * 字段说明
@@ -93,7 +93,7 @@ public:
   coordXY_t get_block_repeat() const {
     return block_repeat;
   }
-  // 单个inst中，每个线程处理的连续元素数
+  // 单个inst中，每个线程处理的【连续】元素数
   coordXY_t get_thread_widths() const {
     return base_layout.thread_creg;
   } 
@@ -267,7 +267,7 @@ private:
 
 class LowerInfoMap {
 public:
-  using LowerInfoMapTy = DenseMap<std::pair<Value, Operation*> , LowerInfo>;
+  using LowerInfoMapTy = DenseMap<std::pair<Value, Operation*> , LowerInfo>;  // key: Value+op 标记某op的某个Value的Layout  v: Layout信息
   // 进行op顺序分析
   const SmallVector<Operation*>& getOpsOrder(mlir::Operation* rootNode);
   // 查询 <buffer，op> 对应的LowerInfo

@@ -4,6 +4,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   TranslateToLLVM.cpp
   LowerPipe.cpp
   VectorizeRegMemref.cpp
+  IROptimize.cpp
 
   DEPENDS
   ThreadToLLVMPasseIncGen

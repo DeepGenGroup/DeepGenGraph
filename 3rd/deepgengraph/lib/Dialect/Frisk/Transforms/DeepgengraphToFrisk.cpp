@@ -1,3 +1,4 @@
+#include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
@@ -342,6 +343,7 @@ struct ArgIdViewBuffer {
   std::vector<int64_t> blockShape;
   std::vector<int64_t> sourceStrides;
   std::vector<int64_t> blockStrides;
+  std::vector<int64_t> order2D;
 };
 
 // 存放 argId : { arg对应的initView ， arg开辟view时建立的shm buffer }
@@ -553,6 +555,27 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
   }
 };
 
+static coordXY_t GetPhysicalBlockShapeWithOrder(ArgIdViewBuffer* info){
+  // 真实block Shape 由order判定。规定 [x,y] 的y为连续维度，即order[0] 指示的维度。
+  std::array<int64_t,2> realBlockShape = {0,0};
+  realBlockShape[1 - info->order2D[0]] = info->blockShape[0];  // [128,32] order [0,1] -> 128为连续
+  realBlockShape[1 - info->order2D[1]] = info->blockShape[1];  // [32,128] order [1,0] -> 128为连续
+  return realBlockShape;
+}
+
+static coordXY_t GetPhysicalBlockShapeWithOrder(deepgengraph::triton::BlockPointerOfOp op){
+  auto blockShape2d = op.getBlockShape();
+  auto order = op.getOrder();
+  // 真实block Shape 由order判定。规定 [x,y] 的y为连续维度，即order[0] 指示的维度。
+  std::array<int64_t,2> realBlockShape = {0,0};
+  realBlockShape[1 - order[0]] = blockShape2d[0];  // [128,32] order [0,1] -> 128为连续
+  realBlockShape[1 - order[1]] = blockShape2d[1];  // [32,128] order [1,0] -> 128为连续
+  return realBlockShape;
+}
+
+
+
+
 struct PointerOfConversionPattern : public OpConversionPattern<deepgengraph::triton::PointerOfOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -650,6 +673,7 @@ struct BlockPointerOfConversionPattern
     info->blockShape = op.getBlockShape();
     info->sourceStrides = std::move(sourceStrides);
     info->blockStrides = std::move(blockStrides);
+    info->order2D = op.getOrder();
     s_argId_bufferInfo[argId] = info;
     if(newOp){
       // 含read，需要创建buffer存数据
