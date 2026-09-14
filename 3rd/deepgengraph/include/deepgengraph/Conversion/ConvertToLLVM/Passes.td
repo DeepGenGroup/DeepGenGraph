@@ -15,11 +15,11 @@ def ThreadLevelIRLegalize: Pass<"thread-ir-legalize", "::mlir::ModuleOp"> {
   ];
 }
 
-def RegMemrefVectorize: Pass<"reg-memref-vectorize", "func::FuncOp"> {
-  let summary = "legalize后，将表达reg的memref改为 vector类型";
+def IRDeepOptimize: Pass<"ir-deep-optimize", "func::FuncOp"> {
+  let summary = "legalize后，将IR 进一步优化(vectorize / forloop unroll full 等)";
   let description = [{}];
 
-  let constructor = "mlir::frisk::createRegMemrefVectorizePass()";
+  let constructor = "mlir::frisk::createIRDeepOptimizePass()";
 
   let dependentDialects = [
     "mlir::frisk::FriskDialect"

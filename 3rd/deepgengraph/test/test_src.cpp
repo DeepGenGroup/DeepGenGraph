@@ -481,11 +481,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createLoopInvariantCodeMotionPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after threadIR legalize -----\n"; llvm::outs().flush(); src->dump();
-  // legalize 后，对剩余表示 reg的memref进行处理，将其 变成vector
-  // AddPassNested(mlir::frisk::createRegMemrefVectorizePass());
-  // llvm::outs() << "\n---------- after createRegMemrefVectorizePass ---------\n"; llvm::outs().flush();src->dump();
+  // legalize 后， affineLoop ir形式优化
   AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
   AddPass(mlir::createCSEPass());
+  // in loop alloc 操作提升
   AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
   AddPassNested(mlir::bufferization::createBufferHoistingPass());
   AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
@@ -498,6 +497,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCanonicalizerPass());
   mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
   AddPassNested(mlir::affine::createAffineVectorize(opt));
+  
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
   llvm::outs() << "\n---- after first vectorize -----\n"; llvm::outs().flush(); src->dump();

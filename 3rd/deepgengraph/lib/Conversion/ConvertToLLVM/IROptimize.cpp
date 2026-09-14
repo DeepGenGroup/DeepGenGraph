@@ -63,19 +63,22 @@
 namespace mlir::frisk {
 
 namespace {
-#define GEN_PASS_DEF_THREADLEVELIRLEGALIZE
+#define GEN_PASS_DEF_IRDEEPOPTIMIZE
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
 
 
 using friskMs = frisk::attr::MemorySpace;
 
-class VectorOpLoopUnrollPass : public impl::ThreadLevelIRLegalizeBase<VectorOpLoopUnrollPass> {
+class VectorOpLoopUnrollPass : public impl::IRDeepOptimizeBase<VectorOpLoopUnrollPass> {
 public:
   void runOnOperation(){
-    // ----- step 1 : module中收集所有function。检查是否为kernel，不是的话去掉. 之后加上 gridDIm 属性
-    auto module = getOperation();
-    std::vector<affine::AffineForOp> forOps;
-    module->walk([&](mlir::vector::InsertOp insertOp){
+  
+    auto kernel = getOperation();
+    if(!kernel->hasAttr(THREAD_NUM)){
+      return;
+    }
+    mlir::DenseSet<affine::AffineForOp> forOps;
+    kernel->walk([&](mlir::vector::InsertOp insertOp){
       auto positions = insertOp.getMixedPosition();
       for(auto pos : positions){
         // 静态索引，例如这里的 0
@@ -89,11 +92,11 @@ public:
 
         if (auto forOp = affine::getForInductionVarOwner(index)) {
           // llvm::outs() << "index is affine.for IV\n";
-          forOps.push_back(forOp);
+          forOps.insert(forOp);
         }
       }
     });
-    module->walk([&](mlir::vector::ExtractOp extractOp){
+    kernel->walk([&](mlir::vector::ExtractOp extractOp){
       auto positions = extractOp.getMixedPosition();
       for(auto pos : positions){
         // 静态索引，例如这里的 0
@@ -107,10 +110,11 @@ public:
 
         if (auto forOp = affine::getForInductionVarOwner(index)) {
           // llvm::outs() << "index is affine.for IV\n";
-          forOps.push_back(forOp);
+          forOps.insert(forOp);
         }
       }
     });
+    
     for(auto op : forOps){
       affine::loopUnrollFull(op);
     }

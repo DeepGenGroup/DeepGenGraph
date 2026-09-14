@@ -3335,6 +3335,14 @@ public:
       if (srcMemType.getShape() != dstMemType.getShape()) {
         return failure();
       }
+      int64_t srcSpace = srcMemType.getMemorySpaceAsInt();
+      int64_t dstSpace = dstMemType.getMemorySpaceAsInt();
+      if ((srcSpace == int(friskMs::Global) &&
+           dstSpace == int(friskMs::Shared)) ||
+          (srcSpace == int(friskMs::Shared) &&
+           dstSpace == int(friskMs::Global))) {
+        return failure();
+      }
 
       LowerInfo *copyInfo = s_info->getLowerInfo(srcMem, op.getOperation());
       if (copyInfo == nullptr) {
@@ -3423,10 +3431,6 @@ public:
       rewriter.eraseOp(op);
       return success();
     };
-
-    if (succeeded(lowerBufferViewCopyWithThreadMap())) {
-      return success();
-    }
 
     auto productOfShape = [&](ArrayRef<int64_t> shape) -> FailureOr<int64_t> {
       int64_t size = 1;
@@ -3698,6 +3702,9 @@ public:
     };
 
     if (succeeded(lowerGlobalSharedCopy())) {
+      return success();
+    }
+    if (succeeded(lowerBufferViewCopyWithThreadMap())) {
       return success();
     }
 
