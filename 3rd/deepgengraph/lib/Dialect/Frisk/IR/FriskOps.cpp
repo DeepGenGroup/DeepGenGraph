@@ -2044,6 +2044,9 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
   Attribute indexMapAttr;
   Type sourceType, viewType;
 
+  // The indices are printed as an affine map over the SSA ids of the enclosing
+  // scope, e.g. `%buf[0, (%i + 4) floordiv 8, %j]`, so parse them back the
+  // same way (this also fills in the `indexMap` attribute).
   if (parser.parseOperand(source) ||
       parser.parseAffineMapOfSSAIds(indices, indexMapAttr, "indexMap",
                                     result.attributes) ||
@@ -2058,7 +2061,8 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
         ranges.push_back(v);
         return success();
       }) ||
-      parser.parseRSquare() || parser.parseColonType(sourceType) ||
+      parser.parseRSquare() || parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(sourceType) ||
       parser.parseArrowTypeList(result.types))
     return failure();
 
@@ -2086,10 +2090,6 @@ ParseResult BufferViewOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   result.addAttribute("ranges", parser.getBuilder().getDenseI64ArrayAttr(ranges));
-
-  if (parser.parseOptionalAttrDict(result.attributes))
-    return failure();
-
   return success();
 }
 

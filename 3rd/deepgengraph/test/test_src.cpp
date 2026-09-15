@@ -4,6 +4,7 @@
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
+#include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
@@ -471,6 +472,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // pm.addNestedPass<func::FuncOp>(frisk::createFriskLayoutInferPass());
   // pm.run(src->getOperation());
   // llvm::outs() << "\n---------- after createFriskLayoutInferPass ---------\n"; llvm::outs().flush();src->dump();
+
+  // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
+  // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
+  // 没有标注的循环原样保留：pass 直接返回，不动 IR。
+  AddPassNested(mlir::pipeline::createPipelineSchedulePass());
+  llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   // pm.addPass(mlir::createSymbolDCEPass());

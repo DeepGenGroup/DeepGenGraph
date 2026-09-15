@@ -1029,7 +1029,11 @@ def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [
     }]>
   ];
 
-  let assemblyFormat = "attr-dict ($buffer^ `:` type($buffer))?";
+  // The optional operand has to sit in a delimited group: a trailing
+  // `($buffer^ `:` type($buffer))?` makes the parser swallow the *next* line's
+  // SSA name (`%x = ...`) as the missing operand and then fail on the `=`,
+  // which breaks every round trip of an op that follows a barrier.
+  let assemblyFormat = "attr-dict (`(` $buffer^ `:` type($buffer) `)`)?";
   let hasVerifier = 1;
 }
 
