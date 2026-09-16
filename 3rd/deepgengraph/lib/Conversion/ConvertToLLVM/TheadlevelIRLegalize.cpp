@@ -152,7 +152,22 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(frisk::WarpMmaRROp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, /*optional*/::mlir::Type res, ::mlir::ValueRange operands, ::llvm::StringRef asm_string, ::llvm::StringRef constraints, /*optional*/bool has_side_effects, /*optional*/bool is_align_stack, /*optional*/::mlir::LLVM::AsmDialectAttr asm_dialect, /*optional*/::mlir::ArrayAttr operand_attrs);
-    auto asm_string = op->getAttrOfType<StringAttr>("inst_name").data();
+    auto instName = op->getAttrOfType<StringAttr>("inst_name").getValue();
+    std::string asm_string = instName.str();
+    if (instName.starts_with("v_mmac_f32_16x16x16_f16 ")) {
+      // The DTK backend does not schedule the MMAC hidden in this inline asm.
+      // On gfx936, the unpadded dependent-MMAC test reads stale results; the
+      // padded test verifies both zero and nonzero accumulator inputs.
+      // Keep input and output spacing INSIDE the same asm so register moves,
+      // result stores and register reuse cannot enter the protected interval.
+      // This is the conservative spacing validated on hardware, not a claim
+      // about the instruction's minimum latency. Shorten only after measuring,
+      // or replace the opaque asm with a target intrinsic with hazard handling.
+      std::string padding;
+      for (int i = 0; i < 8; ++i)
+        padding += "s_nop 7\n\t";
+      asm_string = padding + asm_string + "\n\t" + padding;
+    }
     auto constraints = op->getAttrOfType<StringAttr>("inst_constraints").data();
     
     auto getCollapsed = [&](mlir::Value oldValue){

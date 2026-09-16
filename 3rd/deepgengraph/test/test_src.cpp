@@ -534,8 +534,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
   // 没有标注的循环原样保留：pass 直接返回，不动 IR。
-  AddPassNested(mlir::pipeline::createPipelineSchedulePass());
-  llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
+  // AddPassNested(mlir::pipeline::createPipelineSchedulePass());
+  // llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   // pm.addPass(mlir::createSymbolDCEPass());
@@ -560,8 +560,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPassNested( mlir::affine::createLoopFusionPass());
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
-  mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
-  AddPassNested(mlir::affine::createAffineVectorize(opt));
+  // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
+  // AddPassNested(mlir::affine::createAffineVectorize(opt));
   
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());

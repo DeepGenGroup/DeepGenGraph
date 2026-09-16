@@ -96,6 +96,8 @@ static void print_tensor_sample(
     std::cout << '\n';
 }
 
+
+
 static void print_tensor_summary(
     const char *name,
     const std::vector<uint16_t> &data
@@ -366,8 +368,18 @@ int main(int argc, char** argv) {
         hipModuleUnload(module);
         return 1;
     }
-
+    // print results :
     print_tensor_sample("out", h_out, sample_count);
+
+    for(int ss = 0;ss < 1024; ss+= 64){
+        std::cout << "["<< ss <<"] ";
+        for(int dd = 0;dd < 10;dd++){
+            auto i = bhsd_to_linear(0, 0, ss, dd);
+            std::cout << half_bits_to_float(h_out[i])  << ", ";
+        }
+        std::cout << std::endl;
+    }
+
     print_tensor_summary("out", h_out);
 
     cleanup_buffers();
