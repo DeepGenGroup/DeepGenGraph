@@ -460,32 +460,35 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
     AffineMapAttr:$offset_map
   );
 
+  let results = (outs
+    Variadic<Frisk_MemRefOrVector>:$result
+  );
+
   let builders = [
     // 构造器 1: 默认构造器，自动生成全零偏移映射
     OpBuilder<(ins "Value":$src, "Value":$dst), [{
       auto dstType = cast<ShapedType>(dst.getType());
       auto offsetMap = AffineMap::getConstantMap(dstType.getRank(), $_builder.getContext());
-      build($_builder, $_state, src, dst, ValueRange{}, offsetMap);
+      $_state.addOperands({src, dst});
+      $_state.addAttribute("offset_map", AffineMapAttr::get(offsetMap));
+    }]>,
+    // 构造器 2: 旧代码路径默认不产生 SSA result
+    OpBuilder<(ins "Value":$src, "Value":$dst, "ValueRange":$map_operands, "AffineMap":$offset_map), [{
+      $_state.addOperands({src, dst});
+      $_state.addOperands(map_operands);
+      $_state.addAttribute("offset_map", AffineMapAttr::get(offset_map));
     }]>
-    // ,
-    // // 构造器 2: 全参数构造器
-    // OpBuilder<(ins "Value":$src, "Value":$dst, "ValueRange":$map_operands, "AffineMap":$offset_map), [{
-    //   $_state.addOperands({src, dst});
-    //   $_state.addOperands(map_operands);
-    //   $_state.addAttribute("offset_map", AffineMapAttr::get(offset_map));
-    // }]>
   ];
 
-  let assemblyFormat = [{
-    $src `to` $dst (`at` `(` $map_operands^ `)`)? `[` $offset_map `]` attr-dict
-    `:` type($src) `,` type($dst)
-  }];
+  let hasCustomAssemblyFormat = 1;
 
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
     Value getSrcMemRef() { return getOperand(0); }
     Value getDstMemRef() { return getOperand(1); }
+    bool hasValueResult() { return getNumResults() != 0; }
+    Value getValueResult() { return getOperation()->getResult(0); }
   }];
 }
 
@@ -613,13 +616,17 @@ def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, 
     AnyAttr:$value
   );
 
+  let results = (outs
+    Variadic<AnyMemRef>:$result
+  );
+
   let extraClassDeclaration = [{
     MemRefType getMemType() { return cast<MemRefType>(getMemref().getType()); }
   }];
 
-  // let hasVerifier = 1;
-  // let hasCustomAssemblyFormat = 1;
-  let assemblyFormat = "$memref attr-dict `:` type($memref)";
+  let assemblyFormat = [{
+    $memref  attr-dict `:` type($memref) `->` type($result)
+  }];
 }
 
 //
@@ -634,13 +641,18 @@ def Frisk_FillOp: Frisk_Op<"fill", [MemoryEffects<[MemWrite]>]> {
     AnyAttr:$value
   );
 
+  let results = (outs
+    Variadic<Frisk_MemRefOrVector>:$result
+  );
+
   let extraClassDeclaration = [{
     MemRefType getMemType() { return cast<MemRefType>(getMemref().getType()); }
+    bool hasValueResult() { return getNumResults() != 0; }
+    Value getValueResult() { return getOperation()->getResult(0); }
   }];
 
   let hasVerifier = 1;
-  // let hasCustomAssemblyFormat = 1;
-  let assemblyFormat = "$memref attr-dict `:` type($memref)";
+  let hasCustomAssemblyFormat = 1;
 }
 
 //
@@ -1015,26 +1027,13 @@ def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [
 ]> {
   let summary = "Synchronize all threads in a block";
   let description = [{
-    Synchronize all threads within the current block.  This operation can
-    optionally carry a shared-memory buffer operand that records the memref
-    whose accesses must be waited on.
+    Synchronize all threads within the current block.
   }];
 
-  let arguments = (ins Optional<AnyMemRef>:$buffer);
+  let arguments = (ins);
   let results = (outs);
 
-  let builders = [
-    OpBuilder<(ins), [{
-      build($_builder, $_state, ::mlir::Value{});
-    }]>
-  ];
-
-  // The optional operand has to sit in a delimited group: a trailing
-  // `($buffer^ `:` type($buffer))?` makes the parser swallow the *next* line's
-  // SSA name (`%x = ...`) as the missing operand and then fail on the `=`,
-  // which breaks every round trip of an op that follows a barrier.
-  let assemblyFormat = "attr-dict (`(` $buffer^ `:` type($buffer) `)`)?";
-  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
 }
 
 

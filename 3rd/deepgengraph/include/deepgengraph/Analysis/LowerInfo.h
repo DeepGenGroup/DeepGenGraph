@@ -62,22 +62,22 @@ public:
 
 上述布局示例中，warp_inst 对应单个warp级别指令（如wmma）构成的基础计算区域，称为 base_layout. 该部分的布局完全由硬件决定。一般手册中已经固定了访问模式
 - base_layout中: thread_creg+order, warp_layout+order, warp_repeat+order 唯一确定一个base_Layout 布局
-    其中： thread_creg = thread 计算的连续区域大小 
+    其中： thread_creg = thread 计算的连续区域大小
           order = 行列优先顺序.[0,1] 表示先迭代0轴，再迭代1轴，即列优先，反之为行优先
           warp_layout = warp中线程排布形状。NVIDIA下，单个warp含32线程,如[4,8]; AMD/DCU 下=64. 如[16,4]
           warp_repeat = 单个warp中所有线程计算的连续区域。对应 【图1】中的 warp_inst
 - singeIter表示单次循环计算的区域。其中，可能含有多个 warp_inst 指令。单个循环内 warp_inst 的排列称为 warpInstUnroll
-- 
+-
 */
 
-  LinearLayout2DDesc base_layout;  
-  
+  LinearLayout2DDesc base_layout;
+
   std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
   std::array<int64_t, 2> block_layout_order = {0, 1};  // block内warp布局的行列优先顺序 上例中为[1,0] 行优先（列优先也可）
   std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2] or [4,1]. 其中行列优先顺序无所谓，不影响结果
 
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
-  
+
   coordXY_t get_warp_layout() const {
     return base_layout.warp_layout;
   }
@@ -96,7 +96,7 @@ public:
   // 单个inst中，每个线程处理的【连续】元素数
   coordXY_t get_thread_widths() const {
     return base_layout.thread_creg;
-  } 
+  }
   // kernel中，每个线程持有多少buffer的数据
   coordXY_t get_thread_own_data_size() const {
     return thread_own_data_size;
@@ -182,13 +182,13 @@ public:
       // printExprVec("getAffineMap()", affineMapIndices);
     }
     if(op != nullptr){
-      llvm::outs() << "op: " << op->getName().getStringRef() << "\n";  
+      llvm::outs() << "op: " << op->getName().getStringRef() << "\n";
     }
     else{
-      llvm::outs() << "op: null\n";  
+      llvm::outs() << "op: null\n";
     }
     llvm::outs() << "thread_bound: " << thread_bound << "\n";
-    
+
     printI64Vec("creg", base_layout.thread_creg) ;  // consistent reg
     printI64Vec("creg_order", base_layout.thread_creg_order) ;
     printI64Vec("warp_layout", get_warp_layout());
@@ -218,29 +218,41 @@ public:
     mapOperandsLabel.push_back(TID);
     OpBuilder b{buffer.getContext()};
     unsigned int pos = 0;
-    // iterVar 顺序 ： tid br0 br1  instUnroll0 instUnroll1 warp_repeat_flat  creg_flat 
-    auto tid = b.getAffineDimExpr(pos++);  // 根据warp_layout & order, 分解为tx ty
+    // iterVar 顺序 ： tid br0 br1  instUnroll0 instUnroll1 warp_repeat_flat  creg_flat
+    auto tid = b.getAffineDimExpr(pos++);
     auto i_br0 = b.getAffineDimExpr(pos++);  // block_repeat 无order限制
     auto i_br1 = b.getAffineDimExpr(pos++);
-    
+
     auto i_iu0 = b.getAffineDimExpr(pos++);  // inst unroll 没order限制
     auto i_iu1 = b.getAffineDimExpr(pos++);
-    
+
     auto i_wr_flatten = b.getAffineDimExpr(pos++);  // warp_repeat 有order限制。需传入flattenId，然后分解
     auto i_creg_flatten = b.getAffineDimExpr(pos++);  // thread_creg 有order限制。需传入flattenId，然后分解
-    
+
     std::array<AffineExpr, 2> indices{0,0};
-    
-    // 分解为xy分量
-    auto[t0,t1] = UnflattenIndexToXY(tid, base_layout.warp_layout_order, base_layout.warp_layout);
+
+    // tid covers the whole block. Split it into the lane inside one warp and
+    // the warp's coordinate inside the block before applying the warp layout.
+    auto laneId = tid % warp_threads;
+    auto warpId = tid.floorDiv(warp_threads) % flat_size(block_layout);
+    auto[t0,t1] = UnflattenIndexToXY(laneId, base_layout.warp_layout_order, base_layout.warp_layout);
+    auto[bw0,bw1] = UnflattenIndexToXY(warpId, block_layout_order, block_layout);
     auto[i_wr0, i_wr1] = UnflattenIndexToXY(i_wr_flatten, base_layout.warp_repeat_order, base_layout.warp_repeat);
     auto[i_reg0, i_reg1] = UnflattenIndexToXY(i_creg_flatten, base_layout.thread_creg_order, base_layout.thread_creg);
-    
-    indices[0] = i_br0 * get_block_widths()[0] + i_iu0 * get_warpInst_widths()[0] + i_wr0 * get_warp_widths()[0] + t0 * get_thread_widths()[0] + i_reg0;
-    indices[1] = i_br1 * get_block_widths()[1] + i_iu1 * get_warpInst_widths()[1] + i_wr1 * get_warp_widths()[1] + t1 * get_thread_widths()[1] + i_reg1;
+
+    indices[0] = i_br0 * get_block_widths()[0] +
+                 bw0 * get_warpInst_widths()[0] * warpInstUnroll[0] +
+                 i_iu0 * get_warpInst_widths()[0] +
+                 i_wr0 * get_warp_widths()[0] +
+                 t0 * get_thread_widths()[0] + i_reg0;
+    indices[1] = i_br1 * get_block_widths()[1] +
+                 bw1 * get_warpInst_widths()[1] * warpInstUnroll[1] +
+                 i_iu1 * get_warpInst_widths()[1] +
+                 i_wr1 * get_warp_widths()[1] +
+                 t1 * get_thread_widths()[1] + i_reg1;
 
     auto affine_map = mlir::AffineMap::get(pos, 0, indices, buffer.getContext());
-  
+
     return affine_map;
   }
 
@@ -250,7 +262,7 @@ public:
     auto br = get_block_repeat();
 
     std::vector<int> ubs = {(int)br[0], (int)br[1],
-      (int)warpInstUnroll[0], (int)warpInstUnroll[1], 
+      (int)warpInstUnroll[0], (int)warpInstUnroll[1],
     ub_wr, ub_reg
     };
     return createNestedAffineFor(b, loc, ubs, iterVars);
@@ -274,6 +286,9 @@ public:
   LowerInfo* getLowerInfo(const mlir::Value& buffer, mlir::Operation* op);
   // 添加 lowerinfo（info中已经含有buffer）
   void addLowerInfo(mlir::Operation* op, LowerInfo info, bool isConflict=false);
+  // 当添加 ConvertLayoutOp 进行layout转换时，将op 的arg 的lowerInfo链条断开，将其后的Layout作为 result ssa值的Layout信息
+  void updateLowerInfoForLayoutConvertOp(frisk::ConvertLayoutOp op, LowerInfo newInfo);
+
   void conflictResolve();
   // 根据buffer查找infoMap，找到其中距离currOp最近的之前/之后的Op的 LowerInfo
   LowerInfo* getNearestInferedInfo(const mlir::Value& buffer, mlir::Operation* currOp, bool isBefore = true);
@@ -286,13 +301,14 @@ private:
 
   DenseMap<Operation*, unsigned> opOrder;  // 存放 op 顺序
   SmallVector<Operation*> opOrderVec;
+  Operation *opOrderRoot = nullptr;
 };
 
 class LowerInfoAnalysis {
 public:
   static LowerInfoMap* run(mlir::Operation* kernelOp,
                                         const std::string& hwKind = HW_KIND_DCU,
-                                        const std::string& version = HW_VERSION_DCU_BW1000);                                        
+                                        const std::string& version = HW_VERSION_DCU_BW1000);
   struct GemmProblem {
     Value A;
     Value B;
@@ -346,6 +362,7 @@ private:
                             bool preferBefore = true);
   static bool inferArithmeticOp(Operation *op, LowerInfoMap &buf_info_maps,
                                 bool preferBefore = true);
+  static bool inferOtherSimpleOp(Operation *op,LowerInfoMap &buf_info_maps,bool preferBefore) ;
 
   // void getTest() {
   //   llvm::outs() << "[D]need_infer_ops size: " << need_infer_ops.size() << "\n";

@@ -128,6 +128,15 @@ static void print_tensor_summary(
     std::cout << ", nonfinite_count=" << nonfinite_count << '\n';
 }
 
+size_t bhsd_to_linear(int b, int h, int s, int d){
+    const int B = 1;
+    const int H = 32;
+    const int S=4096;
+    const int D = 128;
+    auto ret = b*(H*S*D) + h*(S*D) + s * D + d;
+    return ret;
+}
+
 int main(int argc, char** argv) {
     int device_count;
     if(argc < 2){
@@ -179,10 +188,10 @@ int main(int argc, char** argv) {
        kernel:
 
        define void @Attn_p2(
-           ptr addrspace(1) %0,  // q:   tensor<1x4096x32x128xf16>
-           ptr addrspace(1) %1,  // k:   tensor<1x4096x32x128xf16>
-           ptr addrspace(1) %2,  // v:   tensor<1x4096x32x128xf16>
-           ptr addrspace(1) %3   // out: tensor<1x4096x32x128xf16>
+           ptr addrspace(1) %0,  // q:   memref<1x32x4096x128xf16, 1>
+           ptr addrspace(1) %1,  // v:   memref<1x32x4096x128xf16, 1>
+           ptr addrspace(1) %2,  // k:   memref<1x32x128x4096xf16, 1>
+           ptr addrspace(1) %3   // out: memref<1x32x4096x128xf16, 1>
        )
     */
 
@@ -201,14 +210,19 @@ int main(int argc, char** argv) {
     std::vector<uint16_t> h_v(tensor_elems);
     std::vector<uint16_t> h_out(tensor_elems, 0);
 
+
+
     for (size_t i = 0; i < tensor_elems; ++i) {
-        // h_q[i] = float_to_half_bits((static_cast<int>(i % 17) - 8) * 0.01f);
-        // h_k[i] = float_to_half_bits((static_cast<int>(i % 19) - 9) * 0.01f);
-        // h_v[i] = float_to_half_bits((static_cast<int>(i % 23) - 11) * 0.01f);
-        h_q[i] = float_to_half_bits(0.01f);
-        h_k[i] = float_to_half_bits(0.01f);
-        h_v[i] = float_to_half_bits(0.01f);
+        h_q[i] = float_to_half_bits(0.1f);
+        h_k[i] = float_to_half_bits(0.1f);
+        h_v[i] = float_to_half_bits(0.0f);
     }
+
+    for(int d = 0; d < 128;++d){
+        auto i = bhsd_to_linear(0, 0, 0, d);
+        h_v[i] = float_to_half_bits(d*1.0f);
+    }
+    
 
     print_tensor_sample("q input", h_q, sample_count);
     print_tensor_sample("k input", h_k, sample_count);
@@ -283,10 +297,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Match the positional ABI of Attn_p2: Q, V, K, O.
     void *args[] = {
         &q,
-        &k,
         &v,
+        &k,
         &out,
     };
 
@@ -304,9 +319,9 @@ int main(int argc, char** argv) {
     err =
     hipModuleLaunchKernel(
         kernel,
-        // grid
-        1, 32, 32,
-        // block
+        // griddim xyz
+        32, 64, 1,
+        // blockdim xyz
         128, 1, 1,
         // dynamic shared memory
         0,

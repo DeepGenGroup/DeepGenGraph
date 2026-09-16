@@ -157,19 +157,73 @@ void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConf
   return;
 }
 
+// 应该在 rewriter.replace 替换旧值之前执行本函数
+void LowerInfoMap::updateLowerInfoForLayoutConvertOp(frisk::ConvertLayoutOp op, LowerInfo _newInfo){
+  mlir::Value newSSA = op->getResult(0);
+  mlir::Value oldSSA = op->getOperand(0);
+  auto oldInfo = getLowerInfo(oldSSA, op.getOperation());
+  if (oldInfo == nullptr && oldSSA.getDefiningOp() != nullptr) {
+    oldInfo = getLowerInfo(oldSSA, oldSSA.getDefiningOp());
+  }
+  if (oldInfo == nullptr) {
+    for (auto user : oldSSA.getUsers()) {
+      if (user == op.getOperation()) {
+        continue;
+      }
+      oldInfo = getLowerInfo(oldSSA, user);
+      if (oldInfo != nullptr) {
+        break;
+      }
+    }
+  }
+  assert(oldInfo != nullptr && "ConvertLayoutOp source LowerInfo not found");
+  LowerInfo newInfo = _newInfo;
+  newInfo.buffer = newSSA;
+  LowerInfo _oldInfo = *oldInfo;
+  addLowerInfo(op.getOperation(), _oldInfo);
+  addLowerInfo(op.getOperation(), newInfo);
+  // 还缺少删除断开info链条的操作。先忽略
+  for(auto user : oldSSA.getUsers()){
+    if(op == user){
+      continue;
+    }
+    auto info = getLowerInfo(oldSSA, user);
+    if (info == nullptr) {
+      continue;
+    }
+    LowerInfo newInfo = *info;
+    newInfo.buffer = newSSA;
+    addLowerInfo(user, newInfo);
+  }
+}
+
+
 static void recalcLayout(LowerInfo& info, const coordXY_t& new_thread_own_data_sz, unsigned pos){
   // 调整 info.thread_own_data 后，线程持有数据增加
   // 单次指令计算区域仍不变，为 warp_layout * warp_repeat * thread_creg -> inst在buffer上平铺次数没变
   // 线程持有数据多了 -> block_repeat 少了，但每次平铺需要额外 unroll k0*k1 次 inst操作
   // 本质是将 k0*k1 次的inst 所用数据都放进 thread_own_data 里。
-  auto _shape = mlir::cast<MemRefType>(info.buffer.getType()).getShape();
+  auto _shape = mlir::cast<ShapedType>(info.buffer.getType()).getShape();
   coordXY_t bufferShape = {_shape[0], _shape[1]};
-  auto thread_calc_data = bufferShape / info.get_warp_layout();  // 单个thread需要计算的数据量
   if(pos >= unsigned(LowerInfo::BufPos::Out)){
     // buffer有作为 out参数的时候 ： 需要按最大数据量
     info.thread_own_data_size = new_thread_own_data_sz;
-    info.warpInstUnroll = new_thread_own_data_sz / ( info.get_thread_widths() * info.get_warp_repeat() );   // 一次 thread_own_data = inst_unroll 次 warp_inst计算
-    info.block_repeat = thread_calc_data / new_thread_own_data_sz; ;  // 进行多少次 thread_own_data 平铺
+    for (unsigned dim = 0; dim < 2; ++dim) {
+      if (bufferShape[dim] == 1 || info.ignoreDim == static_cast<int>(dim)) {
+        info.thread_own_data_size[dim] = 1;
+        info.warpInstUnroll[dim] = 1;
+        info.block_repeat[dim] = 1;
+        continue;
+      }
+      int64_t instructionWidth =
+          info.get_thread_widths()[dim] * info.get_warp_repeat()[dim];
+      info.warpInstUnroll[dim] =
+          (new_thread_own_data_sz[dim] + instructionWidth - 1) / instructionWidth;
+      int64_t blockWidth = instructionWidth * info.warpInstUnroll[dim] *
+                           info.get_warp_layout()[dim] *
+                           info.get_block_layout()[dim];
+      info.block_repeat[dim] = (bufferShape[dim] + blockWidth - 1) / blockWidth;
+    }
   }
   else{
     // buffer 仅作为 in 参数被读取 : 无需修改LowerInfo。
@@ -288,11 +342,26 @@ void LowerInfoMap::conflictResolve() {
 }
 
 const SmallVector<Operation*>& LowerInfoMap::getOpsOrder(mlir::Operation* rootNode){
-  if(opOrder.empty()){
+  if (rootNode == nullptr) {
+    return opOrderVec;
+  }
+
+  if (opOrder.empty() || opOrderRoot != rootNode) {
+    opOrder.clear();
+    opOrderVec.clear();
+    opOrderRoot = rootNode;
     opOrderVec.push_back(nullptr);
     unsigned idx = 1;
     rootNode->walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
       opOrder.try_emplace(subOp, idx++);
+      opOrderVec.push_back(subOp);
+    });
+  } else {
+    rootNode->walk<WalkOrder::PreOrder>([&](mlir::Operation* subOp){
+      if (opOrder.find(subOp) != opOrder.end()) {
+        return;
+      }
+      opOrder.try_emplace(subOp, opOrderVec.size());
       opOrderVec.push_back(subOp);
     });
   }
@@ -319,8 +388,13 @@ LowerInfo *LowerInfoMap::getNearestInferedInfo(const mlir::Value &buffer,
   }
   auto currOrderIt = opOrder.find(currOp);
   if (currOrderIt == opOrder.end()) {
-    assert(false && "currOp must be recorded in LowerInfoMap::getOpsOrder()");
-    return nullptr;
+    if (opOrderRoot != nullptr) {
+      (void)getOpsOrder(opOrderRoot);
+      currOrderIt = opOrder.find(currOp);
+    }
+    if (currOrderIt == opOrder.end()) {
+      return nullptr;
+    }
   }
   unsigned currOrder = currOrderIt->second;
   unsigned bestOrder = 0;
@@ -384,7 +458,7 @@ static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
 }
 
 static bool isFriskArithmeticOp(Operation *op) {
-  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op>(op);
+  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op, FillOp>(op);
 }
 
 static void
@@ -412,7 +486,7 @@ LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
 
   llvm::SmallVector<Operation*, 5> need_infer_ops{};
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op) ||
+    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp, FillOp, affine::AffineForOp, affine::AffineYieldOp>(op) ||
         isFriskArithmeticOp(op)) {
       need_infer_ops.push_back(op);
     }
@@ -660,7 +734,16 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
     Value src = copyOp.getSrcMemRef();
     auto dstInfo = getNearestInferedInfoEither(buf_info_maps, dst, op, preferBefore);
     auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op, preferBefore);
-    LowerInfo *sourceInfo = dstInfo != nullptr ? dstInfo : srcInfo;
+    LowerInfo *resultInfo = nullptr;
+    for (Value result : copyOp->getResults()) {
+      resultInfo = getNearestInferedInfoEither(buf_info_maps, result, op,
+                                               preferBefore);
+      if (resultInfo != nullptr) {
+        break;
+      }
+    }
+    LowerInfo *sourceInfo =
+        dstInfo != nullptr ? dstInfo : (srcInfo != nullptr ? srcInfo : resultInfo);
 
     auto isLowerInfoOKForCalculate = [](Value buffer, LowerInfo& info){
       auto memShape = mlir::cast<MemRefType>(buffer.getType()).getShape();
@@ -694,6 +777,16 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
       dstCandidate.buffer = dst;
       dstCandidate.pos = LowerInfo::BufPos::Out;
       buf_info_maps.addLowerInfo(op, dstCandidate);
+
+      for (Value result : copyOp->getResults()) {
+        if (!isa<ShapedType>(result.getType())) {
+          continue;
+        }
+        LowerInfo resultCandidate = source;
+        resultCandidate.buffer = result;
+        resultCandidate.pos = LowerInfo::BufPos::Out;
+        buf_info_maps.addLowerInfo(op, resultCandidate);
+      }
       return true;
     }
     LLVM_OUT_MSG("---- inferCopyOp error");
@@ -1034,6 +1127,55 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   return true;
 }
 
+
+bool LowerInfoAnalysis::inferOtherSimpleOp(
+  Operation *op,
+  LowerInfoMap &buf_info_maps,
+  bool preferBefore) {
+  // A loop carries independent SSA values. Propagate each recurrence on its
+  // own; the layout of one accumulator says nothing about another accumulator.
+  auto forOp = dyn_cast<affine::AffineForOp>(op);
+  if (auto yieldOp = dyn_cast<affine::AffineYieldOp>(op))
+    forOp = dyn_cast<affine::AffineForOp>(yieldOp->getParentOp());
+  if (forOp) {
+    auto yieldOp = cast<affine::AffineYieldOp>(forOp.getBody()->getTerminator());
+    bool complete = true;
+    for (unsigned i = 0; i < forOp.getNumRegionIterArgs(); ++i) {
+      Value init = forOp.getInits()[i];
+      Value arg = forOp.getRegionIterArgs()[i];
+      Value result = forOp.getResult(i);
+      Value yielded = yieldOp.getOperand(i);
+      if (!isa<ShapedType>(arg.getType()))
+        continue;
+      LowerInfo *source = nullptr;
+      for (Value value : {yielded, arg, init, result}) {
+        source = getNearestInferedInfoEither(buf_info_maps, value, op,
+                                             preferBefore);
+        if (source)
+          break;
+      }
+      if (!source) {
+        complete = false;
+        continue;
+      }
+      // Copy before addLowerInfo: inserting candidates can invalidate source.
+      LowerInfo layout = *source;
+      for (Value value : {init, arg, result, yielded}) {
+        LowerInfo candidate = layout;
+        candidate.buffer = value;
+        candidate.pos = value == result ? LowerInfo::BufPos::Out
+                                        : LowerInfo::BufPos::In;
+        buf_info_maps.addLowerInfo(forOp, candidate);
+      }
+      layout.buffer = yielded;
+      layout.pos = LowerInfo::BufPos::In;
+      buf_info_maps.addLowerInfo(yieldOp, layout);
+    }
+    return complete;
+  }
+  return false;
+}
+
 bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
                                           LowerInfoMap &buf_info_maps,
                                           bool preferBefore) {
@@ -1059,10 +1201,23 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
     return false;
   }
 
+  LowerInfo layout = *sourceInfo;
   for (const auto &[memref, pos] : memrefs) {
-    LowerInfo candidateInfo = *sourceInfo;
+    LowerInfo candidateInfo = layout;
     candidateInfo.buffer = memref;
     candidateInfo.pos = pos;
+    // Broadcast operands retain their own singleton dimensions. In particular,
+    // a row sum consumed by a matrix division is still a [rows, 1] tile.
+    auto shape = cast<ShapedType>(memref.getType()).getShape();
+    if (shape.size() == 2) {
+      candidateInfo.ignoreDim = -1;
+      for (unsigned dim = 0; dim < 2; ++dim) {
+        if (shape[dim] == 1) {
+          candidateInfo.thread_own_data_size[dim] = 1;
+          candidateInfo.ignoreDim = dim;
+        }
+      }
+    }
     buf_info_maps.addLowerInfo(op, candidateInfo);
   }
   return true;
@@ -1082,24 +1237,51 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
                                     bool preferBefore) {
   // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
+  auto addMemrefToCheck = [&](Value value) {
+    if (value == nullptr || !isa<ShapedType>(value.getType())) {
+      return;
+    }
+    if (!llvm::is_contained(memrefsToCheck, value)) {
+      memrefsToCheck.push_back(value);
+    }
+  };
   for (const auto &opd : op->getOperands()) {
-    if (isa<ShapedType>(opd.getType())) {
-      memrefsToCheck.push_back(opd);
+    addMemrefToCheck(opd);
+  }
+  if (isFriskArithmeticOp(op) || isa<CopyOp, affine::AffineForOp>(op)) {
+    for (Value result : op->getResults()) {
+      addMemrefToCheck(result);
     }
   }
-  if (isFriskArithmeticOp(op)) {
-    for (Value result : op->getResults()) {
-      if (isa<ShapedType>(result.getType())) {
-        memrefsToCheck.push_back(result);
+  if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+    for (Value iterArg : forOp.getRegionIterArgs()) {
+      addMemrefToCheck(iterArg);
+    }
+    if (auto yieldOp = dyn_cast<affine::AffineYieldOp>(
+            forOp.getBody()->getTerminator())) {
+      for (Value operand : yieldOp->getOperands()) {
+        addMemrefToCheck(operand);
+      }
+    }
+  } else if (auto yieldOp = dyn_cast<affine::AffineYieldOp>(op)) {
+    if (auto forOp = yieldOp->getParentOfType<affine::AffineForOp>()) {
+      for (Value init : forOp.getInits()) {
+        addMemrefToCheck(init);
+      }
+      for (Value iterArg : forOp.getRegionIterArgs()) {
+        addMemrefToCheck(iterArg);
+      }
+      for (Value result : forOp->getResults()) {
+        addMemrefToCheck(result);
       }
     }
   }
   if (auto blockOp = dyn_cast<BlockOp>(op)) {
     blockOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *nestedOp) {
       if (auto loadOp = dyn_cast<affine::AffineLoadOp>(nestedOp)) {
-        memrefsToCheck.push_back(loadOp.getMemRef());
+        addMemrefToCheck(loadOp.getMemRef());
       } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(nestedOp)) {
-        memrefsToCheck.push_back(storeOp.getMemref());
+        addMemrefToCheck(storeOp.getMemref());
       }
     });
   }
@@ -1143,6 +1325,9 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
     return true;
   }
   if (inferReduceOp(op, buf_info_maps, preferBefore)) {
+    return true;
+  }
+  if (inferOtherSimpleOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
   if (inferArithmeticOp(op, buf_info_maps, preferBefore)) {
@@ -1204,7 +1389,8 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
 
   auto isInferTargetOp = [](Operation *op) {
     return op != nullptr &&
-           (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op) ||
+           (isa<CopyOp, BlockOp, GemmOp, ReduceOp, affine::AffineForOp,
+                affine::AffineYieldOp>(op) ||
             isFriskArithmeticOp(op));
   };
   auto tryInferAt = [&](int opId, bool collectConflict, bool preferBefore) -> bool {

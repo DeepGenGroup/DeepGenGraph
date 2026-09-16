@@ -42,6 +42,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Visitors.h"
@@ -75,13 +76,14 @@ static LowerInfoMap* s_info { nullptr};
 static HWSpecification* s_hw {nullptr};
 
 static DenseMap<mlir::Value, mlir::Value> s_buffer_replace;
-static DenseMap<frisk::ConvertLayoutOp , std::pair<LowerInfo*, LowerInfo*>> convertLayoutInfo;
+static DenseMap<frisk::ConvertLayoutOp, std::pair<LowerInfo, LowerInfo>>
+    convertLayoutInfo;
 
 static Value getVectorReplacement(Value value, Operation *user = nullptr);
 static Value getVectorValue(Value value);
 static FailureOr<Value>
-extractThreadTileFromVector(Value fullVector, VectorType tileTy, LowerInfo &info,
-                            ConversionPatternRewriter &rewriter, Location loc,
+extractThreadTile(Value fullVector, VectorType tileTy, LowerInfo &info,
+                            OpBuilder &rewriter, Location loc,
                             Operation *anchorOp);
 
 static bool isLocalMemref(Value buffer) {
@@ -222,10 +224,15 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap ) {
     inserted.push_back(key);
 
     OpBuilder builder(toInfo.op);
-    auto convertLayout = builder.create<frisk::ConvertLayoutOp>(
-        toInfo.op->getLoc(), toInfo.buffer,
+    auto convertLayoutOp = builder.create<frisk::ConvertLayoutOp>(
+        toInfo.op->getLoc(), toInfo.buffer.getType() ,toInfo.buffer,
         builder.getStringAttr("lowerinfo.convert"));
-    convertLayoutInfo.insert({convertLayout, {toInfo.convertFrom, &toInfo}});
+    LowerInfo fromInfo = *toInfo.convertFrom;
+    LowerInfo newInfo = toInfo;
+    newInfo.buffer = convertLayoutOp->getResult(0);
+    s_info->updateLowerInfoForLayoutConvertOp(convertLayoutOp, toInfo);
+    convertLayoutInfo.insert({convertLayoutOp, {fromInfo, newInfo}});
+    toInfo.op->replaceUsesOfWith(toInfo.buffer, convertLayoutOp->getResult(0));
   }
 }
 
@@ -594,7 +601,7 @@ public:
         if (vectorTy == vecTy) {
           return vector;
         }
-        auto tile = extractThreadTileFromVector(vector, vecTy, info, rewriter,
+        auto tile = extractThreadTile(vector, vecTy, info, rewriter,
                                                 op->getLoc(), op.getOperation());
         if (succeeded(tile)) {
           return *tile;
@@ -914,8 +921,16 @@ public:
 
 static VectorType getVecTypeByLowerInfoWithThreadOwnData(const LowerInfo& info){
   auto shape = info.get_thread_own_data_size();
-  auto memTy = mlir::cast<MemRefType>(info.buffer.getType());
-  return VectorType::get(shape, memTy.getElementType());
+  Type elementType;
+  if (auto memTy = mlir::dyn_cast<MemRefType>(info.buffer.getType())) {
+    elementType = memTy.getElementType();
+  } else if (auto vecTy = mlir::dyn_cast<VectorType>(info.buffer.getType())) {
+    elementType = vecTy.getElementType();
+  } else if (auto shapedTy = mlir::dyn_cast<ShapedType>(info.buffer.getType())) {
+    elementType = shapedTy.getElementType();
+  }
+  assert(elementType && "LowerInfo buffer must carry an element type");
+  return VectorType::get(shape, elementType);
 }
 
 static VectorType getConvertedBufferType(mlir::Value adaptedValue, const LowerInfo& info){
@@ -934,13 +949,14 @@ static VectorType getConvertedBufferType(mlir::Value adaptedValue, const LowerIn
 }
 
 static FailureOr<Value>
-extractThreadTileFromVector(Value fullVector, VectorType tileTy, LowerInfo &info,
-                            ConversionPatternRewriter &rewriter, Location loc,
+extractThreadTile(Value fullVector, VectorType tileTy, LowerInfo &info,
+                            OpBuilder &rewriter, Location loc,
                             Operation *anchorOp) {
-  auto fullTy = mlir::dyn_cast<VectorType>(fullVector.getType());
-  if (!fullTy || fullTy == tileTy) {
+  auto fullTy = mlir::dyn_cast<ShapedType>(fullVector.getType());
+  if (fullVector.getType() == tileTy)
     return fullVector;
-  }
+  if (!fullTy || !isa<VectorType, MemRefType>(fullVector.getType()))
+    return failure();
   if (fullTy.getElementType() != tileTy.getElementType() ||
       fullTy.getRank() != tileTy.getRank()) {
     return failure();
@@ -966,6 +982,7 @@ extractThreadTileFromVector(Value fullVector, VectorType tileTy, LowerInfo &info
       }
       auto forOp = rewriter.create<affine::AffineForOp>(
           loc, /*lowerBound=*/0, ub, /*step=*/1, ValueRange{currentTile});
+      forOp->setAttr("thread_tile_extract", rewriter.getBoolAttr(true));
       rewriter.setInsertionPointToStart(forOp.getBody());
       tileIvs.push_back(forOp.getInductionVar());
       Value nested =
@@ -980,11 +997,20 @@ extractThreadTileFromVector(Value fullVector, VectorType tileTy, LowerInfo &info
     auto fullIndices =
         buildMappedAccessIndices(rewriter, loc, info, tidx, tileIvs,
                                  static_cast<unsigned>(fullTy.getRank()));
+    for (unsigned i = 0; i < fullIndices.size(); ++i) {
+      if (fullTy.getDimSize(i) == 1)
+        fullIndices[i] = createIndexConstant(rewriter, loc, 0);
+    }
     SmallVector<int64_t, 2> staticFullPosition(fullIndices.size(),
                                                ShapedType::kDynamic);
-    auto scalar = rewriter.create<vector::ExtractOp>(
-        loc, fullTy.getElementType(), fullVector, fullIndices,
-        rewriter.getDenseI64ArrayAttr(staticFullPosition));
+    Value scalar;
+    if (isa<MemRefType>(fullVector.getType())) {
+      scalar = rewriter.create<affine::AffineLoadOp>(loc, fullVector, fullIndices);
+    } else {
+      scalar = rewriter.create<vector::ExtractOp>(
+          loc, fullTy.getElementType(), fullVector, fullIndices,
+          rewriter.getDenseI64ArrayAttr(staticFullPosition));
+    }
 
     SmallVector<OpFoldResult, 2> tilePosition;
     tilePosition.reserve(tileIvs.size());
@@ -992,7 +1018,7 @@ extractThreadTileFromVector(Value fullVector, VectorType tileTy, LowerInfo &info
       tilePosition.push_back(iv);
     }
     return rewriter
-        .create<vector::InsertOp>(loc, scalar.getResult(), currentTile,
+        .create<vector::InsertOp>(loc, scalar, currentTile,
                                   tilePosition)
         .getResult();
   };
@@ -1031,6 +1057,7 @@ insertThreadTileIntoVector(Value tileVector, Value fullVector, LowerInfo &info,
       }
       auto forOp = rewriter.create<affine::AffineForOp>(
           loc, /*lowerBound=*/0, ub, /*step=*/1, ValueRange{currentFull});
+      forOp->setAttr("thread_tile_insert", rewriter.getBoolAttr(true));
       rewriter.setInsertionPointToStart(forOp.getBody());
       tileIvs.push_back(forOp.getInductionVar());
       Value nested =
@@ -1065,6 +1092,90 @@ insertThreadTileIntoVector(Value tileVector, Value fullVector, LowerInfo &info,
   return emitLoopNest(0, fullVector);
 }
 
+static FailureOr<Value>
+broadcastLocalVectorToTile(Value sourceVector, VectorType tileTy,
+                           OpBuilder &rewriter, Location loc) {
+  auto sourceTy = mlir::dyn_cast<VectorType>(sourceVector.getType());
+  if (!sourceTy || sourceTy == tileTy) {
+    return sourceVector;
+  }
+  if (sourceTy.getElementType() != tileTy.getElementType() ||
+      sourceTy.getRank() != tileTy.getRank()) {
+    return failure();
+  }
+
+  bool needsBroadcast = false;
+  for (int64_t dim = 0; dim < sourceTy.getRank(); ++dim) {
+    int64_t sourceSize = sourceTy.getDimSize(dim);
+    int64_t tileSize = tileTy.getDimSize(dim);
+    if (sourceSize == tileSize) {
+      continue;
+    }
+    if (sourceSize != 1) {
+      return failure();
+    }
+    needsBroadcast = true;
+  }
+  if (!needsBroadcast) {
+    return sourceVector;
+  }
+
+  Value result =
+      rewriter
+          .create<arith::ConstantOp>(
+              loc, tileTy, mlir::cast<TypedAttr>(rewriter.getZeroAttr(tileTy)))
+          .getResult();
+
+  SmallVector<Value, 2> tileIvs;
+  std::function<Value(unsigned, Value)> emitLoopNest =
+      [&](unsigned dim, Value currentTile) -> Value {
+    if (dim != static_cast<unsigned>(tileTy.getRank())) {
+      int64_t ub = tileTy.getDimSize(dim);
+      if (ub == 1) {
+        tileIvs.push_back(createIndexConstant(rewriter, loc, 0));
+        Value nested = emitLoopNest(dim + 1, currentTile);
+        tileIvs.pop_back();
+        return nested;
+      }
+      auto forOp = rewriter.create<affine::AffineForOp>(
+          loc, /*lowerBound=*/0, ub, /*step=*/1, ValueRange{currentTile});
+      rewriter.setInsertionPointToStart(forOp.getBody());
+      tileIvs.push_back(forOp.getInductionVar());
+      Value nested = emitLoopNest(dim + 1, forOp.getRegionIterArgs()[0]);
+      rewriter.setInsertionPointToEnd(forOp.getBody());
+      rewriter.create<affine::AffineYieldOp>(loc, nested);
+      tileIvs.pop_back();
+      rewriter.setInsertionPointAfter(forOp);
+      return forOp.getResult(0);
+    }
+
+    SmallVector<Value, 2> sourceIndices;
+    sourceIndices.reserve(tileIvs.size());
+    for (auto [idx, iv] : llvm::enumerate(tileIvs)) {
+      sourceIndices.push_back(sourceTy.getDimSize(idx) == 1
+                                  ? createIndexConstant(rewriter, loc, 0)
+                                  : iv);
+    }
+    SmallVector<int64_t, 2> staticSourcePosition(sourceIndices.size(),
+                                                 ShapedType::kDynamic);
+    auto scalar = rewriter.create<vector::ExtractOp>(
+        loc, sourceTy.getElementType(), sourceVector, sourceIndices,
+        rewriter.getDenseI64ArrayAttr(staticSourcePosition));
+
+    SmallVector<OpFoldResult, 2> tilePosition;
+    tilePosition.reserve(tileIvs.size());
+    for (Value iv : tileIvs) {
+      tilePosition.push_back(iv);
+    }
+    return rewriter
+        .create<vector::InsertOp>(loc, scalar.getResult(), currentTile,
+                                  tilePosition)
+        .getResult();
+  };
+
+  return emitLoopNest(0, result);
+}
+
 static Operation *getDominanceRoot(Operation *op) {
   Operation *root = op;
   while (root->getParentOp()) {
@@ -1074,7 +1185,7 @@ static Operation *getDominanceRoot(Operation *op) {
 }
 
 static Value getVectorReplacement(Value value, Operation *user) {
-  if (!mlir::isa<BlockArgument>(value)) {
+  {
     auto it = s_buffer_replace.find(value);
     if (it != s_buffer_replace.end() &&
         mlir::isa<VectorType>(it->second.getType())) {
@@ -1167,6 +1278,64 @@ static void foldThreadTileVectorLoads(Operation *root) {
   }
 }
 
+static Value findSingleExtractSource(affine::AffineForOp forOp,
+                                     VectorType expectedSourceTy = {}) {
+  Value source;
+  bool mismatch = false;
+  forOp.walk([&](vector::ExtractOp extractOp) {
+    Value candidate = extractOp.getVector();
+    if (expectedSourceTy && candidate.getType() != expectedSourceTy) {
+      return;
+    }
+    if (!source) {
+      source = candidate;
+      return;
+    }
+    if (source != candidate) {
+      mismatch = true;
+    }
+  });
+  return mismatch ? Value{} : source;
+}
+
+static bool foldThreadTileExtractLoops(Operation *root) {
+  SmallVector<affine::AffineForOp, 8> loops;
+  root->walk<WalkOrder::PostOrder>([&](affine::AffineForOp forOp) {
+    if (forOp->hasAttr("thread_tile_extract") && forOp.getNumResults() == 1) {
+      loops.push_back(forOp);
+    }
+  });
+
+  bool changed = false;
+  IRRewriter rewriter(root->getContext());
+  for (affine::AffineForOp forOp : loops) {
+    auto resultTy = mlir::dyn_cast<VectorType>(forOp.getResult(0).getType());
+    if (!resultTy) {
+      continue;
+    }
+    Value source = findSingleExtractSource(forOp);
+    if (!source) {
+      continue;
+    }
+    bool isConvertedTile = llvm::any_of(s_buffer_replace, [&](const auto &entry) {
+      return entry.second == source;
+    });
+    if (!isConvertedTile)
+      continue;
+    DominanceInfo dominance(getDominanceRoot(forOp));
+    if (!dominance.properlyDominates(source, forOp))
+      continue;
+    rewriter.setInsertionPoint(forOp);
+    auto tile = broadcastLocalVectorToTile(source, resultTy, rewriter,
+                                           forOp.getLoc());
+    if (failed(tile))
+      continue;
+    rewriter.replaceOp(forOp, *tile);
+    changed = true;
+  }
+  return changed;
+}
+
 static void promoteSingleIterationAffineFors(Operation *root) {
   bool changed = true;
   while (changed) {
@@ -1180,6 +1349,218 @@ static void promoteSingleIterationAffineFors(Operation *root) {
       }
     }
   }
+}
+
+static Attribute convertScalarAttrForElementType(TypedAttr valueAttr,
+                                                 Type elementType,
+                                                 Builder &builder) {
+  if (valueAttr.getType() == elementType) {
+    return valueAttr;
+  }
+  if (auto floatAttr = dyn_cast<FloatAttr>(valueAttr)) {
+    if (mlir::isa<FloatType>(elementType)) {
+      return builder.getFloatAttr(elementType, floatAttr.getValueAsDouble());
+    }
+  }
+  if (auto integerAttr = dyn_cast<IntegerAttr>(valueAttr)) {
+    if (mlir::isa<IntegerType, IndexType>(elementType)) {
+      return builder.getIntegerAttr(elementType, integerAttr.getValue());
+    }
+  }
+  return {};
+}
+
+static std::optional<LowerInfo>
+findThreadCarrierLowerInfo(Value value, Operation *anchor) {
+  if (s_info == nullptr) {
+    return std::nullopt;
+  }
+
+  SmallVector<Value, 8> worklist{value};
+  SmallVector<Value, 8> visited;
+
+  auto enqueue = [&](Value candidate) {
+    if (candidate && !llvm::is_contained(visited, candidate) &&
+        !llvm::is_contained(worklist, candidate)) {
+      worklist.push_back(candidate);
+    }
+  };
+
+  while (!worklist.empty()) {
+    Value candidate = worklist.pop_back_val();
+    visited.push_back(candidate);
+
+    if (auto *info = findLowerInfoForValue(candidate, anchor)) {
+      return *info;
+    }
+    if (anchor) {
+      if (auto *info = s_info->getNearestInferedInfo(candidate, anchor, true)) {
+        return *info;
+      }
+      if (auto *info = s_info->getNearestInferedInfo(candidate, anchor, false)) {
+        return *info;
+      }
+    }
+
+    if (auto castOp = candidate.getDefiningOp<UnrealizedConversionCastOp>();
+        castOp && castOp.getInputs().size() == 1) {
+      enqueue(castOp.getInputs()[0]);
+    }
+
+    if (auto blockArg = mlir::dyn_cast<BlockArgument>(candidate);
+        blockArg && blockArg.getArgNumber() != 0) {
+      if (auto forOp =
+              mlir::dyn_cast<affine::AffineForOp>(blockArg.getOwner()->getParentOp())) {
+        unsigned initIndex = blockArg.getArgNumber() - 1;
+        if (initIndex < forOp.getInits().size()) {
+          enqueue(forOp.getInits()[initIndex]);
+        }
+      }
+    }
+
+    if (auto result = mlir::dyn_cast<OpResult>(candidate)) {
+      if (auto forOp = mlir::dyn_cast<affine::AffineForOp>(result.getOwner());
+          forOp && result.getResultNumber() < forOp.getNumRegionIterArgs()) {
+        enqueue(forOp.getRegionIterArgs()[result.getResultNumber()]);
+        enqueue(forOp.getInits()[result.getResultNumber()]);
+      }
+    }
+
+    for (Operation *user : candidate.getUsers()) {
+      for (Value result : user->getResults()) {
+        enqueue(result);
+      }
+      if (auto copyOp = dyn_cast<frisk::CopyOp>(user)) {
+        enqueue(copyOp.getSrcMemRef());
+        enqueue(copyOp.getDstMemRef());
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+static bool fitsWithinCarrier(VectorType tileTy, VectorType carrierTy) {
+  if (tileTy.getRank() != carrierTy.getRank()) {
+    return false;
+  }
+  for (int64_t i = 0; i < tileTy.getRank(); ++i) {
+    int64_t tileDim = tileTy.getDimSize(i);
+    int64_t carrierDim = carrierTy.getDimSize(i);
+    if (tileDim <= 0) {
+      return false;
+    }
+    if (carrierDim != ShapedType::kDynamic && tileDim > carrierDim) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Normalize after producers/copies have been lowered, before greedy folding
+// destroys the explicit block-value -> thread-value correspondence.
+static bool normalizeLoopCarriedBlockVectors(func::FuncOp kernel) {
+  SmallVector<affine::AffineForOp, 8> loops;
+  kernel.walk<WalkOrder::PreOrder>([&](affine::AffineForOp loop) {
+    if (loop.getNumRegionIterArgs() &&
+        !loop->hasAttr("thread_tile_extract") &&
+        !loop->hasAttr("thread_tile_insert"))
+      loops.push_back(loop);
+  });
+  IRRewriter rewriter(kernel.getContext());
+  bool changed = false;
+  for (auto loop : llvm::reverse(loops)) {
+    auto yield = cast<affine::AffineYieldOp>(loop.getBody()->getTerminator());
+    SmallVector<Value> tiles;
+    SmallVector<std::optional<LowerInfo>, 2> layouts;
+    bool needsRewrite = false;
+    bool supported = true;
+    for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
+      Value yielded = yield.getOperand(i);
+      Value tile = getVectorReplacement(yielded, yield);
+      if (!tile)
+        tile = yielded;
+      auto oldTy = dyn_cast<VectorType>(arg.getType());
+      auto tileTy = dyn_cast<VectorType>(tile.getType());
+      if (tile.getType() != arg.getType() &&
+          (!oldTy || !tileTy || !fitsWithinCarrier(tileTy, oldTy))) {
+        supported = false;
+        break;
+      }
+      tiles.push_back(tile);
+      layouts.push_back(findThreadCarrierLowerInfo(arg, loop));
+      needsRewrite |= tile.getType() != arg.getType();
+    }
+    if (!supported || !needsRewrite)
+      continue;
+
+    SmallVector<Value> inits;
+    rewriter.setInsertionPoint(loop);
+    for (auto [i, init] : llvm::enumerate(loop.getInits())) {
+      Type tileTy = tiles[i].getType();
+      Value converted = getVectorReplacement(init, loop);
+      if (converted && converted.getType() == tileTy) {
+        inits.push_back(converted);
+      } else if (init.getType() == tileTy) {
+        inits.push_back(init);
+      } else if (auto constant = init.getDefiningOp<arith::ConstantOp>();
+                 constant && isa<DenseElementsAttr>(constant.getValue()) &&
+                 cast<DenseElementsAttr>(constant.getValue()).isSplat()) {
+        auto splat = cast<DenseElementsAttr>(constant.getValue());
+        auto attr = DenseElementsAttr::get(cast<VectorType>(tileTy),
+                                          splat.getSplatValue<Attribute>());
+        inits.push_back(rewriter.create<arith::ConstantOp>(loop.getLoc(),
+                                                          tileTy, attr));
+      } else if (layouts[i]) {
+        auto tile = extractThreadTile(
+            init, cast<VectorType>(tileTy), *layouts[i], rewriter,
+            loop.getLoc(), loop);
+        if (failed(tile)) {
+          supported = false;
+          break;
+        }
+        inits.push_back(*tile);
+      } else {
+        supported = false;
+        break;
+      }
+    }
+    if (!supported)
+      continue;
+
+    rewriter.setInsertionPoint(loop);
+    auto newLoop = rewriter.create<affine::AffineForOp>(
+        loop.getLoc(), loop.getLowerBoundOperands(), loop.getLowerBoundMap(),
+        loop.getUpperBoundOperands(), loop.getUpperBoundMap(),
+        loop.getStepAsInt(), inits);
+    for (NamedAttribute attr : loop->getAttrs()) {
+      StringRef name = attr.getName().getValue();
+      if (name != "lowerBoundMap" && name != "upperBoundMap" &&
+          name != "operandSegmentSizes" && name != "step")
+        newLoop->setAttr(attr.getName(), attr.getValue());
+    }
+    newLoop->setAttr("thread_yield_normalized", rewriter.getBoolAttr(true));
+    for (auto [i, oldArg] : llvm::enumerate(loop.getRegionIterArgs())) {
+      s_buffer_replace[oldArg] = newLoop.getRegionIterArgs()[i];
+      s_buffer_replace[loop.getResult(i)] = newLoop.getResult(i);
+      if (layouts[i]) {
+        registerConvertedValueLowerInfo(newLoop.getRegionIterArgs()[i],
+                                        *layouts[i], newLoop);
+        registerConvertedValueLowerInfo(newLoop.getResult(i),
+                                        *layouts[i], newLoop);
+      }
+    }
+    // Move the body instead of cloning it: producer SSA identities and their
+    // entries in s_buffer_replace must survive the loop signature change.
+    yield->setOperands(tiles);
+    Block *body = newLoop.getBody();
+    if (!body->empty())
+      rewriter.eraseOp(body->getTerminator());
+    rewriter.mergeBlocks(loop.getBody(), body, body->getArguments());
+    rewriter.replaceOp(loop, newLoop.getResults());
+    changed = true;
+  }
+  return changed;
 }
 
 static FailureOr<Value> castFloatVectorElementType(
@@ -1268,25 +1649,31 @@ public:
 
     auto resultVecTy = getVecTypeByLowerInfoWithThreadOwnData(*infoC);
     auto zero = createIndexConstant(rewriter, op->getLoc(), 0);
-    auto copyToThreadOwnedVector = [&](Value memref, LowerInfo &info) -> Value {
-      auto operands = buildLowerInfoMapOperands(
-          rewriter, op->getLoc(), info, findThreadIdxOp(op),
-          /*br0=*/zero, /*br1=*/zero,
-          /*iu0=*/zero, /*iu1=*/zero,
-          /*wr0=*/zero, /*wr1=*/zero,
-          /*reg0=*/zero, /*reg1=*/zero);
-      return rewriter
-          .create<frisk::CopyToRegOp>(op->getLoc(), resultVecTy, memref,
-                                      operands, info.getAffineMap())
-          .getResult();
+    auto copyToThreadOwnedVector = [&](Value memref, LowerInfo &info)
+        -> FailureOr<Value> {
+      return extractThreadTile(memref, resultVecTy, info, rewriter,
+                               op->getLoc(), op.getOperation());
     };
 
-	    auto materializeVector = [&](Value original, Value adapted,
-	                                 LowerInfo &info) -> FailureOr<Value> {
-	      if (Value vector = getVectorValue(adapted)) {
-	        auto vecTy = mlir::cast<VectorType>(vector.getType());
+		    auto materializeVector = [&](Value original, Value adapted,
+		                                 LowerInfo &info) -> FailureOr<Value> {
+		      if (Value vector = getVectorReplacement(original, op.getOperation())) {
+		        adapted = vector;
+		      } else if (Value vector =
+		                     getVectorReplacement(adapted, op.getOperation())) {
+		        adapted = vector;
+		      }
+
+		      if (Value vector = getVectorValue(adapted)) {
+		        auto vecTy = mlir::cast<VectorType>(vector.getType());
 	        if (vecTy != resultVecTy) {
-	          auto tile = extractThreadTileFromVector(vector, resultVecTy, info,
+	          auto broadcast =
+	              broadcastLocalVectorToTile(vector, resultVecTy, rewriter,
+	                                         op->getLoc());
+	          if (succeeded(broadcast)) {
+	            return *broadcast;
+	          }
+	          auto tile = extractThreadTile(vector, resultVecTy, info,
 	                                                  rewriter, op->getLoc(),
 	                                                  op.getOperation());
 	          if (succeeded(tile)) {
@@ -1300,7 +1687,13 @@ public:
 
 	      if (auto vecTy = mlir::dyn_cast<VectorType>(adapted.getType())) {
 	        if (vecTy != resultVecTy) {
-          auto tile = extractThreadTileFromVector(adapted, resultVecTy, info,
+          auto broadcast =
+              broadcastLocalVectorToTile(adapted, resultVecTy, rewriter,
+                                         op->getLoc());
+          if (succeeded(broadcast)) {
+            return *broadcast;
+          }
+          auto tile = extractThreadTile(adapted, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
           if (succeeded(tile)) {
@@ -1318,7 +1711,13 @@ public:
         Value castInput = castOp.getInputs()[0];
         auto vecTy = mlir::cast<VectorType>(castInput.getType());
         if (vecTy != resultVecTy) {
-          auto tile = extractThreadTileFromVector(castInput, resultVecTy, info,
+          auto broadcast =
+              broadcastLocalVectorToTile(castInput, resultVecTy, rewriter,
+                                         op->getLoc());
+          if (succeeded(broadcast)) {
+            return *broadcast;
+          }
+          auto tile = extractThreadTile(castInput, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
           if (succeeded(tile)) {
@@ -1455,12 +1854,25 @@ public:
           .getResult();
     };
 
-	    auto materializeVector = [&](Value original, Value adapted,
-	                                 LowerInfo &info) -> FailureOr<Value> {
-	      if (Value vector = getVectorValue(adapted)) {
-	        auto vecTy = mlir::cast<VectorType>(vector.getType());
+		    auto materializeVector = [&](Value original, Value adapted,
+		                                 LowerInfo &info) -> FailureOr<Value> {
+		      if (Value vector = getVectorReplacement(original, op.getOperation())) {
+		        adapted = vector;
+		      } else if (Value vector =
+		                     getVectorReplacement(adapted, op.getOperation())) {
+		        adapted = vector;
+		      }
+
+		      if (Value vector = getVectorValue(adapted)) {
+		        auto vecTy = mlir::cast<VectorType>(vector.getType());
 	        if (vecTy != resultVecTy) {
-	          auto tile = extractThreadTileFromVector(vector, resultVecTy, info,
+	          auto broadcast =
+	              broadcastLocalVectorToTile(vector, resultVecTy, rewriter,
+	                                         op->getLoc());
+	          if (succeeded(broadcast)) {
+	            return *broadcast;
+	          }
+	          auto tile = extractThreadTile(vector, resultVecTy, info,
 	                                                  rewriter, op->getLoc(),
 	                                                  op.getOperation());
 	          if (succeeded(tile)) {
@@ -1474,7 +1886,13 @@ public:
 
 	      if (auto vecTy = mlir::dyn_cast<VectorType>(adapted.getType())) {
 	        if (vecTy != resultVecTy) {
-          auto tile = extractThreadTileFromVector(adapted, resultVecTy, info,
+          auto broadcast =
+              broadcastLocalVectorToTile(adapted, resultVecTy, rewriter,
+                                         op->getLoc());
+          if (succeeded(broadcast)) {
+            return *broadcast;
+          }
+          auto tile = extractThreadTile(adapted, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
           if (succeeded(tile)) {
@@ -1492,7 +1910,13 @@ public:
         Value castInput = castOp.getInputs()[0];
         auto vecTy = mlir::cast<VectorType>(castInput.getType());
         if (vecTy != resultVecTy) {
-          auto tile = extractThreadTileFromVector(castInput, resultVecTy, info,
+          auto broadcast =
+              broadcastLocalVectorToTile(castInput, resultVecTy, rewriter,
+                                         op->getLoc());
+          if (succeeded(broadcast)) {
+            return *broadcast;
+          }
+          auto tile = extractThreadTile(castInput, resultVecTy, info,
                                                   rewriter, op->getLoc(),
                                                   op.getOperation());
           if (succeeded(tile)) {
@@ -2370,37 +2794,227 @@ public:
   }
 };
 
-// convertLayoutOp -> sync op
+static FailureOr<VectorType>
+getThreadTileVectorType(LowerInfo &info, Type elementType, unsigned rank,
+                        Operation *op, PatternRewriter &rewriter) {
+  auto threadShape = info.get_thread_own_data_size();
+  SmallVector<int64_t, 2> shape;
+  shape.reserve(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    int64_t dim = i < threadShape.size() ? threadShape[i] : 1;
+    if (info.ignoreDim >= 0 && static_cast<unsigned>(info.ignoreDim) == i) {
+      dim = 1;
+    }
+    if (dim <= 0 || dim > std::numeric_limits<int>::max()) {
+      return rewriter.notifyMatchFailure(
+          op, "layout convert expects positive static thread tile shape");
+    }
+    shape.push_back(dim);
+  }
+  return VectorType::get(shape, elementType);
+}
+
+static FailureOr<Value>
+materializeLayoutConvertThroughShared(frisk::ConvertLayoutOp op, Value source,
+                                      LowerInfo fromInfo, LowerInfo toInfo,
+                                      ConversionPatternRewriter &rewriter) {
+  auto memTy = mlir::dyn_cast<MemRefType>(op.getMemref().getType());
+  if (!memTy) {
+    return rewriter.notifyMatchFailure(op,
+                                       "layout convert source must be a memref");
+  }
+  if (!memTy.hasStaticShape()) {
+    return rewriter.notifyMatchFailure(
+        op, "layout convert expects static block tile shape");
+  }
+  unsigned rank = memTy.getRank();
+  if (rank == 0 || rank > 2) {
+    return rewriter.notifyMatchFailure(
+        op, "layout convert currently supports rank-1/rank-2 tiles");
+  }
+
+  Type elementType = memTy.getElementType();
+  auto fromVecTy =
+      getThreadTileVectorType(fromInfo, elementType, rank, op.getOperation(),
+                              rewriter);
+  auto toVecTy =
+      getThreadTileVectorType(toInfo, elementType, rank, op.getOperation(),
+                              rewriter);
+  if (failed(fromVecTy) || failed(toVecTy)) {
+    return failure();
+  }
+
+  Location loc = op->getLoc();
+  auto tidx = findThreadIdxOp(op);
+  auto scratch = rewriter.create<frisk::AllocBufferOp>(
+      loc, SmallVector<int64_t>(memTy.getShape().begin(),
+                                memTy.getShape().end()),
+      elementType, 16, int(friskMs::Shared));
+
+  Value sourceVector = getVectorReplacement(source, op.getOperation());
+  if (!sourceVector) {
+    sourceVector = getVectorValue(source);
+  }
+  if (!sourceVector) {
+    sourceVector = getVectorReplacement(op.getMemref(), op.getOperation());
+  }
+  if (!sourceVector) {
+    sourceVector = getVectorValue(op.getMemref());
+  }
+
+  if (sourceVector) {
+    auto sourceVecTy = mlir::dyn_cast<VectorType>(sourceVector.getType());
+    if (!sourceVecTy) {
+      return failure();
+    }
+    if (sourceVecTy != *fromVecTy) {
+      auto threadTile = extractThreadTile(
+          sourceVector, *fromVecTy, fromInfo, rewriter, loc, op.getOperation());
+      if (failed(threadTile)) {
+        return rewriter.notifyMatchFailure(
+            op, "layout convert source vector does not match old thread tile");
+      }
+      sourceVector = *threadTile;
+    }
+  }
+
+  auto getLoopBounds = [&](VectorType vecTy) -> FailureOr<std::vector<int>> {
+    std::vector<int> bounds;
+    bounds.reserve(vecTy.getRank());
+    for (int64_t dim : vecTy.getShape()) {
+      if (dim <= 0 || dim > std::numeric_limits<int>::max()) {
+        return rewriter.notifyMatchFailure(
+            op, "layout convert expects int-sized vector shape");
+      }
+      bounds.push_back(static_cast<int>(dim));
+    }
+    return bounds;
+  };
+
+  auto fromBounds = getLoopBounds(*fromVecTy);
+  if (failed(fromBounds)) {
+    return failure();
+  }
+
+  Value sourceMemref = source;
+  auto sourceMemTy = mlir::dyn_cast<MemRefType>(sourceMemref.getType());
+  if (!sourceVector && !sourceMemTy) {
+    return rewriter.notifyMatchFailure(
+        op, "layout convert source must lower from vector or memref");
+  }
+
+  std::vector<Value> fromIvs;
+  auto writeLoops = createNestedAffineFor(rewriter, loc, *fromBounds, fromIvs);
+  SmallVector<Value, 2> scratchWriteIndices = buildMappedAccessIndices(
+      rewriter, loc, fromInfo, tidx, fromIvs, rank);
+  Value scalar;
+  if (sourceVector) {
+    SmallVector<int64_t, 2> staticPosition(fromIvs.size(),
+                                           ShapedType::kDynamic);
+    scalar = rewriter
+                 .create<vector::ExtractOp>(
+                     loc, fromVecTy->getElementType(), sourceVector, fromIvs,
+                     rewriter.getDenseI64ArrayAttr(staticPosition))
+                 .getResult();
+  } else {
+    SmallVector<Value, 2> sourceIndices;
+    if (isLocalMemref(sourceMemref) &&
+        sourceMemTy.getShape() == fromVecTy->getShape()) {
+      sourceIndices.append(fromIvs.begin(), fromIvs.end());
+    } else {
+      sourceIndices = scratchWriteIndices;
+    }
+    scalar =
+        rewriter
+            .create<affine::AffineLoadOp>(loc, sourceMemref, sourceIndices)
+            .getResult();
+  }
+  rewriter.create<affine::AffineStoreOp>(
+      loc, scalar, scratch.getResult(), scratchWriteIndices);
+  if (!writeLoops.empty()) {
+    rewriter.setInsertionPointAfter(writeLoops.front());
+  }
+
+  rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
+
+  Value result =
+      rewriter
+          .create<arith::ConstantOp>(
+              loc, *toVecTy, mlir::cast<TypedAttr>(rewriter.getZeroAttr(*toVecTy)))
+          .getResult();
+
+  auto toBounds = getLoopBounds(*toVecTy);
+  if (failed(toBounds)) {
+    return failure();
+  }
+
+  SmallVector<Value, 2> toIvs;
+  std::function<Value(unsigned, Value)> emitReadBack =
+      [&](unsigned dim, Value currentVector) -> Value {
+    if (dim != static_cast<unsigned>(toVecTy->getRank())) {
+      if (toVecTy->getDimSize(dim) == 1) {
+        toIvs.push_back(createIndexConstant(rewriter, loc, 0));
+        Value nested = emitReadBack(dim + 1, currentVector);
+        toIvs.pop_back();
+        return nested;
+      }
+      auto forOp = rewriter.create<affine::AffineForOp>(
+          loc, 0, toVecTy->getDimSize(dim), 1, ValueRange{currentVector});
+      rewriter.setInsertionPointToStart(forOp.getBody());
+      toIvs.push_back(forOp.getInductionVar());
+      Value nested = emitReadBack(dim + 1, forOp.getRegionIterArgs()[0]);
+      rewriter.setInsertionPointToEnd(forOp.getBody());
+      rewriter.create<affine::AffineYieldOp>(loc, nested);
+      toIvs.pop_back();
+      rewriter.setInsertionPointAfter(forOp);
+      return forOp.getResult(0);
+    }
+
+    auto scratchReadIndices =
+        buildMappedAccessIndices(rewriter, loc, toInfo, tidx, toIvs, rank);
+    auto loaded = rewriter.create<affine::AffineLoadOp>(
+        loc, scratch.getResult(), scratchReadIndices);
+    SmallVector<OpFoldResult, 2> position;
+    position.reserve(toIvs.size());
+    for (Value iv : toIvs) {
+      position.push_back(iv);
+    }
+    return rewriter
+        .create<vector::InsertOp>(loc, loaded.getResult(), currentVector,
+                                  position)
+        .getResult();
+  };
+
+  return emitReadBack(0, result);
+}
+
+// convertLayoutOp -> shared scratch relayout
 class ConvertLayoutOpConversion : public OpConversionPattern<frisk::ConvertLayoutOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(frisk::ConvertLayoutOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
-    Value memref = op.getMemref();
-    if (getVectorReplacement(memref, op.getOperation())) {
-      rewriter.eraseOp(op);
-      if (auto castOp = memref.getDefiningOp<UnrealizedConversionCastOp>()) {
-        if (memref.use_empty()) {
-          rewriter.eraseOp(castOp);
-        }
-      }
-      return success();
+    auto it = convertLayoutInfo.find(op);
+    if (it == convertLayoutInfo.end()) {
+      return rewriter.notifyMatchFailure(op, "missing layout convert LowerInfo");
     }
 
-    auto it = convertLayoutInfo.find(op);
-    if(it != convertLayoutInfo.end()){
-      auto [from, to] = it->getSecond();
-      // 根据from 构建for循环，用 frisk.copy 将线程持有的数据拷贝到 from.buffer(shm)
-      // 根据to 构建for循环 用 frisk.copy 将 from.buffer(shm) 的数据拷贝到线程持有的buffer
-      assert(from->buffer == to->buffer);
-      auto memTy = mlir::cast<MemRefType>(from->buffer.getType());
-      if (memTy.getMemorySpaceAsInt() == (int)friskMs::Shared) {
-        auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(op->getLoc(), from->buffer);
-        rewriter.replaceOp(op, sync);
-        return success();
+    auto [fromInfo, toInfo] = it->getSecond();
+    auto converted = materializeLayoutConvertThroughShared(
+        op, adaptor.getMemref(), fromInfo, toInfo, rewriter);
+    if (failed(converted)) {
+      return failure();
+    }
+
+    registerConvertedValueLowerInfo(*converted, toInfo, op.getOperation());
+    rewriter.replaceOp(op, *converted);
+    if (auto castOp =
+            adaptor.getMemref().getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (llvm::all_of(castOp->getResults(),
+                       [](Value result) { return result.use_empty(); })) {
+        rewriter.eraseOp(castOp);
       }
     }
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -2773,7 +3387,11 @@ public:
     auto dstOffset = buildCopyOffset(dstInfo, dstIsLocal);
     rewriter.create<frisk::CopyOp>(loc, dstTile.getResult(), dstBuffer,
                                    dstOffset.operands, dstOffset.map);
-    rewriter.eraseOp(op);
+    if (op.hasValueResult()) {
+      rewriter.replaceOp(op, dstBuffer);
+    } else {
+      rewriter.eraseOp(op);
+    }
     return success();
   }
 };
@@ -2829,7 +3447,10 @@ public:
     };
 
     auto lowerVectorCopy = [&]() -> LogicalResult {
-      Value srcVector = getVectorValue(srcMem);
+      Value srcVector = getVectorReplacement(srcMem, op.getOperation());
+      if (!srcVector) {
+        srcVector = getVectorValue(srcMem);
+      }
       Value dstVector = getVectorValue(dstMem);
       if (!srcVector) {
         return failure();
@@ -2866,7 +3487,11 @@ public:
               s_buffer_replace[castOp.getInputs()[0]] = *casted;
             }
           }
-          rewriter.eraseOp(op);
+          if (op.hasValueResult()) {
+            rewriter.replaceOp(op, dstMem);
+          } else {
+            rewriter.eraseOp(op);
+          }
           eraseUnusedCast(srcMem);
           return success();
         }
@@ -2945,7 +3570,11 @@ public:
         if (!loops.empty()) {
           rewriter.setInsertionPointAfter(loops.front());
         }
-        rewriter.eraseOp(op);
+        if (op.hasValueResult()) {
+          rewriter.replaceOp(op, dstMem);
+        } else {
+          rewriter.eraseOp(op);
+        }
         eraseUnusedCast(srcMem);
         eraseUnusedAllocBuffer(srcMem);
         return success();
@@ -2979,21 +3608,32 @@ public:
           return failure();
         }
         updatedDst = *inserted;
+        s_buffer_replace[updatedDst] = srcVector;
       }
 
-      if (!mlir::isa<BlockArgument>(dstMem)) {
-        s_buffer_replace[dstMem] = updatedDst;
-        if (auto castOp = dstMem.getDefiningOp<UnrealizedConversionCastOp>();
-            castOp && castOp.getInputs().size() == 1) {
-          s_buffer_replace[castOp.getInputs()[0]] = updatedDst;
-        }
-      }
+	      if (!mlir::isa<BlockArgument>(dstMem)) {
+	        s_buffer_replace[dstMem] = updatedDst;
+	        if (auto castOp = dstMem.getDefiningOp<UnrealizedConversionCastOp>();
+	            castOp && castOp.getInputs().size() == 1) {
+	          s_buffer_replace[castOp.getInputs()[0]] = updatedDst;
+	        }
+	      }
 
-      Operation *terminator = op->getBlock()->getTerminator();
-      if (terminator && op->isBeforeInBlock(terminator)) {
-        rewriter.modifyOpInPlace(terminator, [&]() {
-          for (OpOperand &operand : terminator->getOpOperands()) {
-            if (operand.get() == dstMem) {
+	      if (op.hasValueResult()) {
+	        if (auto dstInfo = getCopyValueInfo(dstMem)) {
+	          registerConvertedValueLowerInfo(updatedDst, *dstInfo,
+	                                          op.getOperation());
+	        }
+	        rewriter.replaceOp(op, updatedDst);
+	        eraseUnusedCast(srcMem);
+	        return success();
+	      }
+
+	      Operation *terminator = op->getBlock()->getTerminator();
+	      if (terminator && op->isBeforeInBlock(terminator)) {
+	        rewriter.modifyOpInPlace(terminator, [&]() {
+	          for (OpOperand &operand : terminator->getOpOperands()) {
+	            if (operand.get() == dstMem) {
               operand.set(updatedDst);
             }
           }
@@ -3147,7 +3787,11 @@ public:
       if (!loops.empty()) {
         rewriter.setInsertionPointAfter(loops.front());
       }
-      rewriter.eraseOp(op);
+      if (op.hasValueResult()) {
+        rewriter.replaceOp(op, dstMem);
+      } else {
+        rewriter.eraseOp(op);
+      }
       return success();
     };
 
@@ -3311,9 +3955,8 @@ public:
         }
       }
 
-      Value sharedBuffer = srcIsShared ? srcInfo.realBuffer : dstInfo.realBuffer;
       if (srcIsShared) {
-        rewriter.create<frisk::SyncThreadsInBlockOp>(loc, sharedBuffer);
+        rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
       }
 
       if (*totalElements > 0) {
@@ -3414,9 +4057,13 @@ public:
       }
 
       if (dstIsShared) {
-        rewriter.create<frisk::SyncThreadsInBlockOp>(loc, sharedBuffer);
+        rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
       }
-      rewriter.eraseOp(op);
+      if (op.hasValueResult()) {
+        rewriter.replaceOp(op, dstMem);
+      } else {
+        rewriter.eraseOp(op);
+      }
       return success();
     };
 
@@ -3521,7 +4168,11 @@ public:
     if (!loops.empty()) {
       rewriter.setInsertionPointAfter(loops.front());
     }
-    rewriter.eraseOp(op);
+    if (op.hasValueResult()) {
+      rewriter.replaceOp(op, dstMem);
+    } else {
+      rewriter.eraseOp(op);
+    }
     return success();
   }
 };
@@ -3560,6 +4211,35 @@ static std::vector<affine::AffineForOp> getIndexAssociatedForLoops(LoadStoreOp s
     return forOps;
 }
 
+static bool shouldKeepFillResultAsMemref(frisk::FillOp op) {
+  if (!op.hasValueResult()) {
+    return false;
+  }
+
+  SmallVector<Value, 4> worklist{op.getValueResult()};
+  SmallVector<Value, 4> visited;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (llvm::is_contained(visited, value)) {
+      continue;
+    }
+    visited.push_back(value);
+
+    for (Operation *user : value.getUsers()) {
+      if (isa<frisk::GemmOp, frisk::CopyToRegOp, frisk::ConvertLayoutOp,
+              affine::AffineLoadOp, affine::AffineStoreOp>(user)) {
+        return true;
+      }
+      if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        for (Value result : castOp->getResults()) {
+          worklist.push_back(result);
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // fillop -> 点对点赋值
 class FillOpRewrite : public OpConversionPattern<frisk::FillOp> {
 public:
@@ -3567,8 +4247,99 @@ public:
   LogicalResult matchAndRewrite(frisk::FillOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     // 获取 value，构建for循环。将value 赋值给 memref的每个点
     auto memref = adaptor.getMemref();
-    auto memrefType = mlir::cast<MemRefType>(memref.getType());
     auto loc = op->getLoc();
+    auto valueAttr = dyn_cast<TypedAttr>(op.getValueAttr());
+    if (!valueAttr) {
+      return rewriter.notifyMatchFailure(op, "fill value must be typed");
+    }
+
+    Value fillVector = getVectorReplacement(memref, op.getOperation());
+    if (!fillVector) {
+      fillVector = getVectorValue(memref);
+    }
+    if (fillVector && !(op.hasValueResult() && shouldKeepFillResultAsMemref(op))) {
+      auto vecTy = mlir::dyn_cast<VectorType>(fillVector.getType());
+      if (!vecTy) {
+        return failure();
+      }
+      Attribute elementAttr = convertScalarAttrForElementType(
+          valueAttr, vecTy.getElementType(), rewriter);
+      if (!elementAttr) {
+        return rewriter.notifyMatchFailure(
+            op, "fill value cannot be converted to vector element type");
+      }
+      auto denseAttr = DenseElementsAttr::get(vecTy, elementAttr);
+	      auto filled = rewriter.create<arith::ConstantOp>(
+	          loc, vecTy, mlir::cast<TypedAttr>(denseAttr));
+
+	      if (op.hasValueResult()) {
+	        if (auto *info = findLowerInfoForValue(memref, op.getOperation())) {
+	          registerConvertedValueLowerInfo(filled.getResult(), *info,
+	                                          op.getOperation());
+	        }
+	        rewriter.replaceOp(op, filled.getResult());
+	        if (auto castOp = memref.getDefiningOp<UnrealizedConversionCastOp>()) {
+	          if (castOp->use_empty()) {
+	            rewriter.eraseOp(castOp);
+	          }
+	        }
+	        return success();
+	      }
+
+	      if (!mlir::isa<BlockArgument>(memref)) {
+	        s_buffer_replace[memref] = filled.getResult();
+	        if (auto castOp =
+                memref.getDefiningOp<UnrealizedConversionCastOp>();
+            castOp && castOp.getInputs().size() == 1) {
+          s_buffer_replace[castOp.getInputs()[0]] = filled.getResult();
+        }
+      }
+
+      Operation *terminator = op->getBlock()->getTerminator();
+      if (terminator && op->isBeforeInBlock(terminator)) {
+        rewriter.modifyOpInPlace(terminator, [&]() {
+          for (OpOperand &operand : terminator->getOpOperands()) {
+            if (operand.get() == memref || operand.get() == fillVector) {
+              operand.set(filled.getResult());
+            }
+          }
+        });
+      }
+
+      rewriter.eraseOp(op);
+      if (auto castOp = memref.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp->use_empty()) {
+          rewriter.eraseOp(castOp);
+        }
+      }
+      return success();
+    }
+
+    if (op.hasValueResult() && !shouldKeepFillResultAsMemref(op)) {
+      LowerInfo *info = findLowerInfoForValue(op.getValueResult(),
+                                              op.getOperation());
+      if (!info) {
+        info = findLowerInfoForValue(op.getMemref(), op.getOperation());
+      }
+      if (info) {
+        auto vecTy = getVecTypeByLowerInfoWithThreadOwnData(*info);
+        Attribute elementAttr = convertScalarAttrForElementType(
+            valueAttr, vecTy.getElementType(), rewriter);
+        if (!elementAttr) {
+          return rewriter.notifyMatchFailure(
+              op, "fill value cannot be converted to vector element type");
+        }
+        auto denseAttr = DenseElementsAttr::get(vecTy, elementAttr);
+        auto filled = rewriter.create<arith::ConstantOp>(
+            loc, vecTy, mlir::cast<TypedAttr>(denseAttr));
+        registerConvertedValueLowerInfo(filled.getResult(), *info,
+                                        op.getOperation());
+        rewriter.replaceOp(op, filled.getResult());
+        return success();
+      }
+    }
+
+    auto memrefType = mlir::cast<MemRefType>(memref.getType());
     // Local memory spaces (including the legacy value 5) represent registers.
     bool isRegFill = isLocalMemref(memref);
 
@@ -3591,18 +4362,14 @@ public:
         fillShape[1] = threadOwnData[1];
       }
     }
-    for (int64_t dim : fillShape) {
-      if (dim < 0 || dim > std::numeric_limits<int>::max()) {
-        return rewriter.notifyMatchFailure(
-            op, "fill-to-base expects static int-sized memref shape");
-      }
+	    for (int64_t dim : fillShape) {
+	      if (dim < 0 || dim > std::numeric_limits<int>::max()) {
+	        return rewriter.notifyMatchFailure(
+	            op, "fill-to-base expects static int-sized memref shape");
+	      }
       loopUpperBounds.push_back(static_cast<int>(dim));
     }
 
-    auto valueAttr = dyn_cast<TypedAttr>(op.getValueAttr());
-    if (!valueAttr) {
-      return rewriter.notifyMatchFailure(op, "fill value must be typed");
-    }
     // if(isRegFill){
     //   auto vecType = VectorType::get(fillShape, memrefType.getElementType());
     //   auto initValAttr = mlir::DenseElementsAttr::get(vecType, 0.0f);
@@ -3619,8 +4386,8 @@ public:
     //     if(auto userOp = mlir::dyn_cast<affine::AffineLoadOp>(user)){
 
     //     }
-    //   }
-    // }
+	    //   }
+	    // }
 
     // Keep the memref value type in this conversion.  Replacing an alloc's
     // memref result with a vector here would invalidate all affine users;
@@ -3638,6 +4405,10 @@ public:
       rewriter.modifyOpInPlace(loops.front(), [&](){
         loops.front()->setAttr(REG_FILL_SEMATIC, valueAttr);
       });
+    }
+    if (op.hasValueResult()) {
+      rewriter.replaceOp(op, memref);
+      return success();
     }
     rewriter.eraseOp(op);
     return success();
@@ -3698,6 +4469,8 @@ public:
     if(!kernel->hasAttr("thread_num")){
       return;
     }
+    s_buffer_replace.clear();
+    convertLayoutInfo.clear();
     if(s_hw == nullptr){
       s_hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, context);
     }
@@ -3716,12 +4489,13 @@ public:
     kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, blockLayout));
     kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, blockLayoutOrder));
 
-    // 根据 layout推定结果，插入 convertLAyoutOp
+    // 根据 layout推定结果，插入 convertLAyoutOp, 随即更新 s_info (加入convertLayoutOp 得到的新ssa值的info 及后续users信息替换)
     insertConvertLayoutOps(*s_info);
     llvm::outs() << "\n-------------- after insertConvertLayoutOps\n" << getOperation() << "\n";llvm::outs().flush();
 
     TypeConverter tc_blockTileToThreadTile{};
     tc_blockTileToThreadTile.addConversion([](Type type) { return type; });
+
     auto getMaterializationConsumer = [](OpBuilder &builder) -> Operation * {
       if (builder.getBlock() == nullptr) {
         return nullptr;
@@ -3808,13 +4582,39 @@ public:
     p0.add<
       BlockOpConversion, CopyConvertOpRewrite, GemmOpConversion, MaskOpConversion
     >(tc_blockTileToThreadTile, context);
-    llvm::outs() << "---- after convert gemm/blockop/reduce/copy(convert datatype)\n";
-    applyPartialConversion(kernel, t0, std::move(p0));
-    eraseDeadUnrealizedConversionCasts(kernel);
-    llvm::outs() << kernel << "\n"; llvm::outs().flush();
+	    llvm::outs() << "---- after convert gemm/blockop/reduce/copy(convert datatype)\n";
+	    applyPartialConversion(kernel, t0, std::move(p0));
+	    eraseDeadUnrealizedConversionCasts(kernel);
+	    llvm::outs() << kernel << "\n"; llvm::outs().flush();
 
-    {
-      // ----- 转换完gemm后，转换 addop
+	    {
+	      ConversionTarget target(*context);
+	      target.addLegalDialect<
+	        frisk::FriskDialect,
+	        arith::ArithDialect,
+	        affine::AffineDialect,
+	        math::MathDialect,
+	        func::FuncDialect,
+	        memref::MemRefDialect,
+	        scf::SCFDialect,
+	        gpu::GPUDialect,
+	        vector::VectorDialect>();
+	      target.addDynamicallyLegalOp<frisk::FillOp>(
+	          [](frisk::FillOp op) {
+	            return !op.hasValueResult() || shouldKeepFillResultAsMemref(op);
+	          });
+	      target.addLegalOp<UnrealizedConversionCastOp>();
+
+	      RewritePatternSet fillPatterns(context);
+	      fillPatterns.add<FillOpRewrite>(tc_blockTileToThreadTile, context);
+	      llvm::outs() << "---- after convert SSA value fills\n";
+	      applyPartialConversion(kernel, target, std::move(fillPatterns));
+	      eraseDeadUnrealizedConversionCasts(kernel);
+	      llvm::outs() << kernel << "\n"; llvm::outs().flush();
+	    }
+
+	    {
+	      // ----- 转换完gemm后，转换 addop
       ConversionTarget target(*context);
       target.addLegalDialect<
         frisk::FriskDialect,
@@ -3826,28 +4626,28 @@ public:
         scf::SCFDialect,
         gpu::GPUDialect,
         vector::VectorDialect>();
-      target.addIllegalOp<
-        frisk::AddOp, frisk::SubOp, frisk::DivOp, frisk::MulOp,
-        frisk::Exp2Op, frisk::MaskOp
-      >();
-      target.addLegalOp<UnrealizedConversionCastOp>();
+	      target.addIllegalOp<
+	        frisk::AddOp, frisk::SubOp, frisk::DivOp, frisk::MulOp,
+	        frisk::Exp2Op, frisk::MaskOp
+	      >();
+	      target.addLegalOp<UnrealizedConversionCastOp>();
 
-      RewritePatternSet p0(context);
-      p0.add<
-        FriskBinaryOpConversion<frisk::AddOp, arith::AddFOp>,
-        FriskBinaryOpConversion<frisk::SubOp, arith::SubFOp>,
-        FriskBinaryOpConversion<frisk::DivOp, arith::DivFOp>,
-        FriskBinaryOpConversion<frisk::MulOp, arith::MulFOp>,
-        FriskExp2OpConversion
-      >(tc_blockTileToThreadTile, context);
+	      RewritePatternSet p0(context);
+	      p0.add<
+	        FriskBinaryOpConversion<frisk::AddOp, arith::AddFOp>,
+	        FriskBinaryOpConversion<frisk::SubOp, arith::SubFOp>,
+	        FriskBinaryOpConversion<frisk::DivOp, arith::DivFOp>,
+	        FriskBinaryOpConversion<frisk::MulOp, arith::MulFOp>,
+	        FriskExp2OpConversion
+	      >(tc_blockTileToThreadTile, context);
       llvm::outs() << "---- after convert binary elementwise ops\n";
       applyPartialConversion(kernel, target, std::move(p0));
       RewritePatternSet copyToRegCleanup(context);
       copyToRegCleanup.add<CopyToRegCastRewrite>(context);
-      (void)applyPatternsGreedily(kernel, std::move(copyToRegCleanup));
-      foldThreadTileVectorLoads(kernel);
-      eraseDeadUnrealizedConversionCasts(kernel);
-      llvm::outs() << kernel << "\n"; llvm::outs().flush();
+		    (void)applyPatternsGreedily(kernel, std::move(copyToRegCleanup));
+		    foldThreadTileVectorLoads(kernel);
+		    eraseDeadUnrealizedConversionCasts(kernel);
+		    llvm::outs() << kernel << "\n"; llvm::outs().flush();
     }
 
     {
@@ -3903,6 +4703,9 @@ public:
     >(tc_blockTileToThreadTile, context);
     llvm::outs() << "---- after convert copy /fill/ convLayout \n" ;
     applyPartialConversion(kernel, t1, std::move(p1));
+    normalizeLoopCarriedBlockVectors(kernel);
+    foldThreadTileExtractLoops(kernel);
+    eraseTriviallyDeadOps(kernel);
     RewritePatternSet copyToRegCleanup(context);
     copyToRegCleanup.add<CopyToRegOpRewrite>(context);
     (void)applyPatternsGreedily(kernel, std::move(copyToRegCleanup));
@@ -3923,7 +4726,8 @@ public:
       gpu::GPUDialect,
       vector::VectorDialect>();
     t2.addIllegalOp<KernelOp,ParallelOp,ForOp,
-      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp, CopyOp, FillOp, AllocBufferOp
+      BlockOp, GemmOp, ReduceOp, ConvertLayoutOp, CopyOp, FillOp, AllocBufferOp,
+      UnrealizedConversionCastOp
     >();
     RewritePatternSet ps2(context);
     ps2.add<

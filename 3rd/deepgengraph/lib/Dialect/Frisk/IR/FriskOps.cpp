@@ -1666,22 +1666,6 @@ LogicalResult GemmOp::inferLayout(OpBuilder &builder,
 #endif
 }
 
-LogicalResult SyncThreadsInBlockOp::verify() {
-  if (getNumOperands() == 0)
-    return success();
-
-  auto bufferType = dyn_cast<MemRefType>(getOperand(0).getType());
-  if (!bufferType)
-    return emitOpError("buffer must be a memref");
-
-  if (bufferType.getMemorySpaceAsInt() !=
-      static_cast<int>(attr::MemorySpace::Shared)) {
-    return emitOpError("buffer must be in friskMs::Shared memory space");
-  }
-
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // -- AllocBufferOp --
 //===----------------------------------------------------------------------===//
@@ -2116,6 +2100,69 @@ void BufferViewOp::print(OpAsmPrinter &p) {
 // -- CopyOp --
 //===----------------------------------------------------------------------===//
 
+ParseResult CopyOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand src;
+  OpAsmParser::UnresolvedOperand dst;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> mapOperands;
+  Attribute offsetMapAttr;
+  Type srcType;
+  Type dstType;
+
+  if (parser.parseOperand(src) || parser.parseKeyword("to") ||
+      parser.parseOperand(dst)) {
+    return failure();
+  }
+
+  if (succeeded(parser.parseOptionalKeyword("at"))) {
+    if (parser.parseLParen() || parser.parseOperandList(mapOperands) ||
+        parser.parseRParen()) {
+      return failure();
+    }
+  }
+
+  if (parser.parseLSquare() ||
+      parser.parseAttribute(offsetMapAttr, "offset_map", result.attributes) ||
+      parser.parseRSquare() || parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(srcType) || parser.parseComma() ||
+      parser.parseType(dstType)) {
+    return failure();
+  }
+
+  if (succeeded(parser.parseOptionalArrow())) {
+    Type resultType;
+    if (parser.parseType(resultType)) {
+      return failure();
+    }
+    result.addTypes(resultType);
+  }
+
+  if (parser.resolveOperand(src, srcType, result.operands) ||
+      parser.resolveOperand(dst, dstType, result.operands) ||
+      parser.resolveOperands(mapOperands, parser.getBuilder().getIndexType(),
+                             result.operands)) {
+    return failure();
+  }
+
+  return success();
+}
+
+void CopyOp::print(OpAsmPrinter &p) {
+  p << " " << getSrc() << " to " << getDst();
+  if (!getMapOperands().empty()) {
+    p << " at (";
+    llvm::interleaveComma(getMapOperands(), p);
+    p << ")";
+  }
+  p << " [";
+  p.printAttributeWithoutType(getOffsetMapAttr());
+  p << "]";
+  p.printOptionalAttrDict((*this)->getAttrs(), {"offset_map"});
+  p << " : " << getSrc().getType() << ", " << getDst().getType();
+  if (getNumResults() != 0) {
+    p << " -> " << getOperation()->getResult(0).getType();
+  }
+}
+
 LogicalResult CopyOp::verify() {
   // AffineMap srcMap = getSrcSliceAttr().getMap();
   // AffineMap dstMap = getDstSliceAttr().getMap();
@@ -2129,15 +2176,59 @@ LogicalResult CopyOp::verify() {
   //   return emitOpError("expected ") << dstMap.getNumInputs()
   //          << " destination indices, but got " << getDstIndices().size();
   // }
+  if (getNumResults() > 1)
+    return emitOpError("expects at most one SSA result");
+  if (getNumResults() == 1 &&
+      getOperation()->getResult(0).getType() != getDst().getType())
+    return emitOpError("SSA result type must match destination type");
   return success();
 }
 
 //===----------------------------------------------------------------------===//
 // -- FillOp --
 //===----------------------------------------------------------------------===//
+ParseResult FillOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand memref;
+  Type memrefType;
+
+  if (parser.parseOperand(memref) ||
+      parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(memrefType)) {
+    return failure();
+  }
+
+  if (succeeded(parser.parseOptionalArrow())) {
+    Type resultType;
+    if (parser.parseType(resultType)) {
+      return failure();
+    }
+    result.addTypes(resultType);
+  }
+
+  if (parser.resolveOperand(memref, memrefType, result.operands)) {
+    return failure();
+  }
+
+  return success();
+}
+
+void FillOp::print(OpAsmPrinter &p) {
+  p << " " << getMemref();
+  p.printOptionalAttrDict((*this)->getAttrs());
+  p << " : " << getMemref().getType();
+  if (getNumResults() != 0) {
+    p << " -> " << getOperation()->getResult(0).getType();
+  }
+}
+
 LogicalResult FillOp::verify() {
   auto memrefType = dyn_cast<MemRefType>(getMemref().getType());
   auto elemType = memrefType.getElementType();
+  if (getNumResults() > 1)
+    return emitOpError("expects at most one SSA result");
+  if (getNumResults() == 1 &&
+      getOperation()->getResult(0).getType() != getMemref().getType())
+    return emitOpError("SSA result type must match filled memref type");
   auto valueAttr = getValueAttr();
   if (auto floatAttr = dyn_cast<FloatAttr>(valueAttr)) {
     Type valueType = floatAttr.getType();

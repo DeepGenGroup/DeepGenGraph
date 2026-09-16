@@ -280,6 +280,68 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
   });
 }
 
+llvm::Value *materializeSplatConstant(llvm::Constant *constant,
+                                      llvm::Instruction *insertBefore,
+                                      llvm::Constant *zero,
+                                      llvm::DebugLoc debugLoc) {
+  if (!constant ||
+      llvm::isa<llvm::ConstantAggregateZero, llvm::UndefValue,
+                llvm::PoisonValue>(constant)) {
+    return constant;
+  }
+
+  if (auto *vectorType =
+          llvm::dyn_cast<llvm::FixedVectorType>(constant->getType())) {
+    llvm::Constant *splatValue = constant->getSplatValue();
+    if (!splatValue ||
+        llvm::isa<llvm::UndefValue, llvm::PoisonValue>(splatValue)) {
+      return constant;
+    }
+
+    auto *insert = llvm::InsertElementInst::Create(
+        llvm::PoisonValue::get(vectorType), splatValue, zero,
+        "compat.splat.insert", insertBefore);
+    insert->setDebugLoc(debugLoc);
+    llvm::SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
+    auto *shuffle = new llvm::ShuffleVectorInst(
+        insert, llvm::PoisonValue::get(vectorType), mask, "compat.splat",
+        insertBefore);
+    shuffle->setDebugLoc(debugLoc);
+    return shuffle;
+  }
+
+  if (!constant->getType()->isAggregateType() || constant->getNumOperands() == 0) {
+    return constant;
+  }
+
+  bool changed = false;
+  llvm::SmallVector<llvm::Value *, 8> elements;
+  elements.reserve(constant->getNumOperands());
+  for (llvm::Use &operand : constant->operands()) {
+    auto *elementConstant = llvm::dyn_cast<llvm::Constant>(operand.get());
+    if (!elementConstant) {
+      return constant;
+    }
+    llvm::Value *element =
+        materializeSplatConstant(elementConstant, insertBefore, zero, debugLoc);
+    changed |= element != elementConstant;
+    elements.push_back(element);
+  }
+  if (!changed) {
+    return constant;
+  }
+
+  llvm::Value *aggregate = llvm::PoisonValue::get(constant->getType());
+  for (auto [idx, element] : llvm::enumerate(elements)) {
+    auto *insert = llvm::InsertValueInst::Create(
+        aggregate, element, {static_cast<unsigned>(idx)},
+        "compat.splat.aggregate", insertBefore);
+    insert->setDebugLoc(debugLoc);
+    aggregate = insert;
+  }
+  return aggregate;
+}
+
 void materializeSplatVectorConstants(llvm::Module &module) {
   llvm::LLVMContext &context = module.getContext();
   llvm::Type *i32Type = llvm::Type::getInt32Ty(context);
@@ -288,37 +350,36 @@ void materializeSplatVectorConstants(llvm::Module &module) {
   for (llvm::Function &function : module) {
     for (llvm::BasicBlock &block : function) {
       for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
-        if (llvm::isa<llvm::PHINode>(inst))
+        if (auto *phi = llvm::dyn_cast<llvm::PHINode>(&inst)) {
+          for (unsigned idx = 0, e = phi->getNumIncomingValues(); idx < e;
+               ++idx) {
+            auto *constant =
+                llvm::dyn_cast<llvm::Constant>(phi->getIncomingValue(idx));
+            if (!constant) {
+              continue;
+            }
+            llvm::Instruction *insertBefore =
+                phi->getIncomingBlock(idx)->getTerminator();
+            llvm::Value *materialized = materializeSplatConstant(
+                constant, insertBefore, zero, phi->getDebugLoc());
+            if (materialized != constant) {
+              phi->setIncomingValue(idx, materialized);
+            }
+          }
           continue;
+        }
 
         for (unsigned idx = 0, e = inst.getNumOperands(); idx < e; ++idx) {
           auto *constant =
               llvm::dyn_cast<llvm::Constant>(inst.getOperand(idx));
-          if (!constant ||
-              llvm::isa<llvm::ConstantAggregateZero, llvm::UndefValue,
-                        llvm::PoisonValue>(constant))
+          if (!constant) {
             continue;
-
-          auto *vectorType =
-              llvm::dyn_cast<llvm::FixedVectorType>(constant->getType());
-          if (!vectorType)
-            continue;
-
-          llvm::Constant *splatValue = constant->getSplatValue();
-          if (!splatValue ||
-              llvm::isa<llvm::UndefValue, llvm::PoisonValue>(splatValue))
-            continue;
-
-          auto *insert = llvm::InsertElementInst::Create(
-              llvm::PoisonValue::get(vectorType), splatValue, zero,
-              "compat.splat.insert", &inst);
-          insert->setDebugLoc(inst.getDebugLoc());
-          llvm::SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
-          auto *shuffle = new llvm::ShuffleVectorInst(
-              insert, llvm::PoisonValue::get(vectorType), mask, "compat.splat",
-              &inst);
-          shuffle->setDebugLoc(inst.getDebugLoc());
-          inst.setOperand(idx, shuffle);
+          }
+          llvm::Value *materialized =
+              materializeSplatConstant(constant, &inst, zero, inst.getDebugLoc());
+          if (materialized != constant) {
+            inst.setOperand(idx, materialized);
+          }
         }
       }
     }
@@ -469,9 +530,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
   
-  // pm.addNestedPass<func::FuncOp>(frisk::createFriskLayoutInferPass());
-  // pm.run(src->getOperation());
-  // llvm::outs() << "\n---------- after createFriskLayoutInferPass ---------\n"; llvm::outs().flush();src->dump();
 
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
@@ -483,7 +541,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // pm.addPass(mlir::createSymbolDCEPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
-  #if 1
+
   AddPass(frisk::createThreadLevelIRLegalizePass());
   AddPass(mlir::createLoopInvariantCodeMotionPass());
   AddPass(mlir::createCSEPass());
@@ -524,6 +582,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);
   
+  #if 1
   // ------- convert to llvmir text
   //  创建真正的 LLVM 上下文
   llvm::LLVMContext llvmContext;
