@@ -22,7 +22,7 @@ module {
     %vtile = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
     %cst_2 = arith.constant dense<0.000000e+00> : vector<64x128xf32>
     %cst_3 = arith.constant dense<0.000000e+00> : vector<64x1xf32>
-    %9:2 = affine.for %loopK = 0 to affine_map<()[s0] -> (s0 * 64 + 32)>()[%block_id_y] step 32 iter_args(%oAcc = %cst_2, %qkmerAcc = %cst_3) -> (vector<64x128xf32>, vector<64x1xf32>) {
+    %9:2 = affine.for %loopK = 0 to affine_map<()[s0] -> (s0 * 64 + 64)>()[%block_id_y] step 32 iter_args(%oAcc = %cst_2, %qkmerAcc = %cst_3) -> (vector<64x128xf32>, vector<64x1xf32>) {
       %12 = frisk.buffer_view %K[0, %block_id_x mod 32,  0, %loopK mod 4096], ranges = [128, 32] : memref<1x32x128x4096xf16, 1> -> memref<128x32xf16, 1>
       %ktile_copied = frisk.copy %12 to %ktile [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3> -> memref<128x32xf16, 3>
       %13 = frisk.buffer_view %V[0, %block_id_x mod 32, %loopK mod 4096, 0], ranges = [32, 128] : memref<1x32x4096x128xf16, 1> -> memref<32x128xf16, 1>
@@ -39,34 +39,39 @@ module {
         }
         frisk.mask_yield %25 : f32
       } : (index, index) -> memref<64x32xf32>
-      %maskTile_filled = frisk.fill %maskTIle {value = 0.000000e+00 : f32} : memref<64x32xf32> -> memref<64x32xf32>  // dbg
-      %16 = frisk.add %qk, %maskTile_filled : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>
-      %qkme = frisk.exp2 %16 : memref<64x32xf32> -> memref<64x32xf32, 3>
+      // %maskTile_filled = frisk.fill %maskTIle {value = 0.000000e+00 : f32} : memref<64x32xf32> -> memref<64x32xf32>  // dbg
+      %qkm = frisk.add %qk, %maskTIle : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>
+      %qkmeLocal = frisk.exp2 %qkm : memref<64x32xf32> -> memref<64x32xf32>
+      %qkmeShm = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf32, 3>
+      %qkme = frisk.copy %qkmeLocal to %qkmeShm [affine_map<() -> (2)>] : memref<64x32xf32>, memref<64x32xf32,3> -> memref<64x32xf32,3>
+      // %qkme = frisk.copy %qkm to %qkmeShm [affine_map<() -> (2)>] : memref<64x32xf32>, memref<64x32xf32,3> -> memref<64x32xf32,3>
+
       %qkme_reduced = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x1xf32, 3>
-      frisk.reduce %qkme, %qkme_reduced {dim = 1 : i64, kind = "add"} : memref<64x32xf32, 3>, memref<64x1xf32, 3>
+      frisk.reduce %qkme, %qkme_reduced {dim = 1 : i64, kind = "add"} : memref<64x32xf32, 3>, memref<64x1xf32, 3>  // non-ssa semantic
+      frisk.sync_threads_in_block  // Make reduction leader writes visible to all readers.
       %19 = frisk.add %qkme_reduced, %qkmerAcc : memref<64x1xf32, 3>, vector<64x1xf32> -> memref<64x1xf32, 3>
       %20 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>
       %pvWeights_copied = frisk.copy %qkme to %20 [affine_map<() -> (2)>] : memref<64x32xf32, 3>, memref<64x32xf16, 3> -> memref<64x32xf16, 3>
-      // let QK = 1 -> PV = 1*V = v {colsum[i], colsum[i+1], colsum[i+2], ... }
+      // Debug PV = 32 * half(0.3) * half(0.1) per iteration.
       frisk.sync_threads_in_block  // Finish all shared copy writes before the debug fill.
-      %pvWeights_filled = frisk.fill %pvWeights_copied {value = 1.00000e+00 : f16} : memref<64x32xf16, 3> -> memref<64x32xf16, 3>  // dbg
+      // %vtile_filled = frisk.fill %vtile_copied {value = 2.00000e-1 : f16} : memref<32x128xf16, 3> -> memref<32x128xf16, 3>  // dbg
+      // %pvWeights_fill = frisk.fill %pvWeights_copied {value = 3.00000e-1 : f16} : memref<64x32xf16, 3> -> memref<64x32xf16, 3>  // dbg
       frisk.sync_threads_in_block  // Make the debug fill visible before PV reads it.
 
-      %vtile_filled = frisk.fill %vtile_copied {value = 0.30000e+00 : f16} : memref<32x128xf16, 3> -> memref<32x128xf16, 3>  // dbg
-      %tempO = frisk.gemm(%pvWeights_filled, %vtile_filled) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3> -> memref<64x128xf32>
-      %tempO_filled = frisk.fill %tempO {value = 0.20000e+00 : f32} : memref<64x128xf32> -> memref<64x128xf32>  // dbg
-      %22 = frisk.add %oAcc, %tempO_filled : vector<64x128xf32>, memref<64x128xf32> -> memref<64x128xf32>
-      %qkmerAcc_filled = frisk.fill %19 {value = 1.00000e+00 : f32} : memref<64x1xf32,3> -> memref<64x1xf32,3>  // dbg
+      // Accumulate 2 * block_id_y + 1 PV tiles; the debug denominator is 1.
+      %tempO = frisk.gemm(%pvWeights_copied, %vtile_copied) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3> -> memref<64x128xf32>
+      %22 = frisk.add %oAcc, %tempO : vector<64x128xf32>, memref<64x128xf32> -> memref<64x128xf32>
+      // %qkmerAcc_filled = frisk.fill %19 {value = 1.00000e+00 : f32} : memref<64x1xf32,3> -> memref<64x1xf32,3>  // dbg
       %oAcc_next = frisk.copy %22 to %oAcc [affine_map<() -> (2)>] : memref<64x128xf32>, vector<64x128xf32> -> vector<64x128xf32>
-      %qkmerAcc_next = frisk.copy %qkmerAcc_filled to %qkmerAcc [affine_map<() -> (2)>] : memref<64x1xf32, 3>, vector<64x1xf32> -> vector<64x1xf32>
+      %qkmerAcc_next = frisk.copy %19 to %qkmerAcc [affine_map<() -> (2)>] : memref<64x1xf32, 3>, vector<64x1xf32> -> vector<64x1xf32>
       affine.yield %oAcc_next, %qkmerAcc_next : vector<64x128xf32>, vector<64x1xf32>
     } {local_yield_transformed = true}
     frisk.sync_threads_in_block  // dbg
     %10 = frisk.div %9#0, %9#1 : vector<64x128xf32>, vector<64x1xf32> -> memref<64x128xf32>
-    %oShm = frisk.alloc_buffer {scope = "local", alignment = 16} -> memref<64x128xf16, 3>
-    %oShm_copied = frisk.copy %10 to %oShm [affine_map<() -> (2)>] : memref<64x128xf32>, memref<64x128xf16, 3> -> memref<64x128xf16, 3>
+    %oShm = frisk.alloc_buffer {scope = "local", alignment = 16} -> memref<64x128xf16>
+    %oShm_copied = frisk.copy %10 to %oShm [affine_map<() -> (2)>] : memref<64x128xf32>, memref<64x128xf16> -> memref<64x128xf16>
     frisk.sync_threads_in_block  // dbg
-    %O_copied = frisk.copy %oShm_copied to %O at(%block_id_y, %block_id_x) [affine_map<(d0, d1) -> (0, (d1 + (d0 * 8192) floordiv 524288) mod 32, (d0 * 64) mod 4096, 0)>] : memref<64x128xf16, 3>, memref<1x32x4096x128xf16, 1> -> memref<1x32x4096x128xf16, 1>
+    %O_copied = frisk.copy %oShm_copied to %O at(%block_id_y, %block_id_x) [affine_map<(d0, d1) -> (0, (d1 + (d0 * 8192) floordiv 524288) mod 32, (d0 * 64) mod 4096, 0)>] : memref<64x128xf16>, memref<1x32x4096x128xf16, 1> -> memref<1x32x4096x128xf16, 1>
     return
   }
 }

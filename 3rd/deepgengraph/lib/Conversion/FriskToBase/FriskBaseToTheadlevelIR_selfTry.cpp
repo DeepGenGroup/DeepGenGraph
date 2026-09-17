@@ -3276,7 +3276,8 @@ private:
   std::optional<LowerInfo> getCopyValueInfo(Value value) {
     return copyLowerInfoForValue(value, op.getOperation());
   }
-  /// vector 路径：非 global 目标更新 SSA 替换表；global 目标发射实际 store。
+  /// Shared/global destinations retain address semantics. Only local register
+  /// destinations may be represented by an SSA replacement.
   LogicalResult lowerVectorCopy() {
     Value srcVector = getVectorReplacement(srcMem, op.getOperation());
     if (!srcVector) {
@@ -3295,7 +3296,7 @@ private:
         return failure();
       }
 
-      if (!isGlobalMemref(dstMem)) {
+      if (isLocalMemref(dstMem)) {
         if (!mlir::isa<BlockArgument>(dstMem)) {
           s_buffer_replace[dstMem] = *casted;
           if (auto castOp = dstMem.getDefiningOp<UnrealizedConversionCastOp>();
@@ -3355,8 +3356,14 @@ private:
       }
 
       unsigned dstRank = dstMemType.getRank();
-      if (op.getOffsetMap().getNumResults() != dstRank ||
-          op.getOffsetMap().getNumInputs() != op.getMapOperands().size() ||
+      // Same-shape copies use the legacy () -> (2) sentinel, not an
+      // address offset. The thread layout already supplies block coordinates.
+      auto srcMemTy = dyn_cast<MemRefType>(srcMem.getType());
+      bool wholeBufferCopy = srcMemTy &&
+                             srcMemTy.getShape() == dstMemType.getShape();
+      if ((!wholeBufferCopy &&
+           (op.getOffsetMap().getNumResults() != dstRank ||
+            op.getOffsetMap().getNumInputs() != op.getMapOperands().size())) ||
           tileIndices.size() > dstRank) {
         return rewriter.notifyMatchFailure(
             op, "vector-to-memref copy has incompatible offset map");
@@ -3366,11 +3373,16 @@ private:
       dstIndices.reserve(dstRank);
       unsigned loopStart = dstRank - tileIndices.size();
       for (unsigned i = 0; i < dstRank; ++i) {
-        auto oneResultMap = AffineMap::get(
-            op.getOffsetMap().getNumDims(), op.getOffsetMap().getNumSymbols(),
-            op.getOffsetMap().getResult(i), rewriter.getContext());
-        Value index = rewriter.create<affine::AffineApplyOp>(
-            loc, oneResultMap, op.getMapOperands());
+        Value index;
+        if (wholeBufferCopy) {
+          index = createIndexConstant(rewriter, loc, 0);
+        } else {
+          auto oneResultMap = AffineMap::get(
+              op.getOffsetMap().getNumDims(), op.getOffsetMap().getNumSymbols(),
+              op.getOffsetMap().getResult(i), rewriter.getContext());
+          index = rewriter.create<affine::AffineApplyOp>(
+              loc, oneResultMap, op.getMapOperands());
+        }
         if (i >= loopStart) {
           index =
               addIndexValues(rewriter, loc, index, tileIndices[i - loopStart]);
@@ -3382,6 +3394,9 @@ private:
                                              dstIndices);
       if (!loops.empty()) {
         rewriter.setInsertionPointAfter(loops.front());
+      }
+      if (isSharedMemref(dstMem)) {
+        rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
       }
       if (op.hasValueResult()) {
         rewriter.replaceOp(op, dstMem);

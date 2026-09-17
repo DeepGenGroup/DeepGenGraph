@@ -74,8 +74,10 @@ iv = (((br * instUnroll + iu) * warpRepeat + wr) * threadWidth + reg)
 
 `CopyLowering::run()` 保留以下尝试顺序：
 
-1. `lowerVectorCopy`：已有 vector 表示时，非 global 目标更新 SSA 替换关系；
-   global 目标生成实际 store。目标是完整 block vector 时，按布局插入 thread tile。
+1. `lowerVectorCopy`：已有 vector 表示时，local 寄存器目标更新 SSA 替换关系；
+   shared/global 目标按线程布局生成实际 store，shared 写后同步，供后续内存读取。
+   同 shape copy 不将旧式 `() -> (2)` 标记解释为地址偏移。
+   目标是完整 block vector 时，按布局插入 thread tile。
 2. `lowerGlobalSharedCopy`：连续划分整个 copy tile，每线程处理
    `ceil(totalElements / thread_num)` 个元素，并检查尾部越界。
    shared → global 在读前同步；global → shared 在写后同步。

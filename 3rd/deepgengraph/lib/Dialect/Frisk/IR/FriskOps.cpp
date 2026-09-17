@@ -1909,7 +1909,9 @@ ParseResult AllocBufferOp::parse(OpAsmParser &parser, OperationState &result) {
     result.addAttribute("elementType", TypeAttr::get(elementType));
   }
   if (!result.attributes.get("memorySpace")) {
-    result.addAttribute("memorySpace", memorySpace);
+    // MLIR represents the default (local) space with a null attribute.
+    result.addAttribute("memorySpace", memorySpace ? memorySpace
+                                                  : builder.getI64IntegerAttr(0));
   }
   return success();
 }

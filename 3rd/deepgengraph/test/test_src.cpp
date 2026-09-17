@@ -601,11 +601,22 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
   std::error_code ec;
-  llvm::raw_fd_ostream os("finalLLVMText.ll",ec);
-  if(!ec){
-    printLegacyCompatibleLLVMIR(*llvmModule, os);
-    llvm::outs() << "[d] llvmIR 已输出到 finalLLVMText.ll\n" ; llvm::outs().flush();
+  const char *outputPath = argc > 2 ? argv[2] : "finalLLVMText.ll";
+  llvm::raw_fd_ostream os(outputPath, ec);
+  if (ec) {
+    llvm::errs() << "Failed to open LLVM IR output " << outputPath << ": "
+                 << ec.message() << "\n";
+    return 1;
   }
+  printLegacyCompatibleLLVMIR(*llvmModule, os);
+  os.close();
+  if (os.has_error()) {
+    llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
+    os.clear_error();
+    return 1;
+  }
+  llvm::outs() << "[d] llvmIR 已输出到 " << outputPath << "\n";
+  llvm::outs().flush();
   #endif
   return 0;
 }
@@ -882,8 +893,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir>\n";
+  if (argc < 2 || argc > 3) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [output.ll]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

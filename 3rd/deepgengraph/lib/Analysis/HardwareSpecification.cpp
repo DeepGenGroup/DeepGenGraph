@@ -150,7 +150,9 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
               info.n = n;
               info.k = k;
               ss << mlir::frisk::FriskDTypeToString(cTy) << "_" << m << "x" << n << "x" << k << "_"<< mlir::frisk::FriskDTypeToString(abTy);
-              ss << " $0, $2, $1, $3";  // $0 输出， 123 输入(b,a,c)
+              // WarpMmaRROp supplies {A, B, C}; keep this order consistent
+              // with desc_a/desc_b/desc_c. Swapping A/B scrambles nonuniform PV.
+              ss << " $0, $1, $2, $3";
               /*
               <inline asm>:1:2: error: srcD is overlap with srcC
                       v_mmac_f32_16x16x16f16 v[2:5], v[0:1], v[2:3], v[4:7]
