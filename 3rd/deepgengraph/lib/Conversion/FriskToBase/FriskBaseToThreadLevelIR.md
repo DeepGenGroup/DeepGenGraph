@@ -13,7 +13,7 @@
 | 阶段入口 | Pattern | 主要行为 |
 | --- | --- | --- |
 | `lowerStructuredOps` | `BlockOpConversion` | 收集 load/store，分配 local thread tile，建立线程循环，按每个 buffer 的布局重建索引并克隆 region |
-| 同上 | `GemmOpConversion` | DCU 路径：MN 循环选择输出片段，K 循环生成 `WarpMmaRR`，最后合并线程持有的 C vector |
+| 同上 | `GemmOpConversion` | DCU 路径：编译期枚举 MN 片段，K 循环生成 `WarpMmaRR`，通过静态 `vector.insert_strided_slice` 合并 C vector |
 | 同上 | `MaskOpConversion` | 将 region 参数映射为 `starts + block 坐标`，逐元素构造线程 mask vector |
 | 同上 | `CopyConvertOpRewrite` | 同 shape 的浮点 dtype 转换：读寄存器片段、`extf/truncf`、写回；本阶段强制处理 shared/shared 的此类 copy |
 | `lowerValueFills` | `FillOpRewrite` | 优先将不需要地址语义的 SSA fill 转成线程 vector 常量 |
@@ -56,7 +56,6 @@ iv = (((br * instUnroll + iu) * warpRepeat + wr) * threadWidth + reg)
 
 | 元素生成器 | 单元素行为 |
 | --- | --- |
-| `GemmAccumulatorElement` | 将一个 MMA 片段元素插入完整 C thread vector |
 | `MaskTileElement` | 映射并执行 mask region，插入标量结果 |
 | `ExtractThreadTileElement` | 按布局从 block vector/memref 读取线程元素 |
 | `InsertThreadTileElement` | 将线程元素放回 block vector |
@@ -69,6 +68,44 @@ iv = (((br * instUnroll + iu) * warpRepeat + wr) * threadWidth + reg)
 
 `BlockLowering` 和 `CopyLowering` 都只存在于一次 Pattern 调用期间。
 它们将原来由大型 lambda 隐式捕获的上下文变成具名成员，Pattern 本身仅负责入口分派。
+
+## MMA fragment 与 accumulator 融合
+
+这里的 fragment 是单条 MMA 中每线程持有的完整操作数片段，其形状为
+`thread_creg * warp_repeat`，不是单独的 `thread_creg`。当前 f16 MMAC 的 C
+fragment 为 `vector<1x4xf32>`；PV 的 `vector<2x32xf32>` 包含 16 个片段。
+
+`GemmOpConversion` 在编译期枚举 `block_repeat` 和 `warpInstUnroll` 的 MN
+坐标。每维的静态切片起点是 `(br * instUnroll + iu) * fragmentShape`。
+这与 `buildThreadTileOffsetMap` 的线程内坐标一致，不改变带 lane ID 的 LDS 映射。
+每个片段仍有独立、零初始化的 K 累加循环。
+
+完整 thread lowering 后，先 canonicalize 恒等提取循环，再执行
+`createFuseFragmentAccumulatorPass()`。它匹配带 `frisk.mma_fragment` 标记的
+静态切片链与后续 `arith.addf`，验证完整且不重叠的覆盖、单一使用者以及旧
+accumulator 的支配关系。改写为每个 K reduction 完成后执行 `oldFragment + delta`，
+立即写回相应切片；保留原加法的操作数顺序和 fastmath 属性。它不会将旧 O
+作为 K reduction 的初值，因此不改变每元素的浮点累加顺序。
+
+`createIRDeepOptimizePass()` 在 affine lowering 前追踪寄存器 vector 下标中的
+`affine.apply` 和整数运算，只展开由常量及小型静态循环 IV 决定的位置。
+单循环 trip count 上限为 64，累计额外操作预算为 65536；动态外层循环和
+lane-dependent 地址不因此展开。每次展开后重新折叠、收集，避免嵌套循环句柄失效。
+
+验证命令（后两项分别检查 CPU 浮点语义与实际 attention 的全部 fragment 地址）：
+
+```bash
+cmake --build 3rd/deepgengraph/build --target MyTest FragmentOptTest -j 2
+python3 3rd/deepgengraph/test/check_fragment_optimization.py
+3rd/deepgengraph/build/test/MyTest \
+  3rd/deepgengraph/test/test_friskBaseDebug.mlir /tmp/attn_fragment.ll \
+  > /tmp/attn_fragment.log 2>&1
+python3 3rd/deepgengraph/test/check_fragment_attention.py /tmp/attn_fragment.ll
+```
+
+`check_fragment_optimization.py` 接受测试可执行文件路径和 LLVM bin 目录作为
+两个可选位置参数。CPU 测试不验证 MMAC 硬件的实际执行或性能；仍需在 gfx936
+上比较数值误差、scratch、spill 和 kernel 耗时。
 
 ## Copy 的四条路径
 

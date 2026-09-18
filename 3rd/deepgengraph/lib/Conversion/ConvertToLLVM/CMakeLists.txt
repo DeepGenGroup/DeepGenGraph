@@ -4,6 +4,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   TranslateToLLVM.cpp
   LowerPipe.cpp
   IROptimize.cpp
+  FuseFragmentAccumulator.cpp
 
   DEPENDS
   ThreadToLLVMPasseIncGen

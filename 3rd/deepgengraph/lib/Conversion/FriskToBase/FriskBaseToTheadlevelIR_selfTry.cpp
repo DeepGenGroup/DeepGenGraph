@@ -521,61 +521,6 @@ private:
   SmallVector<Value, 2> indices;
 };
 
-/// 将单次 MMA 的每个标量，按当前 MN 分块坐标插入完整 C thread vector。
-struct GemmAccumulatorElement {
-  ConversionPatternRewriter &rewriter;
-  frisk::GemmOp op;
-  VectorType tempVecTy;
-  VectorType regCTy;
-  Value tempVec;
-  LowerInfo &infoC;
-  Value zero;
-  AffineMap cOffsetMap;
-  Value cBr0, cBr1, cWiu0, cWiu1;
-  Value emit(ArrayRef<Value> tempIvs, Value currentFullRegC) {
-    SmallVector<int64_t, 2> staticTempPosition(tempIvs.size(),
-                                               ShapedType::kDynamic);
-    auto scalar = rewriter.create<vector::ExtractOp>(
-        op->getLoc(), tempVecTy.getElementType(), tempVec, tempIvs,
-        rewriter.getDenseI64ArrayAttr(staticTempPosition));
-
-    SmallVector<Value, 2> wrIvs;
-    SmallVector<Value, 2> regIvs;
-    wrIvs.reserve(2);
-    regIvs.reserve(2);
-    for (int i = 0; i < 2; ++i) {
-      Value iv = i < static_cast<int>(tempIvs.size()) ? tempIvs[i] : zero;
-      int64_t threadWidth = infoC.get_thread_widths()[i];
-      wrIvs.push_back(floorDivBy(rewriter, op->getLoc(), iv, threadWidth));
-      regIvs.push_back(modBy(rewriter, op->getLoc(), iv, threadWidth));
-    }
-    Value wrFlat =
-        flattenXY(rewriter, op->getLoc(), wrIvs,
-                  infoC.base_layout.warp_repeat_order, infoC.get_warp_repeat());
-    Value regFlat = flattenXY(rewriter, op->getLoc(), regIvs,
-                              infoC.base_layout.thread_creg_order,
-                              infoC.get_thread_widths());
-    SmallVector<Value, 6> mapOperands{cBr0,  cBr1,   cWiu0,
-                                      cWiu1, wrFlat, regFlat};
-    SmallVector<OpFoldResult, 2> fullPosition;
-    fullPosition.reserve(regCTy.getRank());
-    for (int64_t i = 0; i < regCTy.getRank(); ++i) {
-      auto oneResultMap =
-          AffineMap::get(cOffsetMap.getNumDims(), cOffsetMap.getNumSymbols(),
-                         cOffsetMap.getResult(i), rewriter.getContext());
-      fullPosition.push_back(rewriter
-                                 .create<affine::AffineApplyOp>(
-                                     op->getLoc(), oneResultMap, mapOperands)
-                                 .getResult());
-    }
-
-    return rewriter
-        .create<vector::InsertOp>(op->getLoc(), scalar.getResult(),
-                                  currentFullRegC, fullPosition)
-        .getResult();
-  }
-};
-
 static Value getGemmUnrollIndex(LowerInfo &info, int dim, Value candidate,
                                 Operation *op, OpBuilder &rewriter) {
   Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
@@ -649,24 +594,8 @@ static Value copyGemmOperandToRegisters(LowerInfo &info, Value src,
   return copy.getResult();
 }
 
-static Value insertGemmAccumulatorTile(Value tempVec, Value fullRegC, GemmOp op,
-                                       ConversionPatternRewriter &rewriter,
-                                       LowerInfo &infoC, VectorType tempVecTy,
-                                       VectorType regCTy, Value cBr0,
-                                       Value cBr1, Value cWiu0, Value cWiu1) {
-  auto cOffsetMap = buildThreadTileOffsetMap(rewriter, infoC);
-  Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
-
-  GemmAccumulatorElement element{rewriter, op,    tempVecTy, regCTy,
-                                 tempVec,  infoC, zero,      cOffsetMap,
-                                 cBr0,     cBr1,  cWiu0,     cWiu1};
-  return VectorTileLoopNest(rewriter, op->getLoc(), tempVecTy.getShape(),
-                            {{}, {}, zero})
-      .emit(fullRegC, element);
-}
-
 /// 匹配：已有 A/B/C LowerInfo 和 MMA 指令属性的 GEMM，当前实现 DCU 路径。
-/// 改写：MN 循环选择 C 片段，K 循环读 A/B 并发射 WarpMmaRR，再合并 C 片段。
+/// 改写：编译期枚举 MN 片段，K 循环读 A/B 并发射 WarpMmaRR，再静态插入片段。
 /// A/B 的 K 迭代数必须一致；累加器保留原实现的零初始化语义。
 class GemmOpConversion : public OpConversionPattern<frisk::GemmOp> {
 public:
@@ -714,120 +643,125 @@ public:
           op->getLoc(), regCTy,
           mlir::cast<TypedAttr>(rewriter.getZeroAttr(regCTy)));
 
-      // 1. 展平 MN 的 br/iu 四维循环；K 单独展开，避免混淆 C 片段和累加维度。
+      // A fragment contains thread_creg * warp_repeat elements. Its position
+      // in the packed thread tile is static even though its LDS address depends
+      // on the lane. Enumerate MN here, retaining the K reduction as a loop.
       int mnLoopCount = br0 * br1 * wiu0 * wiu1;
       int kLoopCount = kloopCount * kWarpInstUnroll;
-      auto mnFor = rewriter.create<affine::AffineForOp>(
-          op->getLoc(), 0, mnLoopCount, 1, ValueRange{regCInit.getResult()});
-      mnFor->setAttr("iterLabel", rewriter.getStringAttr("mn_wiu"));
-      rewriter.setInsertionPointToStart(mnFor.getBody());
-
-      Value mnLinear = mnFor.getInductionVar();
-      Value regC = mnFor.getRegionIterArgs()[0];
-      Value cWiu1 = modBy(rewriter, op->getLoc(), mnLinear, wiu1);
-      Value cTmp = floorDivBy(rewriter, op->getLoc(), mnLinear, wiu1);
-      Value cWiu0 = modBy(rewriter, op->getLoc(), cTmp, wiu0);
-      cTmp = floorDivBy(rewriter, op->getLoc(), cTmp, wiu0);
-      Value cBr1 = modBy(rewriter, op->getLoc(), cTmp, br1);
-      Value cBr0 = floorDivBy(rewriter, op->getLoc(), cTmp, br1);
-
-      auto tempVecInit = rewriter.create<arith::ConstantOp>(
-          op->getLoc(), tempVecTy,
-          mlir::cast<TypedAttr>(rewriter.getZeroAttr(tempVecTy)));
-      auto kFor = rewriter.create<affine::AffineForOp>(
-          op->getLoc(), 0, kLoopCount, 1, ValueRange{tempVecInit.getResult()});
-      kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
-      rewriter.setInsertionPointToStart(kFor.getBody());
-
-      Value kLinear = kFor.getInductionVar();
-      Value kRegC = kFor.getRegionIterArgs()[0];
-      Value aKBr = floorDivBy(rewriter, op->getLoc(), kLinear, kWarpInstUnroll);
-      Value aKIu = modBy(rewriter, op->getLoc(), kLinear, kWarpInstUnroll);
-      Value bKBr =
-          floorDivBy(rewriter, op->getLoc(), kLinear, infoB.warpInstUnroll[0]);
-      Value bKIu =
-          modBy(rewriter, op->getLoc(), kLinear, infoB.warpInstUnroll[0]);
-
+      Value regC = regCInit;
       SmallVector<Operation *, 2> materializedCastsToErase;
+      for (int mn = 0; mn < mnLoopCount; ++mn) {
+        int tmp = mn;
+        int iu1 = tmp % wiu1;
+        tmp /= wiu1;
+        int iu0 = tmp % wiu0;
+        tmp /= wiu0;
+        int repeat1 = tmp % br1;
+        int repeat0 = tmp / br1;
+        Value cWiu0 = createIndexConstant(rewriter, op->getLoc(), iu0);
+        Value cWiu1 = createIndexConstant(rewriter, op->getLoc(), iu1);
+        Value cBr0 = createIndexConstant(rewriter, op->getLoc(), repeat0);
+        Value cBr1 = createIndexConstant(rewriter, op->getLoc(), repeat1);
 
-      Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
+        auto tempVecInit = rewriter.create<arith::ConstantOp>(
+            op->getLoc(), tempVecTy,
+            mlir::cast<TypedAttr>(rewriter.getZeroAttr(tempVecTy)));
+        auto kFor = rewriter.create<affine::AffineForOp>(
+            op->getLoc(), 0, kLoopCount, 1, ValueRange{tempVecInit.getResult()});
+        kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
+        rewriter.setInsertionPointToStart(kFor.getBody());
 
-      // 2. 优先使用已有 vector；shared 通过 CopyToReg 读取；local 要求已物化。
-      Value thBufferA;
-      auto vecTyA =
-          VectorType::get(infoA.get_thread_widths(), typeA.getElementType());
-      if (Value aVector = getVectorValue(adaptor.getA())) {
-        auto materializedA = materializeGemmThreadTile(aVector, vecTyA, infoA,
-                                                       "A", op, rewriter);
-        if (failed(materializedA)) {
-          return failure();
+        Value kLinear = kFor.getInductionVar();
+        Value kRegC = kFor.getRegionIterArgs()[0];
+        Value aKBr = floorDivBy(rewriter, op->getLoc(), kLinear, kWarpInstUnroll);
+        Value aKIu = modBy(rewriter, op->getLoc(), kLinear, kWarpInstUnroll);
+        Value bKBr =
+            floorDivBy(rewriter, op->getLoc(), kLinear, infoB.warpInstUnroll[0]);
+        Value bKIu =
+            modBy(rewriter, op->getLoc(), kLinear, infoB.warpInstUnroll[0]);
+
+        Value zero = createIndexConstant(rewriter, op->getLoc(), 0);
+
+        // 2. 优先使用已有 vector；shared 通过 CopyToReg 读取；local 要求已物化。
+        Value thBufferA;
+        auto vecTyA =
+            VectorType::get(infoA.get_thread_widths(), typeA.getElementType());
+        if (Value aVector = getVectorValue(adaptor.getA())) {
+          auto materializedA = materializeGemmThreadTile(aVector, vecTyA, infoA,
+                                                         "A", op, rewriter);
+          if (failed(materializedA)) {
+            return failure();
+          }
+          thBufferA = *materializedA;
+          noteDeadCastCandidate(op.getA(), materializedCastsToErase);
+          noteDeadCastCandidate(adaptor.getA(), materializedCastsToErase);
+        } else if (isSharedMemref(op.getA())) {
+          thBufferA = copyGemmOperandToRegisters(
+              infoA, adaptor.getA(), vecTyA,
+              /*br0=*/cBr0, /*br1=*/aKBr,
+              /*iu0=*/getGemmUnrollIndex(infoA, 0, cWiu0, op, rewriter),
+              /*iu1=*/getGemmUnrollIndex(infoA, 1, aKIu, op, rewriter), tidx,
+              zero, op, rewriter);
+        } else {
+          auto localA = requireGemmLocalVector(adaptor.getA(), "A", op, rewriter);
+          if (failed(localA)) {
+            return failure();
+          }
+          thBufferA = *localA;
         }
-        thBufferA = *materializedA;
-        noteDeadCastCandidate(op.getA(), materializedCastsToErase);
-        noteDeadCastCandidate(adaptor.getA(), materializedCastsToErase);
-      } else if (isSharedMemref(op.getA())) {
-        thBufferA = copyGemmOperandToRegisters(
-            infoA, adaptor.getA(), vecTyA,
-            /*br0=*/cBr0, /*br1=*/aKBr,
-            /*iu0=*/getGemmUnrollIndex(infoA, 0, cWiu0, op, rewriter),
-            /*iu1=*/getGemmUnrollIndex(infoA, 1, aKIu, op, rewriter), tidx,
-            zero, op, rewriter);
-      } else {
-        auto localA = requireGemmLocalVector(adaptor.getA(), "A", op, rewriter);
-        if (failed(localA)) {
-          return failure();
+
+        Value thBufferB;
+        auto vecTyB =
+            VectorType::get(infoB.get_thread_widths(), typeB.getElementType());
+        if (Value bVector = getVectorValue(adaptor.getB())) {
+          auto materializedB = materializeGemmThreadTile(bVector, vecTyB, infoB,
+                                                         "B", op, rewriter);
+          if (failed(materializedB)) {
+            return failure();
+          }
+          thBufferB = *materializedB;
+          noteDeadCastCandidate(op.getB(), materializedCastsToErase);
+          noteDeadCastCandidate(adaptor.getB(), materializedCastsToErase);
+        } else if (isSharedMemref(op.getB())) {
+          thBufferB = copyGemmOperandToRegisters(
+              infoB, adaptor.getB(), vecTyB,
+              /*br0=*/bKBr, /*br1=*/cBr1,
+              /*iu0=*/getGemmUnrollIndex(infoB, 0, bKIu, op, rewriter),
+              /*iu1=*/getGemmUnrollIndex(infoB, 1, cWiu1, op, rewriter), tidx,
+              zero, op, rewriter);
+        } else {
+          auto localB = requireGemmLocalVector(adaptor.getB(), "B", op, rewriter);
+          if (failed(localB)) {
+            return failure();
+          }
+          thBufferB = *localB;
         }
-        thBufferA = *localA;
+
+        // 3. K 循环累加单个 MMA 片段，退出 K 后再写入完整 C thread vector。
+        auto wmma = rewriter.create<frisk::WarpMmaRROp>(
+            op->getLoc(), tempVecTy, thBufferA, thBufferB, kRegC);
+        rewriter.modifyOpInPlace(wmma, [&]() {
+          wmma->setAttr("inst_name", instName);
+          wmma->setAttr("inst_constraints", op->getAttr("inst_constraints"));
+        });
+
+        rewriter.create<affine::AffineYieldOp>(op->getLoc(), wmma.getResult());
+
+        rewriter.setInsertionPointAfter(kFor);
+
+        SmallVector<int64_t, 2> offsets{
+            (repeat0 * wiu0 + iu0) * regC_singleInstShape[0],
+            (repeat1 * wiu1 + iu1) * regC_singleInstShape[1]};
+        auto insert = rewriter.create<vector::InsertStridedSliceOp>(
+            op->getLoc(), kFor.getResult(0), regC, offsets,
+            SmallVector<int64_t, 2>{1, 1});
+        // Consumed by the post-thread-lowering accumulator fusion pass.
+        insert->setAttr("frisk.mma_fragment", rewriter.getUnitAttr());
+        regC = insert.getResult();
       }
 
-      Value thBufferB;
-      auto vecTyB =
-          VectorType::get(infoB.get_thread_widths(), typeB.getElementType());
-      if (Value bVector = getVectorValue(adaptor.getB())) {
-        auto materializedB = materializeGemmThreadTile(bVector, vecTyB, infoB,
-                                                       "B", op, rewriter);
-        if (failed(materializedB)) {
-          return failure();
-        }
-        thBufferB = *materializedB;
-        noteDeadCastCandidate(op.getB(), materializedCastsToErase);
-        noteDeadCastCandidate(adaptor.getB(), materializedCastsToErase);
-      } else if (isSharedMemref(op.getB())) {
-        thBufferB = copyGemmOperandToRegisters(
-            infoB, adaptor.getB(), vecTyB,
-            /*br0=*/bKBr, /*br1=*/cBr1,
-            /*iu0=*/getGemmUnrollIndex(infoB, 0, bKIu, op, rewriter),
-            /*iu1=*/getGemmUnrollIndex(infoB, 1, cWiu1, op, rewriter), tidx,
-            zero, op, rewriter);
-      } else {
-        auto localB = requireGemmLocalVector(adaptor.getB(), "B", op, rewriter);
-        if (failed(localB)) {
-          return failure();
-        }
-        thBufferB = *localB;
-      }
-
-      // 3. K 循环累加单个 MMA 片段，退出 K 后再写入完整 C thread vector。
-      auto wmma = rewriter.create<frisk::WarpMmaRROp>(
-          op->getLoc(), tempVecTy, thBufferA, thBufferB, kRegC);
-      rewriter.modifyOpInPlace(wmma, [&]() {
-        wmma->setAttr("inst_name", instName);
-        wmma->setAttr("inst_constraints", op->getAttr("inst_constraints"));
-      });
-
-      rewriter.create<affine::AffineYieldOp>(op->getLoc(), wmma.getResult());
-
-      rewriter.setInsertionPointAfter(kFor);
-
-      Value updatedRegC = insertGemmAccumulatorTile(
-          kFor.getResult(0), regC, op, rewriter, infoC, tempVecTy, regCTy, cBr0,
-          cBr1, cWiu0, cWiu1);
-
-      rewriter.create<affine::AffineYieldOp>(op->getLoc(), updatedRegC);
-
-      registerConvertedValueLowerInfo(mnFor.getResult(0), infoC,
-                                      op.getOperation());
-      rewriter.replaceOp(op, mnFor.getResults());
+      registerConvertedValueLowerInfo(regC, infoC, op.getOperation());
+      rewriter.replaceOp(op, regC);
       for (Operation *castOperation : materializedCastsToErase) {
         if (llvm::all_of(castOperation->getResults(),
                          [](Value result) { return result.use_empty(); })) {

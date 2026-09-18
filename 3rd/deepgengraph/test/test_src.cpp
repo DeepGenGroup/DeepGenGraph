@@ -538,6 +538,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
+  // lowering decomposes the independent MMA fragment insertion chain.
+  {
+    PassManager fragmentPM(ctx.get());
+    // Loop-carrier normalization can leave identity extraction loops around O.
+    // Fold those first so the original accumulator dominates every fragment.
+    fragmentPM.addPass(mlir::createCanonicalizerPass());
+    fragmentPM.addNestedPass<func::FuncOp>(frisk::createFuseFragmentAccumulatorPass());
+    if (failed(fragmentPM.run(*src)))
+      return 1;
+  }
   // pm.addPass(mlir::createSymbolDCEPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
@@ -567,7 +578,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCanonicalizerPass());
   llvm::outs() << "\n---- after first vectorize -----\n"; llvm::outs().flush(); src->dump();
   AddPassNested(mlir::affine::createAffineScalarReplacementPass());
-  AddPassNested(mlir::affine::createLoopUnrollPass());
+  {
+    PassManager fragmentPM(ctx.get());
+    fragmentPM.addNestedPass<func::FuncOp>(frisk::createIRDeepOptimizePass());
+    if (failed(fragmentPM.run(*src)))
+      return 1;
+  }
   AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
   AddPassNested(mlir::createMem2Reg());
   AddPass(mlir::createCanonicalizerPass());

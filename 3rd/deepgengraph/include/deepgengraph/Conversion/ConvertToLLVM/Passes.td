@@ -16,14 +16,21 @@ def ThreadLevelIRLegalize: Pass<"thread-ir-legalize", "::mlir::ModuleOp"> {
 }
 
 def IRDeepOptimize: Pass<"ir-deep-optimize", "func::FuncOp"> {
-  let summary = "legalize后，将IR 进一步优化(vectorize / forloop unroll full 等)";
+  let summary = "Staticize register-vector indices by selective affine unrolling";
   let description = [{}];
 
   let constructor = "mlir::frisk::createIRDeepOptimizePass()";
 
   let dependentDialects = [
-    "mlir::frisk::FriskDialect"
+    "mlir::affine::AffineDialect", "mlir::arith::ArithDialect",
+    "mlir::vector::VectorDialect"
   ];
+}
+
+def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
+  let summary = "Fuse a full-tile add into independent MMA fragment updates";
+  let constructor = "mlir::frisk::createFuseFragmentAccumulatorPass()";
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::vector::VectorDialect"];
 }
 
 #endif // THREADIR_TO_LLVM_CONVERSION_PASSES

@@ -13,6 +13,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createLLVMFuncOpAddGPUAttrPass(Target t
 std::unique_ptr<OperationPass<ModuleOp>> createAmendAllocaOpAddrSpacePass(Target target);
 std::unique_ptr<mlir::Pass>  createVectorOpLoopUnrollPass();
 std::unique_ptr<mlir::Pass> createIRDeepOptimizePass();
+std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 
 // -------- Lower Pipeline ----------
 bool firstLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context) ;
