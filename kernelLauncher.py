@@ -1,0 +1,599 @@
+import argparse
+import ctypes
+import math
+import torch
+
+# python launchKernel.py --hsaco kernel.hsaco --kernel Attn_p2   --grid 32,64,1 --block 128,1,1
+# ============================================================
+# HIP Runtime
+# ============================================================
+
+hip = ctypes.CDLL("libamdhip64.so")
+
+hipError_t = ctypes.c_int
+hipModule_t = ctypes.c_void_p
+hipFunction_t = ctypes.c_void_p
+hipStream_t = ctypes.c_void_p
+
+
+# hipModuleLoad
+hip.hipModuleLoad.argtypes = [
+    ctypes.POINTER(hipModule_t),
+    ctypes.c_char_p,
+]
+hip.hipModuleLoad.restype = hipError_t
+
+
+# hipModuleGetFunction
+hip.hipModuleGetFunction.argtypes = [
+    ctypes.POINTER(hipFunction_t),
+    hipModule_t,
+    ctypes.c_char_p,
+]
+hip.hipModuleGetFunction.restype = hipError_t
+
+
+# hipModuleLaunchKernel
+hip.hipModuleLaunchKernel.argtypes = [
+    hipFunction_t,
+    ctypes.c_uint,  # gridDimX
+    ctypes.c_uint,  # gridDimY
+    ctypes.c_uint,  # gridDimZ
+    ctypes.c_uint,  # blockDimX
+    ctypes.c_uint,  # blockDimY
+    ctypes.c_uint,  # blockDimZ
+    ctypes.c_uint,  # sharedMemBytes
+    hipStream_t,    # stream
+    ctypes.POINTER(ctypes.c_void_p),  # kernelParams
+    ctypes.POINTER(ctypes.c_void_p),  # extra
+]
+hip.hipModuleLaunchKernel.restype = hipError_t
+
+
+# hipModuleUnload
+hip.hipModuleUnload.argtypes = [
+    hipModule_t,
+]
+hip.hipModuleUnload.restype = hipError_t
+
+
+# hipDeviceSynchronize
+hip.hipDeviceSynchronize.argtypes = []
+hip.hipDeviceSynchronize.restype = hipError_t
+
+
+# hipGetErrorString
+hip.hipGetErrorString.argtypes = [
+    hipError_t,
+]
+hip.hipGetErrorString.restype = ctypes.c_char_p
+
+
+# ============================================================
+# HIP error checking
+# ============================================================
+
+def hip_check(err):
+    if err != 0:
+        msg = hip.hipGetErrorString(err)
+        if msg:
+            msg = msg.decode()
+        raise RuntimeError( "HIP error {}: {}".format(err,msg ))
+
+
+# ============================================================
+# Parse X,Y,Z
+# ============================================================
+
+def parse_xyz(value):
+    values = value.split(",")
+    if len(values) != 3:
+        raise argparse.ArgumentTypeError(
+            "Expected X,Y,Z, for example: 32,64,1"
+        )
+    return (
+        int(values[0]),
+        int(values[1]),
+        int(values[2]),
+    )
+
+
+# ============================================================
+# Launch HSACO
+# ============================================================
+
+def launch_hsaco(
+    hsaco_path,
+    kernel_name,
+    kernel_args,
+    grid,
+    block,
+    shared_mem_bytes=0,
+):
+    # Make sure HIP context exists
+    torch.cuda.init()
+    module = hipModule_t()
+    # --------------------------------------------------------
+    # Load HSACO
+    # --------------------------------------------------------
+    hip_check(hip.hipModuleLoad(ctypes.byref(module),hsaco_path.encode()))
+    time_ms = 0
+    try:
+        # ----------------------------------------------------
+        # Find kernel
+        # ----------------------------------------------------
+        func = hipFunction_t()
+        hip_check(hip.hipModuleGetFunction(ctypes.byref(func),module,kernel_name.encode()))
+        # ----------------------------------------------------
+        # Build kernel parameters
+        #
+        # equivalent C++:
+        #
+        # void *params[] = {
+        #     &arg0,
+        #     &arg1,
+        #     ...
+        # };
+        # ----------------------------------------------------
+
+        arg_storage = []
+        for arg in kernel_args:
+            # torch tensor -> GPU pointer
+            if isinstance(arg, torch.Tensor):
+                if not arg.is_cuda:
+                    raise ValueError("Tensor kernel argument must be on GPU")
+                value = ctypes.c_void_p(arg.data_ptr())
+            # scalar argument such as:
+            #
+            # ctypes.c_int32(...)
+            # ctypes.c_int64(...)
+            # ctypes.c_float(...)
+            #
+            elif isinstance(arg, ctypes._SimpleCData):
+                value = arg
+            else:
+                raise TypeError("Unsupported kernel argument type: {}".format(type(arg)))
+            arg_storage.append(value)
+
+        # kernelParams
+        params = (ctypes.c_void_p * len(arg_storage))()
+
+        for i in range(len(arg_storage)):
+            params[i] = ctypes.cast(
+                ctypes.byref(
+                    arg_storage[i]
+                ),
+                ctypes.c_void_p
+            )
+
+        # ----------------------------------------------------
+        # Grid / block
+        # ----------------------------------------------------
+        gx, gy, gz = grid
+        bx, by, bz = block
+        # Make sure PyTorch initialization operations finish
+        # ----------------------------------------------------
+        # Launch
+        # ----------------------------------------------------
+        st = torch.cuda.Event(enable_timing=True)
+        et = torch.cuda.Event(enable_timing=True)
+        stream = torch.cuda.current_stream()
+        
+        torch.cuda.synchronize()
+        st.record(stream)
+        hip_check(
+            hip.hipModuleLaunchKernel(
+                func,
+                gx,gy,gz,bx,by,bz,
+                shared_mem_bytes,
+                hipStream_t(stream.cuda_stream),
+                params,
+                None
+            )
+        )
+        # Record the end on the kernel's stream, then wait for it to finish.
+        et.record(stream)
+        et.synchronize()
+        time_ms = st.elapsed_time(et)
+        
+    finally:
+        hip_check(hip.hipModuleUnload(module))
+    return time_ms
+
+# ============================================================
+# Attention baseline
+#
+# Q: [B,H,S,D]
+# K: [B,H,D,S]
+# V: [B,H,S,D]
+#
+# GEMM
+#   ->
+# scale
+#   ->
+# causal mask
+#   ->
+# softmax
+#   ->
+# GEMM
+# ============================================================
+
+def attention_baseline(q,k,v,):
+    D = q.shape[-1]
+    S = q.shape[-2]
+    # --------------------------------------------------------
+    # GEMM 1
+    #
+    # [B,H,S,D] @ [B,H,D,S]
+    #
+    # ->
+    #
+    # [B,H,S,S]
+    # --------------------------------------------------------
+    score = torch.matmul(q,k)
+    # --------------------------------------------------------
+    # scale
+    # --------------------------------------------------------
+    scale = 1.0 / math.sqrt(D)
+    score = score * scale
+    # --------------------------------------------------------
+    # causal mask
+    #
+    # Keep:
+    #
+    # x - -
+    # x x -
+    # x x x
+    #
+    # upper triangular area becomes -inf
+    # --------------------------------------------------------
+
+    mask = torch.triu(
+        torch.ones(S,S,dtype=torch.bool,device=q.device),
+        diagonal=1
+    )
+
+    score = score.masked_fill(
+        mask,
+        float("-inf")
+    )
+
+    # --------------------------------------------------------
+    # softmax
+    #
+    # Use fp32 internally.
+    # --------------------------------------------------------
+    prob = torch.softmax(score,dim=-1,dtype=torch.float32)
+    # Convert back to fp16 for GEMM2
+    prob = prob.to(torch.float16)
+    # --------------------------------------------------------
+    # GEMM 2
+    #
+    # [B,H,S,S] @ [B,H,S,D]
+    #
+    # ->
+    #
+    # [B,H,S,D]
+    # --------------------------------------------------------
+    output = torch.matmul(prob,v)
+    return output
+
+
+# ============================================================
+# Compare
+# ============================================================
+
+def compare_results(
+    hsaco_output,
+    baseline_output,
+):
+
+    print("")
+    print("========================================")
+    print("Correctness")
+    print("========================================")
+
+    # Make sure dtypes are identical for comparison
+    hsaco_output = hsaco_output.float()
+    baseline_output = baseline_output.float()
+
+    # --------------------------------------------------------
+    # torch.allclose
+    # --------------------------------------------------------
+
+    passed = torch.allclose(
+        hsaco_output,
+        baseline_output,
+        rtol=1e-2,
+        atol=1e-2
+    )
+
+    print(
+        "torch.allclose(atol=1e-3, rtol=1e-3): {}".format(
+            passed
+        )
+    )
+
+    # --------------------------------------------------------
+    # Additional error information
+    # --------------------------------------------------------
+
+    diff = torch.abs(
+        hsaco_output - baseline_output
+    )
+
+    max_abs_error = diff.max().item()
+    mean_abs_error = diff.mean().item()
+
+    print(
+        "max abs error : {}".format(
+            max_abs_error
+        )
+    )
+
+    print(
+        "mean abs error: {}".format(
+            mean_abs_error
+        )
+    )
+
+    # --------------------------------------------------------
+    # Count mismatched elements using same allclose condition
+    #
+    # |a-b| <= atol + rtol * |b|
+    # --------------------------------------------------------
+
+    tolerance = (
+        1e-3
+        + 1e-3 * torch.abs(baseline_output)
+    )
+
+    mismatch = diff > tolerance
+
+    mismatch_count = mismatch.sum().item()
+    total_count = mismatch.numel()
+
+    print(
+        "mismatch count: {} / {}".format(
+            mismatch_count,
+            total_count
+        )
+    )
+
+    # --------------------------------------------------------
+    # First values
+    # --------------------------------------------------------
+
+    print("")
+    print("HSACO first 16 values:")
+
+    print(
+        hsaco_output.flatten()[:16]
+    )
+
+    print("")
+    print("Baseline first 16 values:")
+
+    print(
+        baseline_output.flatten()[:16]
+    )
+
+    print("")
+
+    if passed:
+        print("RESULT: PASS")
+    else:
+        print("RESULT: FAIL")
+
+    print("========================================")
+
+    return passed
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="Launch AMD HSACO attention kernel"
+    )
+
+    # --------------------------------------------------------
+    # HSACO
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--hsaco",
+        required=True,
+        help="Path to HSACO file"
+    )
+
+    parser.add_argument(
+        "--kernel",
+        default="Attn_p2",
+        help="Kernel symbol name"
+    )
+
+    # --------------------------------------------------------
+    # launch configuration
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--grid",
+        type=parse_xyz,
+        required=True,
+        help="Grid dimensions X,Y,Z, example: 32,64,1"
+    )
+
+    parser.add_argument(
+        "--block",
+        type=parse_xyz,
+        required=True,
+        help="Block dimensions X,Y,Z, example: 64,1,1"
+    )
+
+    parser.add_argument(
+        "--shared-mem",
+        type=int,
+        default=0,
+        help="Dynamic shared memory bytes"
+    )
+
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=0,
+        help="GPU device ID"
+    )
+
+    args = parser.parse_args()
+
+    # ========================================================
+    # Device
+    # ========================================================
+    torch.cuda.set_device(
+        args.device
+    )
+    torch.cuda.init()
+    # ========================================================
+    # Attention shape
+    #
+    # Current Attn_p2:
+    #
+    # Q   [1,32,4096,128]
+    # K   [1,32,128,4096]
+    # V   [1,32,4096,128]
+    # OUT [1,32,4096,128]
+    # ========================================================
+
+    B = 1
+    H = 32
+    S = 4096
+    D = 128
+
+    print("")
+    print("========================================")
+    print("Configuration")
+    print("========================================")
+
+    print(
+        "HSACO       : {}".format(
+            args.hsaco
+        )
+    )
+
+    print(
+        "Kernel      : {}".format(
+            args.kernel
+        )
+    )
+
+    print(
+        "Grid        : {}".format(
+            args.grid
+        )
+    )
+
+    print(
+        "Block       : {}".format(
+            args.block
+        )
+    )
+
+    print(
+        "Shared mem  : {}".format(
+            args.shared_mem
+        )
+    )
+
+    print(
+        "Shape       : B={}, H={}, S={}, D={}".format(
+            B,
+            H,
+            S,
+            D
+        )
+    )
+
+    print("========================================")
+
+    # ========================================================
+    # Input
+    # ========================================================
+
+    torch.manual_seed(0)
+
+    q = torch.randn(B,H,S,D,device="cuda",dtype=torch.float16)
+
+    # NOTE:
+    #
+    # K is already transposed:
+    #
+    # [B,H,D,S]
+    #
+    k = torch.randn(B,H,D,S,device="cuda",dtype=torch.float16)
+    v = torch.randn(B,H,S,D,device="cuda",dtype=torch.float16)
+    out = torch.empty(B,H,S,D,device="cuda",dtype=torch.float16)
+
+    # ========================================================
+    # Baseline
+    # ========================================================
+
+    print("")
+    print("Running PyTorch attention baseline...")
+
+    time_base = []
+    for i in range(50) :
+        st = torch.cuda.Event(enable_timing=True)
+        et = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        st.record()
+        baseline = attention_baseline(q,k,v)
+        et.record()
+        et.synchronize()
+        time_ms_base = st.elapsed_time(et)
+        time_base.append(time_ms_base)
+        
+    print("Baseline finished.")
+    # ========================================================
+    # HSACO
+    # ========================================================
+    print("")
+    print("Running HSACO kernel...")
+    time_ours = []
+    for i in range(50):
+        time_our = launch_hsaco(
+            hsaco_path=args.hsaco,
+            kernel_name=args.kernel,
+            kernel_args=[q,v,k,out],
+            grid=args.grid,
+            block=args.block,
+            shared_mem_bytes=args.shared_mem
+        )
+        time_ours.append(time_our)
+
+    print("HSACO kernel finished.")
+
+    # ========================================================
+    # Correctness
+    # ========================================================
+
+    passed = compare_results(out,baseline)
+
+    # Return non-zero so shell scripts can detect failure
+    if not passed:
+        raise SystemExit(1)
+    
+    import numpy as np
+    time_our_mid = np.median(time_ours)
+    time_base_mid = np.median(time_base)
+    print(f"{time_our_mid=}, {time_base_mid=}, speedup={time_base_mid / time_our_mid}x")
+
+# ============================================================
+# Entry
+# ============================================================
+
+if __name__ == "__main__":
+    main()

@@ -1036,6 +1036,41 @@ def Frisk_SyncThreadsInBlockOp : Frisk_Op<"sync_threads_in_block", [
   let assemblyFormat = "attr-dict";
 }
 
+def Frisk_ToThreadTileOp: Frisk_Op<"to_threadTile", [Pure]> {
+  let summary = "to_threadTile";
+  let description = [{
+    临时转换op。表达从 block-tile -> thread-tile 后期会和 Frisk_FromThreadTileOp 配对消除
+  }];
+
+  let arguments = (ins
+    Frisk_MemRefOrVector : $blockTile
+  );
+  let results = (outs
+    Frisk_MemRefOrVector:$threadTile
+  );
+  // let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    $blockTile attr-dict `:` type($blockTile) `->` type($threadTile)
+  }];
+}
+
+def Frisk_FromThreadTileOp: Frisk_Op<"from_threadTile", [Pure]> {
+  let summary = "from_threadTile";
+  let description = [{
+    临时转换op。表达从 thread-tile -> block-tile. 后期会和 Frisk_ToThreadTileOp 配对消除
+  }];
+
+  let arguments = (ins
+    Frisk_MemRefOrVector : $threadTile
+  );
+  let results = (outs
+    Frisk_MemRefOrVector : $blockTile
+  );
+  // let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    $threadTile attr-dict `:` type($threadTile) `->` type($blockTile)
+  }];
+}
 
 
 #endif // FRISK_OPS
