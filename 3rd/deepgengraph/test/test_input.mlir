@@ -19,7 +19,7 @@ module {
     return %13 : tensor<1x4096x32x128xf16> loc(#loc)
   } loc(#loc)
 
-  deepgengraph.kernel @Attn_p2(%Q: tensor<1x4096x32x128xf16>, %V: tensor<1x4096x32x128xf16>, %K: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> attributes {parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 64 : i64, unit_num = 64 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}]} {
+  deepgengraph.kernel @Attn_p2(%Q: tensor<1x4096x32x128xf16>, %K: tensor<1x4096x32x128xf16>, %V: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> attributes {parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 64 : i64, unit_num = 64 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}]} {
     %pQ = deepgengraph_triton.ptr_of %Q : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
     %pV = deepgengraph_triton.ptr_of %V : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
     %pK = deepgengraph_triton.ptr_of %K : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>

@@ -501,7 +501,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     pm.run(src->getOperation());
   };
 
-  #if 0
+  #if 1
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
   pm.addPass(frisk::createAddKernelargPermuteInfoPass());
   pm.run(src->getOperation());
@@ -553,6 +553,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
 
+  #if 0
   AddPass(frisk::createThreadLevelIRLegalizePass());
   AddPass(mlir::createLoopInvariantCodeMotionPass());
   AddPass(mlir::createCSEPass());
@@ -598,7 +599,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);
   
-  #if 1
+
   // ------- convert to llvmir text
   //  创建真正的 LLVM 上下文
   llvm::LLVMContext llvmContext;
