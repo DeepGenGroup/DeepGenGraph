@@ -4,6 +4,7 @@
 //
 // Usage:
 //   FriskPipelineTest <input.mlir> [--idempotence] [--bad-annotation]
+//                                    [--sync-check [base.mlir]]
 //
 //===----------------------------------------------------------------------===//
 
@@ -152,15 +153,21 @@ std::string firstLineDifference(StringRef lhs, StringRef rhs) {
   return "";
 }
 
-/// Looks for the IR the input was copied from, i.e. `test/test_friskBase.mlir`
-/// in one of the ancestors of the input file.
+/// Looks for the IR the input was copied from, i.e. `test/test_friskBase*.mlir`
+/// in one of the ancestors of the input file.  The debug snapshot of the
+/// attention kernel is the current base; the older snapshot is still looked up
+/// so the test keeps working if either of the two is renamed.
 std::string findBaseFile(StringRef inputPath) {
+  static const char *const names[] = {"test_friskBaseDebug.mlir",
+                                      "test_friskBase.mlir"};
   llvm::SmallString<256> dir(llvm::sys::path::parent_path(inputPath));
   for (;;) {
-    llvm::SmallString<256> candidate(dir);
-    llvm::sys::path::append(candidate, "test", "test_friskBase.mlir");
-    if (llvm::sys::fs::exists(candidate))
-      return candidate.str().str();
+    for (const char *name : names) {
+      llvm::SmallString<256> candidate(dir);
+      llvm::sys::path::append(candidate, "test", name);
+      if (llvm::sys::fs::exists(candidate))
+        return candidate.str().str();
+    }
     if (dir.empty())
       return "";
     // `parent_path` returns a reference into `dir`, so go through a copy.
@@ -203,7 +210,7 @@ void checkSyncedWithBase(MLIRContext &context, const std::string &path,
     llvm::errs() << "       first difference: " << firstLineDifference(got, want)
                  << "\n";
   check(got == want,
-        "the input is " + basePath +
+        "the input is " + llvm::sys::path::filename(basePath).str() +
             " verbatim, plus pipeline.stage/order on its loop");
 }
 
@@ -246,9 +253,76 @@ frisk::CopyOp findCopyFrom(Region &region, Value argument) {
   return result;
 }
 
+/// The copy that lands the softmax result in a buffer slot.  The `frisk.exp2`
+/// result does not reach the slot directly: this IR keeps the f32 softmax in
+/// shared memory first (`%qkme = frisk.copy %qkmeLocal to %qkmeShm`) and takes
+/// the f16 P tile from there, so the search follows the memrefs the exp2 leaves
+/// through and reports the copy that writes one of the selected slots.
+frisk::CopyOp findSlotWriteOfSoftmax(ArrayRef<Operation *> bodyOps) {
+  frisk::CopyOp result;
+  SmallVector<Value> worklist;
+  for (Operation *op : bodyOps)
+    if (isa<frisk::Exp2Op>(op))
+      llvm::append_range(worklist, op->getResults());
+  DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
+      continue;
+    for (Operation *user : value.getUsers()) {
+      if (auto copy = dyn_cast<frisk::CopyOp>(user))
+        if (!result && copy.getDstMemRef().getDefiningOp<scf::IfOp>())
+          result = copy;
+      for (Value nested : user->getResults())
+        if (isa<MemRefType>(nested.getType()))
+          worklist.push_back(nested);
+    }
+  }
+  return result;
+}
+
+/// What the checks need to know about the IR the schedule was derived from.
+/// Measuring the input instead of hard coding the numbers keeps them
+/// meaningful: the pass has to preserve what the input carries (its barriers
+/// and its copies) and to shorten exactly the iteration space it is given.
+struct InputFacts {
+  unsigned loopBarriers = 0; ///< barriers inside the annotated loop
+  unsigned tailBarriers = 0; ///< barriers after it, they stay in the epilogue
+  unsigned copies = 0;       ///< `frisk.copy` ops inside the annotated loop
+  int64_t step = 0;          ///< step of the annotated loop
+  AffineMap upperBound;      ///< upper bound of the annotated loop
+};
+
+InputFacts measureInput(func::FuncOp func) {
+  InputFacts facts;
+  affine::AffineForOp loop;
+  func.walk([&](affine::AffineForOp candidate) {
+    if (!loop && candidate->hasAttr("pipeline.stage"))
+      loop = candidate;
+  });
+  if (!loop)
+    return facts;
+
+  facts.upperBound = loop.getUpperBoundMap();
+  facts.step = loop.getStepAsInt();
+  facts.loopBarriers = countIn<frisk::SyncThreadsInBlockOp>(loop.getRegion());
+  facts.copies = countIn<frisk::CopyOp>(loop.getRegion());
+  bool afterLoop = false;
+  for (Operation &op : func.getBody().front()) {
+    if (&op == loop.getOperation()) {
+      afterLoop = true;
+      continue;
+    }
+    if (afterLoop && isa<frisk::SyncThreadsInBlockOp>(&op))
+      ++facts.tailBarriers;
+  }
+  return facts;
+}
+
 // --- the actual checks -----------------------------------------------------
 
-void checkPrologue(func::FuncOp func, affine::AffineForOp scheduled) {
+void checkPrologue(func::FuncOp func, affine::AffineForOp scheduled,
+                   const InputFacts &facts) {
   SmallVector<Operation *> prologue;
   for (Operation &op : func.getBody().front()) {
     if (&op == scheduled.getOperation())
@@ -276,8 +350,10 @@ void checkPrologue(func::FuncOp func, affine::AffineForOp scheduled) {
     });
   }
 
-  check(countOf<frisk::SyncThreadsInBlockOp>(prologue) == 1,
-        "prologue contains exactly one barrier");
+  check(countOf<frisk::SyncThreadsInBlockOp>(prologue) ==
+            1 + facts.loopBarriers,
+        "prologue has 1 inserted barrier plus the " +
+            std::to_string(facts.loopBarriers) + " of its statements");
   check(countOf<frisk::GemmOp>(prologue) == 1,
         "prologue contains exactly one gemm (QK of tile 0)");
   check(kCopies.size() == 2, "prologue issues 2 K loads (tiles 0 and 1)");
@@ -294,7 +370,8 @@ void checkPrologue(func::FuncOp func, affine::AffineForOp scheduled) {
           "rowsum register is the init operand of the steady loop");
 }
 
-void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled) {
+void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled,
+                     const InputFacts &facts) {
   MLIRContext *context = func.getContext();
   Value k = func.getArgument(2);
   Value v = func.getArgument(1);
@@ -304,15 +381,20 @@ void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled) {
 
   check(scheduled.getStepAsInt() == 32, "steady loop keeps the tile step");
 
-  AffineMap expected = AffineMap::get(
-      0, 1, {getAffineSymbolExpr(0, context) * 64}, context);
+  AffineMap expected =
+      AffineMap::get(facts.upperBound.getNumDims(),
+                     facts.upperBound.getNumSymbols(),
+                     {facts.upperBound.getResult(0) -
+                      getAffineConstantExpr(facts.step, context)},
+                     context);
   check(scheduled.getUpperBoundMap() == expected,
-        "steady loop bound is Ub - 32 (the last tile is peeled)");
+        "steady loop bound is Ub - step (the last tile is peeled)");
 
   Block &body = *scheduled.getBody();
   SmallVector<Operation *> bodyOps = topLevelOps(body);
-  check(countOf<frisk::SyncThreadsInBlockOp>(bodyOps) == 1,
-        "steady body has exactly one barrier (top of the body)");
+  check(countOf<frisk::SyncThreadsInBlockOp>(bodyOps) == 1 + facts.loopBarriers,
+        "steady body has 1 inserted barrier (top of the body) plus the " +
+            std::to_string(facts.loopBarriers) + " of its statements");
 
   // The parity is only used to *select* the buffers: one small `scf.if` per
   // (buffer, offset) pair the body touches, and every statement is emitted
@@ -336,8 +418,9 @@ void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled) {
         "steady body has QK and PV gemms, each emitted once");
   check(countOf<frisk::MaskOp>(bodyOps) == 1,
         "steady body has the softmax, emitted once");
-  check(countIn<frisk::CopyOp>(scheduled.getRegion()) == 5,
-        "steady body emits the 5 copies of its statements once");
+  check(countIn<frisk::CopyOp>(scheduled.getRegion()) == facts.copies,
+        "steady body emits each of its " + std::to_string(facts.copies) +
+            " copies once");
 
   auto kCopy = findCopyFrom(scheduled.getRegion(), k);
   auto vCopy = findCopyFrom(scheduled.getRegion(), v);
@@ -360,12 +443,7 @@ void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled) {
           "PV (offset 0) reads P slot " + slotsOf(pv.getA()));
 
     // The softmax output must land in the other slot than the one PV reads.
-    frisk::CopyOp pCopy;
-    for (Operation *op : bodyOps)
-      if (auto copy = dyn_cast<frisk::CopyOp>(op))
-        if (copy.getDstMemRef().getDefiningOp<scf::IfOp>() &&
-            copy.getSrcMemRef().getDefiningOp<frisk::Exp2Op>())
-          pCopy = copy;
+    frisk::CopyOp pCopy = findSlotWriteOfSoftmax(bodyOps);
     check(pCopy != nullptr, "steady body writes the softmax result into a slot");
     if (pCopy)
       check(selectsSlots(pCopy.getDstMemRef(), 1, 0),
@@ -389,7 +467,8 @@ void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled) {
   }
 }
 
-void checkEpilogue(func::FuncOp func, affine::AffineForOp scheduled) {
+void checkEpilogue(func::FuncOp func, affine::AffineForOp scheduled,
+                   const InputFacts &facts) {
   frisk::DivOp div;
   bool afterLoop = false;
   for (Operation &op : func.getBody().front()) {
@@ -416,7 +495,9 @@ void checkEpilogue(func::FuncOp func, affine::AffineForOp scheduled) {
     if (afterLoop && isa<frisk::SyncThreadsInBlockOp>(&op))
       ++barriers;
   }
-  check(barriers == 1, "the epilogue is separated by exactly one barrier");
+  check(barriers == 1 + facts.tailBarriers,
+        "the epilogue is separated by 1 inserted barrier plus the " +
+            std::to_string(facts.tailBarriers) + " that follow the loop");
 
   // The epilogue finishes the peeled tile: the last PV, accumulated into the
   // accumulator the steady loop produced, and materialised for the `div`.  Like
@@ -505,7 +586,7 @@ int main(int argc, char **argv) {
   if (mode == "--sync-check") {
     std::string basePath = argc > 3 ? argv[3] : findBaseFile(path);
     if (basePath.empty()) {
-      llvm::errs() << "[FAIL] no test/test_friskBase.mlir found above " << path
+      llvm::errs() << "[FAIL] no test/test_friskBase*.mlir found above " << path
                    << "; pass the base file explicitly\n";
       return 1;
     }
@@ -559,6 +640,10 @@ int main(int argc, char **argv) {
     module->print(os);
   }
 
+  // Measure the annotated loop before the pass rewrites it: the checks below
+  // compare the scheduled IR against what the input carries.
+  InputFacts facts = measureInput(func);
+
   PassManager pm(&context);
   pm.addNestedPass<func::FuncOp>(pipeline::createPipelineSchedulePass());
   if (failed(pm.run(module.get()))) {
@@ -585,9 +670,9 @@ int main(int argc, char **argv) {
               scheduled->getAttrOfType<IntegerAttr>("pipeline.slots").getInt() ==
                   2,
           "pipeline.slots == 2");
-    checkPrologue(func, scheduled);
-    checkSteadyLoop(func, scheduled);
-    checkEpilogue(func, scheduled);
+    checkPrologue(func, scheduled, facts);
+    checkSteadyLoop(func, scheduled, facts);
+    checkEpilogue(func, scheduled, facts);
     checkSlots(func);
   }
 

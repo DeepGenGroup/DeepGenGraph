@@ -355,10 +355,8 @@ struct AddKernelargPermuteInfoPass : public PassWrapper<AddKernelargPermuteInfoP
     if(kernelOps.empty()){
       return;
     }
-
     auto originFuncOp = *originFuncs.begin();
     std::map<int, DenseI64ArrayAttr> argPermuteInfoMap;
-    
     auto argCount = originFuncOp.getBody().getNumArguments();
     originFuncOp->walk([&](deepgengraph::PermuteOp permute){
       if(auto arg = mlir::dyn_cast<BlockArgument>(permute.getOperand())){

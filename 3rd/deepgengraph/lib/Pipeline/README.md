@@ -13,11 +13,11 @@ buffer 上做多槽化。
 | `include/deepgengraph/Pipeline/PipelineSchedule.h` | `PipelineScheduleOptions` + 入口 |
 | `lib/Pipeline/PipelineSchedule.cpp` | 分析与重写实现 |
 | `lib/Pipeline/test/pipeline_schedule_test.cpp` | 结构自检（`FriskPipelineTest`） |
-| `lib/Pipeline/test/attn_p2_pipeline_scheme.mlir` | 输入：`test/test_friskBase.mlir` + 2-stage/2-buffer 方案 |
+| `lib/Pipeline/test/attn_p2_pipeline_scheme.mlir` | 输入：`test/test_friskBaseDebug.mlir` + 2-stage/2-buffer 方案 |
 
-输入文件是 `test/test_friskBase.mlir`（`createConvertFriskToBasePass` 在
+输入文件是 `test/test_friskBaseDebug.mlir`（`createConvertFriskToBasePass` 在
 `@Attn_p2` 上的输出）**逐字复制**，op 一个都没改，只在 `affine.for` 上加了
-方案标记。循环体有 17 个顶层 op。
+方案标记。循环体有 22 个顶层 op。
 
 为此顺手修了 `lib/Dialect/Frisk/IR/FriskOps.cpp` 里 `frisk.buffer_view` 的
 parser：它的 printer 把下标打印成 SSA 名字代入后的 affine map
@@ -33,9 +33,9 @@ attr-dict 挪到 `:` 之前（与 printer 及其它 op 的约定一致）。
 ```mlir
 %9 = affine.for ... attributes {
   // 每个顶层 op 一项；同一条语句的 op 重复同一个 (stage, order) 对
-  pipeline.stage = array<i64: 0,0, 1,1, 1, 1,1,1,1,1,1,1,1, 2,2,2, 1>,
-  pipeline.order = array<i64: 0,0, 1,1, 2, 4,4,4,4,4,4,4,4, 3,3,3, 5>
-}   //                   K    V    QK  softmax(mask..copy)  PV   rowsum
+  pipeline.stage = array<i64: 0,0, 1,1, 1, 1,1,1,1,1,1,1,1,1,1,1,1,1, 2,2,2, 1>,
+  pipeline.order = array<i64: 0,0, 1,1, 2, 4,4,4,4,4,4,4,4,4,4,4,4,4, 3,3,3, 5>
+}   //                   K    V    QK  softmax(mask..copy到P槽)          PV   rowsum
 ```
 
 * `pipeline.stage`：语句所属流水级。0 最超前，数字越大越靠近当前迭代。
@@ -120,6 +120,21 @@ frisk.copy %qkme to %44#5                   // softmax 写 P 槽
 倍槽数的语句共用同一个句柄。后序语句照常只发射一遍、直接用这些槽句柄。
 epilogue 同理，只是那边只剩 `offset == 0` 的语句有活干，所以只选 V/P 两个槽。
 
+### `frisk.copy` 的 SSA 句柄就是它写入的 buffer
+
+这一版 Frisk IR 不给 `frisk.copy` 单独写一行了，而是用它的返回值当 buffer 句柄
+往下传（`%ktile = frisk.copy %view to %ktile_slot`，gemm 读 `%ktile`）。这种句柄
+和它的 dst 指向同一份存储，所以 pass 里凡是处理 buffer 的地方都跟着走：
+
+* 依赖分析把句柄上的 use 算成对 buffer 的 use——否则 K/V/P 的 `maxLead` 会算成 0，
+  一个 buffer 都不会双缓冲（句柄 `%ktile` 有 use，buffer 本身没有）；
+* `statementTouches` 认句柄，`(buffer, offset)` 的槽才会被选中；
+* 发射语句时句柄和 buffer 一起绑到选出来的槽，读句柄的 gemm 才读到正确的槽。
+
+因此「`frisk.copy` 的结果 = 它的 dst」是本模块的一条基本假设；这也是回写
+iter_arg 的写法（`%oAcc_next = frisk.copy %22 to %oAcc`），prologue 里同一套逻辑
+把它折成稳态循环的初值。
+
 ## 使用
 
 ```bash
@@ -132,7 +147,7 @@ cmake -S . -B build && cmake --build build --target FriskPipelineTest -j8
 默认模式打印变换后的 IR 并做结构自检；`--idempotence` 验证跑第二遍无变化；
 `--bad-annotation` 验证非法标注（重复 order）被拒绝。
 
-默认模式还会做一次**同步检查**：解析输入和 `test/test_friskBase.mlir`（从输入
+默认模式还会做一次**同步检查**：解析输入和 `test/test_friskBaseDebug.mlir`（从输入
 文件往上找），把输入上的 `pipeline.stage`/`pipeline.order` 去掉后逐行比对打印出
 来的 module，所以注释和排版不影响结果，只有真正的 IR 改动会被报出来（会指出第
 一行差异）。做法是「输入 = 冻结 IR 逐字复制 + 循环标记」，这条检查保证两边不会
@@ -141,7 +156,7 @@ cmake -S . -B build && cmake --build build --target FriskPipelineTest -j8
 ```bash
 ./build/lib/Pipeline/FriskPipelineTest lib/Pipeline/test/attn_p2_pipeline_scheme.mlir --sync-check
 # 或指定基准文件
-./build/lib/Pipeline/FriskPipelineTest <input.mlir> --sync-check test/test_friskBase.mlir
+./build/lib/Pipeline/FriskPipelineTest <input.mlir> --sync-check test/test_friskBaseDebug.mlir
 ```
 
 在代码里作为普通 pass 用：
@@ -155,6 +170,9 @@ pm.addNestedPass<func::FuncOp>(mlir::pipeline::createPipelineSchedulePass());
 
 * 只支持 2 槽（`maxSlots = 2`），即一个流水级的距离；
 * 跨流水级的值必须是 `frisk.alloc_buffer` 的结果，否则报错；
+* 语句之间的 SSA 依赖只认「buffer + 它的 `frisk.copy` 句柄」；跨语句直接传一个
+  中间 memref（例如某条语句的 gemm 结果被另一条语句当输入）时，只能靠同 `stage`
+  的 slot 折叠，跨级则要求它是 `frisk.alloc_buffer`；
 * 稳态/epilogue 的槽句柄是由 `scf.if` 选出来的 **memref** 值，语句通过它引用
   buffer；下游要能把 memref 类型的 `scf.if` 结果一路处理下去（这种值的
   defining op 已经不是 `frisk.alloc_buffer` 了）；

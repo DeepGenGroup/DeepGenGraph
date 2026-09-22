@@ -133,6 +133,11 @@ struct RotatedBuffer {
   frisk::AllocBufferOp alloc;
   int64_t slots = 1;
   SmallVector<Value> slotValues;
+  /// Every value that denotes this buffer: `original` plus the handle of each
+  /// `frisk.copy ... to %original` writing into it.  The Frisk IR keeps using
+  /// those handles instead of the buffer, so the dependency scan, the slot
+  /// selection and the substitution all have to follow them as well.
+  SmallVector<Value, 2> handles;
 };
 
 /// SSA handle of the slot a statement has to touch, used where the tile parity
@@ -144,12 +149,41 @@ struct RotatedBuffer {
 /// buffer and its reader usually have different offsets).
 using SlotHandleMap = DenseMap<std::pair<unsigned, int64_t>, Value>;
 
+/// The buffer a value denotes.  `frisk.copy` can hand back the handle of the
+/// buffer it writes into (`%tile = frisk.copy %src to %slot`), and the Frisk IR
+/// passes that handle around instead of the buffer itself; the handle therefore
+/// denotes the same buffer as its destination.
+Value bufferOf(Value value) {
+  while (auto copy = value.getDefiningOp<frisk::CopyOp>()) {
+    Value dst = copy.getDstMemRef();
+    if (dst == value)
+      break;
+    value = dst;
+  }
+  return value;
+}
+
+/// Every value the statements use to denote `buffer`: the buffer plus the
+/// handle of each `frisk.copy ... to <handle>` writing into it.  A dependency
+/// found through a handle is a dependency on the buffer, and a statement that
+/// touches a handle touches the buffer.
+SmallVector<Value, 2> bufferHandles(Value buffer, ArrayRef<Statement> stmts) {
+  SmallVector<Value, 2> handles{buffer};
+  for (const Statement &st : stmts)
+    for (Operation *op : st.ops)
+      if (auto copy = dyn_cast<frisk::CopyOp>(op))
+        if (bufferOf(copy.getDstMemRef()) == buffer)
+          llvm::append_range(handles, copy.getResults());
+  return handles;
+}
+
 /// Values that are written by the statements of the loop body.
-// 这个 op「写」了什么。frisk.copy 取 dst，frisk.reduce 取 dst，
+// 这个 op「写」了什么。frisk.copy 取 dst（真的写进 buffer，句柄只是同一个
+// buffer 的别名），frisk.reduce 取 dst，
 // 其它 op 取所有 memref/vector 结果（比如 gemm 产出的 memref)
 void collectWrittenValues(Operation *op, SmallVectorImpl<Value> &out) {
   if (auto copy = dyn_cast<frisk::CopyOp>(op)) {
-    out.push_back(copy.getDstMemRef());
+    out.push_back(bufferOf(copy.getDstMemRef()));
     return;
   }
   if (auto reduce = dyn_cast<frisk::ReduceOp>(op)) {
@@ -203,8 +237,9 @@ private:
   SlotHandleMap materializeSlotHandles(OpBuilder &builder, Value evenCond,
                                       ArrayRef<unsigned> indices);
 
-  /// Does `st` read or write `buffer`?
-  static bool statementTouches(const Statement &st, Value buffer);
+  /// Does `st` read or write `buffer`, either directly or through one of its
+  /// `frisk.copy` handles?
+  static bool statementTouches(const Statement &st, const RotatedBuffer &buffer);
 
   /// The slot handle a statement with `offset` uses for `buffer`.  Keyed on
   /// `offset % slots` because `(parity + offset) % slots` only depends on it, so
@@ -387,42 +422,45 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
         continue;
 
       int64_t maxLead = 0;
-      // 遍历它的所有 use
-      for (OpOperand &use : written.getUses()) {
-        Operation *user = use.getOwner();
-        auto it = opToStmt.find(user);
-        // user 不在 opToStmt 里 → 报「写在内、用在外，不支持」
-        if (it == opToStmt.end()) {
-          return loop.emitError()
-                 << "value " << written
-                 << " is written inside the pipelined loop but used outside of "
-                    "it; this is not supported";
+      // 遍历它的所有 use（含 frisk.copy 给出的句柄，它们指向同一个 buffer）
+      SmallVector<Value, 2> handles = bufferHandles(written, stmts);
+      for (Value handle : handles) {
+        for (OpOperand &use : handle.getUses()) {
+          Operation *user = use.getOwner();
+          auto it = opToStmt.find(user);
+          // user 不在 opToStmt 里 → 报「写在内、用在外，不支持」
+          if (it == opToStmt.end()) {
+            return loop.emitError()
+                   << "value " << written
+                   << " is written inside the pipelined loop but used outside "
+                      "of it; this is not supported";
+          }
+          Statement &consumer = stmts[it->second];
+          // The dependency rules of the annotation, see tilelang: a producer
+          // must not be placed after its consumer.
+          // 消费者 offset 大于生产者 → 报错。
+          // 因为 offset 越大越超前，生产者不能比消费者还超前，否则消费者要用一个还没算出来的值。
+          if (consumer.offset > st.offset)
+            return loop.emitError()
+                   << "the statement with `" << kSchemeStageAttr
+                   << "` = " << st.stage
+                   << " produces a value that the statement with `"
+                   << kSchemeStageAttr << "` = " << consumer.stage
+                   << " consumes, but a lower stage runs earlier in the "
+                      "pipeline; the producer stage has to be less than or "
+                      "equal to the consumer stage";
+          // 同 offset（同 stage）时，消费者的 order 必须不小于生产者
+          if (consumer.offset == st.offset && consumer.order < st.order)
+            return loop.emitError()
+                   << "the statement with `" << kSchemeOrderAttr
+                   << "` = " << st.order
+                   << " produces a value that the statement with `"
+                   << kSchemeOrderAttr << "` = " << consumer.order
+                   << " consumes; within one stage the producer has to be "
+                      "emitted first";
+          // maxLead = max(生产者 offset − 消费者 offset)
+          maxLead = std::max(maxLead, st.offset - consumer.offset);
         }
-        Statement &consumer = stmts[it->second];
-        // The dependency rules of the annotation, see tilelang: a producer
-        // must not be placed after its consumer.
-        // 消费者 offset 大于生产者 → 报错。
-        // 因为 offset 越大越超前，生产者不能比消费者还超前，否则消费者要用一个还没算出来的值。
-        if (consumer.offset > st.offset)
-          return loop.emitError()
-                 << "the statement with `" << kSchemeStageAttr
-                 << "` = " << st.stage
-                 << " produces a value that the statement with `"
-                 << kSchemeStageAttr << "` = " << consumer.stage
-                 << " consumes, but a lower stage runs earlier in the "
-                    "pipeline; the producer stage has to be less than or equal "
-                    "to the consumer stage";
-        // 同 offset（同 stage）时，消费者的 order 必须不小于生产者
-        if (consumer.offset == st.offset && consumer.order < st.order)
-          return loop.emitError()
-                 << "the statement with `" << kSchemeOrderAttr
-                 << "` = " << st.order
-                 << " produces a value that the statement with `"
-                 << kSchemeOrderAttr << "` = " << consumer.order
-                 << " consumes; within one stage the producer has to be "
-                    "emitted first";
-        // maxLead = max(生产者 offset − 消费者 offset)
-        maxLead = std::max(maxLead, st.offset - consumer.offset);
       }
       // slots = max(1, maxLead + 1) —— 双缓冲公式，offset 差 1 就是 2 槽
       int64_t slots = std::max<int64_t>(1, maxLead + 1);
@@ -447,6 +485,7 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
       buffer.original = written;
       buffer.alloc = alloc;
       buffer.slots = slots;
+      buffer.handles = std::move(handles);
       rotated.push_back(buffer);
     }
   }
@@ -485,12 +524,14 @@ Value PipelineScheduler::offsetIv(OpBuilder &builder, Value iv, int64_t offset,
   return builder.create<arith::AddIOp>(loc, iv, delta);
 }
 
-// 这条语句有没有读/写这个 buffer。循环体里的 buffer 都是直接当操作数用的
-// （copy 的 src/dst、gemm 的 A/B、mul 的操作数…），所以查操作数就够了
-bool PipelineScheduler::statementTouches(const Statement &st, Value buffer) {
+// 这条语句有没有读/写这个 buffer：buffer 本身和它的 frisk.copy 句柄都算
+// （copy 的 src/dst、gemm 的 A/B、mul 的操作数…都是操作数，查操作数就够）
+bool PipelineScheduler::statementTouches(const Statement &st,
+                                         const RotatedBuffer &buffer) {
   for (Operation *op : st.ops)
-    if (llvm::is_contained(op->getOperands(), buffer))
-      return true;
+    for (Value handle : buffer.handles)
+      if (llvm::is_contained(op->getOperands(), handle))
+        return true;
   return false;
 }
 
@@ -527,7 +568,7 @@ SlotHandleMap PipelineScheduler::materializeSlotHandles(
     const Statement &st = stmts[index];
     for (auto [bufferIndex, buffer] : llvm::enumerate(rotated)) {
       // 这条语句不碰这个 buffer，就不用给它选槽
-      if (!statementTouches(st, buffer.original))
+      if (!statementTouches(st, buffer))
         continue;
       auto key = slotKey(unsigned(bufferIndex), buffer, st.offset);
       if (seen.insert(key).second)
@@ -598,7 +639,10 @@ void PipelineScheduler::emitStatement(OpBuilder &builder, const Statement &st,
     } else {
       slot = buffer.slotValues[modulo(parity + st.offset, buffer.slots)];
     }
-    map.map(buffer.original, slot);
+    // 句柄（`%tile = frisk.copy %src to %slot`）和 buffer 本身指向同一份存储，
+    // 一起绑到选出来的槽，读句柄的语句才能读到正确的槽
+    for (Value handle : buffer.handles)
+      map.map(handle, slot);
   }
 
   scf::IfOp guardOp;

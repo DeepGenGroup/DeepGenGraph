@@ -1,19 +1,19 @@
 #loc = loc(unknown)
 module {
   func.func @Attn(%arg0: tensor<1x4096x32x128xf16> loc(unknown), %arg1: tensor<1x4096x32x128xf16> loc(unknown), %arg2: tensor<1x4096x32x128xf16> loc(unknown)) -> tensor<1x4096x32x128xf16> {
-    %cst = arith.constant dense<1.131250e+01> : tensor<1xf16> loc(#loc)
-    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFC00 : f16 loc(#loc)
-    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16> loc(#loc)
-    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16> loc(#loc)
-    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16> loc(#loc)
-    %4 = deepgengraph.dot %1, %3 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc)
-    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf16>, tensor<1xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc)
-    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf16>, tensor<4096x4096xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc)
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf16> loc(#loc) // 根号128约为11.3137，这个对吗
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFC00 : f16 loc(#loc) // 上三角负无穷
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16> loc(#loc) // Q
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16> loc(#loc) // V
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16> loc(#loc) // K^T
+    %4 = deepgengraph.dot %1, %3 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc) // Q*k^T
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf16>, tensor<1xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc) // Q*K^T/根号d
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf16>, tensor<4096x4096xf16>) -> tensor<1x32x4096x4096xf16> loc(#loc) // mask
     %7 = deepgengraph.convert %6, type = f32 : (tensor<1x32x4096x4096xf16>) -> tensor<1x32x4096x4096xf32> loc(#loc)
     %8 = deepgengraph.exp %7 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32> loc(#loc)
     %9 = deepgengraph.reduce(%8), dim = -1, op =  ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32> loc(#loc)
     %10 = deepgengraph.div %8, %9 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32> loc(#loc)
-    %11 = deepgengraph.convert %10, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16> loc(#loc)
+    %11 = deepgengraph.convert %10, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16> loc(#loc) // P
     %12 = deepgengraph.dot %11, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16> loc(#loc)
     %13 = deepgengraph.permute %12, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16> loc(#loc)
     return %13 : tensor<1x4096x32x128xf16> loc(#loc)
@@ -26,7 +26,7 @@ module {
     %O = deepgengraph_triton.empty_ptr type = tensor<1x4096x32x128xf16> : <tensor<1x4096x32x128xf16>>
     deepgengraph_triton.device_kernel args = [%pQ, %pV, %pK, %O], grid = [1, 64, 32] {
     ^bb0(%bz: index, %bx: index, %by: index, %argQ: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %argV: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %argK: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %argO: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>):
-      %cst = arith.constant dense<0.127531052> : tensor<1xf32>
+      %cst = arith.constant dense<0.127531052> : tensor<1xf32> // ? 0.088388
       %cst_0 = arith.constant 0xFF800000 : f32
       %cst_1 = arith.constant 0.000000e+00 : f32
       %c0 = arith.constant 0 : index
@@ -52,7 +52,7 @@ module {
       %14 = deepgengraph.zero shape = [64, 128], type = f32 : () -> tensor<64x128xf32>
       %15 = deepgengraph.zero shape = [64, 1], type = f32 : () -> tensor<64x1xf32>
       %16 = arith.addi %5, %c64 : index  // by * 128 + 64
-    %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %8, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128  逻辑上[128,32] , 列连续。global需按照 [1,32,128,4096] 做permute 
+      %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %8, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128  逻辑上[128,32] , 列连续。global需按照 [1,32,128,4096] 做permute 
       %18 = deepgengraph_triton.block_ptr_of base = %argV, base_offset = %8, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [32, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>  // 逻辑上[32,128] 行连续
       %temp = arith.muli %bx , %c64 : index 
       %loopUb = arith.addi %temp , %c32 : index // BM * bx + BN
@@ -85,7 +85,7 @@ module {
       %21 = deepgengraph.convert %20, type = f16 : (tensor<64x128xf32>) -> tensor<64x128xf16>
       deepgengraph_triton.block_store %11, %21 : (!deepgengraph_triton<block_ptr{tensor<64x128xf16>}>, tensor<64x128xf16>) -> ()
     } : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> ()
-    %4 = deepgengraph_triton.tensor_from %O : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> tensor<1x4096x32x128xf16>
+    %4 = deepgengraph_triton.tensor_from %O : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> tensor<1x4096x32x128xf16> // ?
     deepgengraph.return %4 : tensor<1x4096x32x128xf16>
   }
 } loc(#loc)
