@@ -302,8 +302,8 @@ int main(int argc, char** argv) {
     // Match the positional ABI of Attn_p2: Q, V, K, O.
     void *args[] = {
         &q,
-        &v,
         &k,
+        &v,
         &out,
     };
 

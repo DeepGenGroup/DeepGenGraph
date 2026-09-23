@@ -52,10 +52,10 @@ module {
       %14 = deepgengraph.zero shape = [64, 128], type = f32 : () -> tensor<64x128xf32>
       %15 = deepgengraph.zero shape = [64, 1], type = f32 : () -> tensor<64x1xf32>
       %16 = arith.addi %5, %c64 : index  // by * 128 + 64
-      %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %8, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128  逻辑上[128,32] , 列连续。global需按照 [1,32,128,4096] 做permute 
-      %18 = deepgengraph_triton.block_ptr_of base = %argV, base_offset = %8, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [32, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>  // 逻辑上[32,128] 行连续
+      %17 = deepgengraph_triton.block_ptr_of base = %argK, base_offset = %6, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [128, 32], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>  // base_offset = by * 128 * 4096 + bx * 64 * 128  逻辑上[128,32] , 列连续。global需按照 [1,32,128,4096] 做permute 
+      %18 = deepgengraph_triton.block_ptr_of base = %argV, base_offset = %6, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [32, 128], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>  // 逻辑上[32,128] 行连续
       %temp = arith.muli %bx , %c64 : index 
-      %loopUb = arith.addi %temp , %c32 : index // BM * bx + BN
+      %loopUb = arith.addi %temp , %c64 : index // BM * bx + BN
       %19:4 = scf.for %arg10 = %c0 to %loopUb step %c32 iter_args(%tempK = %17, %tempV = %18, %arg13 = %14, %arg14 = %15) -> (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>, tensor<64x128xf32>, tensor<64x1xf32>) {
         %22 = deepgengraph_triton.block_load %tempK : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
         %23 = deepgengraph_triton.block_load %tempV : (!deepgengraph_triton<block_ptr{tensor<32x128xf16>}>) -> tensor<32x128xf16>

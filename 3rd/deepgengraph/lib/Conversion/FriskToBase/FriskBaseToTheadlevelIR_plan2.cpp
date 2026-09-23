@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -55,6 +56,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -68,9 +70,6 @@
 namespace mlir::frisk {
 
 namespace {
-#define GEN_PASS_DEF_CONVERTFRISKBASETOTHREADLEVELIR
-
-#include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
 using friskMs = frisk::attr::MemorySpace;
 
@@ -83,6 +82,54 @@ static DenseMap<frisk::ConvertLayoutOp, std::pair<LowerInfo, LowerInfo>>
 static bool isTiled(Operation *op) { return op->hasAttr("tiled"); }
 static void markTiled(Operation *op, OpBuilder &builder) {
   op->setAttr("tiled", builder.getBoolAttr(true));
+}
+
+static Value getViewBuffer(Value value) {
+  while (auto view = value.getDefiningOp<frisk::BufferViewOp>())
+    value = view.getSource();
+  return value;
+}
+
+static bool isGlobalToSharedCopy(frisk::CopyOp op) {
+  auto src = dyn_cast<MemRefType>(getViewBuffer(op.getSrc()).getType());
+  auto dst = dyn_cast<MemRefType>(getViewBuffer(op.getDst()).getType());
+  return src && dst && src.getMemorySpaceAsInt() == int(friskMs::Global) &&
+         dst.getMemorySpaceAsInt() == int(friskMs::Shared);
+}
+
+static Value composeAccessIndex(OpBuilder &b, Location loc, AffineMap map,
+                                ValueRange operands) {
+  return affine::makeComposedAffineApply(
+      b, loc, map, llvm::to_vector_of<OpFoldResult>(operands));
+}
+
+static Value composeAccessIndex(OpBuilder &b, Location loc, AffineExpr expr,
+                                ValueRange operands) {
+  return composeAccessIndex(
+      b, loc, AffineMap::get(operands.size(), 0, expr, b.getContext()), operands);
+}
+
+// A buffer_view is an index mapping, not a physical memref descriptor.
+// Its map gives the source origin; local coordinates occupy the trailing
+// source axes. Compose from the innermost view out to the original buffer.
+static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
+                              SmallVectorImpl<Value> &indices) {
+  while (auto view = buffer.getDefiningOp<frisk::BufferViewOp>()) {
+    auto map = view.getIndexMap();
+    unsigned leading = map.getNumResults() - indices.size();
+    SmallVector<Value> mapped;
+    for (unsigned dim = 0; dim < map.getNumResults(); ++dim) {
+      Value origin = composeAccessIndex(
+          b, loc, map.getSubMap({dim}), view.getIndices());
+      if (dim >= leading)
+        origin = composeAccessIndex(
+            b, loc, b.getAffineDimExpr(0) + b.getAffineDimExpr(1),
+            ValueRange{origin, indices[dim - leading]});
+      mapped.push_back(origin);
+    }
+    indices.assign(mapped.begin(), mapped.end());
+    buffer = view.getSource();
+  }
 }
 
 static std::optional<LowerInfo> findLowerInfoForValue(Value value, Operation *consumer) {
@@ -222,6 +269,9 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
   // Snapshot first: adding conversion layouts can rehash the analysis map.
   for (auto &entry : infoMap) {
     auto &info = entry.second;
+    if (auto copy = dyn_cast_or_null<frisk::CopyOp>(info.op);
+        copy && isGlobalToSharedCopy(copy))
+      continue;
     if (info.convertFrom && info.buffer && info.op && !isTiled(info.op))
       conversions.push_back({info.op, info.buffer, *info.convertFrom, info});
   }
@@ -656,12 +706,32 @@ castFloatVectorElementType(Value vector, Type dstElementType,
 
 
 static FailureOr<Value> materializeElementwiseOperand(
-    Value original, Value adapted, const LowerInfo &info, VectorType resultType,
+    Value original, Value adapted, const LowerInfo &resultInfo, VectorType resultType,
     ConversionPatternRewriter &rewriter, Location loc) {
   if (isa<FloatType>(original.getType())) {
     if (original.getType() != resultType.getElementType())
       return failure();
     return rewriter.create<vector::BroadcastOp>(loc, resultType, adapted).getResult();
+  }
+  // Each operand must supply the logical coordinates owned by the result.
+  // Equal packed vector shapes do not guarantee equal row ownership: e.g.
+  // block_repeat=[2,1] and warp_inst_unroll=[2,1] can both yield two rows
+  // per thread while exchanging rows between warps. Project the result layout
+  // onto singleton operand axes before broadcasting locally. The bridge keeps
+  // the producer's layout separate and materializes a conversion when needed.
+  LowerInfo info = resultInfo;
+  info.buffer = original;
+  auto shape = dyn_cast<ShapedType>(original.getType());
+  if (!shape || !shape.hasStaticShape())
+    return failure();
+  if (shape.getRank() == 2) {
+    info.ignoreDim = -1;
+    for (unsigned dim = 0; dim < 2; ++dim) {
+      if (shape.getDimSize(dim) == 1) {
+        info.ignoreDim = dim;
+        info.thread_own_data_size[dim] = 1;
+      }
+    }
   }
   auto type = getFullThreadTileType(original, info);
   if (failed(type))
@@ -688,12 +758,10 @@ public:
     auto resultType = getFullThreadTileType(op.getResult(), *resultInfo);
     if (failed(resultType))
       return rewriter.notifyMatchFailure(op, "invalid result thread tile");
-    auto lhsInfo = findLowerInfoForValue(op.getLhs(), op);
-    auto rhsInfo = findLowerInfoForValue(op.getRhs(), op);
     auto lhs = materializeElementwiseOperand(op.getLhs(), adaptor.getLhs(),
-        lhsInfo ? *lhsInfo : *resultInfo, *resultType, rewriter, op.getLoc());
+        *resultInfo, *resultType, rewriter, op.getLoc());
     auto rhs = materializeElementwiseOperand(op.getRhs(), adaptor.getRhs(),
-        rhsInfo ? *rhsInfo : *resultInfo, *resultType, rewriter, op.getLoc());
+        *resultInfo, *resultType, rewriter, op.getLoc());
     if (failed(lhs) || failed(rhs))
       return rewriter.notifyMatchFailure(op, "incompatible operand thread tiles");
     auto result = rewriter.create<ToOp>(op.getLoc(), *lhs, *rhs);
@@ -1067,6 +1135,89 @@ public:
   }
 };
 
+// Partition a logical row-major tile into consecutive per-thread intervals.
+// Vector stores never cross a row, even when an interval spans several rows.
+// A short final interval is guarded, while every thread reaches the barrier.
+static LogicalResult lowerGlobalToSharedCopy(
+    frisk::CopyOp op, Value source, Value destination, Value result,
+    ArrayRef<int64_t> shape, ConversionPatternRewriter &rewriter) {
+  auto kernel = op->getParentOfType<func::FuncOp>();
+  auto threadsAttr = kernel->getAttrOfType<IntegerAttr>("thread_num");
+  if (!threadsAttr || threadsAttr.getInt() <= 0 || shape.empty() ||
+      llvm::any_of(shape, [](int64_t size) { return size <= 0; }))
+    return rewriter.notifyMatchFailure(op, "copy requires positive shape and thread_num");
+  auto srcType = cast<MemRefType>(source.getType());
+  auto dstType = cast<MemRefType>(destination.getType());
+  auto physicalDst = cast<MemRefType>(getViewBuffer(destination).getType());
+  if (!physicalDst.isLastDimUnitStride())
+    return rewriter.notifyMatchFailure(op, "vector copy requires unit destination row stride");
+  auto loc = op.getLoc();
+  int64_t total = ShapedType::getNumElements(shape);
+  int64_t perThread = llvm::divideCeil(total, threadsAttr.getInt());
+  int64_t width = std::gcd(perThread, shape.back());
+  auto vectorType = VectorType::get({width}, srcType.getElementType());
+  Value tid = findThreadIdxOp(op, rewriter);
+  auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread, width);
+  markTiled(chunk, rewriter);
+  rewriter.setInsertionPointToStart(chunk.getBody());
+  Value start = composeAccessIndex(
+      rewriter, loc,
+      rewriter.getAffineDimExpr(0) * perThread + rewriter.getAffineDimExpr(1),
+      ValueRange{tid, chunk.getInductionVar()});
+  scf::IfOp active;
+  if (total % perThread != 0 || total / perThread < threadsAttr.getInt()) {
+    Value limit = createIndexConstant(rewriter, loc, total);
+    Value inBounds = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, start, limit);
+    active = rewriter.create<scf::IfOp>(loc, inBounds, false);
+    rewriter.setInsertionPointToStart(&active.getThenRegion().front());
+  }
+  auto coordinates = [&](Value flat) {
+    SmallVector<Value> indices(shape.size());
+    int64_t stride = 1;
+    for (int dim = shape.size() - 1; dim >= 0; --dim) {
+      indices[dim] = composeAccessIndex(
+          rewriter, loc,
+          rewriter.getAffineDimExpr(0).floorDiv(stride) % shape[dim], flat);
+      stride *= shape[dim];
+    }
+    return indices;
+  };
+  Value initial = rewriter.create<arith::ConstantOp>(
+      loc, vectorType, rewriter.getZeroAttr(vectorType));
+  auto lanes = rewriter.create<affine::AffineForOp>(
+      loc, 0, width, 1, ValueRange{initial});
+  rewriter.setInsertionPointToStart(lanes.getBody());
+  Value flat = composeAccessIndex(
+      rewriter, loc, rewriter.getAffineDimExpr(0) + rewriter.getAffineDimExpr(1),
+      ValueRange{start, lanes.getInductionVar()});
+  auto indices = coordinates(flat);
+  Value buffer = source;
+  resolveViewAccess(rewriter, loc, buffer, indices);
+  Value scalar = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
+  Value inserted = rewriter.create<vector::InsertOp>(
+      loc, scalar, lanes.getRegionIterArgs()[0], lanes.getInductionVar());
+  rewriter.create<affine::AffineYieldOp>(loc, inserted);
+  rewriter.setInsertionPointAfter(lanes);
+  auto converted = castFloatVectorElementType(
+      lanes.getResult(0), dstType.getElementType(), rewriter, loc);
+  if (failed(converted))
+    return rewriter.notifyMatchFailure(op, "unsupported global copy element conversion");
+  indices = coordinates(start);
+  buffer = destination;
+  resolveViewAccess(rewriter, loc, buffer, indices);
+  auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
+  markTiled(store, rewriter);
+  rewriter.setInsertionPointAfter(chunk);
+  auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
+  markTiled(sync, rewriter);
+  if (op.hasValueResult())
+    rewriter.replaceOp(op, result);
+  else
+    rewriter.eraseOp(op);
+  return success();
+}
+
 class CopyOpTiling : public OpConversionPattern<frisk::CopyOp> {
 public:
   explicit CopyOpTiling(MLIRContext *context) : OpConversionPattern(context) {
@@ -1086,13 +1237,17 @@ public:
     Value source = adaptor.getSrc();
     Value destination = adaptor.getDst();
     Value layoutValue = op.getSrc();
-    auto info = findLowerInfoForValue(layoutValue, op);
-    if (!info) {
-      layoutValue = op.getDst();
+    bool naiveCopy = isGlobalToSharedCopy(op);
+    std::optional<LowerInfo> info;
+    if (!naiveCopy) {
       info = findLowerInfoForValue(layoutValue, op);
+      if (!info) {
+        layoutValue = op.getDst();
+        info = findLowerInfoForValue(layoutValue, op);
+      }
+      if (!info)
+        return rewriter.notifyMatchFailure(op, "missing copy layout");
     }
-    if (!info)
-      return rewriter.notifyMatchFailure(op, "missing copy layout");
     auto loc = op.getLoc();
     // The legacy () -> (rank) map denotes a whole-buffer copy. Other maps
     // describe a slice on the larger side, as in the old copy lowering.
@@ -1122,6 +1277,9 @@ public:
         destination = view;
       layoutValue = sourceSlice ? op.getDst() : op.getSrc();
     }
+    if (naiveCopy)
+      return lowerGlobalToSharedCopy(op, source, destination, adaptor.getDst(),
+                                     copyShape, rewriter);
     if (!sameShape && failed(setCopyTileShape(*info, copyShape)))
       return rewriter.notifyMatchFailure(op, "copy slice must cover complete layout tiles");
     auto tileTy = getFullThreadTileType(layoutValue, *info);
@@ -1175,8 +1333,17 @@ public:
   }
 };
 
-// copy_to_reg already specifies one thread's contiguous slice. Preserve its
-// address map in a view, then express the representation change explicitly.
+static bool isWholeTileCopyToReg(frisk::CopyToRegOp op) {
+  auto src = cast<MemRefType>(op.getSrc().getType());
+  auto dst = cast<VectorType>(op.getResult().getType());
+  auto map = op.getOffsetMap();
+  return src.getShape() == dst.getShape() && map.getNumInputs() == 0 &&
+         map.getNumResults() == 1 &&
+         map.getResult(0) == getAffineConstantExpr(src.getRank(), op.getContext());
+}
+
+// A rank sentinel denotes a whole block tile (used by pipeline prologue and
+// epilogue). Other maps specify one thread's contiguous slice.
 class CopyToRegOpTiling : public OpConversionPattern<frisk::CopyToRegOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1186,6 +1353,25 @@ public:
       return failure();
     auto srcType = cast<MemRefType>(op.getSrc().getType());
     auto resultType = cast<VectorType>(op.getResult().getType());
+    if (isWholeTileCopyToReg(op)) {
+      auto info = findLowerInfoForValue(op.getSrc(), op);
+      if (!info)
+        info = findLowerInfoForValue(op.getResult(), op);
+      if (!info)
+        return rewriter.notifyMatchFailure(op, "missing whole-tile copy_to_reg layout");
+      auto tileType = getFullThreadTileType(op.getSrc(), *info);
+      if (failed(tileType))
+        return failure();
+      Value tile = toThreadTile(adaptor.getSrc(), *tileType, *info,
+                                rewriter, op.getLoc());
+      auto converted = castFloatVectorElementType(
+          tile, resultType.getElementType(), rewriter, op.getLoc());
+      if (failed(converted))
+        return failure();
+      rewriter.replaceOp(op, fromThreadTile(*converted, resultType, *info,
+                                            rewriter, op.getLoc()));
+      return success();
+    }
     if (op.getOffsetMap().getNumResults() != srcType.getRank() ||
         op.getOffsetMap().getNumInputs() != adaptor.getMapOperands().size())
       return rewriter.notifyMatchFailure(op, "incompatible copy_to_reg offset map");
@@ -1602,6 +1788,9 @@ static void foldThreadTilePairs(Operation *root) {
   } while (changed);
 }
 
+#define GEN_PASS_DEF_CONVERTFRISKBASETOTHREADLEVELIR
+#include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
+
 class ConvertFriskBaseToThreadLevelIR
     : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
 public:
@@ -1624,7 +1813,11 @@ public:
       if (!isBlockTileOperation(op) || isTiled(op))
         return;
       needsTiling = true;
-      if (isa<frisk::CopyToRegOp>(op))
+      if (auto copy = dyn_cast<frisk::CopyToRegOp>(op);
+          copy && !isWholeTileCopyToReg(copy))
+        return;
+      if (auto copy = dyn_cast<frisk::CopyOp>(op);
+          copy && isGlobalToSharedCopy(copy))
         return;
       if (auto alloc = dyn_cast<frisk::AllocBufferOp>(op)) {
         auto space = cast<MemRefType>(alloc.getResult().getType()).getMemorySpaceAsInt();
@@ -1641,8 +1834,7 @@ public:
     auto *context = &getContext();
     s_hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, context);
     convertLayoutInfo.clear();
-    // CopyToReg already supplies its complete per-thread slice. Do not invoke
-    // the GEMM-anchored inference for operations that need no layout analysis.
+    // Explicit CopyToReg slices need no GEMM-anchored layout analysis.
     if (needsLayoutAnalysis && !hasLayoutAnchor) {
       kernel.emitError("thread tiling requires a GEMM anchor for layout inference");
       signalPassFailure();
@@ -1697,6 +1889,546 @@ public:
 
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass() {
   return std::make_unique<ConvertFriskBaseToThreadLevelIR>();
+}
+
+namespace{
+
+// Finalization uses the layout recorded on the bridge, never the expired
+// LowerInfo analysis. Packed coordinates are [br, iu, wr, reg] per axis.
+struct ThreadTileAccess {
+  AffineMap map;
+  coordXY_t widths, repeats, unroll, regOrder, repeatOrder;
+  int64_t ignoreDim = -1;
+
+  LogicalResult read(Operation *op, ShapedType block, ShapedType thread) {
+    if ((isa<VectorType>(block) && cast<VectorType>(block).isScalable()) ||
+        (isa<VectorType>(thread) && cast<VectorType>(thread).isScalable()))
+      return failure();
+    if (!block.hasStaticShape() || !thread.hasStaticShape() ||
+        block.getRank() != thread.getRank() || block.getRank() < 1 ||
+        block.getRank() > 2 ||
+        block.getElementType() != thread.getElementType())
+      return failure();
+    auto attr = op->getAttrOfType<AffineMapAttr>("tile_layout");
+    if (!attr)
+      return success(block.getShape() == thread.getShape());
+    map = attr.getValue();
+    auto ignored = op->getAttrOfType<IntegerAttr>("ignore_dim");
+    if (!ignored || ignored.getInt() < -1 || ignored.getInt() > 1 ||
+        map.getNumDims() != 7 || map.getNumSymbols() != 0 ||
+        map.getNumResults() != 2)
+      return failure();
+    ignoreDim = ignored.getInt();
+    auto pair = [&](StringRef name, coordXY_t &out, bool order = false) {
+      auto a = op->getAttrOfType<DenseI64ArrayAttr>(name);
+      if (!a || a.size() != 2)
+        return false;
+      out = {a[0], a[1]};
+      return order ? ((a[0] == 0 && a[1] == 1) ||
+                      (a[0] == 1 && a[1] == 0))
+                   : a[0] > 0 && a[1] > 0;
+    };
+    return success(pair("thread_widths", widths) &&
+                   pair("warp_repeat", repeats) &&
+                   pair("warp_inst_unroll", unroll) &&
+                   pair("thread_creg_order", regOrder, true) &&
+                   pair("warp_repeat_order", repeatOrder, true));
+  }
+
+  SmallVector<Value> indices(OpBuilder &b, Location loc, Value tid,
+                             ArrayRef<Value> ivs, ShapedType block) const {
+    if (!map)
+      return SmallVector<Value>(ivs);
+    Value zero = createIndexConstant(b, loc, 0);
+    SmallVector<Value> br, iu, wr, reg;
+    for (unsigned axis = 0; axis < 2; ++axis) {
+      Value iv = axis < ivs.size() ? ivs[axis] : zero;
+      if (ivs.size() == 1 && ignoreDim == 0)
+        iv = axis == 1 ? ivs[0] : zero;
+      int64_t repeatWidth = widths[axis] * repeats[axis];
+      br.push_back(floorDivBy(b, loc, iv, repeatWidth * unroll[axis]));
+      iu.push_back(modBy(b, loc, floorDivBy(b, loc, iv, repeatWidth),
+                         unroll[axis]));
+      wr.push_back(modBy(b, loc, floorDivBy(b, loc, iv, widths[axis]),
+                         repeats[axis]));
+      reg.push_back(modBy(b, loc, iv, widths[axis]));
+    }
+    SmallVector<Value> operands{
+        tid, br[0], br[1], iu[0], iu[1],
+        flattenXY(b, loc, wr, repeatOrder, repeats),
+        flattenXY(b, loc, reg, regOrder, widths)};
+    SmallVector<Value> result;
+    for (unsigned dim = 0; dim < ivs.size(); ++dim) {
+      unsigned axis = ivs.size() == 1 && ignoreDim == 0 ? 1 : dim;
+      if (block.getDimSize(dim) == 1 ||
+          (ivs.size() == 2 && ignoreDim == axis))
+        result.push_back(zero);
+      else
+        result.push_back(b.create<affine::AffineApplyOp>(
+            loc, map.getSubMap({axis}), operands));
+    }
+    return result;
+  }
+};
+
+// Fold a view into each scalar memory access, preserving the original buffer's
+// physical strides. In particular, a K slice keeps the full K row stride.
+// Leave unsupported/escaping uses visible for the finalization diagnostic.
+class BufferViewFinalization : public OpRewritePattern<frisk::BufferViewOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(frisk::BufferViewOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getView().use_empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+    for (Operation *user : op.getView().getUsers()) {
+      Value buffer = op.getView(), stored;
+      SmallVector<Value> indices;
+      AffineMap map;
+      if (auto load = dyn_cast<memref::LoadOp>(user)) {
+        if (load.getMemref() != buffer)
+          continue;
+        indices.assign(load.getIndices().begin(), load.getIndices().end());
+      } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemref() != buffer)
+          continue;
+        stored = store.getValueToStore();
+        indices.assign(store.getIndices().begin(), store.getIndices().end());
+      } else if (auto load = dyn_cast<affine::AffineLoadOp>(user)) {
+        if (load.getMemRef() != buffer)
+          continue;
+        map = load.getAffineMap();
+        indices.assign(load.getMapOperands().begin(), load.getMapOperands().end());
+      } else if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
+        if (store.getMemRef() != buffer)
+          continue;
+        stored = store.getValueToStore();
+        map = store.getAffineMap();
+        indices.assign(store.getMapOperands().begin(), store.getMapOperands().end());
+      } else {
+        continue;
+      }
+      rewriter.setInsertionPoint(user);
+      if (map) {
+        SmallVector<Value> coordinates;
+        for (unsigned dim = 0; dim < map.getNumResults(); ++dim)
+          coordinates.push_back(composeAccessIndex(
+              rewriter, user->getLoc(), map.getSubMap({dim}), indices));
+        indices = std::move(coordinates);
+      }
+      resolveViewAccess(rewriter, user->getLoc(), buffer, indices);
+      if (stored) {
+        if (map)
+          rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(
+              user, stored, buffer, indices);
+        else
+          rewriter.replaceOpWithNewOp<memref::StoreOp>(
+              user, stored, buffer, indices);
+      } else {
+        if (map)
+          rewriter.replaceOpWithNewOp<affine::AffineLoadOp>(user, buffer, indices);
+        else
+          rewriter.replaceOpWithNewOp<memref::LoadOp>(user, buffer, indices);
+      }
+      return success();
+    }
+    return failure();
+  }
+};
+
+// Numeric conversion supports scalars and vectors. Equal-width floating point
+// formats are not bitcasts; reject formats requiring a separate conversion.
+static FailureOr<Value> finalizeNumericCast(OpBuilder &b, Location loc,
+                                           Value value, Type resultType) {
+  if (value.getType() == resultType)
+    return value;
+  Type src = getElementTypeOrSelf(value.getType());
+  Type dst = getElementTypeOrSelf(resultType);
+  if (auto sf = dyn_cast<FloatType>(src)) {
+    if (auto df = dyn_cast<FloatType>(dst)) {
+      if (sf.getWidth() < df.getWidth())
+        return b.create<arith::ExtFOp>(loc, resultType, value).getResult();
+      if (sf.getWidth() > df.getWidth())
+        return b.create<arith::TruncFOp>(loc, resultType, value).getResult();
+    }
+    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless())
+      return b.create<arith::FPToSIOp>(loc, resultType, value).getResult();
+  }
+  if (auto si = dyn_cast<IntegerType>(src); si && si.isSignless()) {
+    if (isa<FloatType>(dst))
+      return b.create<arith::SIToFPOp>(loc, resultType, value).getResult();
+    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless()) {
+      if (si.getWidth() < di.getWidth())
+        return b.create<arith::ExtSIOp>(loc, resultType, value).getResult();
+      return b.create<arith::TruncIOp>(loc, resultType, value).getResult();
+    }
+  }
+  if ((isa<IndexType>(src) && isa<IntegerType>(dst)) ||
+      (isa<IntegerType>(src) && isa<IndexType>(dst)))
+    return b.create<arith::IndexCastOp>(loc, resultType, value).getResult();
+  return failure();
+}
+
+class CastFinalization : public OpRewritePattern<frisk::CastOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(frisk::CastOp op,
+                                PatternRewriter &rewriter) const override {
+    Value input = op.getOperand();
+    Type resultType = op.getResult().getType();
+    if (!isa<MemRefType>(input.getType()) && !isa<MemRefType>(resultType)) {
+      auto converted = finalizeNumericCast(rewriter, op.getLoc(), input, resultType);
+      if (failed(converted))
+        return rewriter.notifyMatchFailure(op, "unsupported numeric conversion");
+      rewriter.replaceOp(op, *converted);
+      return success();
+    }
+    // Cast the owned registers, then keep the block representation for users.
+    // The following bridge fold removes it without allocating a block buffer.
+    Operation *layout = nullptr;
+    VectorType threadType;
+    if (auto from = input.getDefiningOp<frisk::FromThreadTileOp>()) {
+      layout = from;
+      auto type = cast<ShapedType>(from.getThreadTile().getType());
+      threadType = VectorType::get(type.getShape(), type.getElementType());
+    } else {
+      for (auto user : op.getResult().getUsers()) {
+        if (auto to = dyn_cast<frisk::ToThreadTileOp>(user)) {
+          layout = to;
+          auto type = cast<ShapedType>(to.getResult().getType());
+          threadType = VectorType::get(type.getShape(), getElementTypeOrSelf(input.getType()));
+          break;
+        }
+      }
+    }
+    if (!layout || !isa<MemRefType>(resultType))
+      return rewriter.notifyMatchFailure(op, "memref cast needs a thread layout");
+    auto to = rewriter.create<frisk::ToThreadTileOp>(op.getLoc(), threadType, input);
+    to->setAttrs(layout->getAttrs());
+    auto converted = finalizeNumericCast(rewriter, op.getLoc(), to,
+        VectorType::get(threadType.getShape(), getElementTypeOrSelf(resultType)));
+    if (failed(converted)) {
+      rewriter.eraseOp(to);
+      return rewriter.notifyMatchFailure(op, "unsupported numeric conversion");
+    }
+    auto from = rewriter.create<frisk::FromThreadTileOp>(op.getLoc(), resultType, *converted);
+    from->setAttrs(layout->getAttrs());
+    rewriter.replaceOp(op, from.getResult());
+    return success();
+  }
+};
+
+// Move the explicit representation boundary across affine loop carriers. This
+// keeps only owned registers live across iterations and also exposes layout
+// changes at loop exits as To(From(...)), where they can be handled explicitly.
+class ThreadTileLoopFinalization : public OpRewritePattern<affine::AffineForOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(affine::AffineForOp op,
+                                PatternRewriter &rewriter) const override {
+    auto yield = cast<affine::AffineYieldOp>(op.getBody()->getTerminator());
+    SmallVector<frisk::FromThreadTileOp> carriers(op.getNumResults());
+    bool changed = false;
+    auto onlyToUsers = [](Value value) {
+      return llvm::all_of(value.getUsers(), [](Operation *user) {
+        return isa<frisk::ToThreadTileOp>(user);
+      });
+    };
+    for (unsigned i = 0; i < op.getNumResults(); ++i) {
+      auto from = yield.getOperand(i).getDefiningOp<frisk::FromThreadTileOp>();
+      if (from && isa<VectorType>(from.getResult().getType()) &&
+          isa<VectorType>(from.getThreadTile().getType()) &&
+          from.getResult().getType() != from.getThreadTile().getType() &&
+          onlyToUsers(op.getRegionIterArgs()[i]) && onlyToUsers(op.getResult(i))) {
+        carriers[i] = from;
+        changed = true;
+      }
+    }
+    if (!changed)
+      return failure();
+    auto loc = op.getLoc();
+    SmallVector<Value> initial(op.getInits());
+    for (unsigned i = 0; i < carriers.size(); ++i) {
+      if (!carriers[i])
+        continue;
+      auto to = rewriter.create<frisk::ToThreadTileOp>(
+          loc, carriers[i].getThreadTile().getType(), initial[i]);
+      to->setAttrs(carriers[i]->getAttrs());
+      initial[i] = to;
+    }
+    auto loop = rewriter.create<affine::AffineForOp>(
+        loc, op.getLowerBoundOperands(), op.getLowerBoundMap(),
+        op.getUpperBoundOperands(), op.getUpperBoundMap(), op.getStepAsInt(), initial);
+    for (auto attr : op->getDiscardableAttrs())
+      loop->setAttr(attr.getName(), attr.getValue());
+    rewriter.setInsertionPointToStart(loop.getBody());
+    SmallVector<Value> arguments{loop.getInductionVar()};
+    for (unsigned i = 0; i < carriers.size(); ++i) {
+      Value arg = loop.getRegionIterArgs()[i];
+      if (carriers[i]) {
+        auto from = rewriter.create<frisk::FromThreadTileOp>(
+            loc, op.getRegionIterArgs()[i].getType(), arg);
+        from->setAttrs(carriers[i]->getAttrs());
+        arg = from;
+      }
+      arguments.push_back(arg);
+    }
+    rewriter.modifyOpInPlace(yield, [&] {
+      for (unsigned i = 0; i < carriers.size(); ++i)
+        if (carriers[i])
+          yield.setOperand(i, carriers[i].getThreadTile());
+    });
+    // The builder only inserts an implicit terminator for loops without inits.
+    if (!loop.getBody()->empty() &&
+        loop.getBody()->back().hasTrait<OpTrait::IsTerminator>())
+      rewriter.eraseOp(&loop.getBody()->back());
+    rewriter.mergeBlocks(op.getBody(), loop.getBody(), arguments);
+    rewriter.setInsertionPointAfter(loop);
+    SmallVector<Value> results(loop.getResults());
+    for (unsigned i = 0; i < carriers.size(); ++i) {
+      if (!carriers[i])
+        continue;
+      auto from = rewriter.create<frisk::FromThreadTileOp>(
+          loc, op.getResult(i).getType(), results[i]);
+      from->setAttrs(carriers[i]->getAttrs());
+      results[i] = from;
+    }
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
+// Copy destinations already have an explicit block writeback. A dominating
+// whole-tile store initializes their scratch storage, so do not read the
+// (possibly still uninitialized) block allocation before that store.
+static bool isFullyOverwritten(frisk::ToThreadTileOp op, MemRefType type) {
+  for (Operation *user : op.getResult().getUsers()) {
+    auto store = dyn_cast<vector::StoreOp>(user);
+    if (!store || store.getBase() != op.getResult() ||
+        store.getVectorType().getShape() != type.getShape() ||
+        !llvm::all_of(store.getIndices(), [](Value index) {
+          auto c = index.getDefiningOp<arith::ConstantIndexOp>();
+          return c && c.value() == 0;
+        }))
+      continue;
+    DominanceInfo dominance(op->getParentOfType<func::FuncOp>());
+    if (llvm::all_of(op.getResult().getUsers(), [&](Operation *other) {
+          return other == user || dominance.properlyDominates(user, other);
+        }))
+      return true;
+  }
+  return false;
+}
+
+struct ReadThreadTileElement {
+  OpBuilder &builder;
+  Location loc;
+  Value source, tid;
+  ShapedType blockType;
+  const ThreadTileAccess &access;
+  Value emit(ArrayRef<Value> ivs, Value tile) {
+    auto indices = access.indices(builder, loc, tid, ivs, blockType);
+    Value scalar;
+    if (isa<MemRefType>(blockType))
+      scalar = builder.create<memref::LoadOp>(loc, source, indices);
+    else
+      scalar = builder.create<vector::ExtractOp>(
+          loc, source, SmallVector<OpFoldResult>(indices.begin(), indices.end()));
+    return builder.create<vector::InsertOp>(
+        loc, scalar, tile, SmallVector<OpFoldResult>(ivs.begin(), ivs.end()));
+  }
+};
+
+class ToThreadTileFinalization : public OpRewritePattern<frisk::ToThreadTileOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(frisk::ToThreadTileOp op,
+                                PatternRewriter &rewriter) const override {
+    auto block = cast<ShapedType>(op.getBlockTile().getType());
+    auto thread = cast<ShapedType>(op.getResult().getType());
+    ThreadTileAccess access;
+    if (failed(access.read(op, block, thread)))
+      return rewriter.notifyMatchFailure(op, "invalid or missing tile layout");
+    auto memref = dyn_cast<MemRefType>(thread);
+    if (memref && (!memref.getLayout().isIdentity() ||
+                   memref.getMemorySpaceAsInt() != 0))
+      return rewriter.notifyMatchFailure(op, "expected private thread scratch");
+    auto loc = op.getLoc();
+    Value source = op.getBlockTile();
+    bool exchanged = false;
+    if (auto from = source.getDefiningOp<frisk::FromThreadTileOp>()) {
+      // This also handles the temporary pair emitted by writeBackBlockTile.
+      if (from->getAttrDictionary() == op->getAttrDictionary()) {
+        Value replacement = from.getThreadTile();
+        if (replacement.getType() == thread) {
+          rewriter.replaceOp(op, replacement);
+          return success();
+        }
+        auto storageType = dyn_cast<MemRefType>(replacement.getType());
+        auto vectorType = dyn_cast<VectorType>(thread);
+        if (storageType && vectorType &&
+            storageType.getShape() == vectorType.getShape() &&
+            storageType.getElementType() == vectorType.getElementType() &&
+            storageType.isLastDimUnitStride()) {
+          SmallVector<Value> zeros(thread.getRank(), createIndexConstant(rewriter, loc, 0));
+          rewriter.replaceOpWithNewOp<vector::LoadOp>(op, vectorType, replacement, zeros);
+          return success();
+        }
+        return rewriter.notifyMatchFailure(op, "incompatible thread storage");
+      }
+      auto info = findLowerInfoForValue(source, op);
+      if (!info || !isa<VectorType>(thread))
+        return rewriter.notifyMatchFailure(op, "unsupported thread layout transition");
+      auto scratchType = MemRefType::get(block.getShape(), block.getElementType(),
+          AffineMap{}, rewriter.getI64IntegerAttr(int(friskMs::Shared)));
+      source = rewriter.create<memref::AllocOp>(loc, scratchType);
+      writeBackBlockTile(op.getBlockTile(), source, *info, rewriter, loc);
+      block = scratchType;
+      exchanged = true;
+    }
+    Value storage;
+    if (memref) {
+      storage = rewriter.create<memref::AllocaOp>(loc, memref);
+      if (isFullyOverwritten(op, memref)) {
+        rewriter.replaceOp(op, storage);
+        return success();
+      }
+    }
+    auto vectorType = VectorType::get(thread.getShape(), thread.getElementType());
+    Value initial = rewriter.create<arith::ConstantOp>(
+        loc, vectorType, rewriter.getZeroAttr(vectorType));
+    Value tid = access.map ? findThreadIdxOp(op, rewriter) : Value{};
+    ReadThreadTileElement element{rewriter, loc, source, tid, block, access};
+    VectorTileLoopNest loops(rewriter, loc, thread.getShape(), {"tiled", "load"});
+    Value tile = loops.emit(initial, element);
+    if (exchanged)
+      rewriter.create<gpu::BarrierOp>(loc);
+    if (storage) {
+      SmallVector<Value> zeros(thread.getRank(), createIndexConstant(rewriter, loc, 0));
+      rewriter.create<vector::StoreOp>(loc, tile, storage, zeros);
+      tile = storage;
+    }
+    rewriter.replaceOp(op, tile);
+    return success();
+  }
+};
+
+// copy_to_reg already has a thread-shaped result and needs no redistribution.
+class FromThreadVectorFinalization : public OpRewritePattern<frisk::FromThreadTileOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(frisk::FromThreadTileOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op->hasAttr("tile_layout") ||
+        op.getResult().getType() != op.getThreadTile().getType())
+      return failure();
+    rewriter.replaceOp(op, op.getThreadTile());
+    return success();
+  }
+};
+
+// Thread scratch used only to store one vector and read it back is an SSA
+// value in disguise. Reject aliases/escaping uses and additional writes, so
+// forwarding never changes observable memory or crosses a possible clobber.
+class ForwardThreadScratch : public OpRewritePattern<memref::AllocaOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::AllocaOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getType().getMemorySpaceAsInt() != 0)
+      return failure();
+    vector::StoreOp store;
+    SmallVector<vector::LoadOp> loads;
+    for (Operation *user : op.getResult().getUsers()) {
+      if (auto write = dyn_cast<vector::StoreOp>(user)) {
+        if (store || write.getBase() != op.getResult())
+          return failure();
+        store = write;
+      } else if (auto read = dyn_cast<vector::LoadOp>(user)) {
+        if (read.getBase() != op.getResult())
+          return failure();
+        loads.push_back(read);
+      } else {
+        return failure();
+      }
+    }
+    if (!store || loads.empty())
+      return failure();
+    DominanceInfo dominance(op->getParentOfType<func::FuncOp>());
+    for (auto load : loads) {
+      if (load.getType() != store.getValueToStore().getType() ||
+          !llvm::equal(load.getIndices(), store.getIndices()) ||
+          !dominance.properlyDominates(store.getOperation(), load.getOperation()))
+        return failure();
+    }
+    for (auto load : loads)
+      rewriter.replaceOp(load, store.getValueToStore());
+    rewriter.eraseOp(store);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+#undef  GEN_PASS_DEF_CONVERTFRISKBASETOTHREADLEVELIR
+#define GEN_PASS_DEF_FINALIZETHREADTILING
+#include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
+
+
+class FinalizeThreadTiling : public impl::FinalizeThreadTilingBase< FinalizeThreadTiling>{
+public:
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<frisk::FriskDialect, arith::ArithDialect, affine::AffineDialect,
+        vector::VectorDialect, math::MathDialect, memref::MemRefDialect,
+        gpu::GPUDialect, scf::SCFDialect>();
+  }
+  void runOnOperation() override {
+    auto kernel = getOperation();
+    if (!kernel->hasAttr("thread_num")){
+      return;
+    }
+    // Keep cast/bridge cancellation ahead of materialization, otherwise a
+    // register-only conversion would accidentally become a shared-memory copy.
+    RewritePatternSet casts(&getContext());
+    casts.add<CastFinalization, ThreadTileLoopFinalization>(&getContext());
+    if (failed(applyPatternsGreedily(kernel, std::move(casts)))) {
+      signalPassFailure();
+      return;
+    }
+    foldThreadTilePairs(kernel);
+    RewritePatternSet patterns(&getContext());
+    patterns.add<BufferViewFinalization, ToThreadTileFinalization,
+                 FromThreadVectorFinalization>(&getContext());
+    if (failed(applyPatternsGreedily(kernel, std::move(patterns)))) {
+      signalPassFailure();
+      return;
+    }
+    RewritePatternSet forwarding(&getContext());
+    forwarding.add<ForwardThreadScratch>(&getContext());
+    if (failed(applyPatternsGreedily(kernel, std::move(forwarding)))) {
+      signalPassFailure();
+      return;
+    }
+    eraseTriviallyDeadOps(kernel);
+    WalkResult result = kernel.walk([&](Operation *op) {
+      if (isa<frisk::ToThreadTileOp, frisk::FromThreadTileOp,
+              frisk::BufferViewOp, frisk::CastOp>(op)) {
+        op->emitError("could not finalize thread tile; unsupported layout or use");
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      signalPassFailure();
+  }
+};
+
+}
+
+
+std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass(){
+  return std::make_unique<FinalizeThreadTiling>();
 }
 
 } // namespace mlir::frisk

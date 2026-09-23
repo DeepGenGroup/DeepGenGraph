@@ -7,6 +7,7 @@ namespace mlir::frisk {
 
 std::unique_ptr<mlir::Pass> createConvertFriskToBasePass();
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass();
+std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 
 #define GEN_PASS_REGISTRATION
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"

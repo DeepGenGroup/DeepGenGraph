@@ -567,7 +567,7 @@ def main():
         time_our = launch_hsaco(
             hsaco_path=args.hsaco,
             kernel_name=args.kernel,
-            kernel_args=[q,v,k,out],
+            kernel_args=[q,k,v,out],
             grid=args.grid,
             block=args.block,
             shared_mem_bytes=args.shared_mem

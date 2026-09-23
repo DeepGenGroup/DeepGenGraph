@@ -429,6 +429,13 @@ void checkSteadyLoop(func::FuncOp func, affine::AffineForOp scheduled,
   check(kCopy && vCopy && qk && pv,
         "steady body has the 4 statements, each emitted once");
   if (kCopy && vCopy && qk && pv) {
+    for (auto copy : {kCopy, vCopy}) {
+      auto view = copy.getSrcMemRef().getDefiningOp<frisk::BufferViewOp>();
+      check(view && llvm::all_of(view.getIndices(), [](Value index) {
+              return affine::isValidDim(index);
+            }),
+            "shifted K/V view indices remain valid affine dimensions");
+    }
     // slot(statement) = (tileParity + offset) % 2, so the even branch of a
     // selector yields the slot to use for an even tile.
     check(selectsSlots(kCopy.getDstMemRef(), 0, 1),

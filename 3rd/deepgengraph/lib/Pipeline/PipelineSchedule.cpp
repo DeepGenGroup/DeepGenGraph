@@ -520,8 +520,12 @@ Value PipelineScheduler::offsetIv(OpBuilder &builder, Value iv, int64_t offset,
   Location loc = loop.getLoc();
   if (offset == 0)
     return iv;
-  Value delta = builder.create<arith::ConstantIndexOp>(loc, offset * step);
-  return builder.create<arith::AddIOp>(loc, iv, delta);
+  // Keep shifted loop indices affine: buffer_view/copy lowering composes
+  // them into affine.load maps, where an arith.addi of an IV is not a valid
+  // dimension (unlike a top-level value outside the affine loop).
+  AffineMap map = AffineMap::get(
+      1, 0, builder.getAffineDimExpr(0) + offset * step, builder.getContext());
+  return builder.create<affine::AffineApplyOp>(loc, map, ValueRange{iv});
 }
 
 // 这条语句有没有读/写这个 buffer：buffer 本身和它的 frisk.copy 句柄都算

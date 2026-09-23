@@ -359,13 +359,16 @@ def Frisk_GemmWaitOp : Frisk_Op<"gemm_wait", [MemoryEffects<[MemRead]>]> {
 }
 
 // bufferViewOp
-def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [MemoryEffects<[MemRead]>]> {
-  let summary = "create a memref view from source buffer and slice";
+def Frisk_BufferViewOp : Frisk_Op<"buffer_view", [Pure]> {
+  let summary = "describe a logical buffer slice with an affine origin";
   let description = [{
-    Create a view memref from a source memref using dynamic indices, an affine
-    map and per-dimension ranges.
-    The result memref keeps source element type and memory space, and uses
-    ranges as result shape.
+    Describe a logical slice without reading memory or constructing a physical
+    memref descriptor. The affine map computes the origin in the source buffer;
+    slice coordinates are added to its trailing dimensions. Leading dimensions
+    select a single element. Nested views compose these index mappings.
+    The result keeps the source element type and memory space, with ranges as
+    its logical shape. Lowering folds the mapping into accesses to the original
+    buffer, whose layout determines the physical strides.
   }];
 
   let arguments = (ins
@@ -602,6 +605,27 @@ def Frisk_SubOp : Frisk_ArithmeticOp<"sub">;
 def Frisk_MulOp : Frisk_ArithmeticOp<"mul", [Commutative]>; // 乘法支持交换律 Trait
 def Frisk_DivOp : Frisk_ArithmeticOp<"div">;
 def Frisk_Exp2Op : Frisk_UnaryArithmeticOp<"exp2">;
+
+// Element-wise data type conversion.
+def Frisk_CastOp : Frisk_Op<"cast", [
+    MemoryEffects<[MemRead]>, SameOperandsAndResultShape
+]> {
+  let summary = "Convert the data type of a scalar, memref or vector";
+  let description = [{
+    Converts each input element to the element type of the result, preserving
+    the shape. Scalar inputs produce scalar results. This is a numeric
+    conversion, not a reinterpretation of the input bits.
+  }];
+
+  let arguments = (ins
+    AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank, AnyFloat, AnyInteger, Index]>:$operand
+  );
+  let results = (outs
+    AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank, AnyFloat, AnyInteger, Index]>:$result
+  );
+
+  let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+}
 
 
 // convert layout op

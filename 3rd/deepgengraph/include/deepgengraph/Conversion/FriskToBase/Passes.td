@@ -25,6 +25,17 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
   ];
 }
 
+def FinalizeThreadTiling: Pass<"finalize-thread-tiling", "::mlir::func::FuncOp"> {
+  let summary = "基于thread级别的实现 将其转为 mlir built-in IR 表达的形式。完全去除 to_threadtile 和 from_threadtile";
+  let description = [{}];
+
+  let constructor = "mlir::frisk::createFinalizeThreadTilingPass()";
+
+  let dependentDialects = [
+    "mlir::frisk::FriskDialect"
+  ];
+}
+
 
 
 #endif // FRISKTOBASE_CONVERSION_PASSES

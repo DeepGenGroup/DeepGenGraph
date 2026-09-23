@@ -20,6 +20,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Location.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -86,6 +87,84 @@
 using namespace mlir;
 
 namespace {
+
+LogicalResult annotateAttentionSeqLenPipeline(ModuleOp module) {
+  auto attention = module.lookupSymbol<func::FuncOp>("Attn_p2");
+  if (!attention)
+    return success();
+
+  // Only the attention tile loop: two accumulators (O and rowsum), two
+  // GEMMs (QK and PV), and a mask indexed by this loop's seqLen IV.
+  SmallVector<affine::AffineForOp> candidates;
+  attention.walk([&](affine::AffineForOp loop) {
+    if (loop.getNumIterOperands() != 2)
+      return;
+    unsigned gemms = 0;
+    bool hasSeqLenMask = false;
+    for (Operation &op : loop.getBody()->without_terminator()) {
+      gemms += isa<frisk::GemmOp>(op);
+      if (isa<frisk::MaskOp>(op))
+        hasSeqLenMask |=
+            llvm::is_contained(op.getOperands(), loop.getInductionVar());
+    }
+    if (gemms == 2 && hasSeqLenMask)
+      candidates.push_back(loop);
+  });
+  if (candidates.empty())
+    return success();
+  if (candidates.size() != 1)
+    return attention.emitError("expected exactly one attention seqLen loop");
+  auto loop = candidates.front();
+  // Keep an explicitly supplied scheme (including the reference fixture).
+  if (loop->hasAttr("pipeline.stage") || loop->hasAttr("pipeline.order") ||
+      loop->hasAttr("pipeline.scheduled"))
+    return success();
+
+  // Manual scheme for test_input.mlir after createConvertFriskToBasePass.
+  // Check the op sequence so a lowering change cannot silently shift entries.
+  const StringRef expectedOps[] = {
+      "frisk.buffer_view", "frisk.copy", "frisk.buffer_view", "frisk.copy",
+      "frisk.gemm", "frisk.mask", "frisk.add", "frisk.exp2",
+      "frisk.alloc_buffer", "frisk.reduce", "frisk.add", "frisk.cast",
+      "frisk.gemm", "frisk.add", "frisk.copy", "frisk.copy"};
+  SmallVector<Operation *> bodyOps;
+  for (Operation &op : loop.getBody()->without_terminator())
+    bodyOps.push_back(&op);
+  if (bodyOps.size() != std::size(expectedOps))
+    return loop.emitError()
+           << "manual attention pipeline expects " << std::size(expectedOps)
+           << " ops before materialising P, got " << bodyOps.size()
+           << "; update the pipeline.stage/order arrays for this IR";
+  for (auto [index, op] : llvm::enumerate(bodyOps))
+    if (op->getName().getStringRef() != expectedOps[index])
+      return op->emitError()
+             << "manual attention pipeline expected " << expectedOps[index]
+             << " at body index " << index;
+
+  // P crosses stage 1 -> 2. The scheduler can rotate explicit alloc_buffer
+  // storage only; copy performs the same f32 -> f16 conversion as this cast.
+  Operation *pCast = bodyOps[11];
+  auto pType = cast<MemRefType>(pCast->getResult(0).getType());
+  OpBuilder builder(pCast);
+  auto pBuffer = builder.create<frisk::AllocBufferOp>(
+      pCast->getLoc(), pType.getShape(), pType.getElementType(), 16,
+      int64_t(frisk::attr::MemorySpace::Shared));
+  builder.create<frisk::CopyOp>(pCast->getLoc(), pCast->getOperand(0),
+                                pBuffer.getResult());
+  pCast->getResult(0).replaceAllUsesWith(pBuffer.getResult());
+  pCast->erase();
+
+  // One entry per top-level op, excluding affine.yield (17 entries).
+  // Body indices: K[0:2], V[2:4], QK[4], softmax/P[5:13],
+  //               PV + O accumulation[13:16], rowsum writeback[16].
+  // Same schedule as attn_p2_pipeline_scheme.mlir: K(i+2), V/QK(i+1),
+  // PV(i), softmax/P(i+1), rowsum(i+1); K/V/P each use two slots.
+  loop->setAttr("pipeline.stage", builder.getDenseI64ArrayAttr(
+      {0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1}));
+  loop->setAttr("pipeline.order", builder.getDenseI64ArrayAttr(
+      {0, 0, 1, 1, 2, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 5}));
+  return success();
+}
 
 bool isUnknownLocation(Location loc) { return isa<UnknownLoc>(loc); }
 
@@ -486,19 +565,25 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   auto AddPass = [&](std::unique_ptr<Pass> pass){
     PassManager pm(ctx.get());
     pm.addPass(std::move(pass));
-    pm.run(src->getOperation());
+    if(failed(pm.run(src->getOperation()))) {
+      assert(false);
+    }
   };
 
   auto AddPassNested = [&](std::unique_ptr<Pass> pass){
     PassManager pm(ctx.get());
     pm.addNestedPass<func::FuncOp>(std::move(pass));
-    pm.run(src->getOperation());
+    if(failed(pm.run(src->getOperation()))) {
+      assert(false);
+    }
   };
 
   auto AddKernelPass = [&](std::unique_ptr<Pass> pass){
     PassManager pm(ctx.get());
     pm.addNestedPass<frisk::KernelOp>(std::move(pass));
-    pm.run(src->getOperation());
+    if(failed(pm.run(src->getOperation()))) {
+      assert(false);
+    }
   };
 
   #if 1
@@ -523,10 +608,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddKernelPass(frisk::createFriskFuseBlockOpsPass());
   llvm::outs() << "\n---------- after createFriskFuseBlockOpsPass ---------\n"; llvm::outs().flush();src->dump();
 
-  // AddKernelPass(frisk::createFuseBlockOpWithDTypeConvertOpPass());   // 有问题
-  // llvm::outs() << "\n---------- after createFuseBlockOpWithDTypeConvertOpPass ---------\n"; llvm::outs().flush();src->dump();
-
   AddPass(frisk::createConvertFriskToBasePass());
+  if (failed(annotateAttentionSeqLenPipeline(*src)))
+    return 1;
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
   
@@ -534,10 +618,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
   // 没有标注的循环原样保留：pass 直接返回，不动 IR。
-  // AddPassNested(mlir::pipeline::createPipelineSchedulePass());
-  // llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
+  AddPassNested(mlir::pipeline::createPipelineSchedulePass());
+  llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  AddPassNested(mlir::frisk::createFinalizeThreadTilingPass());
+  AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
+  AddPassNested( mlir::affine::createAffineLoopInvariantCodeMotionPass());
   // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
   // lowering decomposes the independent MMA fragment insertion chain.
   {
@@ -553,7 +640,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
 
-  #if 0
+  #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
   AddPass(mlir::createLoopInvariantCodeMotionPass());
   AddPass(mlir::createCSEPass());
@@ -593,8 +680,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // mlir::affine::loopUnrollByFactor
 
   mlir::ModuleOp mod = *src;
-  frisk::firstLowering(mod, src->getContext());
-  frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm);
+  if (!frisk::firstLowering(mod, src->getContext()) ||
+      !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm))
+    return 1;
   llvm::outs() << "\n---- after secondLowering -----\n"; llvm::outs().flush(); src->dump();
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);

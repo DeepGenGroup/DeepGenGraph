@@ -1996,6 +1996,9 @@ LogicalResult BufferViewOp::verify() {
   auto map = getIndexMap();
   auto indices = getIndices();
 
+  if (viewType.getRank() > srcType.getRank())
+    return emitOpError("slice rank must not exceed source rank");
+
   if (map.getNumInputs() != indices.size()) {
     return emitOpError("indices size (")
            << indices.size() << ") must match map input count ("

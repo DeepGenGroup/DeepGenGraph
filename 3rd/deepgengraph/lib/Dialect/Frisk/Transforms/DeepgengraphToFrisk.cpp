@@ -928,47 +928,21 @@ struct ZeroOpConversionPattern : public OpConversionPattern<dg::ZeroOp> {
 
 struct ConvertOpConversionPattern : public OpConversionPattern<dg::ConvertOp> {
   using OpConversionPattern::OpConversionPattern;
-  // %23 = deepgengraph.convert %22, type = f16 : (tensor<128x128xf32>) -> tensor<128x128xf16> 替换为 allocBuffer + frisk.copy 
+  // Lower data type conversion to frisk.cast for both buffers and scalars.
   LogicalResult matchAndRewrite(dg::ConvertOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
   {
-    llvm::outs() << "enter ConvertOpConversionPattern : " << op << "\n"; llvm::outs().flush();
+    auto convertedTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedTy)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
     auto inMs = getOpInputMemspaceAttr(op).asArrayRef()[0];
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
-    auto loc = op->getLoc();
     auto operand = adaptor.getOperand();
-    AppendMemspaceToMemrefValue( operand , inMs);
-    auto dstType = adaptor.getDstType();
-    ModifyMemrefType(dstType, outMs);
-    
-    auto convertedTy = getTypeConverter()->convertType(op.getResult().getType());
-    if(mlir::isa<MemRefType>(convertedTy)){
-      auto newMemTy = mlir::dyn_cast<MemRefType>(convertedTy);
-      auto outerMostFor = getOuterMostOp<affine::AffineForOp>(op);
-      frisk::AllocBufferOp allocBuffer {};
-      
-        // RewriterBase::InsertionGuard ig{rewriter};
-        // rewriter.setInsertionPoint(outerMostFor);
-        allocBuffer = rewriter.create<frisk::AllocBufferOp>(loc, newMemTy.getShape(), newMemTy.getElementType(), 16, outMs);
-      
-      auto copyOp = rewriter.create<frisk::CopyOp>(loc, adaptor.getOperand(), allocBuffer);
-      
-      rewriter.replaceOp(op, allocBuffer);
-    }
-    else{
-      // %16 = "deepgengraph.convert"(%5) <{dst_type = f16}> {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<1xf32>) -> tensor<1xf16>
-      // 转换为 arith.truncf %
-      auto srcWidth = mlir::cast<FloatType>(adaptor.getOperand().getType()).getWidth();
-      auto dstWitdth = mlir::cast<FloatType>(convertedTy).getWidth();
-      mlir::Operation* newOp {};
-      if(srcWidth > dstWitdth){
-        newOp = rewriter.create<arith::TruncFOp>(op->getLoc(), adaptor.getDstType(), adaptor.getOperand());
-      }
-      else{
-        newOp = rewriter.create<arith::ExtFOp>(op->getLoc(), adaptor.getDstType(), adaptor.getOperand());
-      }
-      rewriter.replaceOp(op, newOp);
-    }
+    AppendMemspaceToMemrefValue(operand, inMs);
+    convertedTy = ModifyMemrefType(convertedTy, outMs);
+
+    rewriter.replaceOpWithNewOp<frisk::CastOp>(op, convertedTy, operand);
     return success();
   }
 };

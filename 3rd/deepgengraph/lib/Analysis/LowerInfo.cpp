@@ -4,6 +4,7 @@
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
@@ -458,7 +459,19 @@ static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
 }
 
 static bool isFriskArithmeticOp(Operation *op) {
-  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op, FillOp>(op);
+  // The scheduler's whole-tile memref -> vector materialisation preserves
+  // layout. Explicit copy_to_reg slices already describe per-thread values.
+  if (auto copy = dyn_cast<CopyToRegOp>(op)) {
+    auto src = cast<MemRefType>(copy.getSrc().getType());
+    auto dst = cast<VectorType>(copy.getResult().getType());
+    auto map = copy.getOffsetMap();
+    return src.getShape() == dst.getShape() && map.getNumInputs() == 0 &&
+           map.getNumResults() == 1 &&
+           map.getResult(0) == getAffineConstantExpr(src.getRank(), op->getContext());
+  }
+  // Cast preserves the element distribution, so either its input or output
+  // can anchor the same bidirectional layout inference as arithmetic ops.
+  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op, CastOp, FillOp>(op);
 }
 
 static void
@@ -486,7 +499,8 @@ LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
 
   llvm::SmallVector<Operation*, 5> need_infer_ops{};
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp, FillOp, affine::AffineForOp, affine::AffineYieldOp>(op) ||
+    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp, FillOp, affine::AffineForOp,
+            affine::AffineYieldOp, scf::IfOp>(op) ||
         isFriskArithmeticOp(op)) {
       need_infer_ops.push_back(op);
     }
@@ -1132,6 +1146,42 @@ bool LowerInfoAnalysis::inferOtherSimpleOp(
   Operation *op,
   LowerInfoMap &buf_info_maps,
   bool preferBefore) {
+  // Pipeline slot selectors have independent K/V/P results. Connect each
+  // result only to its own branch values, in both directions: a GEMM anchors
+  // the read selector, which anchors the slots and then the write selector.
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    if (ifOp.getNumResults() == 0)
+      return true;
+    auto thenYield = cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
+    auto elseYield = cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
+    bool complete = true;
+    for (auto [index, result] : llvm::enumerate(ifOp.getResults())) {
+      if (!isa<ShapedType>(result.getType()))
+        continue;
+      Value thenValue = thenYield.getOperand(index);
+      Value elseValue = elseYield.getOperand(index);
+      LowerInfo *source = nullptr;
+      for (Value value : {Value(result), thenValue, elseValue}) {
+        source = getNearestInferedInfoEither(buf_info_maps, value, op,
+                                             preferBefore);
+        if (source)
+          break;
+      }
+      if (!source) {
+        complete = false;
+        continue;
+      }
+      LowerInfo layout = *source;
+      for (Value value : {Value(result), thenValue, elseValue}) {
+        LowerInfo candidate = layout;
+        candidate.buffer = value;
+        candidate.pos = value == result ? LowerInfo::BufPos::Out
+                                        : LowerInfo::BufPos::In;
+        buf_info_maps.addLowerInfo(ifOp, candidate);
+      }
+    }
+    return complete;
+  }
   // A loop carries independent SSA values. Propagate each recurrence on its
   // own; the layout of one accumulator says nothing about another accumulator.
   auto forOp = dyn_cast<affine::AffineForOp>(op);
@@ -1235,6 +1285,11 @@ bool LowerInfoAnalysis::inferDirectOp(Operation *op, LowerInfoMap &buf_info_maps
 bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
                                     HWSpecification *hw, bool collectConflict,
                                     bool preferBefore) {
+  // Control-flow layout edges live in yields/region arguments. Keep partially
+  // inferred selectors and loops pending until each shaped result has an
+  // anchor, without mixing layouts between different result positions.
+  if (isa<scf::IfOp, affine::AffineForOp, affine::AffineYieldOp>(op))
+    return inferOtherSimpleOp(op, buf_info_maps, preferBefore);
   // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
   auto addMemrefToCheck = [&](Value value) {
@@ -1390,7 +1445,7 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
   auto isInferTargetOp = [](Operation *op) {
     return op != nullptr &&
            (isa<CopyOp, BlockOp, GemmOp, ReduceOp, affine::AffineForOp,
-                affine::AffineYieldOp>(op) ||
+                affine::AffineYieldOp, scf::IfOp>(op) ||
             isFriskArithmeticOp(op));
   };
   auto tryInferAt = [&](int opId, bool collectConflict, bool preferBefore) -> bool {
