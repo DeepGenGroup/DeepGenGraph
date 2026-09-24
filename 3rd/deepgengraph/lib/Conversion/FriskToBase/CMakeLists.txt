@@ -11,5 +11,6 @@ add_deepgengraph_library(FriskToBase
   MLIRIR
   MLIRPass
   MLIRTransforms
+  DeepgengraphAnalysis
   FriskIR 
 )

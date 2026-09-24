@@ -1,4 +1,5 @@
 #include "deepgengraph/Common.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #undef TID
 #include <cassert>
 #include <dlfcn.h>
@@ -32,6 +33,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/ReplaceConstant.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -40,6 +43,110 @@
 
 namespace mlir::frisk{
 using namespace llvm;
+
+namespace {
+bool containsSharedPointer(llvm::Type *type) {
+  if (auto *pointer = dyn_cast<PointerType>(type))
+    return pointer->getAddressSpace() == 3;
+  if (auto *structure = dyn_cast<StructType>(type))
+    return llvm::any_of(structure->elements(), containsSharedPointer);
+  if (auto *array = dyn_cast<ArrayType>(type))
+    return containsSharedPointer(array->getElementType());
+  return false;
+}
+
+unsigned aggregateSize(llvm::Type *type) {
+  if (auto *structure = dyn_cast<StructType>(type))
+    return structure->getNumElements();
+  return cast<ArrayType>(type)->getNumElements();
+}
+
+llvm::Type *aggregateElement(llvm::Type *type, unsigned index) {
+  if (auto *structure = dyn_cast<StructType>(type))
+    return structure->getElementType(index);
+  return cast<ArrayType>(type)->getElementType();
+}
+
+llvm::Value *splitDescriptorSelect(llvm::IRBuilder<> &builder,
+                                   llvm::Value *condition, llvm::Value *lhs,
+                                   llvm::Value *rhs) {
+  llvm::Type *type = lhs->getType();
+  if (!type->isAggregateType())
+    return builder.CreateSelect(condition, lhs, rhs, "lds.select");
+  llvm::Value *result = PoisonValue::get(type);
+  for (unsigned i = 0, e = aggregateSize(type); i != e; ++i) {
+    llvm::Value *selected = splitDescriptorSelect(
+        builder, condition, builder.CreateExtractValue(lhs, {i}),
+        builder.CreateExtractValue(rhs, {i}));
+    result = builder.CreateInsertValue(result, selected, {i});
+  }
+  return result;
+}
+
+llvm::Value *splitDescriptorPhi(PHINode *phi, llvm::Type *type,
+                                SmallVector<unsigned> &indices,
+                                llvm::IRBuilder<> &builder) {
+  if (type->isAggregateType()) {
+    llvm::Value *result = PoisonValue::get(type);
+    for (unsigned i = 0, e = aggregateSize(type); i != e; ++i) {
+      indices.push_back(i);
+      llvm::Value *field = splitDescriptorPhi(
+          phi, aggregateElement(type, i), indices, builder);
+      indices.pop_back();
+      result = builder.CreateInsertValue(result, field, {i});
+    }
+    return result;
+  }
+  auto *field = PHINode::Create(type, phi->getNumIncomingValues(), "lds.phi",
+                                phi->getIterator());
+  field->setDebugLoc(phi->getDebugLoc());
+  for (unsigned i = 0, e = phi->getNumIncomingValues(); i != e; ++i) {
+    BasicBlock *predecessor = phi->getIncomingBlock(i);
+    llvm::IRBuilder<> edge(predecessor->getTerminator());
+    edge.SetCurrentDebugLocation(phi->getDebugLoc());
+    field->addIncoming(edge.CreateExtractValue(phi->getIncomingValue(i), indices),
+                       predecessor);
+  }
+  return field;
+}
+} // namespace
+
+void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
+  SmallVector<Instruction *> joins;
+  for (Function &function : module)
+    for (BasicBlock &block : function)
+      for (Instruction &inst : block)
+        if (isa<SelectInst, PHINode>(inst) && inst.getType()->isAggregateType() &&
+            containsSharedPointer(inst.getType()))
+          joins.push_back(&inst);
+  for (Instruction *join : joins) {
+    llvm::IRBuilder<> builder(join);
+    builder.SetCurrentDebugLocation(join->getDebugLoc());
+    llvm::Value *replacement;
+    if (auto *select = dyn_cast<SelectInst>(join)) {
+      replacement = splitDescriptorSelect(builder, select->getCondition(),
+                                           select->getTrueValue(), select->getFalseValue());
+    } else {
+      auto *phi = cast<PHINode>(join);
+      // An invoke result is only available on its normal edge; splitting that
+      // edge needs an EH-aware transform. Frisk emits ordinary branch edges.
+      if (!llvm::all_of(phi->blocks(), [](BasicBlock *block) {
+            return isa<BranchInst, SwitchInst>(block->getTerminator());
+          }))
+        continue;
+      builder.SetInsertPoint(phi->getParent(), phi->getParent()->getFirstInsertionPt());
+      SmallVector<unsigned> indices;
+      replacement = splitDescriptorPhi(phi, phi->getType(), indices, builder);
+    }
+    join->replaceAllUsesWith(replacement);
+    join->eraseFromParent();
+  }
+  SmallVector<Constant *> sharedGlobals;
+  for (GlobalVariable &global : module.globals())
+    if (global.getAddressSpace() == 3)
+      sharedGlobals.push_back(&global);
+  convertUsersOfConstantsToInstructions(sharedGlobals);
+}
 
 static llvm::Value *materializeSplatConstant(llvm::Constant *constant,
                                              llvm::Instruction *insertBefore,
@@ -156,12 +263,20 @@ static void replaceAll(std::string &text, StringRef from, StringRef to) {
 }
 
 static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
+  prepareSharedMemoryForLegacyLLVM(module);
+
   std::string text;
   raw_string_ostream buffer(text);
   module.print(buffer, nullptr);
   buffer.flush();
 
   // Keep the textual IR parseable by older llvm-link builds used downstream.
+  // Shared-memory views can fold into constant-expression GEPs. Older parsers
+  // accept inbounds, but not the newer GEP nuw/nusw flags. Drop only GEP flags;
+  // integer arithmetic no-wrap flags and the address calculation stay intact.
+  replaceAll(text, "getelementptr inbounds nuw ", "getelementptr inbounds ");
+  replaceAll(text, "getelementptr nusw ", "getelementptr ");
+  replaceAll(text, "getelementptr nuw ", "getelementptr ");
   replaceAll(text, " captures(none)", "");
   replaceAll(text, " memory(none)", "");
   replaceAll(text, " memory(argmem: read)", "");

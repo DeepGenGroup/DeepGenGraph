@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "deepgengraph/Analysis/HardwareSpecification.h"
+#include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
@@ -1829,6 +1830,7 @@ public:
     // Running the pass again must not re-analyze or re-tile thread operations.
     if (!needsTiling) {
       foldThreadTilePairs(kernel);
+      reuseSharedMemory(kernel);
       return;
     }
     auto *context = &getContext();
@@ -1882,6 +1884,9 @@ public:
 
     eraseTriviallyDeadOps(kernel);
     promoteSingleIterationAffineFors(kernel);
+    // Reuse fully materialized buffers. Buffers still referenced by thread-tile
+    // bridges are excluded until FinalizeThreadTiling expands their accesses.
+    reuseSharedMemory(kernel);
   }
 };
 
@@ -2419,8 +2424,13 @@ public:
       }
       return WalkResult::advance();
     });
-    if (result.wasInterrupted())
+    if (result.wasInterrupted()) {
       signalPassFailure();
+      return;
+    }
+    // Bridges can defer shared reads and materialize additional scratch buffers.
+    // Only now is their complete physical storage lifetime visible.
+    reuseSharedMemory(kernel);
   }
 };
 

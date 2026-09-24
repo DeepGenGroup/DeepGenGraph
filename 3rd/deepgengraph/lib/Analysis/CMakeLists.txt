@@ -11,5 +11,13 @@ add_deepgengraph_library(DeepgengraphAnalysis
   LINK_LIBS PUBLIC
   MLIRAnalysis
   MLIRIR
+  MLIRAffineDialect
+  MLIRArithDialect
+  MLIRGPUDialect
+  MLIRMemRefDialect
+  MLIRSCFDialect
+  MLIRVectorDialect
+  MLIRViewLikeInterface
+  FriskIR
   DeepgengraphIR 
 )

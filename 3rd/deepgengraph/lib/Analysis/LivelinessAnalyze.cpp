@@ -1,438 +1,329 @@
-#include "mlir/Analysis/Liveness.h"
-#include "mlir/IR/AsmState.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Operation.h"
-#include "mlir/IR/Value.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/raw_ostream.h"
-
+#include "deepgengraph/Analysis/LivelinessAnalyze.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 #include <algorithm>
-#include <cstdint>
+#include <limits>
+#include <utility>
 
-using namespace mlir;
+namespace mlir::frisk {
+namespace {
 
-namespace mlir::frisk{
+constexpr StringLiteral poolAttr = "frisk.shm_pool";
+constexpr uint64_t maxBytes = std::numeric_limits<int64_t>::max();
 
-struct RegPressurePoint {
-  Operation *op = nullptr;
-
-  /// 整个 block tile 上的 logical reg32 数量。
-  uint64_t regUnits = 0;
-
-  /// regUnits / threadNum。
-  uint64_t regsPerThread = 0;
-
-  /// 此处 live 的 register values。
-  SmallVector<std::pair<Value, uint64_t>> liveValues;
-};
-
-struct RegPressureResult {
-  uint64_t peakRegUnits = 0;
-  uint64_t peakRegsPerThread = 0;
-
-  Operation *peakOp = nullptr;
-  SmallVector<std::pair<Value, uint64_t>> peakValues;
-
-  /// 按 IR lexical order 保存 pressure curve。
-  SmallVector<RegPressurePoint> curve;
-};
-
-static uint64_t ceilDiv(uint64_t x, uint64_t y) {
-  return (x + y - 1) / y;
+bool isShared(MemRefType type) {
+  auto space = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
+  return space && space.getInt() == 3;
 }
 
-static uint64_t getElementBitWidth(Type type,
-                                   unsigned indexBitWidth = 64) {
-  if (auto intTy = dyn_cast<IntegerType>(type))
-    return intTy.getWidth();
-
-  if (auto floatTy = dyn_cast<FloatType>(type))
-    return floatTy.getWidth();
-
-  if (isa<IndexType>(type))
-    return indexBitWidth;
-
-  return 0;
+bool isBarrier(Operation *op) {
+  return isa<gpu::BarrierOp, SyncThreadsInBlockOp>(op);
 }
 
-static int64_t getMemorySpace(MemRefType type) {
-  Attribute space = type.getMemorySpace();
-
-  if (!space)
-    return 0;
-
-  if (auto intAttr = dyn_cast<IntegerAttr>(space))
-    return intAttr.getInt();
-
-  return -1;
-}
-
-/// 返回 Value 对应的 logical 32-bit register unit。
-static uint64_t getRegUnits(Value value,
-                            unsigned regBitWidth = 32,
-                            unsigned indexBitWidth = 64) {
-  Type type = value.getType();
-
-  // vector -> register tile
-  if (auto vecTy = dyn_cast<VectorType>(type)) {
-    if (!vecTy.hasStaticShape())
-      return 0;
-
-    uint64_t numElements = vecTy.getNumElements();
-    uint64_t elemBits =
-        getElementBitWidth(vecTy.getElementType(), indexBitWidth);
-
-    if (!elemBits)
-      return 0;
-
-    return ceilDiv(numElements * elemBits, regBitWidth);
+// These regions finish synchronously. async.execute and parallel regions must
+// not be treated as sequential operations when computing storage lifetimes.
+Operation *getTopLevelUser(Operation *op, Block *entry) {
+  while (op->getBlock() != entry) {
+    op = op->getParentOp();
+    if (!op || !isa<scf::ForOp, scf::IfOp, affine::AffineForOp,
+                    affine::AffineIfOp>(op))
+      return nullptr;
   }
-
-  // memref
-  if (auto memrefTy = dyn_cast<MemRefType>(type)) {
-    int64_t space = getMemorySpace(memrefTy);
-
-    //
-    // 按你的 Frisk 语义：
-    //
-    // memory space 3 : shared memory
-    // memory space 1 : global memory / global view
-    //
-    // payload 都不计入 register tile。
-    //
-    if (space == 3 || space == 1)
-      return 0;
-
-    if (!memrefTy.hasStaticShape())
-      return 0;
-
-    uint64_t numElements = memrefTy.getNumElements();
-    uint64_t elemBits =
-        getElementBitWidth(memrefTy.getElementType(), indexBitWidth);
-
-    if (!elemBits)
-      return 0;
-
-    return ceilDiv(numElements * elemBits, regBitWidth);
-  }
-
-  // scalar
-  if (isa<IntegerType, FloatType, IndexType>(type)) {
-    uint64_t bits = getElementBitWidth(type, indexBitWidth);
-
-    if (!bits)
-      return 0;
-
-    // 一个独立 scalar SSA 至少占一个 logical reg。
-    return std::max<uint64_t>(
-        1, ceilDiv(bits, regBitWidth));
-  }
-
-  return 0;
+  return op;
 }
 
-/// 分析一个具体 Operation 所在位置的 pressure。
-static RegPressurePoint
-analyzePressureAtOp(Operation *op,
-                    const Liveness &liveness,
-                    unsigned threadNum) {
-  RegPressurePoint point;
-  point.op = op;
+bool isSynchronousAccess(Operation *op) {
+  // MemoryEffectOpInterface alone is insufficient: async copies also report
+  // reads/writes, but their last operand use is not their completion point.
+  return isa<memref::LoadOp, memref::StoreOp, memref::CopyOp,
+             memref::DimOp, memref::AssumeAlignmentOp,
+             affine::AffineLoadOp, affine::AffineStoreOp,
+             affine::AffineVectorLoadOp, affine::AffineVectorStoreOp,
+             vector::LoadOp, vector::StoreOp, vector::TransferReadOp,
+             vector::TransferWriteOp, vector::MaskedLoadOp,
+             vector::MaskedStoreOp>(op);
+}
 
-  Block *block = op->getBlock();
-  if (!block)
-    return point;
-
-  const LivenessBlockInfo *blockInfo =
-      liveness.getLiveness(block);
-
-  if (!blockInfo)
-    return point;
-
-  auto liveValues =
-      blockInfo->currentlyLiveValues(op);
-
-  for (Value value : liveValues) {
-    uint64_t units = getRegUnits(value);
-
-    if (!units)
+void analyzeUses(ShmLiveInterval &info, Block *entry,
+                 const DenseMap<Operation *, unsigned> &positions) {
+  SmallVector<Value> worklist{info.allocation.getResult()};
+  DenseSet<Value> visited;
+  bool hasUse = false;
+  info.firstUse = std::numeric_limits<unsigned>::max();
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
       continue;
-
-    point.regUnits += units;
-    point.liveValues.emplace_back(value, units);
-  }
-
-  point.regsPerThread =
-      ceilDiv(point.regUnits, threadNum);
-
-  return point;
-}
-
-/// 按 lexical IR order 递归遍历。
-///
-/// 注意这里不依赖 Operation::walk() 的具体 traversal order。
-static void collectRegionPressure(
-    Region &region,
-    const Liveness &liveness,
-    unsigned threadNum,
-    SmallVectorImpl<RegPressurePoint> &curve) {
-
-  for (Block &block : region) {
-    for (Operation &op : block) {
-
-      //
-      // 对 region-owning op 本身不做 pressure 统计。
-      //
-      // 例如：
-      //   affine.for
-      //   scf.if
-      //   frisk.mask
-      //
-      // currentlyLiveValues() 对包含 region 的 op 是 expansive 的，
-      // 容易把 region 内的值都合并到父 op 上，使结果虚高。
-      //
-      if (op.getNumRegions() == 0) {
-        curve.push_back(
-            analyzePressureAtOp(
-                &op, liveness, threadNum));
+    info.aliases.push_back(value);
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      Operation *top = getTopLevelUser(user, entry);
+      if (!top) {
+        info.skipReason = "use inside unsupported/async control flow";
+        return;
       }
-
-      //
-      // 然后继续分析 nested region。
-      //
-      for (Region &nestedRegion : op.getRegions()) {
-        collectRegionPressure(
-            nestedRegion,
-            liveness,
-            threadNum,
-            curve);
+      auto recordUse = [&] {
+        unsigned position = positions.lookup(top);
+        info.firstUse = std::min(info.firstUse, position);
+        info.lastUse = std::max(info.lastUse, position);
+        hasUse = true;
+      };
+      if (auto view = dyn_cast<ViewLikeOpInterface>(user)) {
+        if (view.getViewSource() == value && user->getNumRegions() == 0 &&
+            isMemoryEffectFree(user)) {
+          for (Value result : user->getResults())
+            if (isa<BaseMemRefType>(result.getType()))
+              worklist.push_back(result);
+          continue; // Constructing a descriptor does not touch storage.
+        }
       }
+      if (isa<memref::CastOp, arith::SelectOp>(user)) {
+        worklist.push_back(user->getResult(0));
+        continue;
+      }
+      // Loop inits also reach the result along the zero-trip path.
+      if (auto loop = dyn_cast<scf::ForOp>(user)) {
+        for (auto init : llvm::enumerate(loop.getInitArgs()))
+          if (init.value() == value) {
+            worklist.push_back(loop.getRegionIterArgs()[init.index()]);
+            worklist.push_back(loop.getResult(init.index()));
+          }
+        recordUse();
+        continue;
+      }
+      if (auto loop = dyn_cast<affine::AffineForOp>(user)) {
+        for (auto init : llvm::enumerate(loop.getInits()))
+          if (init.value() == value) {
+            worklist.push_back(loop.getRegionIterArgs()[init.index()]);
+            worklist.push_back(loop.getResult(init.index()));
+          }
+        recordUse();
+        continue;
+      }
+      if (isa<scf::YieldOp, affine::AffineYieldOp>(user)) {
+        Operation *parent = user->getParentOp();
+        unsigned index = use.getOperandNumber();
+        if (isa<scf::IfOp, affine::AffineIfOp, scf::ForOp,
+                affine::AffineForOp>(parent)) {
+          worklist.push_back(parent->getResult(index));
+          if (auto loop = dyn_cast<scf::ForOp>(parent))
+            worklist.push_back(loop.getRegionIterArgs()[index]);
+          if (auto loop = dyn_cast<affine::AffineForOp>(parent))
+            worklist.push_back(loop.getRegionIterArgs()[index]);
+          recordUse(); // Covers loop backedges and branch-selected aliases.
+          continue;
+        }
+      }
+      if (!isSynchronousAccess(user)) {
+        info.skipReason = "unsupported or escaping use: " +
+                          user->getName().getStringRef().str();
+        return;
+      }
+      if (auto assume = dyn_cast<memref::AssumeAlignmentOp>(user))
+        info.alignment = std::max<uint64_t>(info.alignment, assume.getAlignment());
+      recordUse();
     }
   }
-}
-
-static RegPressureResult
-analyzeRegPressure(func::FuncOp funcOp,
-                   unsigned threadNum = 64) {
-  RegPressureResult result;
-
-  Liveness liveness(funcOp.getOperation());
-
-  //
-  // 收集所有 op 的 pressure。
-  //
-  for (Region &region : funcOp->getRegions()) {
-    collectRegionPressure(
-        region,
-        liveness,
-        threadNum,
-        result.curve);
-  }
-
-  //
-  // 找峰值。
-  //
-  for (const RegPressurePoint &point : result.curve) {
-    if (point.regUnits <= result.peakRegUnits)
-      continue;
-
-    result.peakRegUnits = point.regUnits;
-    result.peakRegsPerThread =
-        point.regsPerThread;
-    result.peakOp = point.op;
-    result.peakValues = point.liveValues;
-  }
-
-  return result;
-}
-
-static void dumpPressureCurve(
-    func::FuncOp funcOp,
-    const RegPressureResult &result,
-    unsigned threadNum = 64,
-    bool printFullOp = false) {
-
-  llvm::errs()
-      << "\n"
-      << "================ Register Pressure Curve ================\n";
-
-  llvm::errs()
-      << "Function: "
-      << funcOp.getName()
-      << "\n";
-
-  llvm::errs()
-      << "Threads/block: "
-      << threadNum
-      << "\n\n";
-
-  uint64_t previousRegsPerThread = 0;
-
-  for (size_t i = 0; i < result.curve.size(); ++i) {
-    const RegPressurePoint &point =
-        result.curve[i];
-
-    int64_t delta =
-        static_cast<int64_t>(point.regsPerThread) -
-        static_cast<int64_t>(previousRegsPerThread);
-
-    //
-    // index
-    //
-    llvm::errs()
-        << "["
-        << llvm::format("%4zu", i)
-        << "] ";
-
-    //
-    // block 总 logical reg32
-    //
-    llvm::errs()
-        << "reg32/block="
-        << llvm::format("%7llu",
-             static_cast<unsigned long long>(
-                 point.regUnits))
-        << "  ";
-
-    //
-    // per-thread
-    //
-    llvm::errs()
-        << "reg/thread="
-        << llvm::format("%4llu",
-             static_cast<unsigned long long>(
-                 point.regsPerThread))
-        << "  ";
-
-    //
-    // 与上一条 op 的变化
-    //
-    llvm::errs()
-        << "delta="
-        << llvm::format("%+5lld",
-             static_cast<long long>(delta))
-        << "  ";
-
-    //
-    // op name
-    //
-    llvm::errs()
-        << point.op->getName().getStringRef();
-
-    if (point.op == result.peakOp)
-      llvm::errs() << "    <--- PEAK";
-
-    llvm::errs() << "\n";
-
-    //
-    // 可选：把完整 operation 打印出来。
-    //
-    if (printFullOp) {
-      llvm::errs() << "       ";
-      point.op->print(llvm::errs());
-      llvm::errs() << "\n";
-    }
-
-    previousRegsPerThread =
-        point.regsPerThread;
-  }
-
-  llvm::errs()
-      << "\nPeak reg32/block : "
-      << result.peakRegUnits
-      << "\n";
-
-  llvm::errs()
-      << "Peak regs/thread : "
-      << result.peakRegsPerThread
-      << "\n";
-
-  if (result.peakOp) {
-    llvm::errs()
-        << "Peak op          : ";
-
-    result.peakOp->print(llvm::errs());
-    llvm::errs() << "\n";
-  }
-
-  llvm::errs()
-      << "=========================================================\n";
-}
-
-static void dumpPeakLiveValues(
-    func::FuncOp funcOp,
-    const RegPressureResult &result,
-    unsigned threadNum = 64) {
-
-  if (!result.peakOp)
+  if (!hasUse) {
+    info.skipReason = "no storage uses";
     return;
-
-  SmallVector<std::pair<Value, uint64_t>>
-      values = result.peakValues;
-
-  llvm::sort(
-      values,
-      [](const auto &lhs, const auto &rhs) {
-        return lhs.second > rhs.second;
-      });
-
-  AsmState asmState(funcOp);
-
-  llvm::errs()
-      << "\n"
-      << "================ Peak Live Values =======================\n";
-
-  for (auto &[value, units] : values) {
-    llvm::errs() << "  ";
-
-    value.printAsOperand(
-        llvm::errs(), asmState);
-
-    llvm::errs()
-        << " : "
-        << value.getType()
-        << "\n"
-        << "      reg32/block = "
-        << units
-        << ", approx/thread = "
-        << ceilDiv(units, threadNum)
-        << "\n";
   }
-
-  llvm::errs()
-      << "=========================================================\n";
+  info.reusable = true;
 }
 
-/// 最外层调用接口。
-void dumpRegPressure(
-    func::FuncOp funcOp,
-    unsigned threadNum = 64,
-    bool printFullOp = false) {
-
-  RegPressureResult result =
-      analyzeRegPressure(
-          funcOp,
-          threadNum);
-
-  //
-  // 1. 输出逐 op pressure 曲线
-  //
-  dumpPressureCurve(
-      funcOp,
-      result,
-      threadNum,
-      printFullOp);
-
-  //
-  // 2. 输出峰值处具体哪些 Value 活跃
-  //
-  dumpPeakLiveValues(
-      funcOp,
-      result,
-      threadNum);
+bool overlaps(uint64_t a, uint64_t sizeA, uint64_t b, uint64_t sizeB) {
+  return a < b + sizeB && b < a + sizeA;
 }
 
 } // namespace
+
+bool ShmLivenessResult::interferes(unsigned lhs, unsigned rhs) const {
+  const auto &a = buffers[lhs];
+  const auto &b = buffers[rhs];
+  return lhs == rhs || !a.reusable || !b.reusable ||
+         (a.firstUse <= b.lastUse && b.firstUse <= a.lastUse);
+}
+
+ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel) {
+  ShmLivenessResult result;
+  if (kernel.isExternal())
+    return result;
+  Block *entry = &kernel.getBody().front();
+  DenseMap<Operation *, unsigned> positions;
+  for (Operation &op : *entry) {
+    positions[&op] = result.programOrder.size();
+    result.programOrder.push_back(&op);
+  }
+  kernel.walk([&](memref::AllocOp alloc) {
+    auto type = alloc.getType();
+    if (!isShared(type))
+      return;
+    result.buffers.emplace_back();
+    auto &info = result.buffers.back();
+    info.allocation = alloc;
+    auto skip = [&](StringRef reason) { info.skipReason = reason.str(); };
+    if (!llvm::hasSingleElement(kernel.getBody()))
+      return skip("multi-block function");
+    if (alloc->hasAttr(poolAttr))
+      return skip("existing shared-memory pool");
+    if (!getTopLevelUser(alloc, entry))
+      return skip("allocation inside unsupported control flow");
+    if (!type.hasStaticShape() || !type.getLayout().isIdentity())
+      return skip("dynamic shape or non-identity layout");
+    Type element = type.getElementType();
+    if (!isa<IntegerType, FloatType>(element))
+      return skip("unsupported element storage size");
+    unsigned bits = element.getIntOrFloatBitWidth();
+    if (bits < 8 || bits % 8 || !llvm::isPowerOf2_64(bits / 8))
+      return skip("unsupported element storage size");
+    uint64_t size = bits / 8;
+    for (int64_t dim : type.getShape()) {
+      if (dim <= 0 || uint64_t(dim) > maxBytes / size)
+        return skip("empty or overflowing allocation");
+      size *= dim;
+    }
+    info.sizeBytes = size;
+    info.alignment = std::max<uint64_t>(bits / 8, alloc.getAlignment().value_or(1));
+    analyzeUses(info, entry, positions);
+  });
+  return result;
+}
+
+ShmReusePlan planShmReuse(const ShmLivenessResult &liveness) {
+  ShmReusePlan plan;
+  SmallVector<unsigned> order;
+  for (auto indexed : llvm::enumerate(liveness.buffers)) {
+    const auto &info = indexed.value();
+    if (!info.reusable)
+      continue;
+    if (info.sizeBytes > maxBytes - plan.originalBytes)
+      return {};
+    plan.originalBytes += info.sizeBytes;
+    plan.alignment = std::max(plan.alignment, info.alignment);
+    order.push_back(indexed.index());
+  }
+  llvm::stable_sort(order, [&](unsigned a, unsigned b) {
+    return liveness.buffers[a].sizeBytes > liveness.buffers[b].sizeBytes;
+  });
+  for (unsigned index : order) {
+    const auto &info = liveness.buffers[index];
+    uint64_t offset = 0;
+    // Move past conflicts until the lowest aligned free byte range is found.
+    bool conflict;
+    do {
+      conflict = false;
+      for (const auto &placed : plan.placements) {
+        const auto &other = liveness.buffers[placed.bufferIndex];
+        if (!liveness.interferes(index, placed.bufferIndex) ||
+            !overlaps(offset, info.sizeBytes, placed.offsetBytes, other.sizeBytes))
+          continue;
+        uint64_t end = placed.offsetBytes + other.sizeBytes;
+        if (info.alignment > maxBytes - end)
+          return {};
+        offset = llvm::alignTo(end, info.alignment);
+        if (info.sizeBytes > maxBytes - offset)
+          return {};
+        conflict = true;
+        break;
+      }
+    } while (conflict);
+    plan.placements.push_back({index, offset});
+    plan.pooledBytes = std::max(plan.pooledBytes, offset + info.sizeBytes);
+  }
+  return plan;
+}
+
+void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os) {
+  for (auto indexed : llvm::enumerate(liveness.buffers)) {
+    const auto &info = indexed.value();
+    os << "shm[" << indexed.index() << "] " << info.sizeBytes
+       << " bytes, align " << info.alignment;
+    if (info.reusable)
+      os << ", live [" << info.firstUse << ", " << info.lastUse << "]";
+    else
+      os << ", skipped: " << info.skipReason;
+    os << '\n';
+  }
+}
+
+bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
+  if (stats)
+    *stats = {};
+  if (!kernel->hasAttr("thread_num"))
+    return false;
+  auto liveness = analyzeShmLiveness(kernel);
+  auto plan = planShmReuse(liveness);
+  if (stats) {
+    stats->originalBytes = plan.originalBytes;
+    stats->pooledBytes = plan.originalBytes;
+  }
+  if (plan.placements.size() < 2 || plan.pooledBytes >= plan.originalBytes)
+    return false;
+
+  // Operand liveness does not guarantee every warp has finished reading.
+  SmallVector<std::pair<unsigned, unsigned>> handoffs;
+  for (auto a : plan.placements) {
+    const auto &earlier = liveness.buffers[a.bufferIndex];
+    for (auto b : plan.placements) {
+      const auto &later = liveness.buffers[b.bufferIndex];
+      if (earlier.lastUse >= later.firstUse ||
+          !overlaps(a.offsetBytes, earlier.sizeBytes, b.offsetBytes, later.sizeBytes))
+        continue;
+      bool synchronized = false;
+      for (unsigned i = earlier.lastUse + 1; i < later.firstUse; ++i)
+        synchronized |= isBarrier(liveness.programOrder[i]);
+      if (!synchronized)
+        handoffs.emplace_back(later.firstUse, earlier.lastUse);
+    }
+  }
+  // One barrier can satisfy several handoffs. Process the earliest deadline
+  // first, and reuse a previously selected barrier whenever it covers the gap.
+  llvm::sort(handoffs);
+  SmallVector<unsigned> barrierPositions;
+  for (auto handoff : handoffs)
+    if (barrierPositions.empty() || barrierPositions.back() <= handoff.second)
+      barrierPositions.push_back(handoff.first);
+  OpBuilder builder(kernel.getContext());
+  for (unsigned position : barrierPositions) {
+    Operation *before = liveness.programOrder[position];
+    builder.setInsertionPoint(before);
+    builder.create<gpu::BarrierOp>(before->getLoc());
+  }
+  builder.setInsertionPointToStart(&kernel.getBody().front());
+  auto poolType = MemRefType::get({int64_t(plan.pooledBytes)}, builder.getI8Type(),
+                                MemRefLayoutAttrInterface{},
+                                builder.getI64IntegerAttr(3));
+  auto pool = builder.create<memref::AllocOp>(
+      kernel.getLoc(), poolType, builder.getI64IntegerAttr(plan.alignment));
+  pool->setAttr(poolAttr, builder.getUnitAttr());
+  pool->setAttr("tiled", builder.getBoolAttr(true));
+  for (auto placement : plan.placements) {
+    auto alloc = liveness.buffers[placement.bufferIndex].allocation;
+    builder.setInsertionPoint(alloc);
+    Value offset = builder.create<arith::ConstantIndexOp>(
+        alloc.getLoc(), placement.offsetBytes);
+    auto view = builder.create<memref::ViewOp>(alloc.getLoc(), alloc.getType(),
+                                              pool, offset, ValueRange{});
+    alloc.getResult().replaceAllUsesWith(view.getResult());
+    alloc.erase();
+  }
+  if (stats) {
+    stats->pooledBytes = plan.pooledBytes;
+    stats->reusedAllocations = plan.placements.size();
+    stats->insertedBarriers = barrierPositions.size();
+  }
+  return true;
+}
+
+} // namespace mlir::frisk

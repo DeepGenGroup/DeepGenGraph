@@ -1,4 +1,5 @@
 #include "deepgengraph/Common.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -474,12 +475,20 @@ void replaceAll(std::string &text, llvm::StringRef from, llvm::StringRef to) {
 }
 
 void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
+  mlir::frisk::prepareSharedMemoryForLegacyLLVM(module);
+
   std::string text;
   llvm::raw_string_ostream buffer(text);
   module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
   buffer.flush();
 
   // Keep the textual IR parseable by older llvm-link builds used downstream.
+  // Shared-memory views can fold into constant-expression GEPs. Older parsers
+  // accept inbounds, but not the newer GEP nuw/nusw flags. Drop only GEP flags;
+  // integer arithmetic no-wrap flags and the address calculation stay intact.
+  replaceAll(text, "getelementptr inbounds nuw ", "getelementptr inbounds ");
+  replaceAll(text, "getelementptr nusw ", "getelementptr ");
+  replaceAll(text, "getelementptr nuw ", "getelementptr ");
   replaceAll(text, " captures(none)", "");
   replaceAll(text, " memory(none)", "");
   replaceAll(text, " memory(argmem: read)", "");
@@ -523,6 +532,12 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+  bool isPipelineSched = false;
+  if(argc >= 2){
+    isPipelineSched = std::stoi(argv[2]) > 0;
+  }
+  const char *outputPath = argc > 3 ? argv[3] : "finalLLVMText.ll";
+
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);
   mlir::registerAllDialects(registry);
@@ -618,8 +633,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
   // 没有标注的循环原样保留：pass 直接返回，不动 IR。
-  AddPassNested(mlir::pipeline::createPipelineSchedulePass());
-  llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
+  if(isPipelineSched){
+    AddPassNested(mlir::pipeline::createPipelineSchedulePass());
+    llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
+  }
+  
 
   AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
   AddPassNested(mlir::frisk::createFinalizeThreadTilingPass());
@@ -706,7 +724,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
   std::error_code ec;
-  const char *outputPath = argc > 2 ? argv[2] : "finalLLVMText.ll";
+  
   llvm::raw_fd_ostream os(outputPath, ec);
   if (ec) {
     llvm::errs() << "Failed to open LLVM IR output " << outputPath << ": "
