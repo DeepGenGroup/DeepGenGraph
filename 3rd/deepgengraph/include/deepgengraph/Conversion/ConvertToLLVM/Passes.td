@@ -27,6 +27,11 @@ def IRDeepOptimize: Pass<"ir-deep-optimize", "func::FuncOp"> {
   ];
 }
 
+def BarrierOptimize: Pass<"barrier-optimize", "func::FuncOp"> {
+  let summary = "Remove workgroup barriers without cross-thread memory dependencies";
+  let constructor = "mlir::frisk::createBarrierOptimizePass()";
+}
+
 def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
   let summary = "Fuse a full-tile add into independent MMA fragment updates";
   let constructor = "mlir::frisk::createFuseFragmentAccumulatorPass()";

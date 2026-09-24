@@ -122,6 +122,22 @@ def main():
           }}
           return %x : f32
         """), 96, 96, 0)
+        # Allocation inside the iteration gives fresh storage. Sharing needs
+        # both the A->B handoff and the B->A backedge to synchronize warps.
+        local_body = ALLOCS + A + B
+        ir, _ = check(f"{dialect}_iteration_local", kernel(f"""
+          {loop} {{ {local_body} }}
+          return %x : f32
+        """), 96, 64, 2)
+        assert ir.index("gpu.barrier") > ir.index(f"{dialect}.for"), ir
+        check(f"{dialect}_existing_loop_barriers", kernel(f"""
+          {loop} {{ {ALLOCS} {A} gpu.barrier {B} gpu.barrier }}
+          return %x : f32
+        """), 96, 64, 0)
+        check(f"{dialect}_prefix_barrier", kernel(f"""
+          {loop} {{ {ALLOCS} gpu.barrier {A} gpu.barrier {B} }}
+          return %x : f32
+        """), 96, 64, 0)
         check(f"{dialect}_iter_arg", kernel(same + A + f"""
           %out = {loop} iter_args(%carried = %a) -> (memref<16xf32, 3>) {{
             {dialect}.yield %carried : memref<16xf32, 3>
@@ -130,6 +146,102 @@ def main():
           %v = memref.load %out[%c0] : memref<16xf32, 3>
           return %v : f32
         """), 128, 128, 0)
+
+    full_allocs = """
+      %a = memref.alloc() : memref<128xf32, 3>
+      %b = memref.alloc() : memref<128xf32, 3>
+      %tid = gpu.thread_id x
+    """
+    full_a = """
+      memref.store %x, %a[%tid] : memref<128xf32, 3>
+      %av = memref.load %a[%tid] : memref<128xf32, 3>
+    """
+    full_b = full_a.replace("%a", "%b")
+    check("full_overwrite_each_iteration", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{ {full_a} {full_b} }}
+      return %x : f32
+    """), 1024, 512, 2)
+    check("divergent_loop_bounds", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %tid step %c1 {{ {full_a} {full_b} }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    check("read_before_overwrite", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        %old = memref.load %a[%tid] : memref<128xf32, 3>
+        {full_a} {full_b}
+      }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    check("use_after_loop_preserves_storage", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{ {full_a} {full_b} }}
+      %v = memref.load %a[%tid] : memref<128xf32, 3>
+      return %v : f32
+    """), 1024, 1024, 0)
+    check("conditional_loop_not_collective", kernel(full_allocs + f"""
+      scf.if %cond {{
+        scf.for %i = %c0 to %n step %c1 {{ {full_a} {full_b} }}
+      }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    check("partial_write_inside_full_sized_buffer", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        {full_a.replace('%a[%tid]', '%a[%c0]')} {full_b}
+      }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    check("overlapping_loop_lifetimes", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        {full_a} {full_b}
+        %again = memref.load %a[%tid] : memref<128xf32, 3>
+      }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    check("conditional_initialization", kernel(full_allocs + f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        scf.if %cond {{ {full_a} }}
+        {full_b}
+      }}
+      return %x : f32
+    """), 1024, 1024, 0)
+    # The vector stores have an affine per-thread mapping, like the real K/V
+    # copies. Merely seeing a store or a tiled marker must not imply coverage.
+    vector_allocs = """
+      %a = memref.alloc() : memref<128x4xf32, 3>
+      %b = memref.alloc() : memref<128x4xf32, 3>
+      %tid = gpu.thread_id x
+      %v = arith.constant dense<1.0> : vector<4xf32>
+    """
+    vector_body = """
+      %row = affine.apply affine_map<(d0) -> (d0 mod 128)>(%tid)
+      vector.store %v, %a[%row, %c0] : memref<128x4xf32, 3>, vector<4xf32>
+      %av = vector.load %a[%row, %c0] : memref<128x4xf32, 3>, vector<4xf32>
+      vector.store %v, %b[%row, %c0] : memref<128x4xf32, 3>, vector<4xf32>
+      %bv = vector.load %b[%row, %c0] : memref<128x4xf32, 3>, vector<4xf32>
+    """
+    for name, body, after, barriers in (
+        ("complete_vector_mapping", vector_body, 2048, 2),
+        ("incomplete_vector_mapping", vector_body.replace("mod 128", "mod 64"), 4096, 0),
+        ("rotating_vector_mapping", vector_body.replace("(d0) -> (d0 mod 128)>(%tid)",
+             "(d0, d1) -> ((d0 + d1) mod 128)>(%tid, %i)"), 4096, 0),
+    ):
+        check(name, kernel(vector_allocs + f"""
+          scf.for %i = %c0 to %n step %c1 {{ {body} }}
+          return %x : f32
+        """), 4096, after, barriers)
+    check("loop_local_conditional_storage", kernel(f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        {ALLOCS}
+        scf.if %cond {{ {A} }}
+        scf.if %cond {{ {B} }}
+      }}
+      return %x : f32
+    """), 96, 64, 2)
+    check("nested_collective_loops", kernel(f"""
+      scf.for %i = %c0 to %n step %c1 {{
+        affine.for %j = 0 to 4 {{ {ALLOCS} {A} {B} }}
+      }}
+      return %x : f32
+    """), 96, 64, 2)
 
     ir, _ = check("barrier_outside_divergent_if", kernel(ALLOCS + A + f"""
       scf.if %cond {{ {B} }}
@@ -195,17 +307,26 @@ def main():
 
     if len(sys.argv) > 2:
         log = Path(sys.argv[2]).read_text()
-        ir, report = run(module_after(log, "---------- after createConvertFriskBaseToThreadLevelIRPass ---------"))
-        stats = re.findall(r"shm bytes (\d+) -> (\d+), barriers (\d+)", report)
-        assert any(int(after) < int(before) for before, after, _ in stats), report
+        source = module_after(log, "---------- after createConvertFriskBaseToThreadLevelIRPass ---------")
+        # Bridges defer pooling until finalization exposes every physical use.
+        deferred, _ = run(source)
+        if "frisk.to_threadTile" in source:
+            assert "frisk.shm_pool" not in deferred
+        ir, report = run(source, "finalize-thread-tiling,test-shm-reuse")
+        pools = re.findall(r"memref.alloc\(\)[^\n]*frisk.shm_pool[^\n]*memref<(\d+)xi8, 3>", ir)
+        assert pools, report
+        if "pipeline.scheduled" not in source:
+            assert pools == ["16384"], pools
         repeated, _ = run(ir)
         assert repeated == ir
-        print("PASS attention log:", stats)
-        scheduled = module_after(log, "---------- after frisk-pipeline-schedule ---------")
-        integrated, _ = run(scheduled, "convert-friskbase-to-thread,finalize-thread-tiling")
-        assert "frisk.shm_pool" in integrated
-        assert "frisk.to_threadTile" not in integrated
-        print("PASS scheduled attention through conversion and bridge finalization: SHM pool applied")
+        print(f"PASS attention log: finalized pools {pools} bytes; reuse is idempotent")
+        marker = "---------- after frisk-pipeline-schedule ---------"
+        if marker in log:
+            scheduled = module_after(log, marker)
+            integrated, _ = run(scheduled, "convert-friskbase-to-thread,finalize-thread-tiling")
+            assert "frisk.shm_pool" in integrated
+            assert "frisk.to_threadTile" not in integrated
+            print("PASS scheduled attention through conversion and bridge finalization: SHM pool applied")
 
 
 if __name__ == "__main__":

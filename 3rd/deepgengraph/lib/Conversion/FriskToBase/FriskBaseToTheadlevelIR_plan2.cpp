@@ -427,6 +427,7 @@ struct VectorTileLoopOptions {
   StringRef marker;
   StringRef labelPrefix;
   Value unitIndex; // 可复用调用方已有的 0，保留 GEMM 的常量放置位置。
+  bool unrollFull = false;
 };
 
 class VectorTileLoopNest {
@@ -451,6 +452,8 @@ public:
                                                     ValueRange{initial});
     if (!options.marker.empty())
       loop->setAttr(options.marker, builder.getBoolAttr(true));
+    if (options.unrollFull)
+      loop->setAttr("frisk.loopUnrollFull", builder.getBoolAttr(true));
     if (!options.labelPrefix.empty())
       loop->setAttr("iterLabel", builder.getStringAttr(
                                      Twine(options.labelPrefix) + Twine(dim)));
@@ -1689,6 +1692,9 @@ public:
     auto loc = op.getLoc();
     Value ttileA = toThreadTile(adaptor.getA(), threadTileA, *infoA, rewriter, loc);
     Value ttileB = toThreadTile(adaptor.getB(), threadTileB, *infoB, rewriter, loc);
+    // Finalization propagates this request to the A/B vector assembly loops.
+    ttileA.getDefiningOp()->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
+    ttileB.getDefiningOp()->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
     Value result = rewriter.create<arith::ConstantOp>(
         loc, threadTileC, cast<TypedAttr>(rewriter.getZeroAttr(threadTileC)));
     Value zeroFragment = rewriter.create<arith::ConstantOp>(
@@ -1701,6 +1707,7 @@ public:
         auto kFor = rewriter.create<affine::AffineForOp>(
             loc, 0, aCounts[1], 1, ValueRange{zeroFragment});
         kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
+        kFor->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
         rewriter.setInsertionPointToStart(kFor.getBody());
         Value a = extractGemmTileFragment(rewriter, loc, ttileA, fragmentA,
                                           m, kFor.getInductionVar(), true);
@@ -2306,7 +2313,9 @@ public:
         loc, vectorType, rewriter.getZeroAttr(vectorType));
     Value tid = access.map ? findThreadIdxOp(op, rewriter) : Value{};
     ReadThreadTileElement element{rewriter, loc, source, tid, block, access};
-    VectorTileLoopNest loops(rewriter, loc, thread.getShape(), {"tiled", "load"});
+    auto unroll = op->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
+    VectorTileLoopNest loops(rewriter, loc, thread.getShape(),
+                            {"tiled", "load", {}, unroll && unroll.getValue()});
     Value tile = loops.emit(initial, element);
     if (exchanged)
       rewriter.create<gpu::BarrierOp>(loc);
@@ -2431,6 +2440,22 @@ public:
     // Bridges can defer shared reads and materialize additional scratch buffers.
     // Only now is their complete physical storage lifetime visible.
     reuseSharedMemory(kernel);
+
+    // Unroll inner loops first so expanding an outer loop cannot invalidate
+    // pending nested loop handles. Leave unmarked/false-marked loops intact.
+    SmallVector<affine::AffineForOp> loopsToUnroll;
+    kernel.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
+      auto unroll = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
+      if (unroll && unroll.getValue())
+        loopsToUnroll.push_back(loop);
+    });
+    for (auto loop : loopsToUnroll) {
+      if (failed(affine::loopUnrollFull(loop))) {
+        loop.emitError("failed to fully unroll loop marked frisk.loopUnrollFull");
+        signalPassFailure();
+        return;
+      }
+    }
   }
 };
 

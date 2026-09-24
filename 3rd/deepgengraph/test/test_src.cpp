@@ -585,7 +585,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     }
   };
 
-  auto AddPassNested = [&](std::unique_ptr<Pass> pass){
+  auto AddFuncPass = [&](std::unique_ptr<Pass> pass){
     PassManager pm(ctx.get());
     pm.addNestedPass<func::FuncOp>(std::move(pass));
     if(failed(pm.run(src->getOperation()))) {
@@ -634,15 +634,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
   // 没有标注的循环原样保留：pass 直接返回，不动 IR。
   if(isPipelineSched){
-    AddPassNested(mlir::pipeline::createPipelineSchedulePass());
+    AddFuncPass(mlir::pipeline::createPipelineSchedulePass());
     llvm::outs() << "\n---------- after frisk-pipeline-schedule ---------\n"; llvm::outs().flush();src->dump();
   }
   
 
-  AddPassNested(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
-  AddPassNested(mlir::frisk::createFinalizeThreadTilingPass());
-  AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
-  AddPassNested( mlir::affine::createAffineLoopInvariantCodeMotionPass());
+  AddFuncPass(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
+
+  AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
+  AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
+  AddFuncPass( mlir::affine::createAffineLoopInvariantCodeMotionPass());
   // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
   // lowering decomposes the independent MMA fragment insertion chain.
   {
@@ -656,7 +658,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   // pm.addPass(mlir::createSymbolDCEPass());
   AddPass(mlir::createCSEPass());
-  llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
+  llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n"; llvm::outs().flush();src->dump();
 
   #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
@@ -664,34 +666,29 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after threadIR legalize -----\n"; llvm::outs().flush(); src->dump();
   // legalize 后， affineLoop ir形式优化
-  AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
+  AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));
   AddPass(mlir::createCSEPass());
   // in loop alloc 操作提升
-  AddPassNested(mlir::bufferization::createBufferLoopHoistingPass());
-  AddPassNested(mlir::bufferization::createBufferHoistingPass());
+  AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
+  AddFuncPass(mlir::bufferization::createBufferHoistingPass());
   AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
   AddPass(mlir::createCanonicalizerPass());
   // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
-  // AddPassNested(mlir::affine::createAffineVectorize(opt));
+  // AddFuncPass(mlir::affine::createAffineVectorize(opt));
   
-  AddPassNested( mlir::affine::createLoopFusionPass());
+  AddFuncPass( mlir::affine::createLoopFusionPass());
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
-  // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
-  // AddPassNested(mlir::affine::createAffineVectorize(opt));
   
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
-  llvm::outs() << "\n---- after first vectorize -----\n"; llvm::outs().flush(); src->dump();
-  AddPassNested(mlir::affine::createAffineScalarReplacementPass());
-  {
-    PassManager fragmentPM(ctx.get());
-    fragmentPM.addNestedPass<func::FuncOp>(frisk::createIRDeepOptimizePass());
-    if (failed(fragmentPM.run(*src)))
-      return 1;
-  }
-  AddPassNested(mlir::affine::createAffineLoopNormalizePass(true));
-  AddPassNested(mlir::createMem2Reg());
+  AddFuncPass(mlir::affine::createAffineScalarReplacementPass());
+  AddFuncPass(frisk::createIRDeepOptimizePass());
+  
+  llvm::outs() << "\n---- after createIRDeepOptimizePass -----\n"; llvm::outs().flush(); src->dump();
+
+  AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));
+  AddFuncPass(mlir::createMem2Reg());
   AddPass(mlir::createCanonicalizerPass());
   llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
 

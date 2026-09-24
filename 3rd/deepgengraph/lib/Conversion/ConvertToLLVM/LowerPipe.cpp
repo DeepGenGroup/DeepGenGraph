@@ -262,6 +262,7 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
   pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
 
   // 2. 基础控制流、MemRef、Func 降级到 LLVM

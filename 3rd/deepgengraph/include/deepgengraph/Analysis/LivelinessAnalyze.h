@@ -11,11 +11,13 @@
 namespace mlir::frisk {
 
 /// Storage liveness, not SSA descriptor liveness. Positions refer to operations
-/// in the function entry block. A nested access covers its entire enclosing
-/// top-level operation, including all loop iterations and both conditional arms.
+/// in the function entry block for diagnostics. Interference additionally
+/// resolves accesses inside collective loops when storage is iteration-local.
 struct ShmLiveInterval {
   memref::AllocOp allocation;
   SmallVector<Value> aliases;
+  SmallVector<Operation *, 0> accesses;
+  SmallVector<Operation *, 0> iterationLocalLoops;
   uint64_t sizeBytes = 0;
   uint64_t alignment = 1;
   unsigned firstUse = 0;
@@ -67,11 +69,13 @@ ShmReusePlan planShmReuse(const ShmLivenessResult &liveness);
 void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os);
 
 /// Recompute analysis, pack into memref<Nxi8, 3>, replace allocations with typed
-/// memref.view and insert entry-block gpu.barrier at storage handoffs as needed.
+/// memref.view and insert gpu.barrier at storage handoffs as needed.
 /// Requires a function executed collectively by a thread block (thread_num attr).
 /// Applies only if bytes decrease. Returns true iff IR changed. Existing pool
-/// allocations are excluded, making repeated calls safe. No barrier is inserted
-/// inside a conditional or a loop. Skipped allocations remain untouched.
+/// allocations are excluded, making repeated calls safe. Loop-body barriers
+/// require provably block-uniform loop bounds and collective enclosing control
+/// flow. Conditional regions remain atomic. Unfinalized thread-tile bridges
+/// defer pooling, so an early pool cannot lock out later scratch allocations.
 bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats = nullptr);
 
 } // namespace mlir::frisk
