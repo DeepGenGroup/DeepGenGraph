@@ -7,6 +7,32 @@
 // Bridge elimination is a later stage.
 //===----------------------------------------------------------------------===//
 
+// 中文阅读导航：block tile -> thread tile 的两阶段实现
+// 配套文档：同目录 FriskBaseToTheadlevelIR_plan2_中文说明.md。
+//
+// 【概念】block tile 是整个线程块协作处理的逻辑矩阵；thread tile 是当前线程
+// 实际持有的元素集合，在这里打包成小 vector，或放在线程私有 memref 中。
+// thread tile 的相邻下标未必对应 block 矩阵中的相邻元素，必须结合布局解释。
+//
+// 【第一阶段】ConvertFriskBaseToThreadLevelIR：
+//   LowerInfoAnalysis 推断每个 (Value, 使用它的 Operation) 的布局；
+//   插入必要的 ConvertLayoutOp；各 pattern 将计算改写为线程级计算；
+//   用 ToThreadTile(block) 读入，用 FromThreadTile(thread) 保留原 block 类型；
+//   尽量折叠布局一致的 To(From(...))，暂时保留外层循环的 block 类型接口。
+// 【第二阶段】FinalizeThreadTiling：
+//   调整可转换的 affine 循环携带值，折叠桥接，展开剩余桥接为实际访存；
+//   处理 buffer_view、cast 和私有暂存，再检查中间桥接是否全部消除。
+//
+// 【LowerInfo 的三个用途】
+//   1. 决定线程 tile 形状：thread_widths * warp_repeat * warpInstUnroll * block_repeat。
+//   2. 决定元素归属：(threadIdx.x, 线程内下标) -> block 内逻辑坐标。
+//   3. 判断生产者/消费者布局是否相容；不相容时通过共享内存交换数据。
+// 以上乘法均为二维数组逐维相乘；单例轴、归约轴需要额外投影。
+//
+// 建议阅读顺序：两个 pass 的 runOnOperation -> getFullThreadTileType ->
+// buildMappedAccessIndices -> GemmOpTiling -> writeBackBlockTile ->
+// ThreadTileAccess / ToThreadTileFinalization。桥接本身不等于内存写回，
+// FromThreadTile 也不表示已经把所有线程的数据实际拼成一个大矩阵。
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -75,22 +101,34 @@ namespace {
 using friskMs = frisk::attr::MemorySpace;
 
 // Only layout analysis is shared. All block/thread value transitions live in IR.
+// 第一阶段使用的布局分析入口；key 是 (Value, Operation*)，不是单独一个 Value。
+// 同一逻辑矩阵在不同消费者处可能需要不同分布，所以不能只按 SSA 值缓存布局。
+// 第一阶段完成后清空 s_info；第二阶段依靠桥接属性恢复信息，不依赖旧分析对象。
 static LowerInfoMap *s_info = nullptr;
 static HWSpecification *s_hw = nullptr;
+// 记录显式 ConvertLayoutOp 的源布局和目标布局，供该 op 的重写使用。
+// 这里存的是布局描述，不是 block SSA 值到 thread SSA 值的替换表。
 static DenseMap<frisk::ConvertLayoutOp, std::pair<LowerInfo, LowerInfo>>
     convertLayoutInfo;
 
+// 判断是否已经处理过。当前实现只检查 tiled 属性是否存在，
+// 即使属性值为 false 也会视为已处理；不要把它当作普通布尔条件读取。
 static bool isTiled(Operation *op) { return op->hasAttr("tiled"); }
+// 给新生成且不应再次切分的操作设置 tiled=true，使重复执行转换保持稳定。
 static void markTiled(Operation *op, OpBuilder &builder) {
   op->setAttr("tiled", builder.getBoolAttr(true));
 }
 
+// 沿 buffer_view 的 source 链找到底层 buffer，用于识别真实内存空间。
+// 这里只追踪来源，不计算偏移；实际坐标合成由 resolveViewAccess 完成。
 static Value getViewBuffer(Value value) {
   while (auto view = value.getDefiningOp<frisk::BufferViewOp>())
     value = view.getSource();
   return value;
 }
 
+// 识别 global -> shared 搬运的特殊路径；忽略外层 view 后检查两端内存空间。
+// 该路径按连续区间分工，不使用 MMA 的 LowerInfo 分布。
 static bool isGlobalToSharedCopy(frisk::CopyOp op) {
   auto src = dyn_cast<MemRefType>(getViewBuffer(op.getSrc()).getType());
   auto dst = dyn_cast<MemRefType>(getViewBuffer(op.getDst()).getType());
@@ -98,12 +136,15 @@ static bool isGlobalToSharedCopy(frisk::CopyOp op) {
          dst.getMemorySpaceAsInt() == int(friskMs::Shared);
 }
 
+// 把 affine map 应用到 operands，并合成已有 affine.apply，返回单个索引值。
+// 用于将切片偏移与局部坐标拼成底层 buffer 的访问坐标。
 static Value composeAccessIndex(OpBuilder &b, Location loc, AffineMap map,
                                 ValueRange operands) {
   return affine::makeComposedAffineApply(
       b, loc, map, llvm::to_vector_of<OpFoldResult>(operands));
 }
 
+// 上一个函数的单表达式版本：将 expr 包装成无 symbol 的单结果 map。
 static Value composeAccessIndex(OpBuilder &b, Location loc, AffineExpr expr,
                                 ValueRange operands) {
   return composeAccessIndex(
@@ -113,6 +154,11 @@ static Value composeAccessIndex(OpBuilder &b, Location loc, AffineExpr expr,
 // A buffer_view is an index mapping, not a physical memref descriptor.
 // Its map gives the source origin; local coordinates occupy the trailing
 // source axes. Compose from the innermost view out to the original buffer.
+// 将 view 内 indices 原地改写为真实 buffer 的 indices，同时更新 buffer。
+// 每层 view 的 index_map 给出切片起点；局部坐标叠加到源的末尾若干轴。
+// 例如二维 tile 位于四维张量 [batch, head, row0, col0]，局部 [i,j]
+// 变为 [batch, head, row0+i, col0+j]；嵌套 view 从内向外依次组合。
+// 保留原 buffer 类型，因此真实行跨度不会被误写成切片的宽度。
 static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
                               SmallVectorImpl<Value> &indices) {
   while (auto view = buffer.getDefiningOp<frisk::BufferViewOp>()) {
@@ -133,6 +179,12 @@ static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
   }
 }
 
+// 查询 value 在 consumer 处的布局，按以下顺序寻找：
+//   精确 (value, consumer) -> value 的其他用户 -> 表中同 buffer 的条目。
+// 后两项是兼容改写过程中旧分析键失配的回退，不代表求出了新的最优布局。
+// 若分析表不可用或未命中，尝试从定义 value 的 FromThreadTile 属性恢复。
+// 返回 LowerInfo 副本，便于调用方调整切片/广播轴而不修改共享分析结果。
+// 桥接恢复只重建地址映射所需字段，不恢复 mmaInst、convertFrom 等分析关系。
 static std::optional<LowerInfo> findLowerInfoForValue(Value value, Operation *consumer) {
   if (s_info) {
     if (auto *info = s_info->getLowerInfo(value, consumer))
@@ -181,6 +233,13 @@ static std::optional<LowerInfo> findLowerInfoForValue(Value value, Operation *co
 
 // A/B layouts may only budget one MMA's registers. A bridge represents the
 // complete tile, so include block_repeat and preserve singleton broadcast axes.
+// 输入 block tile 及其布局，返回当前线程持有“完整 tile”的 vector 类型。
+// 对普通二维轴：T[d] = thread_widths[d] * warp_repeat[d] *
+//                         warpInstUnroll[d] * block_repeat[d]。
+// warp_layout、block_layout 不直接乘入 T，因为它们分配的是其他线程/warp 的工作。
+// 不能直接使用旧 thread_own_data_size：GEMM A/B 的该字段可能只预算一次 MMA。
+// 原 shape 为 1 的轴或二维 ignoreDim 轴压到 1；一维且 ignoreDim=0 时，
+// 唯一的物理轴对应布局的第 1 轴。只接受静态 rank 1/2 和正的有效大小。
 static FailureOr<VectorType> getFullThreadTileType(Value blockTile,
                                                    const LowerInfo &info) {
   auto type = dyn_cast<ShapedType>(blockTile.getType());
@@ -204,6 +263,10 @@ static FailureOr<VectorType> getFullThreadTileType(Value blockTile,
 
 // A copy slice can have different extents from the buffer whose layout was
 // inferred. Preserve lane/warp ownership while recomputing the repeat counts.
+// 将已知 buffer 的布局调整到实际 copy 切片的大小，只更新副本 info。
+// 保持 lane/warp 分工不变，用 shape[d] / get_block_widths()[axis] 重算 block_repeat。
+// 切片必须整除一个布局覆盖单元；单例轴设置 ignoreDim，变成非单例时取消该轴忽略。
+// 因此这个函数不支持任意尾块补零或带掩码的不整除切片。
 static LogicalResult setCopyTileShape(LowerInfo &info, ArrayRef<int64_t> shape) {
   if (shape.empty() || shape.size() > 2)
     return failure();
@@ -226,6 +289,11 @@ static LogicalResult setCopyTileShape(LowerInfo &info, ArrayRef<int64_t> shape) 
 
 // Keep layout metadata on each bridge: equal vector shapes do not imply equal
 // distributions across lanes. No Value -> Value replacement table is needed.
+// 把 LowerInfo 的地址映射及各层布局序列化到桥接 op 上。
+// tile_layout 保存最终七输入、二输出 affine map；其余属性保留分解参数，
+// 用于从线程内 packed 下标构造 map 操作数、比较布局、或恢复 LowerInfo。
+// 相同 vector shape 不意味着 lane 所有权相同，不能只记录形状。
+// getAffineMap 会更新 LowerInfo 内部辅助字段，所以这里对副本调用。
 static void setTileLayout(Operation *bridge, const LowerInfo &info,
                           OpBuilder &builder) {
   LowerInfo layout = info;
@@ -245,6 +313,9 @@ static void setTileLayout(Operation *bridge, const LowerInfo &info,
   markTiled(bridge, builder);
 }
 
+// 创建 block -> thread 的显式表示边界，并附上完整布局属性。
+// tileType 决定返回 SSA vector 还是可写的线程 memref；此时尚未展开实际 load。
+// 后续可能与 FromThreadTile 抵消，也可能在 finalization 生成取数/布局交换。
 static Value toThreadTile(Value value, Type tileType, const LowerInfo &info,
                            OpBuilder &builder, Location loc) {
   auto bridge = builder.create<frisk::ToThreadTileOp>(loc, tileType, value);
@@ -252,6 +323,8 @@ static Value toThreadTile(Value value, Type tileType, const LowerInfo &info,
   return bridge.getResult();
 }
 
+// 将线程数据包装为原 blockType，供尚未改写的用户和循环接口继续使用。
+// 这是逻辑表示桥接，不会自动分配完整 block buffer，也不会自动写回目的地址。
 static Value fromThreadTile(Value value, Type blockType, const LowerInfo &info,
                              OpBuilder &builder, Location loc) {
   auto bridge = builder.create<frisk::FromThreadTileOp>(loc, blockType, value);
@@ -259,11 +332,18 @@ static Value fromThreadTile(Value value, Type blockType, const LowerInfo &info,
   return bridge.getResult();
 }
 
+// 在当前 builder 插入点生成 gpu.thread_id x；尽管名字叫 find，实际会创建 op。
+// 在使用位置生成保证支配关系。这里的 tid 是整个 block 内的线程编号，
+// LowerInfo 的 map 还会把它分解为 laneId 和 warpId。
 static Value findThreadIdxOp(Operation *op, OpBuilder &builder) {
   // Materialize at the use site, so the value always dominates its consumer.
   return builder.create<gpu::ThreadIdOp>(op->getLoc(), gpu::Dimension::x);
 }
 
+// 把分析阶段标记的 convertFrom 关系变为真实 ConvertLayoutOp。
+// 先保存需要转换的条目，再插入 op，避免更新 DenseMap 时重哈希使遍历失效。
+// 只替换指定 consumer 对原输入的使用；其他消费者仍可保留原布局。
+// global -> shared copy 使用独立搬运方案，因此跳过这里的布局转换。
 static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
   struct Conversion { Operation *user; Value input; LowerInfo from; LowerInfo to; };
   SmallVector<Conversion, 8> conversions;
@@ -286,17 +366,20 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
   }
 }
 
+// 生成 index 类型常量，供循环下标、取模、向量位置和地址计算共用。
 static Value createIndexConstant(OpBuilder &builder, Location loc,
                                  int64_t value) {
   return builder.create<arith::ConstantIndexOp>(loc, value);
 }
 
+// 将只依赖一个 index 值的表达式构造成 affine.apply，返回计算后的 index。
 static Value createSingleDimAffineApply(OpBuilder &builder, Location loc,
                                         AffineExpr expr, Value operand) {
   auto map = AffineMap::get(1, 0, expr, builder.getContext());
   return builder.create<affine::AffineApplyOp>(loc, map, operand);
 }
 
+// 计算 operand % divisor，用来拆出某层局部坐标；除数为 1 时直接返回 0。
 static Value modBy(OpBuilder &builder, Location loc, Value operand,
                    int64_t divisor) {
   assert(divisor > 0 && "affine modulo divisor must be positive");
@@ -307,6 +390,7 @@ static Value modBy(OpBuilder &builder, Location loc, Value operand,
   return createSingleDimAffineApply(builder, loc, d0 % divisor, operand);
 }
 
+// 计算 operand floordiv divisor，用来去掉更内层坐标；除数为 1 时返回原值。
 static Value floorDivBy(OpBuilder &builder, Location loc, Value operand,
                         int64_t divisor) {
   assert(divisor > 0 && "affine floordiv divisor must be positive");
@@ -318,6 +402,7 @@ static Value floorDivBy(OpBuilder &builder, Location loc, Value operand,
                                     operand);
 }
 
+// 生成 lhs + rhs 的 affine 索引表达式，例如 mask 的起点加 block 内坐标。
 static Value addIndexValues(OpBuilder &builder, Location loc, Value lhs,
                             Value rhs) {
   auto d0 = builder.getAffineDimExpr(0);
@@ -326,6 +411,11 @@ static Value addIndexValues(OpBuilder &builder, Location loc, Value lhs,
   return builder.create<affine::AffineApplyOp>(loc, map, ValueRange{lhs, rhs});
 }
 
+// 按 order 将二维坐标展平：flat = xy[order[0]] +
+// xy[order[1]] * layout[order[0]]，其中 order[0] 是变化最快的轴。
+// 例如 shape=[2,3]、xy=[1,2]：order=[0,1] 得 1+2*2；
+// order=[1,0] 得 2+1*3。不能把 order 固定理解为 C 数组行优先。
+// 只有一个元素时直接生成 0；这与 LowerInfo 中 UnflattenIndexToXY 互为对应。
 static Value flattenXY(OpBuilder &builder, Location loc, ArrayRef<Value> xy,
                        coordXY_t order, coordXY_t layout) {
   assert(xy.size() == 2 && "expected two coordinates");
@@ -343,6 +433,9 @@ static Value flattenXY(OpBuilder &builder, Location loc, ArrayRef<Value> xy,
 /// LowerInfo map 固定接收七个参数：
 /// [tid, br0, br1, iu0, iu1, flattened_warp_repeat, flattened_register]。
 /// wr/reg 的展平顺序由 layout 指定，不能假定行优先。
+// 把分层坐标整理成 LowerInfo::getAffineMap 约定的七个实参。
+// br/iu 保留每轴独立参数；wr/reg 分别按各自 order 展平成一个参数。
+// tid 已隐含 lane 与 warp 坐标，所以不再额外传入 laneId、warpId。
 static SmallVector<Value, 7>
 buildLowerInfoMapOperands(OpBuilder &builder, Location loc, LowerInfo &info,
                           Value tidx, Value br0, Value br1, Value iu0,
@@ -365,6 +458,9 @@ buildLowerInfoMapOperands(OpBuilder &builder, Location loc, LowerInfo &info,
   return operands;
 }
 
+// 应用 LowerInfo 的二维地址 map，并投影成实际 rank 个索引。
+// 二维 ignoreDim 轴返回 0；归约掉第 0 轴的一维结果使用 map 的第 1 个结果。
+// 返回的是 block tile 内逻辑坐标；如果底层还有 buffer_view，需要再加 view 偏移。
 static SmallVector<Value, 2> applyLowerInfoMap(OpBuilder &builder, Location loc,
                                                LowerInfo &info,
                                                ArrayRef<Value> mapOperands,
@@ -389,6 +485,17 @@ static SmallVector<Value, 2> applyLowerInfoMap(OpBuilder &builder, Location loc,
 /// 将线程 tile 下标拆为 br/iu/wr/reg，再应用含 tid 的布局 map 得到 block 坐标。
 /// 每维满足 iv = (((br * instUnroll + iu) * warpRepeat + wr) * threadWidth +
 /// reg)。
+// 核心逆打包函数：输入当前线程的 tileIvs，输出它们在 block tile 中的坐标。
+// 记 W=thread_widths[d]、R=warp_repeat[d]、U=warpInstUnroll[d]：
+//   br = iv / (U*R*W)，iu = (iv / (R*W)) % U，
+//   wr = (iv % (R*W)) / W，reg = iv % W。
+// 线程内部排列为 [br][iu][wr][reg]，reg 最内层；这里不把 tid 加到 iv 上，
+// 而是把 tid 与上述分层坐标一起交给 LowerInfo map。
+// 在 LowerInfo.h 中，每轴 block 坐标是：
+//   br*blockWidth + warpCoord*warpInstWidth*U + iu*warpInstWidth
+//   + wr*warpWidth + laneCoord*W + reg。
+// laneCoord 来自 tid%warp_threads；warpCoord 来自 tid/warp_threads，
+// 各自再按 warp_layout_order、block_layout_order 拆成二维。
 static SmallVector<Value, 2>
 buildMappedAccessIndices(OpBuilder &builder, Location loc, LowerInfo &info,
                          Value tidx, ArrayRef<Value> tileIvs, unsigned rank) {
@@ -423,6 +530,8 @@ buildMappedAccessIndices(OpBuilder &builder, Location loc, LowerInfo &info,
 }
 
 
+// 控制线程内部遍历循环的属性：marker 标记已处理，labelPrefix 用于阅读 IR，
+// unitIndex 复用单例轴的 0，unrollFull 请求 finalization 完全展开循环。
 struct VectorTileLoopOptions {
   StringRef marker;
   StringRef labelPrefix;
@@ -430,12 +539,20 @@ struct VectorTileLoopOptions {
   bool unrollFull = false;
 };
 
+// 遍历一个线程 vector 的所有元素，利用 affine.for 的 iter_args/yield
+// 逐元素构造新的 SSA vector。shape 是线程 tile 形状，不是整个 block 的形状。
+// BodyEmitter::emit(indices, currentTile) 接收线程局部坐标并返回更新后的 vector。
+// 它只负责遍历；是否映射到 block 地址由具体 emitter 决定。
 class VectorTileLoopNest {
 public:
+  // 记录 builder、位置、遍历形状和循环选项；构造函数本身不生成 IR。
   VectorTileLoopNest(OpBuilder &builder, Location loc, ArrayRef<int64_t> shape,
                      VectorTileLoopOptions options = {})
       : builder(builder), loc(loc), shape(shape), options(options) {}
 
+  // 递归生成每个非单例轴的循环；单例轴直接使用索引 0，最内层调用 emitter。
+  // 每层携带完整 vector 的当前 SSA 值，递归返回的值经 yield 传回外层。
+  // 返回最外层结果，同时将 builder 恢复到所生成循环之后。
   template <typename BodyEmitter>
   Value emit(Value initial, BodyEmitter &body, unsigned dim = 0) {
     if (dim == shape.size())
@@ -480,6 +597,13 @@ private:
 // Legacy destination-style operations write memory at the original program
 // point. Local destinations are thread memrefs; shared/global destinations keep
 // physical block addresses. The explicit To(From(...)) chain is foldable later.
+// 把 FromThreadTile 包装的计算结果实际写入 destination，保留原 op 的副作用。
+// 输入 block 必须直接由 FromThreadTile 定义；先 To(block) 获得可读取的 vector。
+// local/空间 5：目标转为线程私有 memref，直接以线程局部 iv 写入。
+// shared/global：目标仍是物理 block 存储，以 LowerInfo 映射后的坐标写入。
+// 若归约轴、广播轴或跨 warp 复用导致多个线程拥有同一逻辑元素，仅 leader 写。
+// shared 写完后在条件分支外发出 barrier，保证所有线程都参加同步。
+// 调用点位置很重要：不能把写回随意移到消费者处，否则会改变可见的内存顺序。
 static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
                                 OpBuilder &builder, Location loc) {
   auto bridge = block.getDefiningOp<frisk::FromThreadTileOp>();
@@ -558,11 +682,14 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
   }
 }
 
+// 局部广播的单元素 emitter：源的单例轴固定取 0，其他轴使用当前 tile 下标。
+// 抽取一个标量后插入目标 vector；这里不执行跨 lane 通信。
 struct BroadcastTileElement {
   OpBuilder &rewriter;
   Location loc;
   VectorType sourceTy;
   Value sourceVector;
+  // 为目标 tile 的一个位置取源元素并返回插入后的新 SSA vector。
   Value emit(ArrayRef<Value> tileIvs, Value currentTile) {
     SmallVector<Value, 2> sourceIndices;
     sourceIndices.reserve(tileIvs.size());
@@ -589,6 +716,9 @@ struct BroadcastTileElement {
   }
 };
 
+// 将线程内 sourceVector 广播到 tileTy；要求元素类型、rank 相同，
+// 每个不匹配的源维度必须为 1。相同类型直接复用，否则用逐元素循环构造结果。
+// 正确的跨线程元素归属应由调用前的 ToThreadTile 布局保证。
 static FailureOr<Value> broadcastLocalVectorToTile(Value sourceVector,
                                                    VectorType tileTy,
                                                    OpBuilder &rewriter,
@@ -630,6 +760,8 @@ static FailureOr<Value> broadcastLocalVectorToTile(Value sourceVector,
 }
 
 
+// 后序扫描并反复删除 MLIR 判定为 trivially dead 的操作，直到不再变化。
+// 避免把未使用但仍有写内存副作用的操作当作普通死 SSA 计算删除。
 static void eraseTriviallyDeadOps(Operation *root) {
   bool changed = true;
   while (changed) {
@@ -649,6 +781,8 @@ static void eraseTriviallyDeadOps(Operation *root) {
 }
 
 
+// 反复展开只有一次迭代的 affine.for，让循环体直接进入父 block。
+// 这是单次迭代简化，与 frisk.loopUnrollFull 请求的多次循环完全展开不同。
 static void promoteSingleIterationAffineFors(Operation *root) {
   bool changed = true;
   while (changed) {
@@ -664,6 +798,8 @@ static void promoteSingleIterationAffineFors(Operation *root) {
   }
 }
 
+// 把 fill 使用的标量常量属性转换为目标元素类型。
+// 支持浮点属性到浮点、整数属性到整数/index；不支持时返回空属性。
 static Attribute convertScalarAttrForElementType(TypedAttr valueAttr,
                                                  Type elementType,
                                                  Builder &builder) {
@@ -684,6 +820,9 @@ static Attribute convertScalarAttrForElementType(TypedAttr valueAttr,
 }
 
 
+// 保持 vector 形状，只转换浮点元素位宽；同类型直接返回。
+// 位宽增大生成 arith.extf，其他不同浮点类型走 arith.truncf；非浮点转换失败。
+// 它不是通用数值转换器，后面的 finalizeNumericCast 有独立且更细的类型检查。
 static FailureOr<Value>
 castFloatVectorElementType(Value vector, Type dstElementType,
                            ConversionPatternRewriter &rewriter, Location loc) {
@@ -709,6 +848,11 @@ castFloatVectorElementType(Value vector, Type dstElementType,
 }
 
 
+// 为逐元素计算准备与结果线程 tile 对齐的一个操作数。
+// 浮点标量：直接广播；有形状的输入：以 resultInfo 为基础投影单例轴，
+// 先 ToThreadTile 取得对应逻辑元素，再转换元素类型，最后在线程内广播。
+// 关键是“按结果需要的坐标取输入”，而不是任取一个同 shape 的线程 vector。
+// 如果生产者布局不同，保留在两端桥接上的属性会使后续执行真实布局交换。
 static FailureOr<Value> materializeElementwiseOperand(
     Value original, Value adapted, const LowerInfo &resultInfo, VectorType resultType,
     ConversionPatternRewriter &rewriter, Location loc) {
@@ -748,6 +892,9 @@ static FailureOr<Value> materializeElementwiseOperand(
   return broadcastLocalVectorToTile(*casted, resultType, rewriter, loc);
 }
 
+// add/sub/mul/div 共用的重写模板：查询结果 LowerInfo -> 推导线程形状 ->
+// 物化两端操作数 -> 创建 arith 向量计算 -> FromThreadTile 恢复原结果类型。
+// matchAndRewrite 成功后替换原 op；缺布局或不兼容的广播/类型则匹配失败。
 template <typename FromOp, typename ToOp>
 class FriskBinaryOpTiling : public OpConversionPattern<FromOp> {
 public:
@@ -777,6 +924,8 @@ public:
   }
 };
 
+// 将 block 级 exp2 改为 math.exp2 的线程 vector 计算，再桥接回 block 类型。
+// 优先使用输入自己的 LowerInfo 取数；没有输入信息时回退到结果布局。
 class Exp2OpTiling : public OpConversionPattern<frisk::Exp2Op> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -803,6 +952,8 @@ public:
   }
 };
 
+// 按结果 LowerInfo 生成线程 tile 大小的全零 vector，并恢复 block 结果类型。
+// 零是纯值，构造该结果不需要分配或清零一个真实的 block 大小内存。
 class ZeroOpTiling : public OpConversionPattern<frisk::ZeroOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -825,6 +976,9 @@ public:
   }
 };
 
+// fill 有写目标内存的语义：先生成线程 memref，循环写入目标常量，
+// 再用 writeBackBlockTile 保留物理写回；有结果时返回 block 表示，否则删除原 op。
+// 与 ZeroOpTiling 不同，不能只用零/常量 vector 替换而丢失写内存副作用。
 class FillOpTiling : public OpConversionPattern<frisk::FillOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -865,6 +1019,9 @@ public:
   }
 };
 
+// shared/global 分配保留原来的 block 大小和内存空间。
+// 其他分配根据 LowerInfo 缩小为线程 tile 大小的 memref.alloca，
+// 再用 FromThreadTile 保持用户看到的 block 类型。
 class AllocBufferOpTiling : public OpConversionPattern<frisk::AllocBufferOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -896,6 +1053,9 @@ public:
   }
 };
 
+// mask 的逐元素 emitter：线程下标先映射为 block 坐标，再叠加 starts。
+// 用这些逻辑坐标替换原 region 参数，克隆标量表达式，将 mask_yield 的值
+// 插入当前线程 vector。否则使用局部 iv 会让不同线程误算同一组 mask 坐标。
 struct MaskTileElement {
   ConversionPatternRewriter &rewriter;
   Location loc;
@@ -905,6 +1065,7 @@ struct MaskTileElement {
   frisk::MaskOp::Adaptor adaptor;
   Block *body;
   frisk::MaskYieldOp yieldOp;
+  // 计算 mask 中一个线程拥有的元素；IRMapping 仅用于本次 region 克隆。
   Value emit(ArrayRef<Value> tileIvs, Value initVector) {
     auto accessIndices = buildMappedAccessIndices(
         rewriter, loc, *resultInfo, tidx, tileIvs, resultTy.getRank());
@@ -940,6 +1101,8 @@ struct MaskTileElement {
 
 /// 匹配：rank <= 2、带 LowerInfo 的 memref mask，region yield 一个标量。
 /// 对线程持有的每个元素执行 region，经 FromThreadTile 返回原 block 类型。
+// 校验 mask 的静态结果形状、LowerInfo、region 参数数和单标量 yield，
+// 创建线程 vector，并通过 MaskTileElement 遍历填充，最终桥接回原结果类型。
 class MaskOpTiling : public OpConversionPattern<frisk::MaskOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -999,6 +1162,8 @@ public:
 };
 
 
+// 为浮点归约生成单位元：add=0、mul=1、min=+∞、max=-∞。
+// 未知 kind 返回 failure，调用方据此拒绝该归约。
 static FailureOr<Value> createReduceIdentity(frisk::ReduceOp op, Type elemTy,
                                              OpBuilder &rewriter) {
   double identity = 0.0;
@@ -1018,6 +1183,7 @@ static FailureOr<Value> createReduceIdentity(frisk::ReduceOp op, Type elemTy,
   return rewriter.create<arith::ConstantOp>(op->getLoc(), attr).getResult();
 }
 
+// 按 reduce.kind 合并两个浮点值，生成 addf/mulf/minnumf/maxnumf。
 static FailureOr<Value> combineReduceValues(frisk::ReduceOp op, Value lhs,
                                             Value rhs, OpBuilder &rewriter) {
   auto kind = op.getKind();
@@ -1039,6 +1205,9 @@ static FailureOr<Value> combineReduceValues(frisk::ReduceOp op, Value lhs,
 }
 
 
+// 对一个输出位置先在线程内部归约，再在同一 warp 的相关 lanes 间归约。
+// laneExtent 是归约轴上的 lane 数；laneStride 由该轴在 warp_layout_order
+// 中的位置决定，因此 XOR shuffle 的偏移不是一律 1、2、4。
 struct ReduceTileElement {
   ConversionPatternRewriter &rewriter;
   frisk::ReduceOp op;
@@ -1049,6 +1218,8 @@ struct ReduceTileElement {
   int64_t laneStride;
   int64_t warpThreads;
 
+  // 沿源线程 vector 的归约轴循环累加，再按 offset*laneStride 做 XOR shuffle，
+  // 最后把归约结果插回输出 vector。支持保留长度为 1 的轴或去掉该轴。
   Value emit(ArrayRef<Value> outputIvs, Value output) {
     auto loc = op.getLoc();
     int64_t dim = op.getDim();
@@ -1083,6 +1254,10 @@ struct ReduceTileElement {
   }
 };
 
+// 生成“线程内循环 + warp 内 shuffle”的归约，并在原位置写回 dst。
+// 要求浮点类型匹配、归约轴不跨 warp（block_layout[dim]==1）、lane 数为 2 的幂。
+// 结果形状取源线程 tile 的非归约轴，避免误用仍描述未归约矩阵的寄存器预算。
+// 本实现没有跨 warp 的共享内存归约路径；不满足条件时明确匹配失败。
 class ReduceOpTiling : public OpConversionPattern<frisk::ReduceOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1142,6 +1317,11 @@ public:
 // Partition a logical row-major tile into consecutive per-thread intervals.
 // Vector stores never cross a row, even when an interval spans several rows.
 // A short final interval is guarded, while every thread reaches the barrier.
+// global -> shared 的专用搬运：不按 LowerInfo，而按逻辑行优先序连续分块。
+// 每线程负责 ceil(总元素数/thread_num) 个元素；向量宽度取该数量与末轴长度的 gcd，
+// 保证一次 vector.store 不跨行。源逐标量加载并组装向量，可做浮点位宽转换。
+// 尾部无任务线程跳过访存，但所有线程都在分支外执行 block 同步。
+// 源/目标 view 的偏移会合成到真实 buffer；带结果的 copy 返回传入的完整目标。
 static LogicalResult lowerGlobalToSharedCopy(
     frisk::CopyOp op, Value source, Value destination, Value result,
     ArrayRef<int64_t> shape, ConversionPatternRewriter &rewriter) {
@@ -1222,8 +1402,17 @@ static LogicalResult lowerGlobalToSharedCopy(
   return success();
 }
 
+// 处理整块/切片 copy，并保留写目标及返回目标的语义。
+//   1. 解析 offset_map；旧式 ()->(rank) 是整块复制哨兵，不是实际偏移。
+//   2. 必要时对较大一端建立 buffer_view，并调整切片的 block_repeat。
+//   3. global->shared 走连续搬运；其他路径按 LowerInfo 取得源线程 tile。
+//   4. vector 目标更新 SSA；memref 目标写线程暂存，再执行物理写回。
+//   5. 若切片类型不同于 copy 结果类型，返回完整原目标，不能只返回切片。
+// 旧式无结果 vector copy 只替换被新定义支配的后续使用，以保留 copy 前的读取。
 class CopyOpTiling : public OpConversionPattern<frisk::CopyOp> {
 public:
+  // 注册为允许有界递归的 pattern：一次改写删除一个旧 copy 且不创建新 copy，
+  // 即使替换后续 vector 使用立即触发另一个 copy 重写，也会有限终止。
   explicit CopyOpTiling(MLIRContext *context) : OpConversionPattern(context) {
     // Updating a legacy vector destination can trigger legalization of the
     // next copy immediately. Each invocation erases one original copy and
@@ -1337,6 +1526,8 @@ public:
   }
 };
 
+// 识别 copy_to_reg 的整块形式：源和结果 shape 相同，offset_map 为 ()->(rank)。
+// 这种形式的 vector 仍表示逻辑 block tile，不能误认为已经是线程寄存器片段。
 static bool isWholeTileCopyToReg(frisk::CopyToRegOp op) {
   auto src = cast<MemRefType>(op.getSrc().getType());
   auto dst = cast<VectorType>(op.getResult().getType());
@@ -1348,6 +1539,9 @@ static bool isWholeTileCopyToReg(frisk::CopyToRegOp op) {
 
 // A rank sentinel denotes a whole block tile (used by pipeline prologue and
 // epilogue). Other maps specify one thread's contiguous slice.
+// copy_to_reg 分两种语义：整块形式使用 LowerInfo 缩成线程 tile，再桥接回
+// 原 block vector；显式偏移形式已经描述一个线程的连续切片，直接建 view。
+// 后者不附 tile_layout，后续要求切片与线程形状一致，按局部索引读取即可。
 class CopyToRegOpTiling : public OpConversionPattern<frisk::CopyToRegOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1395,12 +1589,15 @@ public:
   }
 };
 
+// 布局转换的回读 emitter：以目标 LowerInfo 把线程下标映射到共享 scratch，
+// 读回标量并组装新的线程 vector；生产者在 scratch 中使用的是源布局地址。
 struct LayoutReadBackElement {
   ConversionPatternRewriter &rewriter;
   Location loc;
   LowerInfo &info;
   Value tid;
   Value scratch;
+  // 从共享中转矩阵读取目标线程应持有的一个元素，返回更新后的 vector。
   Value emit(ArrayRef<Value> ivs, Value output) {
     auto indices = buildMappedAccessIndices(rewriter, loc, info, tid, ivs, ivs.size());
     Value scalar = rewriter.create<affine::AffineLoadOp>(loc, scratch, indices);
@@ -1409,6 +1606,10 @@ struct LayoutReadBackElement {
   }
 };
 
+// 落实显式布局转换：按 fromInfo 取源寄存器 -> 按源坐标写 shared scratch ->
+// 同步 -> 按 toInfo 坐标读成新寄存器 vector -> 再同步 -> FromThreadTile。
+// 第一次同步由 writeBackBlockTile 生成，第二次保护 scratch 不被过早复用。
+// 转换改变的是线程/lane 对元素的持有关系，矩阵的逻辑值和 block 类型保持不变。
 class ConvertLayoutOpTiling : public OpConversionPattern<frisk::ConvertLayoutOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1452,6 +1653,12 @@ public:
 /// Scalar block bodies use thread memrefs for memory accesses and block
 /// coordinates for arithmetic on the original region IVs. IRMapping below is
 /// local to cloning this region; it never records replacements across patterns.
+// 把 frisk.block 的标量 region 分配给线程执行。
+// 先收集读写 buffer 的 LowerInfo，选择一个输出线程形状作为局部循环范围。
+// 特别区分两套坐标：region 参数参与标量计算时用 block 坐标；
+// 线程私有 memref 的 load/store 使用局部 iv（单例轴为 0）。
+// 当前仅支持平直 region 和受限的投影访问；嵌套 region、未知副作用、
+// 需要跨分布轴置换的访问会失败。所有写过的 buffer 最后显式写回。
 class BlockOpTiling : public OpConversionPattern<frisk::BlockOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1595,6 +1802,11 @@ public:
 
 /// 从完整 thread tile 提取一个 MMA 片段。MN 为静态片段编号，K 为循环 IV；
 /// vector.extract_strided_slice 不支持动态 offset，因此逐寄存器提取/组装。
+// 从完整 A/B 线程 vector 中取某次 MMA 所需的小片段。
+// A 使用 [m*片段行数+row, k*片段列数+col]；
+// B 使用 [k*片段行数+row, n*片段列数+col]。
+// mn 来自 C++ 静态循环，k 是 IR 中循环变量，故用逐元素 extract/insert
+// 支持动态 K 偏移，而不是要求静态 offset 的 extract_strided_slice。
 static Value extractGemmTileFragment(OpBuilder &builder, Location loc,
                                      Value tile, VectorType fragmentType,
                                      int64_t mn, Value k, bool isA) {
@@ -1625,6 +1837,14 @@ static Value extractGemmTileFragment(OpBuilder &builder, Location loc,
 }
 
 /// 只替换 block-tile SSA 值，thread-tile 的数据流完全由 IR 显式表达。
+// 将一个 block GEMM 改写为每线程寄存器片段参与的 WarpMmaRROp。
+// 要求 DCU、二维 memref A/B/C、三者 LowerInfo 绑定相同 MMA 指令。
+// 每轴片段大小 = thread_widths * warp_repeat；
+// 每轴片段数量 = block_repeat * warpInstUnroll；两者相乘才是完整线程 tile。
+// A 是 [M,K]，B 是 [K,N]，C 是 [M,N]，所以需检查三者片段数量相容。
+// M/N 在 C++ 层静态展开，K 在 IR 中循环；每个 C 片段从零开始累加，
+// 结束后插入完整 C 线程 vector，再用 FromThreadTile 替换原 GEMM 结果。
+// op.getC() 在这里是输出 SSA 值，不是 GEMM 的输入累加器。
 class GemmOpTiling : public OpConversionPattern<frisk::GemmOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1659,6 +1879,8 @@ public:
       return rewriter.notifyMatchFailure(op, "requires rank-two block tiles");
     }
 
+    // 把“片段数量”和“单片段寄存器形状”分开计算。
+    // 例如某轴 W=2、R=2、U=1、BR=3，则片段大小=4、片段数=3、完整长度=12。
     auto aCounts = infoA->get_block_repeat() * infoA->warpInstUnroll;
     auto bCounts = infoB->get_block_repeat() * infoB->warpInstUnroll;
     auto cCounts = infoC->get_block_repeat() * infoC->warpInstUnroll;
@@ -1680,6 +1902,8 @@ public:
 
     // A/B 的旧 thread_own_data_size 不含 block_repeat（复用寄存器的尺寸）。
     // ToThreadTile 在循环外产生完整 SSA tile，必须包含全部 MN/K 片段。
+    // 完整 A/B tile 在 K 循环外创建，需要容纳所有重复访问的片段。
+    // 这与旧分析中“每轮复用一次 MMA 的 A/B 寄存器”的最小存储预算不同。
     auto threadTileA = VectorType::get(aCounts * aFragmentShape,
                                        aType.getElementType());
     auto threadTileB = VectorType::get(bCounts * bFragmentShape,
@@ -1713,6 +1937,8 @@ public:
                                           m, kFor.getInductionVar(), true);
         Value b = extractGemmTileFragment(rewriter, loc, ttileB, fragmentB,
                                           n, kFor.getInductionVar(), false);
+        // IR 中每个线程提供自己的 A/B/C 片段；warp 级指令按硬件布局协同计算。
+        // 这里保留指令名字和约束，最终机器指令生成仍由后续 lowering 负责。
         auto mma = rewriter.create<frisk::WarpMmaRROp>(
             loc, fragmentC, a, b, kFor.getRegionIterArgs()[0]);
         markTiled(mma, rewriter);
@@ -1736,6 +1962,8 @@ public:
 };
 
 
+// 列举本阶段需要处理的 block 级 op，供预扫描和 ConversionTarget 共用。
+// 普通控制流和已生成的线程计算不属于这份待转换列表。
 static bool isBlockTileOperation(Operation *op) {
   return isa<frisk::GemmOp, frisk::MaskOp, frisk::AddOp, frisk::SubOp,
       frisk::MulOp, frisk::DivOp, frisk::Exp2Op, frisk::CopyOp,
@@ -1746,6 +1974,11 @@ static bool isBlockTileOperation(Operation *op) {
 // Fold ToThreadTile(FromThreadTile(threadTile)) without changing block-level
 // users of the same FromThreadTile. Equal types alone do not imply equal lane
 // ownership, so only cancel bridges describing the same layout.
+// 消除布局等价的 ToThreadTile(FromThreadTile(x))，反复处理直到稳定。
+// 逐项比较布局属性，不能只比较 shape；同类型时直接复用 x。
+// 若 x 是线程 memref 而 To 要 vector，必须在 To 原位置加载，
+// 以看见 From 和 To 之间的写入。From 还有其他 block 用户时不能删除。
+// 这里只消除成对桥接，不展开独立 To，也不强行消除所有 From。
 static void foldThreadTilePairs(Operation *root) {
   static constexpr StringLiteral layoutAttrs[] = {
       "tile_layout", "thread_widths", "thread_creg_order", "warp_repeat",
@@ -1799,20 +2032,29 @@ static void foldThreadTilePairs(Operation *root) {
 #define GEN_PASS_DEF_CONVERTFRISKBASETOTHREADLEVELIR
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
+// 第一阶段 pass：由 block 计算建立线程计算和显式表示边界。
+// runOnOperation 的步骤：筛选 kernel -> 判断布局需求 -> LowerInfo 推断 ->
+// 插入布局转换 -> partial conversion -> 折叠桥接/清理 -> 尝试共享内存复用。
+// 只有带 thread_num 的函数会处理；需要推断时必须存在 GEMM 布局锚点。
+// 该阶段不会统一改写循环签名，也不保证桥接已经全部消失。
 class ConvertFriskBaseToThreadLevelIR
     : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
 public:
+  // 声明本 pass 会创建的 dialect，让 pass 管理器提前加载相应 IR 定义。
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<frisk::FriskDialect, arith::ArithDialect, affine::AffineDialect,
         vector::VectorDialect, math::MathDialect, memref::MemRefDialect,
         gpu::GPUDialect, scf::SCFDialect>();
   }
 
+  // 对当前 func.func 执行本阶段转换；具体处理顺序见下方分支和类说明。
   void runOnOperation() override {
     auto kernel = getOperation();
     if (!kernel->hasAttr("thread_num"))
       return;
     eraseTriviallyDeadOps(kernel);
+    // 预扫描区分“有操作要改写”和“需要 GEMM 推导布局”。
+    // 显式线程 copy_to_reg、global->shared 搬运、shared/global 分配可不依赖布局分析。
     bool needsTiling = false;
     bool needsLayoutAnalysis = false;
     bool hasLayoutAnchor = false;
@@ -1849,6 +2091,8 @@ public:
       signalPassFailure();
       return;
     }
+    // 分析从 MMA 硬件描述确定 GEMM 布局，再向前/向后传播给其他操作，
+    // 最后解决同一值不同使用点的布局冲突，必要时设置 convertFrom。
     LowerInfoMap emptyInfo;
     s_info = needsLayoutAnalysis ? LowerInfoAnalysis::run(kernel) : &emptyInfo;
     if (!s_info) {
@@ -1864,6 +2108,9 @@ public:
     insertConvertLayoutOps(*s_info);
     llvm::outs() << "----- after insertConvertLayoutOps:\n" << kernel << "\n"; llvm::outs().flush();
 
+    // 未 tiled 的目标 Frisk op 必须被转换；其他 op 动态合法。
+    // 因此 pattern 返回 failure 不等于默默保留原计算：若没有其他合法改写，
+    // applyPartialConversion 会失败并使 pass 报错。
     ConversionTarget target(*context);
     target.markUnknownOpDynamicallyLegal([](Operation *op) {
       return !isBlockTileOperation(op) || isTiled(op);
@@ -1899,6 +2146,7 @@ public:
 
 } // namespace
 
+// 第一阶段的工厂入口，对应命令行 --convert-friskbase-to-thread。
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass() {
   return std::make_unique<ConvertFriskBaseToThreadLevelIR>();
 }
@@ -1907,11 +2155,17 @@ namespace{
 
 // Finalization uses the layout recorded on the bridge, never the expired
 // LowerInfo analysis. Packed coordinates are [br, iu, wr, reg] per axis.
+// 第二阶段的轻量布局解码器，完全从桥接属性获得地址计算信息。
+// read 校验并读取 map/形状/分层参数；indices 把线程局部 iv 映射到 block 地址。
+// 它复现 buildMappedAccessIndices 的分解公式，但不要求旧 LowerInfoMap 仍有效。
 struct ThreadTileAccess {
   AffineMap map;
   coordXY_t widths, repeats, unroll, regOrder, repeatOrder;
   int64_t ignoreDim = -1;
 
+  // 校验静态 rank 1/2、相同 rank 和元素类型；有 tile_layout 时还校验七输入
+  // 二输出 map、ignore_dim 和正的分层尺寸/合法 order。
+  // 没有布局属性只接受 block 与 thread 同 shape，表示已经是线程连续切片。
   LogicalResult read(Operation *op, ShapedType block, ShapedType thread) {
     if ((isa<VectorType>(block) && cast<VectorType>(block).isScalable()) ||
         (isa<VectorType>(thread) && cast<VectorType>(thread).isScalable()))
@@ -1947,6 +2201,9 @@ struct ThreadTileAccess {
                    pair("warp_repeat_order", repeatOrder, true));
   }
 
+  // 由 packed iv 拆出 br/iu/wr/reg，按属性中的 order 展平，再调用保存的 map。
+  // 无 map 则直接返回局部 iv；单例轴或二维 ignore_dim 轴固定为 0。
+  // 此处仍返回 tile 内坐标，buffer_view 的物理偏移由另一个 pattern 合成。
   SmallVector<Value> indices(OpBuilder &b, Location loc, Value tid,
                              ArrayRef<Value> ivs, ShapedType block) const {
     if (!map)
@@ -1986,6 +2243,9 @@ struct ThreadTileAccess {
 // Fold a view into each scalar memory access, preserving the original buffer's
 // physical strides. In particular, a K slice keeps the full K row stride.
 // Leave unsupported/escaping uses visible for the finalization diagnostic.
+// 把 buffer_view 折叠到每个标量 memref/affine load/store 的访问地址中。
+// 一次重写一个用户，贪心驱动重复执行；无用户时删除 view。
+// 保留底层 buffer 的真实 stride；不支持或逃逸的用户留给最终诊断报告。
 class BufferViewFinalization : public OpRewritePattern<frisk::BufferViewOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2052,6 +2312,9 @@ public:
 
 // Numeric conversion supports scalars and vectors. Equal-width floating point
 // formats are not bitcasts; reject formats requiring a separate conversion.
+// 生成标量或 vector 的数值转换：浮点扩展/截断、有符号整数与浮点转换、
+// 整数扩展/截断、index cast。类型相同直接复用；未支持的组合返回 failure。
+// 相同位宽的不同浮点格式没有被当作 bitcast，不能用截断冒充数值转换。
 static FailureOr<Value> finalizeNumericCast(OpBuilder &b, Location loc,
                                            Value value, Type resultType) {
   if (value.getType() == resultType)
@@ -2083,6 +2346,9 @@ static FailureOr<Value> finalizeNumericCast(OpBuilder &b, Location loc,
   return failure();
 }
 
+// 消除 frisk.cast。普通标量/vector 直接数值转换；memref 表示的 block 值
+// 先从生产者 From 或消费者 To 获取线程布局，再构造 To -> 数值转换 -> From。
+// 这样后续可折叠桥接，让只需寄存器转换的操作保留在线程内部。
 class CastFinalization : public OpRewritePattern<frisk::CastOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2135,6 +2401,12 @@ public:
 // Move the explicit representation boundary across affine loop carriers. This
 // keeps only owned registers live across iterations and also exposes layout
 // changes at loop exits as To(From(...)), where they can be handled explicitly.
+// 在满足条件时，把 affine.for 的 block vector 携带值缩为 thread vector。
+// 要求 yield 来自 From、两侧都是不同类型的 vector，且 iter_arg/循环结果
+// 仅被 To 使用。不是对任意循环、memref 携带值或 scf.for 的通用类型转换。
+// 循环前对 init 加 To；新循环携带线程值；循环体入口暂加 From 兼容旧用户；
+// yield 改交线程值；循环出口再 From 恢复外部接口，之后折叠冗余桥接。
+// 这解释了第一阶段为何能先保留 block 签名，第二阶段再收缩活跃寄存器集合。
 class ThreadTileLoopFinalization : public OpRewritePattern<affine::AffineForOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2215,6 +2487,9 @@ public:
 // Copy destinations already have an explicit block writeback. A dominating
 // whole-tile store initializes their scratch storage, so do not read the
 // (possibly still uninitialized) block allocation before that store.
+// 判断 To 产生的线程 memref 是否先被一个全 tile、零起点 vector.store 覆盖，
+// 且该 store 支配所有其他使用。若是，可只分配 scratch 而不读取旧 block 内容。
+// 这是避免无意义/未初始化读取的保守判断，不证明任意标量循环都能完全覆盖。
 static bool isFullyOverwritten(frisk::ToThreadTileOp op, MemRefType type) {
   for (Operation *user : op.getResult().getUsers()) {
     auto store = dyn_cast<vector::StoreOp>(user);
@@ -2234,12 +2509,15 @@ static bool isFullyOverwritten(frisk::ToThreadTileOp op, MemRefType type) {
   return false;
 }
 
+// 物化 To 时的逐元素读取器：先取得 block 坐标，再从 memref load 或
+// block vector extract，最后插入线程 vector 的局部 iv 位置。
 struct ReadThreadTileElement {
   OpBuilder &builder;
   Location loc;
   Value source, tid;
   ShapedType blockType;
   const ThreadTileAccess &access;
+  // 读取当前线程负责的一个逻辑元素，并返回更新后的线程 vector。
   Value emit(ArrayRef<Value> ivs, Value tile) {
     auto indices = access.indices(builder, loc, tid, ivs, blockType);
     Value scalar;
@@ -2253,6 +2531,15 @@ struct ReadThreadTileElement {
   }
 };
 
+// 把剩余 ToThreadTile 变成可执行的线程数据流，主要有四条路径：
+//   1. 相同属性的 From->To：直接复用线程值，必要时从线程 memref 加载 vector。
+//   2. 来自 From 但布局/属性不匹配：恢复源布局，写 shared scratch 并同步，
+//      再按本 To 的目标 map 读取，读完后再次同步。
+//   3. 普通 block memref/vector：遍历当前线程 tile，映射地址后逐元素取数。
+//   4. 结果要求线程 memref：分配私有 scratch，将组装的 vector 存进去；
+//      若 isFullyOverwritten 成立，跳过旧值读取，交给后续 store 初始化。
+// 布局比较在本 pattern 的快速路径使用整个属性字典；前面的 foldThreadTilePairs
+// 仅比较列出的布局属性，所以应先运行桥接折叠，减少非布局属性造成的额外处理。
 class ToThreadTileFinalization : public OpRewritePattern<frisk::ToThreadTileOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2330,6 +2617,8 @@ public:
 };
 
 // copy_to_reg already has a thread-shaped result and needs no redistribution.
+// 仅消除没有 tile_layout 且输入输出类型相同的 From，例如显式切片 copy_to_reg。
+// 它不负责把分散在多个线程的值聚合为真实 block 矩阵。
 class FromThreadVectorFinalization : public OpRewritePattern<frisk::FromThreadTileOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2346,6 +2635,9 @@ public:
 // Thread scratch used only to store one vector and read it back is an SSA
 // value in disguise. Reject aliases/escaping uses and additional writes, so
 // forwarding never changes observable memory or crosses a possible clobber.
+// 把只用于“一次 vector.store + 若干同位置 vector.load”的私有 alloca
+// 转发为原 SSA vector，要求 store 支配所有 load、类型/索引匹配、没有其他用户。
+// 拒绝别名、逃逸和额外写入，避免把可能变化的存储错误地当成不变 SSA 值。
 class ForwardThreadScratch : public OpRewritePattern<memref::AllocaOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2390,13 +2682,20 @@ public:
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
 
+// 第二阶段 pass，消除线程 tiling 的中间表示。
+// 顺序有语义意义：先 cast/循环携带值重写和桥接抵消，再实际展开访存，
+// 随后消除纯暂存、检查是否仍有 To/From/view/cast，最后复用共享内存和展开标记循环。
+// 最终检查失败表示存在尚不支持的布局或使用方式，不会假装已经完成 lowering。
+// WarpMmaRROp 等并不由这里全部降成机器指令；它仍需后续专门的转换 pass。
 class FinalizeThreadTiling : public impl::FinalizeThreadTilingBase< FinalizeThreadTiling>{
 public:
+  // 声明本 pass 会创建的 dialect，让 pass 管理器提前加载相应 IR 定义。
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<frisk::FriskDialect, arith::ArithDialect, affine::AffineDialect,
         vector::VectorDialect, math::MathDialect, memref::MemRefDialect,
         gpu::GPUDialect, scf::SCFDialect>();
   }
+  // 对当前 func.func 执行本阶段转换；具体处理顺序见下方分支和类说明。
   void runOnOperation() override {
     auto kernel = getOperation();
     if (!kernel->hasAttr("thread_num")){
@@ -2404,6 +2703,8 @@ public:
     }
     // Keep cast/bridge cancellation ahead of materialization, otherwise a
     // register-only conversion would accidentally become a shared-memory copy.
+    // 先把类型转换和循环边界移动到线程值上，暴露更多可抵消的 To(From(...))。
+    // 若提前物化 load/scratch，原本纯寄存器计算可能变成多余的共享内存搬运。
     RewritePatternSet casts(&getContext());
     casts.add<CastFinalization, ThreadTileLoopFinalization>(&getContext());
     if (failed(applyPatternsGreedily(kernel, std::move(casts)))) {
@@ -2425,6 +2726,7 @@ public:
       return;
     }
     eraseTriviallyDeadOps(kernel);
+    // 完成中间桥接消除的强制检查：仍有任何桥接/view/cast 就报告具体 op 并失败。
     WalkResult result = kernel.walk([&](Operation *op) {
       if (isa<frisk::ToThreadTileOp, frisk::FromThreadTileOp,
               frisk::BufferViewOp, frisk::CastOp>(op)) {
@@ -2443,6 +2745,8 @@ public:
 
     // Unroll inner loops first so expanding an outer loop cannot invalidate
     // pending nested loop handles. Leave unmarked/false-marked loops intact.
+    // 仅展开 frisk.loopUnrollFull=true 的循环；先收集内层再处理外层，
+    // 避免展开外层后使待处理的内层 op 句柄失效。
     SmallVector<affine::AffineForOp> loopsToUnroll;
     kernel.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
       auto unroll = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
@@ -2462,6 +2766,7 @@ public:
 }
 
 
+// 第二阶段的工厂入口，对应命令行 --finalize-thread-tiling。
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass(){
   return std::make_unique<FinalizeThreadTiling>();
 }
