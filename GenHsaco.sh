@@ -116,5 +116,10 @@ ld.lld \
 # llvm-dwarfdump --debug-line "${KERNEL_FILE}"
 # llvm-objdump -d --line-numbers "${KERNEL_FILE}" | less
 
+llc -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
+    "${LLVM_CODEGEN_OPT}" -debugger-tune=gdb \
+    -dwarf-version="${DWARF_VERSION}" -filetype=asm \
+    opt.bc -o "${KERNEL_FILE}.amdgcn"
+    
 echo
-echo "---- Generated ${KERNEL_FILE} from ${LL_FILE}, Opt=O${OPT_LEVEL} ----"
+echo "---- Generated ${KERNEL_FILE} and ${KERNEL_FILE}.amdgcn from ${LL_FILE}, Opt=O${OPT_LEVEL} ----"

@@ -521,6 +521,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       argc > 2 && StringRef(argv[2]) != "0" && StringRef(argv[2]) != "1"
           ? argv[2] : "finalLLVMText.ll";
   bool reorderEnabled = argc < 5 || StringRef(argv[4]) == "1";
+  bool packSharedEnabled = argc < 6 || StringRef(argv[5]) == "1";
+  if (argc > 5 && StringRef(argv[5]) != "0" && StringRef(argv[5]) != "1") {
+    llvm::errs() << "pack-shared must be 0 or 1\n";
+    return 1;
+  }
   if (argc > 4 && StringRef(argv[4]) != "0" && StringRef(argv[4]) != "1") {
     llvm::errs() << "reorder must be 0 or 1\n";
     return 1;
@@ -627,7 +632,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   
 
-  AddFuncPass(mlir::frisk::createConvertFriskBaseToThreadLevelIRPass());
+  auto tiling = mlir::frisk::createConvertFriskBaseToThreadLevelIRPass();
+  if (failed(tiling->initializeOptions(
+          packSharedEnabled ? "pack-shared-operands=true" : "pack-shared-operands=false",
+          [&](const llvm::Twine &message) {
+            llvm::errs() << message << '\n';
+            return failure();
+          })))
+    return 1;
+  AddFuncPass(std::move(tiling));
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
 
   AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
@@ -1018,8 +1031,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 5) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1]\n";
+  if (argc < 2 || argc > 6) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

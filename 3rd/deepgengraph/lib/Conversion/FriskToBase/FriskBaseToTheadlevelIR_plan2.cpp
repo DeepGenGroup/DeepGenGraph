@@ -148,6 +148,60 @@ static bool isGlobalToSharedCopy(frisk::CopyOp op) {
          dst.getMemorySpaceAsInt() == int(friskMs::Shared);
 }
 
+// Plan a physical layout only for owned, non-escaping shared B operands whose
+// complete producer/consumer set is understood. This is independent of kernel
+// names, attention shapes and surrounding graph operators. A logical memref
+// remains row-major until pack-shared-memory rewrites ALL accesses together.
+static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts) {
+  auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+  if (!threads || threads.getInt() <= 0)
+    return;
+  kernel.walk([&](frisk::AllocBufferOp alloc) {
+    auto type = cast<MemRefType>(alloc.getResult().getType());
+    if (type.getRank() != 2 || !type.hasStaticShape() ||
+        !type.getLayout().isIdentity() ||
+        type.getMemorySpaceAsInt() != int(friskMs::Shared))
+      return;
+    int64_t width = 0;
+    bool writer = false;
+    for (Operation *user : alloc.getResult().getUsers()) {
+      if (auto gemm = dyn_cast<frisk::GemmOp>(user)) {
+        auto *info = layouts.getLowerInfo(alloc.getResult(), gemm);
+        if (gemm.getB() != alloc.getResult() || gemm.getA() == alloc.getResult() ||
+            !info || !info->mmaInst || info->get_thread_widths()[1] != 1)
+          return;
+        int64_t candidate = info->get_thread_widths()[0];
+        if (width && width != candidate)
+          return;
+        width = candidate;
+      } else if (auto copy = dyn_cast<frisk::CopyOp>(user)) {
+        // Offset/sliced and escaping copy aliases conservatively keep their
+        // original layout. Buffer-view origins on the source are supported.
+        auto map = copy.getOffsetMap();
+        if (copy.getDstMemRef() != alloc.getResult() || !isGlobalToSharedCopy(copy) ||
+            !cast<MemRefType>(getViewBuffer(copy.getSrc()).getType()).isLastDimUnitStride() ||
+            cast<MemRefType>(copy.getSrc().getType()).getShape() != type.getShape() ||
+            (copy.hasValueResult() && !copy->use_empty()) ||
+            map.getNumInputs() != 0 || map.getNumResults() != 1 ||
+            !isa<AffineConstantExpr>(map.getResult(0)) ||
+            cast<AffineConstantExpr>(map.getResult(0)).getValue() != type.getRank())
+          return;
+        writer = true;
+      } else {
+        return;
+      }
+    }
+    if (!writer || width < 2 || !llvm::isPowerOf2_64(width) ||
+        width * type.getElementTypeBitWidth() > 128 ||
+        type.getDimSize(0) % width != 0 ||
+        type.getNumElements() % threads.getInt() != 0 ||
+        (type.getNumElements() / threads.getInt()) % width != 0)
+      return;
+    alloc->setAttr("frisk.shared_pack", IntegerAttr::get(
+        IntegerType::get(kernel.getContext(), 64), width));
+  });
+}
+
 // 把 affine map 应用到 operands，并合成已有 affine.apply，返回单个索引值。
 // 用于将切片偏移与局部坐标拼成底层 buffer 的访问坐标。
 static Value composeAccessIndex(OpBuilder &b, Location loc, AffineMap map,
@@ -1345,6 +1399,8 @@ public:
     if (type.getMemorySpaceAsInt() == int(friskMs::Shared) ||
         type.getMemorySpaceAsInt() == int(friskMs::Global)) {
       auto alloc = rewriter.create<memref::AllocOp>(op.getLoc(), type, op.getAlignmentAttr());
+      if (auto pack = op->getAttr("frisk.shared_pack"))
+        alloc->setAttr("frisk.shared_pack", pack);
       markTiled(alloc, rewriter);
       rewriter.replaceOp(op, alloc.getResult());
       return success();
@@ -1710,7 +1766,8 @@ public:
 // A short final interval is guarded, while every thread reaches the barrier.
 // global -> shared 的专用搬运：不按 LowerInfo，而按逻辑行优先序连续分块。
 // 每线程负责 ceil(总元素数/thread_num) 个元素；向量宽度取该数量与末轴长度的 gcd，
-// 保证一次 vector.store 不跨行。源逐标量加载并组装向量，可做浮点位宽转换。
+// 保证一次 vector.store 不跨行。连续源显式使用至多 128-bit 的读取包；
+// 非连续源保留标量读取，随后组装向量，可做浮点位宽转换。
 // 尾部无任务线程跳过访存，但所有线程都在分支外执行 block 同步。
 // 源/目标 view 的偏移会合成到真实 buffer；带结果的 copy 返回传入的完整目标。
 static LogicalResult lowerGlobalToSharedCopy(
@@ -1729,7 +1786,15 @@ static LogicalResult lowerGlobalToSharedCopy(
   auto loc = op.getLoc();
   int64_t total = ShapedType::getNumElements(shape);
   int64_t perThread = llvm::divideCeil(total, threadsAttr.getInt());
-  int64_t width = std::gcd(perThread, shape.back());
+  auto allocation = getViewBuffer(destination).getDefiningOp();
+  auto packing = allocation ? allocation->getAttrOfType<IntegerAttr>("frisk.shared_pack")
+                            : IntegerAttr{};
+  int64_t pack = packing ? packing.getInt() : 1;
+  if (pack < 2 || !llvm::isPowerOf2_64(pack) || shape.size() != 2 ||
+      pack > 128 / dstType.getElementTypeBitWidth() || shape[0] % pack ||
+      total % threadsAttr.getInt() || perThread % pack)
+    pack = 1;
+  int64_t width = std::gcd(perThread, shape.back() * pack);
   auto vectorType = VectorType::get({width}, srcType.getElementType());
   Value tid = findThreadIdxOp(op, rewriter);
   auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread / width, 1);
@@ -1750,7 +1815,19 @@ static LogicalResult lowerGlobalToSharedCopy(
     active = rewriter.create<scf::IfOp>(loc, inBounds, false);
     rewriter.setInsertionPointToStart(&active.getThenRegion().front());
   }
-  auto coordinates = [&](Value flat) {
+  auto coordinates = [&](Value flat, int64_t reg = 0) {
+    if (pack > 1) {
+      auto d = rewriter.getAffineDimExpr(0);
+      // Each thread transfers a consecutive PHYSICAL interval. Retain logical
+      // coordinates here, so even an unexecuted packing pass is semantically
+      // valid. The later pass folds the inverse permutation and widens stores.
+      // width divides N*pack and is a multiple of pack; start is a multiple
+      // of width. The packet cannot cross a packed row. Keep its shared base
+      // explicit, avoiding hard-to-simplify floorDiv(start + reg) expressions.
+      return SmallVector<Value>{
+          composeAccessIndex(rewriter, loc, d.floorDiv(shape[1] * pack) * pack + reg % pack, flat),
+          composeAccessIndex(rewriter, loc, d.floorDiv(pack) % shape[1] + reg / pack, flat)};
+    }
     SmallVector<Value> indices(shape.size());
     int64_t stride = 1;
     for (int dim = shape.size() - 1; dim >= 0; --dim) {
@@ -1764,12 +1841,45 @@ static LogicalResult lowerGlobalToSharedCopy(
   Value packet = buildFragment(rewriter, loc, vectorType, "load", [&]() {
     Value packet = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
+    if (cast<MemRefType>(getViewBuffer(source).getType()).isLastDimUnitStride()) {
+      // A transfer contains pack rows by width/pack columns (one row for
+      // ordinary copies). Bound GLOBAL loads independently of the thread's
+      // transfer size and of LDS packing. In particular, scalar loads assembled
+      // into a large vector can become an oversized, element-aligned LLVM load
+      // that the backend scalarizes again. Explicit native-size packets avoid
+      // relying on SLP and do not assume stronger alignment for external buffers
+      // or offset views. Only exact elements of this row are accessed.
+      int64_t columns = width / pack;
+      int64_t limit = std::max<int64_t>(1, 128 / srcType.getElementTypeBitWidth());
+      for (int64_t row = 0; row < pack; ++row) {
+        for (int64_t col = 0; col < columns;) {
+          int64_t count = 1;
+          while (count * 2 <= std::min(limit, columns - col))
+            count *= 2;
+          auto at = coordinates(start, row);
+          at.back() = composeAccessIndex(rewriter, loc,
+              rewriter.getAffineDimExpr(0) + col, at.back());
+          Value buffer = source;
+          resolveViewAccess(rewriter, loc, buffer, at);
+          auto loadType = VectorType::get({count}, srcType.getElementType());
+          Value values = rewriter.create<vector::LoadOp>(loc, loadType, buffer, at);
+          for (int64_t i = 0; i < count; ++i) {
+            Value value = rewriter.create<vector::ExtractOp>(loc, values,
+                ArrayRef<OpFoldResult>{rewriter.getIndexAttr(i)});
+            packet = rewriter.create<vector::InsertOp>(loc, value, packet,
+                ArrayRef<OpFoldResult>{rewriter.getIndexAttr((col + i) * pack + row)});
+          }
+          col += count;
+        }
+      }
+      return packet;
+    }
   // Static register positions within one transfer fragment; only the packet
   // grid is represented by an affine loop, just like computation fragments.
   for (int64_t reg = 0; reg < width; ++reg) {
     Value flat = composeAccessIndex(
         rewriter, loc, rewriter.getAffineDimExpr(0) + reg, start);
-    auto indices = coordinates(flat);
+    auto indices = pack > 1 ? coordinates(start, reg) : coordinates(flat);
     Value buffer = source;
     resolveViewAccess(rewriter, loc, buffer, indices);
     Value scalar = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
@@ -1786,8 +1896,20 @@ static LogicalResult lowerGlobalToSharedCopy(
   Value buffer = destination;
   resolveViewAccess(rewriter, loc, buffer, indices);
   buildFragment(rewriter, loc, Type{}, "store", [&]() -> Value {
-    auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
-    markTiled(store, rewriter);
+    if (pack == 1) {
+      auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
+      markTiled(store, rewriter);
+    } else {
+      for (int64_t reg = 0; reg < width; ++reg) {
+        auto at = coordinates(start, reg);
+        Value target = destination;
+        resolveViewAccess(rewriter, loc, target, at);
+        Value scalar = rewriter.create<vector::ExtractOp>(loc, *converted,
+            ArrayRef<OpFoldResult>{rewriter.getIndexAttr(reg)});
+        auto store = rewriter.create<memref::StoreOp>(loc, scalar, target, at);
+        markTiled(store, rewriter);
+      }
+    }
     return {};
   });
   rewriter.setInsertionPointAfter(chunk);
@@ -2489,6 +2611,8 @@ public:
       kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, info.get_block_layout_order()));
     }
     insertConvertLayoutOps(*s_info);
+    if (packSharedOperands)
+      planSharedOperandPacking(kernel, *s_info);
     llvm::outs() << "----- after insertConvertLayoutOps:\n" << kernel << "\n"; llvm::outs().flush();
 
     // 未 tiled 的目标 Frisk op 必须被转换；其他 op 动态合法。

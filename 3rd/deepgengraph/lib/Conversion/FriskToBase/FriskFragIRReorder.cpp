@@ -548,6 +548,7 @@ static bool pipelineFragments(Loop loop) {
 
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
+    packSharedMemory(getOperation());
     SmallVector<frisk::FragmentOp> fragments;
     getOperation().walk<WalkOrder::PostOrder>([&](frisk::FragmentOp op) {
       fragments.push_back(op);

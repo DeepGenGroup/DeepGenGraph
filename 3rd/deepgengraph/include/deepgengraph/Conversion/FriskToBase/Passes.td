@@ -19,10 +19,18 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
   let description = [{}];
 
   let constructor = "mlir::frisk::createConvertFriskBaseToThreadLevelIRPass()";
+  let options = [Option<"packSharedOperands", "pack-shared-operands", "bool", "true",
+      "Plan packed LDS layouts for owned GEMM B operands">];
 
   let dependentDialects = [
     "mlir::frisk::FriskDialect"
   ];
+}
+
+def PackSharedMemory: Pass<"pack-shared-memory", "::mlir::func::FuncOp"> {
+  let summary = "Pack owned shared buffers and coalesce proven contiguous accesses";
+  let constructor = "mlir::frisk::createPackSharedMemoryPass()";
+  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect"];
 }
 
 def FinalizeThreadTiling: Pass<"finalize-thread-tiling", "::mlir::func::FuncOp"> {
@@ -47,7 +55,7 @@ def FriskFragIRReorder: Pass<"frisk-frag-ir-reorder", "::mlir::func::FuncOp"> {
 def LowerFriskFragments: Pass<"lower-frisk-fragments", "::mlir::func::FuncOp"> {
   let summary = "Lower scheduled fragment regions, plan storage and unroll marked loops";
   let constructor = "mlir::frisk::createLowerFriskFragmentsPass()";
-  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::gpu::GPUDialect", "mlir::frisk::FriskDialect"];
+  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect", "mlir::gpu::GPUDialect", "mlir::frisk::FriskDialect"];
 }
 
 #endif // FRISKTOBASE_CONVERSION_PASSES

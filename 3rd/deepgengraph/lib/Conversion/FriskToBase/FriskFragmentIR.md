@@ -166,7 +166,64 @@ python3 3rd/deepgengraph/test/check_register_mma_export.py
 python3 3rd/deepgengraph/test/check_attention_codegen.py
 ```
 
-MyTest 参数依次为输入、block pipeline 开关、输出路径、展开后 reorder 开关。
+MyTest 参数依次为输入、block pipeline 开关、输出路径、展开后 reorder 开关、
+shared operand packing 开关（最后一项为 `0|1`，默认开启）。
 后两个参数可省略，默认输出 `finalLLVMText.ll` 并开启 reorder。O3 回归
 检查同时覆盖两版导出、LLVM 15 解析、操作数地址、读取复用与分组调度的
 访存指令数；LLVM 指令数不等于 gfx936 ISA 指令数或实际性能。
+
+## 通用 shared operand packing
+
+`PackSharedMemory.cpp` 将逻辑二维共享矩阵的连续行片段映射成连续物理地址。
+对于逻辑 `[K,N]`、pack 宽度 `p`，物理布局是 `[K/p,N,p]`，以一维 memref 存储：
+
+```
+physical(k,n) = ((k floordiv p) * N + n) * p + k mod p
+```
+
+这是元素数不变的一一映射；不改变全局张量布局、算子接口或线程的计算数据归属。
+没有额外分配一个重排缓冲区。`K` 必须能被 `p` 整除。
+
+自动规划在 `convert-friskbase-to-thread` 中进行，从 GEMM B 的
+`LowerInfo.thread_widths[0]` 推导 `p`，不匹配 kernel 名、attention pattern 或
+固定的 M/N/K。要求本地拥有的静态 identity-layout shared allocation，
+所有消费者都是相容的 GEMM B，写入是完整的 global→shared copy，且每线程
+搬运量能被 `p` 整除。多个相容 GEMM 消费者可以共享同一个物理布局。
+未知用户、作为 A 同时使用、外部参数、切片/逃逸别名和轮转 selector 保持原布局。
+开关：`--convert-friskbase-to-thread=pack-shared-operands=false`。
+
+规划只附加 `frisk.shared_pack = p : i64`，此时缓冲区仍具有原逻辑语义。
+协作搬运按未来物理连续区间分工，反解为逻辑坐标读取 global、写入 shared。
+每个 packet 是逻辑矩阵的 `p` 行与若干连续列；global 使用逐行显式
+vector load，再在寄存器中交错为物理 packet，避免依赖 SLP 从交错标量
+读取中重新发现连续访问。自动规划要求 global 源的末维具有 unit stride；
+即使暂不执行后续 packing pass，这些 scalar stores 的语义也成立。
+
+普通 global→shared copy 同样显式生成连续源的 vector load，不依赖 shared
+packing 或 LLVM SLP。每次读取取不超过 128 bit、且不超过当前行剩余元素数的
+最大二次幂长度；FP16/FP32/FP64 分别最多读取 8/4/2 个元素，尾部缩小读取包。
+线程搬运总量、读取指令宽度和 shared 写入向量的长度是独立的，不能把一个
+线程搬运的全部元素都视为一条硬件读取。view 偏移仍合成到原始 buffer，
+只有原始 buffer 的末维已知为 unit stride 时才生成向量读取；非单位或未知
+stride 保留标量读取。不会给外部指针或切片增加未经证明的对齐属性。
+`test/check_affine_copy.py` 覆盖偏移、尾部、不同位宽和 CPU 数值；
+`test/check_attention_codegen.py` 在存在 LLVM 15 时还检查 gfx90a 的实际
+global load 指令，防止出现“IR 已向量化、机器指令仍是标量”的回归。
+
+`--pack-shared-memory` 在桥接/view 已消除、共享内存池化之前执行；
+`lower-frisk-fragments` 自动调用它。它也可独立处理带上述属性的普通
+affine/memref IR，不要求含 GEMM、Frisk fragment 或 GPU thread id。
+当前只接收可完整枚举的 scalar affine/memref load/store 和 dealloc；
+未知用途（包括 subview、cast、原有 vector access、atomic、call）整块回退。
+先验证完整使用集合，再统一改写地址，因此不会只改变生产者或部分消费者。
+
+地址合并通过组合 affine map 证明相邻地址差为 1，最多生成 128 bit 的
+power-of-two vector load/store。任何中间访存、控制流、同步或不可推测计算
+都会终止合并；读取移动到组首、写入移动到组尾，不多读尾部或 padding。
+搬运生成的标量写因此重新合并成宽写，避免以增加 scatter 写换取宽读。
+这个 pass 不调整 MMAC/NOP，也不保证目标硬件的 bank conflict 或性能收益；
+实际 LDS 指令、VGPR、occupancy 和时间仍须用目标 DTK/设备验证。
+
+验证入口：`test/check_shared_packing.py`（普通 IR 的 CPU 数值对照、回退及
+不同尺寸独立 GEMM）、`test/check_packed_attention_copy.py`（K/V 完整搬运地址）、
+`test/check_attention_codegen.py`（全部 MMAC 操作数、P、rowsum、LLVM 15/O3）。
