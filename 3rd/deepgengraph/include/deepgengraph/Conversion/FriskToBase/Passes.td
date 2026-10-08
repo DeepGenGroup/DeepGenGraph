@@ -38,4 +38,16 @@ def FinalizeThreadTiling: Pass<"finalize-thread-tiling", "::mlir::func::FuncOp">
 
 
 
+def FriskFragIRReorder: Pass<"frisk-frag-ir-reorder", "::mlir::func::FuncOp"> {
+  let summary = "Fuse fragment loops and pipeline read-only fragment loads";
+  let constructor = "mlir::frisk::createFriskFragIRReorderPass()";
+  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::frisk::FriskDialect"];
+}
+
+def LowerFriskFragments: Pass<"lower-frisk-fragments", "::mlir::func::FuncOp"> {
+  let summary = "Lower scheduled fragment regions, plan storage and unroll marked loops";
+  let constructor = "mlir::frisk::createLowerFriskFragmentsPass()";
+  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::gpu::GPUDialect", "mlir::frisk::FriskDialect"];
+}
+
 #endif // FRISKTOBASE_CONVERSION_PASSES

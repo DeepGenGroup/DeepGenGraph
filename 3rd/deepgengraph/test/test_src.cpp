@@ -466,15 +466,8 @@ void materializeSplatVectorConstants(llvm::Module &module) {
   }
 }
 
-void replaceAll(std::string &text, llvm::StringRef from, llvm::StringRef to) {
-  size_t pos = 0;
-  while ((pos = text.find(from.str(), pos)) != std::string::npos) {
-    text.replace(pos, from.size(), to.str());
-    pos += to.size();
-  }
-}
-
 void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
+  mlir::frisk::prepareRegisterMMAForLLVM(module);
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(module);
 
   std::string text;
@@ -482,18 +475,7 @@ void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
   module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
   buffer.flush();
 
-  // Keep the textual IR parseable by older llvm-link builds used downstream.
-  // Shared-memory views can fold into constant-expression GEPs. Older parsers
-  // accept inbounds, but not the newer GEP nuw/nusw flags. Drop only GEP flags;
-  // integer arithmetic no-wrap flags and the address calculation stay intact.
-  replaceAll(text, "getelementptr inbounds nuw ", "getelementptr inbounds ");
-  replaceAll(text, "getelementptr nusw ", "getelementptr ");
-  replaceAll(text, "getelementptr nuw ", "getelementptr ");
-  replaceAll(text, " captures(none)", "");
-  replaceAll(text, " memory(none)", "");
-  replaceAll(text, " memory(argmem: read)", "");
-  replaceAll(text, " memory(argmem: write)", "");
-  replaceAll(text, " memory(argmem: readwrite)", "");
+  mlir::frisk::legalizeLLVMTextForLegacyLLVM(text);
 
   os << text;
 }
@@ -532,11 +514,17 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
-  bool isPipelineSched = false;
-  if(argc >= 2){
-    isPipelineSched = std::stoi(argv[2]) > 0;
+  bool isPipelineSched = argc > 2 && StringRef(argv[2]) == "1";
+  // Preserve the historical <input> <output.ll> spelling as well as the
+  // numeric pipeline switch. Expose independent reorder A/B runs explicitly.
+  const char *outputPath = argc > 3 ? argv[3] :
+      argc > 2 && StringRef(argv[2]) != "0" && StringRef(argv[2]) != "1"
+          ? argv[2] : "finalLLVMText.ll";
+  bool reorderEnabled = argc < 5 || StringRef(argv[4]) == "1";
+  if (argc > 4 && StringRef(argv[4]) != "0" && StringRef(argv[4]) != "1") {
+    llvm::errs() << "reorder must be 0 or 1\n";
+    return 1;
   }
-  const char *outputPath = argc > 3 ? argv[3] : "finalLLVMText.ll";
 
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);
@@ -643,8 +631,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
 
   AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
-  AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
-  AddFuncPass( mlir::affine::createAffineLoopInvariantCodeMotionPass());
   // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
   // lowering decomposes the independent MMA fragment insertion chain.
   {
@@ -652,13 +638,27 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     // Loop-carrier normalization can leave identity extraction loops around O.
     // Fold those first so the original accumulator dominates every fragment.
     fragmentPM.addPass(mlir::createCanonicalizerPass());
-    fragmentPM.addNestedPass<func::FuncOp>(frisk::createFuseFragmentAccumulatorPass());
+    // Resolve bridges and simplify indices before proving fragment dependences.
+    fragmentPM.addNestedPass<func::FuncOp>(frisk::createFriskFragIRReorderPass());
+    // Preserve fragment regions in the scheduling dump. Lower them separately.
+
     if (failed(fragmentPM.run(*src)))
       return 1;
   }
   // pm.addPass(mlir::createSymbolDCEPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n"; llvm::outs().flush();src->dump();
+
+  AddFuncPass(frisk::createLowerFriskFragmentsPass());
+  // Affine LICM only inspects direct operands of unknown region operations;
+  // run it after inlining fragment regions so their captured values are visible.
+  AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
+  AddFuncPass(mlir::affine::createAffineLoopInvariantCodeMotionPass());
+  AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));
+  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::createCSEPass());
+  llvm::outs() << "\n---- after lower-frisk-fragments -----\n";
+  llvm::outs().flush(); src->dump();
 
   #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
@@ -683,7 +683,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   AddPass(mlir::createCanonicalizerPass());
   AddFuncPass(mlir::affine::createAffineScalarReplacementPass());
-  AddFuncPass(frisk::createIRDeepOptimizePass());
+  auto optimize = frisk::createIRDeepOptimizePass();
+  if (failed(optimize->initializeOptions(
+          reorderEnabled ? "reorder-after-unroll=true" : "reorder-after-unroll=false",
+          [](const llvm::Twine &message) { llvm::errs() << message << "\n"; return failure(); })))
+    return 1;
+  AddFuncPass(std::move(optimize));
   
   llvm::outs() << "\n---- after createIRDeepOptimizePass -----\n"; llvm::outs().flush(); src->dump();
 
@@ -698,7 +703,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (!frisk::firstLowering(mod, src->getContext()) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm))
     return 1;
-  llvm::outs() << "\n---- after secondLowering -----\n"; llvm::outs().flush(); src->dump();
+  llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush(); 
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);
   
@@ -1013,8 +1018,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 3) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [output.ll]\n";
+  if (argc < 2 || argc > 5) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

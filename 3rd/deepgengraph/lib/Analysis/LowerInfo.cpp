@@ -48,7 +48,7 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 #define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
 LowerInfo::LowerInfo(int w) : warp_threads(w){ }
-
+int LowerInfoAnalysis::gemmCount = 0;
 static std::array<int64_t, 2> getThreadOwnDataSize(const LowerInfo &info,
                                                    bool includeBaseRepeat) {
   auto [tw0, tw1] = info.get_thread_widths();
@@ -618,6 +618,10 @@ bool LowerInfoAnalysis::getDirectGemmBlockLayout(
   }
 }
 
+coordXY_t LowerInfoAnalysis::getNewBufferSenamtic(coordXY_t semantic){
+  return {LowerInfoAnalysis::gemmCount * semantic[0],LowerInfoAnalysis::gemmCount* semantic[1]};
+}
+
 LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem &problem,
                                                  MMAInstInfo *mma, uint64_t thread_num,
                                                  HWSpecification *hw,
@@ -627,6 +631,7 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
   info.mmaInst = mma;
   info.block_layout = block_layout;
   info.block_layout_order = {0, 1};
+  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_N});  // 
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
@@ -662,6 +667,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   if (!getDirectGemmBlockLayout(thread_num, block_layout, hw)) {
     block_layout = source_info.get_block_layout();
   }
+  info.bufferCalculateSemantic = source_info.bufferCalculateSemantic;
   info.block_layout = block_layout;
   info.block_layout_order = source_info.block_layout_order;
   if (hw->getKind() == HW_KIND_DCU) {
@@ -683,6 +689,7 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
                                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.A;
   info.mmaInst = mma;
+  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_K});
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
@@ -708,6 +715,7 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
                                            MMAInstInfo *mma, AffineExpr zero) {
   info.buffer = problem.A;
   auto blockLayout = info.get_block_layout();
+  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_K});
   info.base_layout = mma->desc_a;
   info.block_layout = {blockLayout[0], 1};
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
@@ -720,6 +728,7 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
                                        MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.B;
   info.mmaInst = mma;
+  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_K, BUFFER_SEMANTIC_N});
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[0] = 1;
@@ -995,7 +1004,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
   if (!gemmOp) {
     return false;
   }
-
+  LowerInfoAnalysis::gemmCount += 1;
   OpBuilder b(op);
   uint64_t thread_num = getRegionThreadNum(op);
   GemmProblem problem = getGemmProblem(gemmOp);
@@ -1136,7 +1145,7 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   _dstInfo.thread_own_data_size[0] = required_sz0;
   _dstInfo.thread_own_data_size[1] = required_sz1;
   _dstInfo.thread_own_data_size[dim] = 1; 
-
+  _dstInfo.bufferCalculateSemantic[dim] = BUFFER_SEMANTIC_REDUCE;
   buf_info_maps.addLowerInfo(op, _dstInfo);
   return true;
 }
@@ -1410,7 +1419,7 @@ int LowerInfoAnalysis::block_threads = 0;
 // 
 LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version){
   auto hw = GetHWSpecification(hwKind, version, kernelOp->getContext());
-
+  LowerInfoAnalysis::gemmCount = 0;
   buf_info_maps = LowerInfoMap{};
   const auto& opOrderVec = buf_info_maps.getOpsOrder(kernelOp);
   

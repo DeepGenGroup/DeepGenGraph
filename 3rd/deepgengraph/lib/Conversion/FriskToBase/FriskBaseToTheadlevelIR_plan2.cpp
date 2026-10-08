@@ -7,21 +7,33 @@
 // Bridge elimination is a later stage.
 //===----------------------------------------------------------------------===//
 
-// 中文阅读导航：block tile -> thread tile 的两阶段实现
+// 中文阅读导航：block tile -> thread tile -> fragment
 // 配套文档：同目录 FriskBaseToTheadlevelIR_plan2_中文说明.md。
 //
 // 【概念】block tile 是整个线程块协作处理的逻辑矩阵；thread tile 是当前线程
 // 实际持有的元素集合，在这里打包成小 vector，或放在线程私有 memref 中。
 // thread tile 的相邻下标未必对应 block 矩阵中的相邻元素，必须结合布局解释。
+// fragment 是 thread tile 中一次计算/搬运处理的寄存器小片段；MMA 的 fragment
+// 只是单条 warp 指令在当前 lane 上的操作数，warp 内所有 lane 协作完成该指令。
+// 普通二维计算布局中，逐维有：
+//   fragmentShape = thread_widths * warp_repeat
+//   fragmentCount = block_repeat * warpInstUnroll
+//   threadTileShape = fragmentCount * fragmentShape
+// 例如 thread tile 为 2x32、fragment 为 1x4，片段网格为 2x8，共 16 次迭代。
+// fragment 内偏移是静态的；加上当前片段 origin 得到 thread tile 下标，
+// 再结合 tid 和 LowerInfo 才能得到 block tile 的逻辑坐标。
 //
 // 【第一阶段】ConvertFriskBaseToThreadLevelIR：
 //   LowerInfoAnalysis 推断每个 (Value, 使用它的 Operation) 的布局；
 //   插入必要的 ConvertLayoutOp；各 pattern 将计算改写为线程级计算；
 //   用 ToThreadTile(block) 读入，用 FromThreadTile(thread) 保留原 block 类型；
+//   在线程 tile 内生成 fragment 循环和 load/compute/store region；
 //   尽量折叠布局一致的 To(From(...))，暂时保留外层循环的 block 类型接口。
 // 【第二阶段】FinalizeThreadTiling：
 //   调整可转换的 affine 循环携带值，折叠桥接，展开剩余桥接为实际访存；
 //   处理 buffer_view、cast 和私有暂存，再检查中间桥接是否全部消除。
+//   此时仍保留 fragment 边界供后续融合/预取；lower-frisk-fragments 再内联
+//   region、规划共享内存复用并按预算展开标记循环，它不在本文件中实现。
 //
 // 【LowerInfo 的三个用途】
 //   1. 决定线程 tile 形状：thread_widths * warp_repeat * warpInstUnroll * block_repeat。
@@ -30,7 +42,7 @@
 // 以上乘法均为二维数组逐维相乘；单例轴、归约轴需要额外投影。
 //
 // 建议阅读顺序：两个 pass 的 runOnOperation -> getFullThreadTileType ->
-// buildMappedAccessIndices -> GemmOpTiling -> writeBackBlockTile ->
+// buildMappedAccessIndices -> FragmentTileLoopNest -> GemmOpTiling -> writeBackBlockTile ->
 // ThreadTileAccess / ToThreadTileFinalization。桥接本身不等于内存写回，
 // FromThreadTile 也不表示已经把所有线程的数据实际拼成一个大矩阵。
 #include <algorithm>
@@ -340,10 +352,39 @@ static Value findThreadIdxOp(Operation *op, OpBuilder &builder) {
   return builder.create<gpu::ThreadIdOp>(op->getLoc(), gpu::Dimension::x);
 }
 
-// 把分析阶段标记的 convertFrom 关系变为真实 ConvertLayoutOp。
-// 先保存需要转换的条目，再插入 op，避免更新 DenseMap 时重哈希使遍历失效。
-// 只替换指定 consumer 对原输入的使用；其他消费者仍可保留原布局。
-// global -> shared copy 使用独立搬运方案，因此跳过这里的布局转换。
+// A whole-tile store into independent shared storage can use the producer's
+// register distribution. The consumer redistributes by loading that storage;
+// converting the registers first would introduce a second LDS round trip.
+// Keep slices, aliases and value-returning copies on the existing path.
+static bool canStoreProducerLayout(frisk::CopyOp copy, Value input) {
+  if (input != copy.getSrc() || copy.hasValueResult() ||
+      !copy.getDst().getDefiningOp<frisk::AllocBufferOp>())
+    return false;
+  auto src = dyn_cast<MemRefType>(input.getType());
+  auto dst = dyn_cast<MemRefType>(copy.getDst().getType());
+  if (!src || !dst || !src.hasStaticShape() ||
+      src.getShape() != dst.getShape() ||
+      dst.getMemorySpaceAsInt() != int(friskMs::Shared))
+    return false;
+  // These operations produce computed block tiles, not aliases of the target.
+  // In particular, do not bypass exchange for a source view or copy result.
+  if (!isa_and_nonnull<frisk::GemmOp, frisk::Exp2Op, frisk::AddOp,
+                       frisk::SubOp, frisk::MulOp, frisk::DivOp,
+                       frisk::MaskOp, frisk::ZeroOp>(input.getDefiningOp()))
+    return false;
+  auto map = copy.getOffsetMap();
+  if (map.getNumInputs() != 0)
+    return false;
+  bool whole = map.getNumResults() == 1 &&
+      map.getResult(0) == getAffineConstantExpr(dst.getRank(), copy.getContext());
+  bool zero = map.getNumResults() == unsigned(dst.getRank()) &&
+      llvm::all_of(map.getResults(), [](AffineExpr e) {
+        auto c = dyn_cast<AffineConstantExpr>(e);
+        return c && c.getValue() == 0;
+      });
+  return whole || zero;
+}
+
 static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
   struct Conversion { Operation *user; Value input; LowerInfo from; LowerInfo to; };
   SmallVector<Conversion, 8> conversions;
@@ -357,6 +398,18 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
       conversions.push_back({info.op, info.buffer, *info.convertFrom, info});
   }
   for (auto &conversion : conversions) {
+    if (auto copy = dyn_cast<frisk::CopyOp>(conversion.user);
+        copy && canStoreProducerLayout(copy, conversion.input)) {
+      // Change only this copy's source layout. Destination readers (including
+      // MMA) retain their own layouts and the store's existing block barrier.
+      auto *info = infoMap.getLowerInfo(conversion.input, conversion.user);
+      *info = conversion.from;
+      info->buffer = conversion.input;
+      info->op = conversion.user;
+      info->pos = LowerInfo::BufPos::In;
+      info->convertFrom = nullptr;
+      continue;
+    }
     OpBuilder builder(conversion.user);
     auto op = builder.create<frisk::ConvertLayoutOp>(conversion.user->getLoc(),
         conversion.input.getType(), conversion.input, builder.getStringAttr("lowerinfo.convert"));
@@ -530,69 +583,211 @@ buildMappedAccessIndices(OpBuilder &builder, Location loc, LowerInfo &info,
 }
 
 
-// 控制线程内部遍历循环的属性：marker 标记已处理，labelPrefix 用于阅读 IR，
-// unitIndex 复用单例轴的 0，unrollFull 请求 finalization 完全展开循环。
-struct VectorTileLoopOptions {
+// 控制 fragment 网格循环的属性：marker 标记已处理，label 用于阅读 IR，
+// unrollFull 请求后续 lower-frisk-fragments 在预算允许时完全展开循环。
+struct FragmentLoopOptions {
   StringRef marker;
-  StringRef labelPrefix;
-  Value unitIndex; // 可复用调用方已有的 0，保留 GEMM 的常量放置位置。
+  StringRef label;
   bool unrollFull = false;
 };
 
-// 遍历一个线程 vector 的所有元素，利用 affine.for 的 iter_args/yield
-// 逐元素构造新的 SSA vector。shape 是线程 tile 形状，不是整个 block 的形状。
-// BodyEmitter::emit(indices, currentTile) 接收线程局部坐标并返回更新后的 vector。
-// 它只负责遍历；是否映射到 block 地址由具体 emitter 决定。
-class VectorTileLoopNest {
-public:
-  // 记录 builder、位置、遍历形状和循环选项；构造函数本身不生成 IR。
-  VectorTileLoopNest(OpBuilder &builder, Location loc, ArrayRef<int64_t> shape,
-                     VectorTileLoopOptions options = {})
-      : builder(builder), loc(loc), shape(shape), options(options) {}
+// A fragment region preserves the scheduling boundary even when its target
+// implementation needs several scalar loads or register insertions.
+// 创建一个无条件执行的单 block region，将 body 生成的操作包在同一调度边界内。
+// body 捕获外部 SSA 值；有结果时用 fragment_yield 导出，无结果时仅保留副作用。
+// 这里构造的是 IR 容器，并没有执行计算，也不保证 region 对应单条机器指令。
+template <typename Callback>
+static Value buildFragment(OpBuilder &b, Location loc, Type resultType,
+                           StringRef kind, Callback body) {
+  SmallVector<Type> types;
+  if (resultType)
+    types.push_back(resultType);
+  auto fragment = b.create<frisk::FragmentOp>(loc, types, b.getStringAttr(kind));
+  fragment.getBody().push_back(new Block);
+  b.setInsertionPointToStart(&fragment.getBody().front());
+  Value value = body();
+  b.create<frisk::FragmentYieldOp>(loc, value ? ValueRange{value} : ValueRange{});
+  b.setInsertionPointAfter(fragment);
+  return resultType ? fragment.getResult(0) : Value{};
+}
 
-  // 递归生成每个非单例轴的循环；单例轴直接使用索引 0，最内层调用 emitter。
-  // 每层携带完整 vector 的当前 SSA 值，递归返回的值经 yield 传回外层。
-  // 返回最外层结果，同时将 builder 恢复到所生成循环之后。
-  template <typename BodyEmitter>
-  Value emit(Value initial, BodyEmitter &body, unsigned dim = 0) {
-    if (dim == shape.size())
-      return body.emit(indices, initial);
-    if (shape[dim] == 1) {
-      indices.push_back(options.unitIndex
-                            ? options.unitIndex
-                            : createIndexConstant(builder, loc, 0));
-      Value result = emit(initial, body, dim + 1);
-      indices.pop_back();
-      return result;
+static Value transferFragment(OpBuilder &b, Location loc, Value tile,
+                              VectorType fragmentType, ArrayRef<Value> origins,
+                              Value fragment = {});
+
+// A fragment is one instruction's per-thread register tile. Singleton and
+// reduced axes are projected before constructing the fragment iteration space.
+// 从完整 thread tile 的形状求单片段形状 F=W*R，不包含 U、BR 两层重复。
+// 单例轴固定为 1；rank-1 且忽略第 0 轴时，使用布局的第 1 轴参数。
+// 要求每轴完整长度能被片段宽度整除，后面的循环因此无需处理残缺片段。
+static SmallVector<int64_t> getFragmentShape(ArrayRef<int64_t> shape,
+                                             const LowerInfo &info) {
+  auto widths = info.get_thread_widths() * info.get_warp_repeat();
+  SmallVector<int64_t> fragment;
+  for (auto [dim, size] : llvm::enumerate(shape)) {
+    unsigned axis = shape.size() == 1 && info.ignoreDim == 0 ? 1 : dim;
+    int64_t width = size == 1 ? 1 : widths[axis];
+    assert(width > 0 && size % width == 0 && "incomplete register fragment");
+    fragment.push_back(width);
+  }
+  return fragment;
+}
+
+// Flatten only the fragment grid (br * instUnroll + iu), never the register
+// shape. The body receives a fragment origin; registers inside it are static.
+// One SSA carrier may be a vector, a memref, or a scalar reduction accumulator.
+// 两层遍历：外层生成 IR 中的 affine.for 遍历片段，内层在 C++ 中枚举寄存器。
+// shape 是完整线程形状 T，fragment 是单片段形状 F；网格大小 G[d]=T[d]/F[d]。
+// 注意网格的行优先展平只决定遍历次序，元素归属仍由 LowerInfo 的布局决定。
+class FragmentTileLoopNest {
+public:
+  // 未显式传入 fragmentShape 时，把整个线程 tile 当作一个 fragment。
+  FragmentTileLoopNest(OpBuilder &builder, Location loc, ArrayRef<int64_t> shape,
+                    FragmentLoopOptions options = {},
+                    ArrayRef<int64_t> fragmentShape = {})
+      : builder(builder), loc(loc), shape(shape), options(options),
+        fragment(fragmentShape.empty() ? shape : fragmentShape) {}
+
+  template <typename Callback>
+  // body 接收片段起点和当前累积值，返回更新后的值；空 initial 表示仅有副作用。
+  // initial 非空时通过 iter_args/yield 串起各次更新，避免生成脱离 SSA 的可变值。
+  Value emitFragments(Value initial, Callback body) {
+    int64_t count = 1;
+    for (auto [size, width] : llvm::zip(shape, fragment)) {
+      assert(width > 0 && size % width == 0);
+      count *= size / width;
     }
-    auto loop = builder.create<affine::AffineForOp>(loc, 0, shape[dim], 1,
-                                                    ValueRange{initial});
+    SmallVector<Value> init;
+    if (initial)
+      init.push_back(initial);
+    auto loop = builder.create<affine::AffineForOp>(loc, 0, count, 1, init);
+    loop->setAttr("frisk.fragment_loop", builder.getUnitAttr());
+    loop->setAttr("frisk.fragment_shape", builder.getDenseI64ArrayAttr(fragment));
+    loop->setAttr("frisk.tile_shape", builder.getDenseI64ArrayAttr(shape));
     if (!options.marker.empty())
       loop->setAttr(options.marker, builder.getBoolAttr(true));
     if (options.unrollFull)
       loop->setAttr("frisk.loopUnrollFull", builder.getBoolAttr(true));
-    if (!options.labelPrefix.empty())
-      loop->setAttr("iterLabel", builder.getStringAttr(
-                                     Twine(options.labelPrefix) + Twine(dim)));
+    if (!options.label.empty())
+      loop->setAttr("iterLabel", builder.getStringAttr(options.label));
     builder.setInsertionPointToStart(loop.getBody());
-    indices.push_back(loop.getInductionVar());
-    Value result = emit(loop.getRegionIterArgs()[0], body, dim + 1);
-    builder.setInsertionPointToEnd(loop.getBody());
-    if (result)
+    // 将一维片段编号拆成网格坐标，再乘 F 得到线程 vector 内的 origin。
+    // 例如 T=2x32、F=1x4：origin=[iv/8, (iv%8)*4]。
+    SmallVector<Value> origins(shape.size());
+    int64_t stride = 1;
+    for (int dim = shape.size() - 1; dim >= 0; --dim) {
+      int64_t extent = shape[dim] / fragment[dim];
+      origins[dim] = extent == 1 ? createIndexConstant(builder, loc, 0)
+          : composeAccessIndex(builder, loc,
+              (builder.getAffineDimExpr(0).floorDiv(stride) % extent) * fragment[dim],
+              loop.getInductionVar());
+      stride *= extent;
+    }
+    Value result = body(origins, initial ? loop.getRegionIterArgs()[0] : Value{});
+    if (initial) {
+      builder.setInsertionPointToEnd(loop.getBody());
       builder.create<affine::AffineYieldOp>(loc, result);
-    indices.pop_back();
+    }
     builder.setInsertionPointAfter(loop);
-    return result ? loop.getResult(0) : Value{};
+    return initial ? loop.getResult(0) : Value{};
+  }
+
+  template <typename BodyEmitter>
+  // 把逐元素 emitter 适配成 fragment：indices=origin+静态寄存器偏移。
+  // vector carrier：body 返回标量，先组装片段，再插回完整线程 vector；
+  // 标量/memref carrier：依次传递 body 返回值（例如归约累加器）；
+  // 无 carrier：body 只生成 store 等副作用，fragment 不返回值。
+  Value emit(Value initial, BodyEmitter &body, StringRef kind = "compute") {
+    return emitFragments(initial, [&](ArrayRef<Value> origins, Value current) {
+      auto vectorType = initial ? dyn_cast<VectorType>(initial.getType()) : VectorType{};
+      Type resultType = vectorType ? Type(VectorType::get(fragment, vectorType.getElementType()))
+                                   : initial ? initial.getType() : Type{};
+      Value result = buildFragment(builder, loc, resultType, kind, [&]() -> Value {
+        Value packed = vectorType ? builder.create<arith::ConstantOp>(
+            loc, resultType, builder.getZeroAttr(resultType)).getResult() : current;
+        int64_t registers = ShapedType::getNumElements(fragment);
+        for (int64_t reg = 0; reg < registers; ++reg) {
+          SmallVector<Value> indices(shape.size());
+          SmallVector<OpFoldResult> local(shape.size());
+          int64_t remaining = reg;
+          for (int dim = shape.size() - 1; dim >= 0; --dim) {
+            int64_t offset = remaining % fragment[dim];
+            remaining /= fragment[dim];
+            local[dim] = builder.getIndexAttr(offset);
+            indices[dim] = offset == 0 ? origins[dim]
+                : composeAccessIndex(builder, loc, builder.getAffineDimExpr(0) + offset,
+                                     origins[dim]);
+          }
+          Value element = body.emit(indices, vectorType ? Value{} : packed);
+          packed = vectorType ? builder.create<vector::InsertOp>(loc, element, packed, local)
+                              : element;
+        }
+        return packed;
+      });
+      return vectorType ? transferFragment(builder, loc, current,
+          cast<VectorType>(resultType), origins, result) : result;
+    });
   }
 
 private:
   OpBuilder &builder;
   Location loc;
-  ArrayRef<int64_t> shape;
-  VectorTileLoopOptions options;
-  SmallVector<Value, 2> indices;
+  SmallVector<int64_t> shape;
+  FragmentLoopOptions options;
+  SmallVector<int64_t> fragment;
 };
 
+// Dynamic vector slice offsets are not supported by extract_strided_slice.
+// Gather/scatter the statically sized register fragment using scalar positions.
+// fragment 为空时，从 tile 的 origins 起点抽取片段；非空时将片段插回 tile。
+// 局部寄存器坐标静态展开，完整 tile 坐标允许动态；这里只搬运当前线程的 SSA
+// vector 元素，不进行跨线程通信，也不直接产生 shared/global 内存访问。
+static Value transferFragment(OpBuilder &b, Location loc, Value tile,
+                              VectorType fragmentType, ArrayRef<Value> origins,
+                              Value fragment) {
+  bool insert = bool(fragment);
+  if (!insert)
+    fragment = b.create<arith::ConstantOp>(loc, fragmentType,
+                                         b.getZeroAttr(fragmentType));
+  for (int64_t reg = 0; reg < fragmentType.getNumElements(); ++reg) {
+    SmallVector<OpFoldResult> local(fragmentType.getRank()), position(local.size());
+    int64_t remaining = reg;
+    for (int dim = fragmentType.getRank() - 1; dim >= 0; --dim) {
+      int64_t offset = remaining % fragmentType.getDimSize(dim);
+      remaining /= fragmentType.getDimSize(dim);
+      local[dim] = b.getIndexAttr(offset);
+      position[dim] = offset == 0 ? origins[dim]
+          : composeAccessIndex(b, loc, b.getAffineDimExpr(0) + offset, origins[dim]);
+    }
+    if (insert) {
+      Value scalar = b.create<vector::ExtractOp>(loc, fragment, local);
+      tile = b.create<vector::InsertOp>(loc, scalar, tile, position);
+    } else {
+      Value scalar = b.create<vector::ExtractOp>(loc, tile, position);
+      fragment = b.create<vector::InsertOp>(loc, scalar, fragment, local);
+    }
+  }
+  return insert ? tile : fragment;
+}
+
+template <typename Callback>
+// 通用逐片段计算：零初始化完整结果 -> compute(origin, fragmentType)
+// -> 片段结果插回完整 vector。算术 op 在 region 内，插回 tile 在 region 外，
+// 便于后续融合 pass 分析各迭代写入哪些位置。
+static Value mapFragments(OpBuilder &b, Location loc, VectorType type,
+                          ArrayRef<int64_t> fragment, Callback compute) {
+  auto fragmentType = VectorType::get(fragment, type.getElementType());
+  Value initial = b.create<arith::ConstantOp>(loc, type, b.getZeroAttr(type));
+  return FragmentTileLoopNest(b, loc, type.getShape(), {"tiled", "fragment"}, fragment)
+      .emitFragments(initial, [&](ArrayRef<Value> origins, Value tile) {
+        Value value = buildFragment(b, loc, fragmentType, "compute", [&]() {
+          Value result = compute(origins, fragmentType);
+          markTiled(result.getDefiningOp(), b);
+          return result;
+        });
+        return transferFragment(b, loc, tile, fragmentType, origins, value);
+      });
+}
 
 // Legacy destination-style operations write memory at the original program
 // point. Local destinations are thread memrefs; shared/global destinations keep
@@ -659,10 +854,7 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
     leader = builder.create<scf::IfOp>(loc, isLeader, false);
     builder.setInsertionPointToStart(&leader.getThenRegion().front());
   }
-  std::vector<int> bounds(threadType.getShape().begin(), threadType.getShape().end());
-  std::vector<Value> ivs;
-  auto loops = createNestedAffineFor(builder, loc, bounds, ivs);
-  markTiled(loops.front(), builder);
+  auto emitStore = [&](ArrayRef<Value> ivs, Value) -> Value {
   SmallVector<OpFoldResult, 2> position(ivs.begin(), ivs.end());
   Value scalar = builder.create<vector::ExtractOp>(loc, source, position);
   SmallVector<Value, 2> indices(ivs.begin(), ivs.end());
@@ -673,7 +865,14 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
       indices[dim] = createIndexConstant(builder, loc, 0);
   auto store = builder.create<affine::AffineStoreOp>(loc, scalar, target, indices);
   markTiled(store, builder);
-  builder.setInsertionPointAfter(loops.front());
+  return {};
+  };
+  struct StoreBody {
+    decltype(emitStore) &fn;
+    Value emit(ArrayRef<Value> ivs, Value current) { return fn(ivs, current); }
+  } body{emitStore};
+  FragmentTileLoopNest(builder, loc, threadType.getShape(), {"tiled", "store"},
+                     getFragmentShape(threadType.getShape(), info)).emit({}, body, "store");
   if (leader)
     builder.setInsertionPointAfter(leader);
   if (dstType.getMemorySpaceAsInt() == int(friskMs::Shared)) {
@@ -683,13 +882,13 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
 }
 
 // 局部广播的单元素 emitter：源的单例轴固定取 0，其他轴使用当前 tile 下标。
-// 抽取一个标量后插入目标 vector；这里不执行跨 lane 通信。
+// 返回一个标量，由 FragmentTileLoopNest::emit 组装片段；不执行跨 lane 通信。
 struct BroadcastTileElement {
   OpBuilder &rewriter;
   Location loc;
   VectorType sourceTy;
   Value sourceVector;
-  // 为目标 tile 的一个位置取源元素并返回插入后的新 SSA vector。
+  // 为目标 tile 的一个位置取源标量；currentTile 在 vector 模式下不使用。
   Value emit(ArrayRef<Value> tileIvs, Value currentTile) {
     SmallVector<Value, 2> sourceIndices;
     sourceIndices.reserve(tileIvs.size());
@@ -704,15 +903,7 @@ struct BroadcastTileElement {
         loc, sourceTy.getElementType(), sourceVector, sourceIndices,
         rewriter.getDenseI64ArrayAttr(staticSourcePosition));
 
-    SmallVector<OpFoldResult, 2> tilePosition;
-    tilePosition.reserve(tileIvs.size());
-    for (Value iv : tileIvs) {
-      tilePosition.push_back(iv);
-    }
-    return rewriter
-        .create<vector::InsertOp>(loc, scalar.getResult(), currentTile,
-                                  tilePosition)
-        .getResult();
+    return scalar.getResult();
   }
 };
 
@@ -722,7 +913,8 @@ struct BroadcastTileElement {
 static FailureOr<Value> broadcastLocalVectorToTile(Value sourceVector,
                                                    VectorType tileTy,
                                                    OpBuilder &rewriter,
-                                                   Location loc) {
+                                                   Location loc,
+                                                   const LowerInfo &info) {
   auto sourceTy = mlir::dyn_cast<VectorType>(sourceVector.getType());
   if (!sourceTy || sourceTy == tileTy) {
     return sourceVector;
@@ -755,7 +947,8 @@ static FailureOr<Value> broadcastLocalVectorToTile(Value sourceVector,
           .getResult();
 
   BroadcastTileElement element{rewriter, loc, sourceTy, sourceVector};
-  return VectorTileLoopNest(rewriter, loc, tileTy.getShape())
+  return FragmentTileLoopNest(rewriter, loc, tileTy.getShape(), {},
+                            getFragmentShape(tileTy.getShape(), info))
       .emit(result, element);
 }
 
@@ -791,7 +984,8 @@ static void promoteSingleIterationAffineFors(Operation *root) {
     root->walk<WalkOrder::PostOrder>(
         [&](affine::AffineForOp forOp) { loops.push_back(forOp); });
     for (affine::AffineForOp forOp : loops) {
-      if (succeeded(affine::promoteIfSingleIteration(forOp))) {
+      if (!forOp->hasAttr("frisk.fragment_loop") &&
+          succeeded(affine::promoteIfSingleIteration(forOp))) {
         changed = true;
       }
     }
@@ -825,7 +1019,8 @@ static Attribute convertScalarAttrForElementType(TypedAttr valueAttr,
 // 它不是通用数值转换器，后面的 finalizeNumericCast 有独立且更细的类型检查。
 static FailureOr<Value>
 castFloatVectorElementType(Value vector, Type dstElementType,
-                           ConversionPatternRewriter &rewriter, Location loc) {
+                           ConversionPatternRewriter &rewriter, Location loc,
+                           const LowerInfo *info = nullptr) {
   auto srcVecTy = mlir::dyn_cast<VectorType>(vector.getType());
   if (!srcVecTy) {
     return failure();
@@ -841,18 +1036,21 @@ castFloatVectorElementType(Value vector, Type dstElementType,
   }
 
   auto dstVecTy = VectorType::get(srcVecTy.getShape(), dstElementType);
-  if (srcFloatTy.getWidth() < dstFloatTy.getWidth()) {
-    return rewriter.create<arith::ExtFOp>(loc, dstVecTy, vector).getResult();
-  }
-  return rewriter.create<arith::TruncFOp>(loc, dstVecTy, vector).getResult();
+  SmallVector<int64_t> fragment = info ? getFragmentShape(srcVecTy.getShape(), *info)
+                                      : SmallVector<int64_t>(srcVecTy.getShape());
+  return mapFragments(rewriter, loc, dstVecTy, fragment,
+      [&](ArrayRef<Value> origins, VectorType dst) -> Value {
+        auto src = VectorType::get(fragment, srcElementType);
+        Value value = transferFragment(rewriter, loc, vector, src, origins);
+        if (srcFloatTy.getWidth() < dstFloatTy.getWidth())
+          return rewriter.create<arith::ExtFOp>(loc, dst, value);
+        return rewriter.create<arith::TruncFOp>(loc, dst, value);
+      });
 }
 
 
-// 为逐元素计算准备与结果线程 tile 对齐的一个操作数。
-// 浮点标量：直接广播；有形状的输入：以 resultInfo 为基础投影单例轴，
-// 先 ToThreadTile 取得对应逻辑元素，再转换元素类型，最后在线程内广播。
-// 关键是“按结果需要的坐标取输入”，而不是任取一个同 shape 的线程 vector。
-// 如果生产者布局不同，保留在两端桥接上的属性会使后续执行真实布局交换。
+// 为逐元素计算准备完整线程操作数：标量直接广播，矩阵按结果布局取数，
+// 再转换元素类型并广播单例轴。相同 vector 形状不代表相同的 block 元素归属。
 static FailureOr<Value> materializeElementwiseOperand(
     Value original, Value adapted, const LowerInfo &resultInfo, VectorType resultType,
     ConversionPatternRewriter &rewriter, Location loc) {
@@ -886,14 +1084,15 @@ static FailureOr<Value> materializeElementwiseOperand(
     return failure();
   Value tile = toThreadTile(adapted, *type, info, rewriter, loc);
   auto casted = castFloatVectorElementType(tile, resultType.getElementType(),
-                                          rewriter, loc);
+                                          rewriter, loc, &resultInfo);
   if (failed(casted))
     return failure();
-  return broadcastLocalVectorToTile(*casted, resultType, rewriter, loc);
+  return broadcastLocalVectorToTile(*casted, resultType, rewriter, loc, resultInfo);
 }
 
 // add/sub/mul/div 共用的重写模板：查询结果 LowerInfo -> 推导线程形状 ->
-// 物化两端操作数 -> 创建 arith 向量计算 -> FromThreadTile 恢复原结果类型。
+// 物化两端线程操作数 -> 逐 fragment 创建 arith 向量计算 ->
+// 将片段插回完整线程 vector -> FromThreadTile 恢复原结果类型。
 // matchAndRewrite 成功后替换原 op；缺布局或不兼容的广播/类型则匹配失败。
 template <typename FromOp, typename ToOp>
 class FriskBinaryOpTiling : public OpConversionPattern<FromOp> {
@@ -915,9 +1114,16 @@ public:
         *resultInfo, *resultType, rewriter, op.getLoc());
     if (failed(lhs) || failed(rhs))
       return rewriter.notifyMatchFailure(op, "incompatible operand thread tiles");
-    auto result = rewriter.create<ToOp>(op.getLoc(), *lhs, *rhs);
-    markTiled(result, rewriter);
-    Value block = fromThreadTile(result.getResult(), op.getResult().getType(),
+    auto fragment = getFragmentShape(resultType->getShape(), *resultInfo);
+    Value result = mapFragments(rewriter, op.getLoc(), *resultType, fragment,
+        [&](ArrayRef<Value> origins, VectorType type) -> Value {
+          Value a = transferFragment(rewriter, op.getLoc(), *lhs, type, origins);
+          Value b = transferFragment(rewriter, op.getLoc(), *rhs, type, origins);
+          auto newop = rewriter.create<ToOp>(op.getLoc(), a, b);
+          newop->setAttr("origin",rewriter.getStringAttr(op->getName().getStringRef()));
+          return newop;
+        });
+    Value block = fromThreadTile(result, op.getResult().getType(),
                                  *resultInfo, rewriter, op.getLoc());
     rewriter.replaceOp(op, block);
     return success();
@@ -944,16 +1150,111 @@ public:
         inputInfo ? *inputInfo : *info, *type, rewriter, op.getLoc());
     if (failed(input))
       return failure();
-    auto result = rewriter.create<math::Exp2Op>(op.getLoc(), *input);
-    markTiled(result, rewriter);
+    Value result = mapFragments(rewriter, op.getLoc(), *type,
+        getFragmentShape(type->getShape(), *info),
+        [&](ArrayRef<Value> origins, VectorType fragmentType) -> Value {
+          Value fragment = transferFragment(rewriter, op.getLoc(), *input, fragmentType, origins);
+          return rewriter.create<math::Exp2Op>(op.getLoc(), fragment);
+        });
     rewriter.replaceOp(op, fromThreadTile(result, op.getResult().getType(),
                                           *info, rewriter, op.getLoc()));
     return success();
   }
 };
 
-// 按结果 LowerInfo 生成线程 tile 大小的全零 vector，并恢复 block 结果类型。
-// 零是纯值，构造该结果不需要分配或清零一个真实的 block 大小内存。
+// Numeric conversion supports scalars and vectors. Equal-width floating point
+// formats are not bitcasts; reject formats requiring a separate conversion.
+static FailureOr<Value> finalizeNumericCast(OpBuilder &b, Location loc,
+                                           Value value, Type resultType) {
+  if (value.getType() == resultType)
+    return value;
+  Type src = getElementTypeOrSelf(value.getType());
+  Type dst = getElementTypeOrSelf(resultType);
+  if (auto sf = dyn_cast<FloatType>(src)) {
+    if (auto df = dyn_cast<FloatType>(dst)) {
+      if (sf.getWidth() < df.getWidth())
+        return b.create<arith::ExtFOp>(loc, resultType, value).getResult();
+      if (sf.getWidth() > df.getWidth())
+        return b.create<arith::TruncFOp>(loc, resultType, value).getResult();
+    }
+    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless())
+      return b.create<arith::FPToSIOp>(loc, resultType, value).getResult();
+  }
+  if (auto si = dyn_cast<IntegerType>(src); si && si.isSignless()) {
+    if (isa<FloatType>(dst))
+      return b.create<arith::SIToFPOp>(loc, resultType, value).getResult();
+    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless()) {
+      if (si.getWidth() < di.getWidth())
+        return b.create<arith::ExtSIOp>(loc, resultType, value).getResult();
+      return b.create<arith::TruncIOp>(loc, resultType, value).getResult();
+    }
+  }
+  if ((isa<IndexType>(src) && isa<IntegerType>(dst)) ||
+      (isa<IntegerType>(src) && isa<IndexType>(dst)))
+    return b.create<arith::IndexCastOp>(loc, resultType, value).getResult();
+  return failure();
+}
+
+// Casts share the same fragment boundary as arithmetic, including integer
+// conversions. Scalar casts have no fragment iteration space.
+class CastOpTiling : public OpConversionPattern<frisk::CastOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(frisk::CastOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (isTiled(op))
+      return failure();
+    auto result = dyn_cast<ShapedType>(op.getResult().getType());
+    if (!result) {
+      auto value = finalizeNumericCast(rewriter, op.getLoc(), adaptor.getOperand(),
+                                       op.getResult().getType());
+      if (failed(value))
+        return failure();
+      rewriter.replaceOp(op, *value);
+      return success();
+    }
+    auto source = dyn_cast<ShapedType>(op.getOperand().getType());
+    if (!source || !source.hasStaticShape() || !result.hasStaticShape() ||
+        (isa<VectorType>(source) && cast<VectorType>(source).isScalable()) ||
+        (isa<VectorType>(result) && cast<VectorType>(result).isScalable()) ||
+        source.getShape() != result.getShape())
+      return rewriter.notifyMatchFailure(op, "cast requires matching static shapes");
+    auto info = findLowerInfoForValue(op.getResult(), op);
+    if (!info)
+      info = findLowerInfoForValue(op.getOperand(), op);
+    if (!info && (isa<MemRefType>(source) || isa<MemRefType>(result)))
+      return rewriter.notifyMatchFailure(op, "missing cast layout");
+    auto type = info ? getFullThreadTileType(op.getResult(), *info)
+                     : FailureOr<VectorType>(cast<VectorType>(result));
+    if (failed(type))
+      return failure();
+    auto srcType = VectorType::get(type->getShape(), source.getElementType());
+    Value input = info ? toThreadTile(adaptor.getOperand(), srcType, *info, rewriter, op.getLoc())
+                       : adaptor.getOperand();
+    SmallVector<int64_t> shape = info ? getFragmentShape(type->getShape(), *info)
+                                      : SmallVector<int64_t>(type->getShape());
+    bool supported = true;
+    Value value = mapFragments(rewriter, op.getLoc(), *type, shape,
+        [&](ArrayRef<Value> origins, VectorType dst) -> Value {
+          Value fragment = transferFragment(rewriter, op.getLoc(), input,
+              VectorType::get(shape, source.getElementType()), origins);
+          auto converted = finalizeNumericCast(rewriter, op.getLoc(), fragment, dst);
+          if (failed(converted)) {
+            supported = false;
+            // ConversionPatternRewriter rolls back this speculative IR.
+            return rewriter.create<arith::ConstantOp>(op.getLoc(), dst, rewriter.getZeroAttr(dst));
+          }
+          return *converted;
+        });
+    if (!supported)
+      return rewriter.notifyMatchFailure(op, "unsupported fragment numeric conversion");
+    if (info)
+      value = fromThreadTile(value, result, *info, rewriter, op.getLoc());
+    rewriter.replaceOp(op, value);
+    return success();
+  }
+};
+
 class ZeroOpTiling : public OpConversionPattern<frisk::ZeroOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -967,9 +1268,12 @@ public:
     auto type = getFullThreadTileType(op.getResult(), *info);
     if (failed(type))
       return failure();
-    auto zero = rewriter.create<arith::ConstantOp>(op.getLoc(), *type,
-        cast<TypedAttr>(rewriter.getZeroAttr(*type)));
-    markTiled(zero, rewriter);
+    Value zero = mapFragments(rewriter, op.getLoc(), *type,
+        getFragmentShape(type->getShape(), *info),
+        [&](ArrayRef<Value>, VectorType fragmentType) -> Value {
+          return rewriter.create<arith::ConstantOp>(op.getLoc(), fragmentType,
+                                                  rewriter.getZeroAttr(fragmentType));
+        });
     rewriter.replaceOp(op, fromThreadTile(zero, op.getResult().getType(),
                                           *info, rewriter, op.getLoc()));
     return success();
@@ -1003,12 +1307,18 @@ public:
     Value tile = toThreadTile(adaptor.getMemref(), memType, *info, rewriter, loc);
     Value value = rewriter.create<arith::ConstantOp>(loc, type->getElementType(),
                                                      cast<TypedAttr>(element));
-    std::vector<int> bounds(type->getShape().begin(), type->getShape().end());
-    std::vector<Value> ivs;
-    auto loops = createNestedAffineFor(rewriter, loc, bounds, ivs);
-    auto store = rewriter.create<affine::AffineStoreOp>(loc, value, tile, ivs);
-    markTiled(store, rewriter);
-    rewriter.setInsertionPointAfter(loops.front());
+    struct FillElement {
+      OpBuilder &builder;
+      Location loc;
+      Value value, tile;
+      Value emit(ArrayRef<Value> ivs, Value) {
+        auto store = builder.create<affine::AffineStoreOp>(loc, value, tile, ivs);
+        markTiled(store, builder);
+        return {};
+      }
+    } elementBody{rewriter, loc, value, tile};
+    FragmentTileLoopNest(rewriter, loc, type->getShape(), {"tiled", "fill"},
+                      getFragmentShape(type->getShape(), *info)).emit({}, elementBody, "store");
     Value block = fromThreadTile(tile, op.getMemref().getType(), *info, rewriter, loc);
     writeBackBlockTile(block, adaptor.getMemref(), *info, rewriter, loc);
     if (op.hasValueResult())
@@ -1089,13 +1399,7 @@ struct MaskTileElement {
     }
 
     Value scalar = mapper.lookupOrDefault(yieldOp->getOperand(0));
-    SmallVector<OpFoldResult, 2> position;
-    position.reserve(tileIvs.size());
-    for (Value iv : tileIvs) {
-      position.push_back(iv);
-    }
-    return rewriter.create<vector::InsertOp>(loc, scalar, initVector, position)
-        .getResult();
+    return scalar;
   }
 };
 
@@ -1153,7 +1457,8 @@ public:
     MaskTileElement element{rewriter, loc,     &*resultInfo, tidx,
                             resultTy, adaptor, body,       yieldOp};
     resultVector =
-        VectorTileLoopNest(rewriter, loc, vectorShape, {{}, "mask_tw", {}})
+        FragmentTileLoopNest(rewriter, loc, vectorShape, {"tiled", "mask_fragment"},
+                           getFragmentShape(vectorShape, *resultInfo))
             .emit(resultVector, element);
     rewriter.replaceOp(op, fromThreadTile(resultVector, op.getResult().getType(),
                                           *resultInfo, rewriter, loc));
@@ -1217,47 +1522,127 @@ struct ReduceTileElement {
   int64_t laneExtent;
   int64_t laneStride;
   int64_t warpThreads;
+  int64_t fragmentWidth;
 
   // 沿源线程 vector 的归约轴循环累加，再按 offset*laneStride 做 XOR shuffle，
-  // 最后把归约结果插回输出 vector。支持保留长度为 1 的轴或去掉该轴。
+  // 最后返回归约标量，由外层 emitter 组装输出片段。支持保留或去掉归约轴。
   Value emit(ArrayRef<Value> outputIvs, Value output) {
     auto loc = op.getLoc();
     int64_t dim = op.getDim();
-    auto loop = rewriter.create<affine::AffineForOp>(loc, 0,
-        sourceType.getDimSize(dim), 1, ValueRange{identity});
-    rewriter.setInsertionPointToStart(loop.getBody());
-    SmallVector<OpFoldResult, 2> indices;
-    unsigned out = 0;
-    bool keepDim = outputIvs.size() == static_cast<size_t>(sourceType.getRank());
-    for (int64_t i = 0; i < sourceType.getRank(); ++i) {
-      if (i == dim) {
-        indices.push_back(loop.getInductionVar());
-        if (keepDim)
-          ++out;
-      } else {
-        indices.push_back(outputIvs[out++]);
+    struct ReductionElement {
+      ReduceTileElement &self;
+      ArrayRef<Value> outputIvs;
+      Value emit(ArrayRef<Value> reductionIvs, Value accumulator) {
+        SmallVector<OpFoldResult, 2> indices;
+        unsigned out = 0;
+        bool keepDim = outputIvs.size() == static_cast<size_t>(self.sourceType.getRank());
+        for (int64_t i = 0; i < self.sourceType.getRank(); ++i) {
+          if (i == self.op.getDim()) {
+            indices.push_back(reductionIvs[0]);
+            if (keepDim)
+              ++out;
+          } else {
+            indices.push_back(outputIvs[out++]);
+          }
+        }
+        Value value = self.rewriter.create<vector::ExtractOp>(self.op.getLoc(), self.source, indices);
+        return *combineReduceValues(self.op, accumulator, value, self.rewriter);
       }
-    }
-    Value value = rewriter.create<vector::ExtractOp>(loc, source, indices);
-    Value combined = *combineReduceValues(op, loop.getRegionIterArgs()[0], value, rewriter);
-    rewriter.create<affine::AffineYieldOp>(loc, combined);
-    rewriter.setInsertionPointAfter(loop);
-    Value reduced = loop.getResult(0);
+    } element{*this, outputIvs};
+    // Keep the original left-to-right FP association across all fragments.
+    Value reduced = FragmentTileLoopNest(rewriter, loc, {sourceType.getDimSize(dim)},
+        {"tiled", "reduce_axis_fragment"}, {fragmentWidth}).emit(identity, element);
     for (int64_t offset = 1; offset < laneExtent; offset <<= 1) {
       auto shuffle = rewriter.create<gpu::ShuffleOp>(loc, reduced,
           static_cast<int32_t>(offset * laneStride), static_cast<int32_t>(warpThreads),
           gpu::ShuffleMode::XOR);
       reduced = *combineReduceValues(op, reduced, shuffle.getShuffleResult(), rewriter);
     }
-    SmallVector<OpFoldResult, 2> positions(outputIvs.begin(), outputIvs.end());
-    return rewriter.create<vector::InsertOp>(loc, reduced, output, positions);
+    return reduced;
   }
 };
 
-// 生成“线程内循环 + warp 内 shuffle”的归约，并在原位置写回 dst。
-// 要求浮点类型匹配、归约轴不跨 warp（block_layout[dim]==1）、lane 数为 2 的幂。
-// 结果形状取源线程 tile 的非归约轴，避免误用仍描述未归约矩阵的寄存器预算。
-// 本实现没有跨 warp 的共享内存归约路径；不满足条件时明确匹配失败。
+// Compose the same tid/thread-index decomposition as buildMappedAccessIndices.
+// Project singleton axes before comparing: their layout metadata may differ
+// even though every lane holds exactly the same surviving coordinates.
+static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
+                                        VectorType tile, MLIRContext *ctx) {
+  auto zero = getAffineConstantExpr(0, ctx);
+  SmallVector<AffineExpr> br, iu, wr, reg;
+  for (unsigned axis = 0; axis < 2; ++axis) {
+    int dim = tile.getRank() == 1 ? (axis == (info.ignoreDim == 0 ? 1 : 0) ? 0 : -1)
+                                  : int(axis);
+    AffineExpr iv = dim < 0 || tile.getDimSize(dim) == 1
+        ? zero : getAffineDimExpr(dim + 1, ctx);
+    int64_t width = info.get_thread_widths()[axis];
+    int64_t repeat = info.get_warp_repeat()[axis];
+    int64_t unroll = info.warpInstUnroll[axis];
+    br.push_back(iv.floorDiv(width * repeat * unroll));
+    iu.push_back(iv.floorDiv(width * repeat) % unroll);
+    wr.push_back((iv % (width * repeat)).floorDiv(width));
+    reg.push_back(iv % width);
+  }
+  auto flatten = [](ArrayRef<AffineExpr> xy, coordXY_t order, coordXY_t shape) {
+    return xy[order[0]] + xy[order[1]] * shape[order[0]];
+  };
+  SmallVector<AffineExpr> operands{
+      getAffineDimExpr(0, ctx), br[0], br[1], iu[0], iu[1],
+      flatten(wr, info.base_layout.warp_repeat_order, info.get_warp_repeat()),
+      flatten(reg, info.base_layout.thread_creg_order, info.get_thread_widths())};
+  auto map = info.getAffineMap().replaceDimsAndSymbols(
+      operands, {}, tile.getRank() + 1, 0);
+  SmallVector<AffineExpr> results;
+  for (int dim = 0; dim < tile.getRank(); ++dim) {
+    int axis = tile.getRank() == 1 && info.ignoreDim == 0 ? 1 : dim;
+    results.push_back(block.getDimSize(dim) == 1 ||
+                              (tile.getRank() == 2 && info.ignoreDim == axis)
+                          ? zero : map.getResult(axis));
+  }
+  return simplifyAffineMap(AffineMap::get(tile.getRank() + 1, 0, results, ctx));
+}
+
+// A private-to-this-expression reduction temporary with one later layout read
+// has no observable storage. Forward only when that read needs the exact same
+// per-lane values; equal vector shapes alone do not prove this.
+static bool forwardReductionTemporary(frisk::ReduceOp op, Value result,
+                                      LowerInfo resultInfo,
+                                      ConversionPatternRewriter &rewriter) {
+  Value dst = op.getDst();
+  Operation *allocation = dst.getDefiningOp();
+  if (!isa_and_nonnull<frisk::AllocBufferOp, memref::AllocOp>(allocation) ||
+      cast<MemRefType>(dst.getType()).getMemorySpaceAsInt() != int(friskMs::Shared))
+    return false;
+  frisk::ConvertLayoutOp consumer;
+  for (OpOperand &use : dst.getUses()) {
+    if (use.getOwner() == op && use.getOperandNumber() == 1)
+      continue;
+    auto convert = dyn_cast<frisk::ConvertLayoutOp>(use.getOwner());
+    if (!convert || consumer || convert->getBlock() != op->getBlock() ||
+        !op->isBeforeInBlock(convert))
+      return false;
+    consumer = convert;
+  }
+  if (!consumer)
+    return false;
+  auto found = convertLayoutInfo.find(consumer);
+  if (found == convertLayoutInfo.end())
+    return false;
+  LowerInfo targetInfo = found->second.second;
+  auto targetType = getFullThreadTileType(consumer->getResult(0), targetInfo);
+  auto resultType = cast<VectorType>(result.getType());
+  if (failed(targetType) || *targetType != resultType)
+    return false;
+  auto blockType = cast<ShapedType>(dst.getType());
+  if (effectiveThreadTileMap(resultInfo, blockType, resultType, op.getContext()) !=
+      effectiveThreadTileMap(targetInfo, blockType, resultType, op.getContext()))
+    return false;
+  Value forwarded = fromThreadTile(result, consumer->getResult(0).getType(),
+                                    targetInfo, rewriter, op.getLoc());
+  convertLayoutInfo.erase(consumer);
+  rewriter.replaceOp(consumer, forwarded);
+  return true;
+}
+
 class ReduceOpTiling : public OpConversionPattern<frisk::ReduceOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1305,8 +1690,14 @@ public:
     Value initial = rewriter.create<arith::ConstantOp>(loc, dstType,
         cast<TypedAttr>(rewriter.getZeroAttr(dstType)));
     ReduceTileElement element{rewriter, op, source, *sourceType, *identity,
-                               lanes, stride, sourceInfo->warp_threads};
-    Value result = VectorTileLoopNest(rewriter, loc, shape).emit(initial, element);
+                               lanes, stride, sourceInfo->warp_threads,
+                               getFragmentShape(sourceType->getShape(), *sourceInfo)[dim]};
+    Value result = FragmentTileLoopNest(rewriter, loc, shape, {"tiled", "reduce_fragment"},
+        getFragmentShape(shape, *resultInfo)).emit(initial, element);
+    if (forwardReductionTemporary(op, result, *resultInfo, rewriter)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     Value block = fromThreadTile(result, op.getDst().getType(), *resultInfo, rewriter, loc);
     writeBackBlockTile(block, adaptor.getDst(), *resultInfo, rewriter, loc);
     rewriter.eraseOp(op);
@@ -1341,12 +1732,15 @@ static LogicalResult lowerGlobalToSharedCopy(
   int64_t width = std::gcd(perThread, shape.back());
   auto vectorType = VectorType::get({width}, srcType.getElementType());
   Value tid = findThreadIdxOp(op, rewriter);
-  auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread, width);
+  auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread / width, 1);
   markTiled(chunk, rewriter);
+  chunk->setAttr("frisk.fragment_loop", rewriter.getUnitAttr());
+  chunk->setAttr("frisk.fragment_shape", rewriter.getDenseI64ArrayAttr({width}));
+  chunk->setAttr("iterLabel", rewriter.getStringAttr("copy_transfer_fragment"));
   rewriter.setInsertionPointToStart(chunk.getBody());
   Value start = composeAccessIndex(
       rewriter, loc,
-      rewriter.getAffineDimExpr(0) * perThread + rewriter.getAffineDimExpr(1),
+      rewriter.getAffineDimExpr(0) * perThread + rewriter.getAffineDimExpr(1) * width,
       ValueRange{tid, chunk.getInductionVar()});
   scf::IfOp active;
   if (total % perThread != 0 || total / perThread < threadsAttr.getInt()) {
@@ -1367,31 +1761,35 @@ static LogicalResult lowerGlobalToSharedCopy(
     }
     return indices;
   };
-  Value initial = rewriter.create<arith::ConstantOp>(
+  Value packet = buildFragment(rewriter, loc, vectorType, "load", [&]() {
+    Value packet = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
-  auto lanes = rewriter.create<affine::AffineForOp>(
-      loc, 0, width, 1, ValueRange{initial});
-  rewriter.setInsertionPointToStart(lanes.getBody());
-  Value flat = composeAccessIndex(
-      rewriter, loc, rewriter.getAffineDimExpr(0) + rewriter.getAffineDimExpr(1),
-      ValueRange{start, lanes.getInductionVar()});
-  auto indices = coordinates(flat);
-  Value buffer = source;
-  resolveViewAccess(rewriter, loc, buffer, indices);
-  Value scalar = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
-  Value inserted = rewriter.create<vector::InsertOp>(
-      loc, scalar, lanes.getRegionIterArgs()[0], lanes.getInductionVar());
-  rewriter.create<affine::AffineYieldOp>(loc, inserted);
-  rewriter.setInsertionPointAfter(lanes);
+  // Static register positions within one transfer fragment; only the packet
+  // grid is represented by an affine loop, just like computation fragments.
+  for (int64_t reg = 0; reg < width; ++reg) {
+    Value flat = composeAccessIndex(
+        rewriter, loc, rewriter.getAffineDimExpr(0) + reg, start);
+    auto indices = coordinates(flat);
+    Value buffer = source;
+    resolveViewAccess(rewriter, loc, buffer, indices);
+    Value scalar = rewriter.create<affine::AffineLoadOp>(loc, buffer, indices);
+    packet = rewriter.create<vector::InsertOp>(
+        loc, scalar, packet, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(reg)});
+  }
+    return packet;
+  });
   auto converted = castFloatVectorElementType(
-      lanes.getResult(0), dstType.getElementType(), rewriter, loc);
+      packet, dstType.getElementType(), rewriter, loc);
   if (failed(converted))
     return rewriter.notifyMatchFailure(op, "unsupported global copy element conversion");
-  indices = coordinates(start);
-  buffer = destination;
+  auto indices = coordinates(start);
+  Value buffer = destination;
   resolveViewAccess(rewriter, loc, buffer, indices);
-  auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
-  markTiled(store, rewriter);
+  buildFragment(rewriter, loc, Type{}, "store", [&]() -> Value {
+    auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
+    markTiled(store, rewriter);
+    return {};
+  });
   rewriter.setInsertionPointAfter(chunk);
   auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
   markTiled(sync, rewriter);
@@ -1480,9 +1878,17 @@ public:
       return failure();
     auto sourceTileTy = VectorType::get(tileTy->getShape(), srcTy.getElementType());
     Value tile = toThreadTile(source, sourceTileTy, *info, rewriter, loc);
-    auto converted = castFloatVectorElementType(tile, dstTy.getElementType(), rewriter, loc);
+    auto converted = castFloatVectorElementType(tile, dstTy.getElementType(), rewriter, loc, &*info);
     if (failed(converted))
       return rewriter.notifyMatchFailure(op, "unsupported copy element conversion");
+    if (srcTy.getElementType() == dstTy.getElementType()) {
+      auto resultType = VectorType::get(tileTy->getShape(), dstTy.getElementType());
+      converted = mapFragments(rewriter, loc, resultType,
+          getFragmentShape(tileTy->getShape(), *info),
+          [&](ArrayRef<Value> origins, VectorType fragmentType) {
+            return transferFragment(rewriter, loc, tile, fragmentType, origins);
+          });
+    }
     if (isa<VectorType>(dstTy)) {
       if (!sameShape)
         return rewriter.notifyMatchFailure(op, "vector destination requires a whole-tile copy");
@@ -1502,12 +1908,7 @@ public:
       }
       return success();
     }
-    auto dstTileTy = MemRefType::get(tileTy->getShape(), dstTy.getElementType());
-    Value dstTile = toThreadTile(destination, dstTileTy, *info, rewriter, loc);
-    SmallVector<Value> zeros(tileTy->getRank(), createIndexConstant(rewriter, loc, 0));
-    auto store = rewriter.create<vector::StoreOp>(loc, *converted, dstTile, zeros);
-    markTiled(store, rewriter);
-    Value block = fromThreadTile(dstTile, destination.getType(), *info, rewriter, loc);
+    Value block = fromThreadTile(*converted, destination.getType(), *info, rewriter, loc);
     writeBackBlockTile(block, destination, *info, rewriter, loc);
     if (op.hasValueResult()) {
       if (block.getType() != op.getValueResult().getType()) {
@@ -1563,7 +1964,7 @@ public:
       Value tile = toThreadTile(adaptor.getSrc(), *tileType, *info,
                                 rewriter, op.getLoc());
       auto converted = castFloatVectorElementType(
-          tile, resultType.getElementType(), rewriter, op.getLoc());
+          tile, resultType.getElementType(), rewriter, op.getLoc(), &*info);
       if (failed(converted))
         return failure();
       rewriter.replaceOp(op, fromThreadTile(*converted, resultType, *info,
@@ -1601,8 +2002,7 @@ struct LayoutReadBackElement {
   Value emit(ArrayRef<Value> ivs, Value output) {
     auto indices = buildMappedAccessIndices(rewriter, loc, info, tid, ivs, ivs.size());
     Value scalar = rewriter.create<affine::AffineLoadOp>(loc, scratch, indices);
-    SmallVector<OpFoldResult, 2> position(ivs.begin(), ivs.end());
-    return rewriter.create<vector::InsertOp>(loc, scalar, output, position);
+    return scalar;
   }
 };
 
@@ -1640,7 +2040,8 @@ public:
     Value initial = rewriter.create<arith::ConstantOp>(loc, *toTy,
         cast<TypedAttr>(rewriter.getZeroAttr(*toTy)));
     LayoutReadBackElement element{rewriter, loc, toInfo, tid, scratch};
-    Value result = VectorTileLoopNest(rewriter, loc, toTy->getShape()).emit(initial, element);
+    Value result = FragmentTileLoopNest(rewriter, loc, toTy->getShape(), {"tiled", "layout_fragment"},
+        getFragmentShape(toTy->getShape(), toInfo)).emit(initial, element, "load");
     // No thread may reuse scratch until all threads have completed their reads.
     auto readSync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
     markTiled(readSync, rewriter);
@@ -1747,10 +2148,7 @@ public:
       buffer.tile = toThreadTile(adapted, type, buffer.info, rewriter, loc);
     }
     Value tid = findThreadIdxOp(op, rewriter);
-    std::vector<int> bounds(shape.begin(), shape.end());
-    std::vector<Value> ivs;
-    auto loops = createNestedAffineFor(rewriter, loc, bounds, ivs);
-    markTiled(loops.front(), rewriter);
+    auto emitBlock = [&](ArrayRef<Value> ivs, Value) -> Value {
     auto blockIndices = buildMappedAccessIndices(rewriter, loc, output->info, tid, ivs, ivs.size());
     IRMapping scalarMapping;
     for (auto [arg, index] : llvm::zip(body->getArguments(), blockIndices))
@@ -1788,7 +2186,14 @@ public:
         rewriter.clone(child, scalarMapping);
       }
     }
-    rewriter.setInsertionPointAfter(loops.front());
+    return {};
+    };
+    struct BlockElement {
+      decltype(emitBlock) &fn;
+      Value emit(ArrayRef<Value> ivs, Value current) { return fn(ivs, current); }
+    } blockElement{emitBlock};
+    FragmentTileLoopNest(rewriter, loc, shape, {"tiled", "block_fragment"},
+                      getFragmentShape(shape, output->info)).emit({}, blockElement, "store");
     for (auto &buffer : buffers) {
       if (!buffer.written)
         continue;
@@ -1800,49 +2205,13 @@ public:
   }
 };
 
-/// 从完整 thread tile 提取一个 MMA 片段。MN 为静态片段编号，K 为循环 IV；
-/// vector.extract_strided_slice 不支持动态 offset，因此逐寄存器提取/组装。
-// 从完整 A/B 线程 vector 中取某次 MMA 所需的小片段。
-// A 使用 [m*片段行数+row, k*片段列数+col]；
-// B 使用 [k*片段行数+row, n*片段列数+col]。
-// mn 来自 C++ 静态循环，k 是 IR 中循环变量，故用逐元素 extract/insert
-// 支持动态 K 偏移，而不是要求静态 offset 的 extract_strided_slice。
-static Value extractGemmTileFragment(OpBuilder &builder, Location loc,
-                                     Value tile, VectorType fragmentType,
-                                     int64_t mn, Value k, bool isA) {
-  Value fragment = builder.create<arith::ConstantOp>(
-      loc, fragmentType, cast<TypedAttr>(builder.getZeroAttr(fragmentType)));
-  auto d0 = builder.getAffineDimExpr(0);
-  for (int64_t row = 0; row < fragmentType.getDimSize(0); ++row) {
-    for (int64_t col = 0; col < fragmentType.getDimSize(1); ++col) {
-      int64_t staticIndex =
-          isA ? mn * fragmentType.getDimSize(0) + row
-              : mn * fragmentType.getDimSize(1) + col;
-      Value dynamicIndex = createSingleDimAffineApply(
-          builder, loc,
-          isA ? d0 * fragmentType.getDimSize(1) + col
-              : d0 * fragmentType.getDimSize(0) + row,
-          k);
-      SmallVector<int64_t, 2> position =
-          isA ? SmallVector<int64_t, 2>{staticIndex, ShapedType::kDynamic}
-              : SmallVector<int64_t, 2>{ShapedType::kDynamic, staticIndex};
-      Value element = builder.create<vector::ExtractOp>(
-          loc, fragmentType.getElementType(), tile, ValueRange{dynamicIndex},
-          builder.getDenseI64ArrayAttr(position));
-      fragment = builder.create<vector::InsertOp>(
-          loc, element, fragment, ArrayRef<int64_t>{row, col});
-    }
-  }
-  return fragment;
-}
-
 /// 只替换 block-tile SSA 值，thread-tile 的数据流完全由 IR 显式表达。
 // 将一个 block GEMM 改写为每线程寄存器片段参与的 WarpMmaRROp。
 // 要求 DCU、二维 memref A/B/C、三者 LowerInfo 绑定相同 MMA 指令。
 // 每轴片段大小 = thread_widths * warp_repeat；
 // 每轴片段数量 = block_repeat * warpInstUnroll；两者相乘才是完整线程 tile。
 // A 是 [M,K]，B 是 [K,N]，C 是 [M,N]，所以需检查三者片段数量相容。
-// M/N 在 C++ 层静态展开，K 在 IR 中循环；每个 C 片段从零开始累加，
+// M/N 片段网格展平成一个 IR 循环，内层 K 循环逐片段累加；C 片段从零开始，
 // 结束后插入完整 C 线程 vector，再用 FromThreadTile 替换原 GEMM 结果。
 // op.getC() 在这里是输出 SSA 值，不是 GEMM 的输入累加器。
 class GemmOpTiling : public OpConversionPattern<frisk::GemmOp> {
@@ -1901,9 +2270,7 @@ public:
     }
 
     // A/B 的旧 thread_own_data_size 不含 block_repeat（复用寄存器的尺寸）。
-    // ToThreadTile 在循环外产生完整 SSA tile，必须包含全部 MN/K 片段。
-    // 完整 A/B tile 在 K 循环外创建，需要容纳所有重复访问的片段。
-    // 这与旧分析中“每轮复用一次 MMA 的 A/B 寄存器”的最小存储预算不同。
+    // Bridge 类型记录完整 MN/K 布局；Finalize 只在片段使用处物化实际读。
     auto threadTileA = VectorType::get(aCounts * aFragmentShape,
                                        aType.getElementType());
     auto threadTileB = VectorType::get(bCounts * bFragmentShape,
@@ -1914,46 +2281,55 @@ public:
     auto fragmentB = VectorType::get(bFragmentShape, bType.getElementType());
     auto fragmentC = VectorType::get(cFragmentShape, cType.getElementType());
     auto loc = op.getLoc();
-    Value ttileA = toThreadTile(adaptor.getA(), threadTileA, *infoA, rewriter, loc);
-    Value ttileB = toThreadTile(adaptor.getB(), threadTileB, *infoB, rewriter, loc);
-    // Finalization propagates this request to the A/B vector assembly loops.
-    ttileA.getDefiningOp()->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
-    ttileB.getDefiningOp()->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
-    Value result = rewriter.create<arith::ConstantOp>(
-        loc, threadTileC, cast<TypedAttr>(rewriter.getZeroAttr(threadTileC)));
+    Value initial = rewriter.create<arith::ConstantOp>(
+        loc, threadTileC, rewriter.getZeroAttr(threadTileC));
     Value zeroFragment = rewriter.create<arith::ConstantOp>(
-        loc, fragmentC, cast<TypedAttr>(rewriter.getZeroAttr(fragmentC)));
-
-    // 静态展开 MN，K 循环通过 iter_args/yield 累加一个 MMA 片段。
-    // GEMM 没有输入 C：每个片段都从零开始，不读取尚未定义的 op.getC()。
-    for (int64_t m = 0; m < cCounts[0]; ++m) {
-      for (int64_t n = 0; n < cCounts[1]; ++n) {
-        auto kFor = rewriter.create<affine::AffineForOp>(
-            loc, 0, aCounts[1], 1, ValueRange{zeroFragment});
-        kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
-        kFor->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
-        rewriter.setInsertionPointToStart(kFor.getBody());
-        Value a = extractGemmTileFragment(rewriter, loc, ttileA, fragmentA,
-                                          m, kFor.getInductionVar(), true);
-        Value b = extractGemmTileFragment(rewriter, loc, ttileB, fragmentB,
-                                          n, kFor.getInductionVar(), false);
-        // IR 中每个线程提供自己的 A/B/C 片段；warp 级指令按硬件布局协同计算。
-        // 这里保留指令名字和约束，最终机器指令生成仍由后续 lowering 负责。
-        auto mma = rewriter.create<frisk::WarpMmaRROp>(
-            loc, fragmentC, a, b, kFor.getRegionIterArgs()[0]);
-        markTiled(mma, rewriter);
-        mma->setAttr("inst_name", instName);
-        mma->setAttr("inst_constraints", constraints);
-        rewriter.create<affine::AffineYieldOp>(loc, mma.getResult());
-        rewriter.setInsertionPointAfter(kFor);
-        auto insert = rewriter.create<vector::InsertStridedSliceOp>(
-            loc, kFor.getResult(0), result,
-            ArrayRef<int64_t>{m * cFragmentShape[0], n * cFragmentShape[1]},
-            ArrayRef<int64_t>{1, 1});
-        insert->setAttr("frisk.mma_fragment", rewriter.getUnitAttr());
-        result = insert.getResult();
-      }
-    }
+        loc, fragmentC, rewriter.getZeroAttr(fragmentC));
+    // 外层枚举 C 的 (m,n) 片段；cOrigin 是线程 vector 坐标，除以片段宽度
+    // 才得到片段编号 m/n。MN 与 K 循环保留到后续融合、调度完成之后。
+    Value result = FragmentTileLoopNest(rewriter, loc, threadTileC.getShape(),
+        {"tiled", "gemm_mn"}, cFragmentShape).emitFragments(initial,
+        [&](ArrayRef<Value> cOrigin, Value output) -> Value {
+          Value m = floorDivBy(rewriter, loc, cOrigin[0], cFragmentShape[0]);
+          Value n = floorDivBy(rewriter, loc, cOrigin[1], cFragmentShape[1]);
+          // 每个 C[m,n] 的累加器独立从零开始，K 循环执行
+          // acc = MMA(A[m,k], B[k,n], acc)，iter_args 保存上一轮 fragment。
+          auto kFor = rewriter.create<affine::AffineForOp>(
+              loc, 0, aCounts[1], 1, ValueRange{zeroFragment});
+          kFor->setAttr("iterLabel", rewriter.getStringAttr("gemm_k"));
+          kFor->setAttr("frisk.fragment_loop", rewriter.getUnitAttr());
+          kFor->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
+          rewriter.setInsertionPointToStart(kFor.getBody());
+          Value k = kFor.getInductionVar();
+          auto operand = [&](Value block, VectorType tileType, VectorType fragType,
+                             LowerInfo &info, Value row, Value col) {
+            return buildFragment(rewriter, loc, fragType, "load", [&]() {
+              // 在使用位置描述完整 A/B 布局，但只抽取当前 (m,k)/(k,n) 片段。
+              // fragment_source 让 Finalize 把这些 extract 原地改为实际 load，
+              // 从而无需先加载包含所有 K 片段的完整线程 vector。
+              Value tile = toThreadTile(block, tileType, info, rewriter, loc);
+              tile.getDefiningOp()->setAttr("frisk.fragment_source", rewriter.getUnitAttr());
+              SmallVector<Value> origin{
+                  composeAccessIndex(rewriter, loc, rewriter.getAffineDimExpr(0) * fragType.getDimSize(0), row),
+                  composeAccessIndex(rewriter, loc, rewriter.getAffineDimExpr(0) * fragType.getDimSize(1), col)};
+              return transferFragment(rewriter, loc, tile, fragType, origin);
+            });
+          };
+          Value a = operand(adaptor.getA(), threadTileA, fragmentA, *infoA, m, k);
+          Value b = operand(adaptor.getB(), threadTileB, fragmentB, *infoB, k, n);
+          Value mma = buildFragment(rewriter, loc, fragmentC, "compute", [&]() -> Value {
+            auto op = rewriter.create<frisk::WarpMmaRROp>(
+                loc, fragmentC, a, b, kFor.getRegionIterArgs()[0]);
+            markTiled(op, rewriter);
+            op->setAttr("inst_name", instName);
+            op->setAttr("inst_constraints", constraints);
+            return op;
+          });
+          rewriter.create<affine::AffineYieldOp>(loc, mma);
+          rewriter.setInsertionPointAfter(kFor);
+          // K 累加结束后把 C fragment 插回当前完整线程结果；外层循环携带它。
+          return transferFragment(rewriter, loc, output, fragmentC, cOrigin, kFor.getResult(0));
+        });
 
     Value newBlockTile = fromThreadTile(result, op.getC().getType(), *infoC, rewriter, loc);
     rewriter.replaceOp(op, newBlockTile);
@@ -1966,7 +2342,7 @@ public:
 // 普通控制流和已生成的线程计算不属于这份待转换列表。
 static bool isBlockTileOperation(Operation *op) {
   return isa<frisk::GemmOp, frisk::MaskOp, frisk::AddOp, frisk::SubOp,
-      frisk::MulOp, frisk::DivOp, frisk::Exp2Op, frisk::CopyOp,
+      frisk::MulOp, frisk::DivOp, frisk::Exp2Op, frisk::CastOp, frisk::CopyOp,
       frisk::CopyToRegOp, frisk::FillOp, frisk::ZeroOp, frisk::ReduceOp,
       frisk::BlockOp, frisk::ConvertLayoutOp, frisk::AllocBufferOp>(op);
 }
@@ -2007,6 +2383,8 @@ static void foldThreadTilePairs(Operation *root) {
             memrefType.getElementType() != vectorType.getElementType() ||
             !memrefType.isLastDimUnitStride())
           continue;
+        if (to->hasAttr("frisk.fragment_source"))
+          continue;
         // A thread memref is storage, not an SSA vector. Read it at the To
         // operation so writes between From and To remain visible.
         OpBuilder builder(to);
@@ -2034,7 +2412,8 @@ static void foldThreadTilePairs(Operation *root) {
 
 // 第一阶段 pass：由 block 计算建立线程计算和显式表示边界。
 // runOnOperation 的步骤：筛选 kernel -> 判断布局需求 -> LowerInfo 推断 ->
-// 插入布局转换 -> partial conversion -> 折叠桥接/清理 -> 尝试共享内存复用。
+// 插入布局转换 -> partial conversion -> 折叠桥接/清理。
+// 共享内存复用推迟到 fragment 调度完成后。
 // 只有带 thread_num 的函数会处理；需要推断时必须存在 GEMM 布局锚点。
 // 该阶段不会统一改写循环签名，也不保证桥接已经全部消失。
 class ConvertFriskBaseToThreadLevelIR
@@ -2063,6 +2442,10 @@ public:
       if (!isBlockTileOperation(op) || isTiled(op))
         return;
       needsTiling = true;
+      if (auto cast = dyn_cast<frisk::CastOp>(op);
+          cast && !isa<MemRefType>(cast.getOperand().getType()) &&
+          !isa<MemRefType>(cast.getResult().getType()))
+        return;
       if (auto copy = dyn_cast<frisk::CopyToRegOp>(op);
           copy && !isWholeTileCopyToReg(copy))
         return;
@@ -2079,7 +2462,7 @@ public:
     // Running the pass again must not re-analyze or re-tile thread operations.
     if (!needsTiling) {
       foldThreadTilePairs(kernel);
-      reuseSharedMemory(kernel);
+      // Shared storage planning is deferred until after fragment scheduling.
       return;
     }
     auto *context = &getContext();
@@ -2116,7 +2499,7 @@ public:
       return !isBlockTileOperation(op) || isTiled(op);
     });
     RewritePatternSet patterns(context);
-    patterns.add<GemmOpTiling, MaskOpTiling, Exp2OpTiling, FillOpTiling,
+    patterns.add<GemmOpTiling, MaskOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
         ZeroOpTiling, AllocBufferOpTiling, CopyOpTiling, CopyToRegOpTiling,
         ReduceOpTiling, BlockOpTiling, ConvertLayoutOpTiling>(context);
     patterns.add<FriskBinaryOpTiling<frisk::AddOp, arith::AddFOp>,
@@ -2138,9 +2521,7 @@ public:
 
     eraseTriviallyDeadOps(kernel);
     promoteSingleIterationAffineFors(kernel);
-    // Reuse fully materialized buffers. Buffers still referenced by thread-tile
-    // bridges are excluded until FinalizeThreadTiling expands their accesses.
-    reuseSharedMemory(kernel);
+    // Shared storage planning is deferred until after fragment scheduling.
   }
 };
 
@@ -2309,42 +2690,6 @@ public:
     return failure();
   }
 };
-
-// Numeric conversion supports scalars and vectors. Equal-width floating point
-// formats are not bitcasts; reject formats requiring a separate conversion.
-// 生成标量或 vector 的数值转换：浮点扩展/截断、有符号整数与浮点转换、
-// 整数扩展/截断、index cast。类型相同直接复用；未支持的组合返回 failure。
-// 相同位宽的不同浮点格式没有被当作 bitcast，不能用截断冒充数值转换。
-static FailureOr<Value> finalizeNumericCast(OpBuilder &b, Location loc,
-                                           Value value, Type resultType) {
-  if (value.getType() == resultType)
-    return value;
-  Type src = getElementTypeOrSelf(value.getType());
-  Type dst = getElementTypeOrSelf(resultType);
-  if (auto sf = dyn_cast<FloatType>(src)) {
-    if (auto df = dyn_cast<FloatType>(dst)) {
-      if (sf.getWidth() < df.getWidth())
-        return b.create<arith::ExtFOp>(loc, resultType, value).getResult();
-      if (sf.getWidth() > df.getWidth())
-        return b.create<arith::TruncFOp>(loc, resultType, value).getResult();
-    }
-    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless())
-      return b.create<arith::FPToSIOp>(loc, resultType, value).getResult();
-  }
-  if (auto si = dyn_cast<IntegerType>(src); si && si.isSignless()) {
-    if (isa<FloatType>(dst))
-      return b.create<arith::SIToFPOp>(loc, resultType, value).getResult();
-    if (auto di = dyn_cast<IntegerType>(dst); di && di.isSignless()) {
-      if (si.getWidth() < di.getWidth())
-        return b.create<arith::ExtSIOp>(loc, resultType, value).getResult();
-      return b.create<arith::TruncIOp>(loc, resultType, value).getResult();
-    }
-  }
-  if ((isa<IndexType>(src) && isa<IntegerType>(dst)) ||
-      (isa<IntegerType>(src) && isa<IndexType>(dst)))
-    return b.create<arith::IndexCastOp>(loc, resultType, value).getResult();
-  return failure();
-}
 
 // 消除 frisk.cast。普通标量/vector 直接数值转换；memref 表示的 block 值
 // 先从生产者 From 或消费者 To 获取线程布局，再构造 To -> 数值转换 -> From。
@@ -2526,20 +2871,12 @@ struct ReadThreadTileElement {
     else
       scalar = builder.create<vector::ExtractOp>(
           loc, source, SmallVector<OpFoldResult>(indices.begin(), indices.end()));
-    return builder.create<vector::InsertOp>(
-        loc, scalar, tile, SmallVector<OpFoldResult>(ivs.begin(), ivs.end()));
+    return scalar;
   }
 };
 
-// 把剩余 ToThreadTile 变成可执行的线程数据流，主要有四条路径：
-//   1. 相同属性的 From->To：直接复用线程值，必要时从线程 memref 加载 vector。
-//   2. 来自 From 但布局/属性不匹配：恢复源布局，写 shared scratch 并同步，
-//      再按本 To 的目标 map 读取，读完后再次同步。
-//   3. 普通 block memref/vector：遍历当前线程 tile，映射地址后逐元素取数。
-//   4. 结果要求线程 memref：分配私有 scratch，将组装的 vector 存进去；
-//      若 isFullyOverwritten 成立，跳过旧值读取，交给后续 store 初始化。
-// 布局比较在本 pattern 的快速路径使用整个属性字典；前面的 foldThreadTilePairs
-// 仅比较列出的布局属性，所以应先运行桥接折叠，减少非布局属性造成的额外处理。
+// 将逻辑 ToThreadTile 桥接落地：同布局桥接抵消；不同布局经 shared 交换；
+// 普通来源按映射读入线程 tile；GEMM fragment 来源只在 extract 使用点加载。
 class ToThreadTileFinalization : public OpRewritePattern<frisk::ToThreadTileOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -2556,10 +2893,39 @@ public:
       return rewriter.notifyMatchFailure(op, "expected private thread scratch");
     auto loc = op.getLoc();
     Value source = op.getBlockTile();
+    // fragment_source 的所有用户必须是同一 block 中的标量 extract。
+    // 先完整验证用户，再逐个把线程位置映射成物理地址并替换为 memref.load；
+    // 动态的 m/n/k 起点仍留在 fragment region 内，供后续预取调度使用。
+    auto materializeFragment = [&](Value buffer, ShapedType physical,
+                                   const ThreadTileAccess &mapping) -> LogicalResult {
+      SmallVector<vector::ExtractOp> reads;
+      for (Operation *user : op.getResult().getUsers()) {
+        auto read = dyn_cast<vector::ExtractOp>(user);
+        if (!read || read->getBlock() != op->getBlock() || isa<VectorType>(read.getType()))
+          return failure();
+        reads.push_back(read);
+      }
+      Value tid = mapping.map ? findThreadIdxOp(op, rewriter) : Value{};
+      for (auto read : reads) {
+        rewriter.setInsertionPoint(read);
+        SmallVector<Value> positions;
+        for (OpFoldResult index : read.getMixedPosition())
+          positions.push_back(isa<Value>(index) ? cast<Value>(index)
+              : createIndexConstant(rewriter, loc, cast<IntegerAttr>(cast<Attribute>(index)).getInt()));
+        auto indices = mapping.indices(rewriter, loc, tid, positions, physical);
+        rewriter.replaceOpWithNewOp<memref::LoadOp>(read, buffer, indices);
+      }
+      rewriter.eraseOp(op);
+      return success();
+    };
     bool exchanged = false;
     if (auto from = source.getDefiningOp<frisk::FromThreadTileOp>()) {
       // This also handles the temporary pair emitted by writeBackBlockTile.
-      if (from->getAttrDictionary() == op->getAttrDictionary()) {
+      auto fromAttrs = NamedAttrList(from->getAttrs());
+      auto toAttrs = NamedAttrList(op->getAttrs());
+      fromAttrs.erase("frisk.fragment_source");
+      toAttrs.erase("frisk.fragment_source");
+      if (fromAttrs == toAttrs) {
         Value replacement = from.getThreadTile();
         if (replacement.getType() == thread) {
           rewriter.replaceOp(op, replacement);
@@ -2571,6 +2937,8 @@ public:
             storageType.getShape() == vectorType.getShape() &&
             storageType.getElementType() == vectorType.getElementType() &&
             storageType.isLastDimUnitStride()) {
+          if (op->hasAttr("frisk.fragment_source"))
+            return materializeFragment(replacement, storageType, ThreadTileAccess{});
           SmallVector<Value> zeros(thread.getRank(), createIndexConstant(rewriter, loc, 0));
           rewriter.replaceOpWithNewOp<vector::LoadOp>(op, vectorType, replacement, zeros);
           return success();
@@ -2587,6 +2955,8 @@ public:
       block = scratchType;
       exchanged = true;
     }
+    if (op->hasAttr("frisk.fragment_source") && isa<MemRefType>(block) && !exchanged)
+      return materializeFragment(source, block, access);
     Value storage;
     if (memref) {
       storage = rewriter.create<memref::AllocaOp>(loc, memref);
@@ -2601,9 +2971,18 @@ public:
     Value tid = access.map ? findThreadIdxOp(op, rewriter) : Value{};
     ReadThreadTileElement element{rewriter, loc, source, tid, block, access};
     auto unroll = op->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
-    VectorTileLoopNest loops(rewriter, loc, thread.getShape(),
-                            {"tiled", "load", {}, unroll && unroll.getValue()});
-    Value tile = loops.emit(initial, element);
+    SmallVector<int64_t> fragment(thread.getShape());
+    if (access.map) {
+      for (unsigned dim = 0; dim < fragment.size(); ++dim) {
+        unsigned axis = fragment.size() == 1 && access.ignoreDim == 0 ? 1 : dim;
+        fragment[dim] = thread.getDimSize(dim) == 1 ? 1
+            : access.widths[axis] * access.repeats[axis];
+      }
+    }
+    FragmentTileLoopNest loops(rewriter, loc, thread.getShape(),
+                            {"tiled", "load_fragment", unroll && unroll.getValue()},
+                            fragment);
+    Value tile = loops.emit(initial, element, "load");
     if (exchanged)
       rewriter.create<gpu::BarrierOp>(loc);
     if (storage) {
@@ -2684,7 +3063,8 @@ public:
 
 // 第二阶段 pass，消除线程 tiling 的中间表示。
 // 顺序有语义意义：先 cast/循环携带值重写和桥接抵消，再实际展开访存，
-// 随后消除纯暂存、检查是否仍有 To/From/view/cast，最后复用共享内存和展开标记循环。
+// 随后消除纯暂存、检查是否仍有 To/From/view/cast。
+// fragment region/循环在此保留；共享内存复用和标记循环展开由后续 pass 完成。
 // 最终检查失败表示存在尚不支持的布局或使用方式，不会假装已经完成 lowering。
 // WarpMmaRROp 等并不由这里全部降成机器指令；它仍需后续专门的转换 pass。
 class FinalizeThreadTiling : public impl::FinalizeThreadTilingBase< FinalizeThreadTiling>{
@@ -2739,27 +3119,11 @@ public:
       signalPassFailure();
       return;
     }
-    // Bridges can defer shared reads and materialize additional scratch buffers.
-    // Only now is their complete physical storage lifetime visible.
-    reuseSharedMemory(kernel);
+    // Shared storage planning is deferred until after fragment scheduling.
 
-    // Unroll inner loops first so expanding an outer loop cannot invalidate
-    // pending nested loop handles. Leave unmarked/false-marked loops intact.
-    // 仅展开 frisk.loopUnrollFull=true 的循环；先收集内层再处理外层，
-    // 避免展开外层后使待处理的内层 op 句柄失效。
-    SmallVector<affine::AffineForOp> loopsToUnroll;
-    kernel.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
-      auto unroll = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
-      if (unroll && unroll.getValue())
-        loopsToUnroll.push_back(loop);
-    });
-    for (auto loop : loopsToUnroll) {
-      if (failed(affine::loopUnrollFull(loop))) {
-        loop.emitError("failed to fully unroll loop marked frisk.loopUnrollFull");
-        signalPassFailure();
-        return;
-      }
-    }
+    // Fragment regions and loops are deliberately preserved here. The late
+    // lower-frisk-fragments pass runs only after fusion/software pipelining.
+
   }
 };
 

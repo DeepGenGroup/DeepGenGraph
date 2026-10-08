@@ -31,6 +31,12 @@ static const char* WARP_LABELS[] = {"iv_warpX", "iv_warpY"};
 static const char* THREAD_LABELS[] = {"iv_threadX", "iv_threadY"};
 static const char* BLOCK_LABELS[] = {"iv_blockX", "iv_blockY"};
 
+#define BUFFER_SEMANTIC_UNDEF -1
+#define BUFFER_SEMANTIC_REDUCE 0
+#define BUFFER_SEMANTIC_M 1
+#define BUFFER_SEMANTIC_N 2
+#define BUFFER_SEMANTIC_K 3
+
 class LowerInfoAnalysis ;
 /**
  * @brief LowerInfo
@@ -49,6 +55,8 @@ public:
   int warp_threads;
   BufPos pos = LowerInfo::BufPos::In;  // 入参 出参
   coordXY_t warpInstUnroll = {1,1};
+  // 规定 -1=未定义 0=规约 {1,2,3}=mnk {4,5,6}=mnk 对不同gemm
+  coordXY_t bufferCalculateSemantic = {-1,-1};  // buffer 2dShape的计算语义是什么（mnk的哪两个。考虑多gemm以及冲突，应该不止mnk。还有规约轴）
   int ignoreDim = -1;  // 需要忽略的维度（只看有效维度）
   LowerInfo* convertFrom = nullptr;  // 表示该Layout使用前，需要添加 LayoutConvertOp，从 convertFrom Layout转换到到自己（即：reg->shm->reg）
 
@@ -321,12 +329,15 @@ public:
     int64_t bn;
     int64_t bk;
   };
+
   static GemmProblem getGemmProblem(GemmOp gemmOp);
   static MMAInstInfo* selectGemmInst(GemmProblem problem, HWSpecification* hw);
 
 private:
   static LowerInfoMap buf_info_maps;
   static int block_threads ;
+  static int gemmCount ;  // 表示gemmOp的数目（Layout暂不考虑是否冲突）。用于计算 buffercalcSemantic
+  static coordXY_t getNewBufferSenamtic(coordXY_t semantic);
   static llvm::SmallVector<Operation*, 5> collectNeedInferOps(mlir::Operation *kernelOp);
   static std::pair<int, int> squareFactor(int n);
   static uint64_t getRegionThreadNum(Operation *op);

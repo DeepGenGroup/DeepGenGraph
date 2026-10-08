@@ -1,5 +1,7 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "llvm/IR/InlineAsm.h"
 #undef TID
 #include <cassert>
 #include <dlfcn.h>
@@ -9,6 +11,7 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include <optional>
+#include <regex>
 #include <string>
 #include <sstream>
 #include <fstream>
@@ -110,6 +113,28 @@ llvm::Value *splitDescriptorPhi(PHINode *phi, llvm::Type *type,
   return field;
 }
 } // namespace
+
+void prepareRegisterMMAForLLVM(llvm::Module &module) {
+  auto *half4 = llvm::FixedVectorType::get(llvm::Type::getHalfTy(module.getContext()), 4);
+  auto *float4 = llvm::FixedVectorType::get(llvm::Type::getFloatTy(module.getContext()), 4);
+  for (llvm::Function &function : module)
+    for (llvm::BasicBlock &block : function)
+      for (llvm::Instruction &inst : block) {
+        auto *call = llvm::dyn_cast<llvm::CallInst>(&inst);
+        if (!call || call->getNumOperandBundles() || call->arg_size() != 3)
+          continue;
+        auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
+        if (!assembly || !assembly->hasSideEffects() || assembly->isAlignStack() ||
+            !isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
+            call->getType() != float4 || call->getArgOperand(0)->getType() != half4 ||
+            call->getArgOperand(1)->getType() != half4 ||
+            call->getArgOperand(2)->getType() != float4)
+          continue;
+        call->setMemoryEffects(llvm::MemoryEffects::none());
+        // All lanes participate; no speculative motion across control flow.
+        call->addFnAttr(llvm::Attribute::Convergent);
+      }
+}
 
 void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
   SmallVector<Instruction *> joins;
@@ -262,13 +287,24 @@ static void replaceAll(std::string &text, StringRef from, StringRef to) {
   }
 }
 
-static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
-  prepareSharedMemoryForLegacyLLVM(module);
-
-  std::string text;
-  raw_string_ostream buffer(text);
-  module.print(buffer, nullptr);
-  buffer.flush();
+void legalizeLLVMTextForLegacyLLVM(std::string &text) {
+  // Keep these ordered mappings in sync with legalizeLLVMText.py. Preserve
+  // representable memory effects before applying the historical fallback.
+  static const std::pair<std::regex, const char *> mappings[] = {
+      {std::regex(R"(memory\(none\))"), "readnone"},
+      {std::regex(R"(memory\(read\))"), "readonly"},
+      {std::regex(R"(memory\(write\))"), "writeonly"},
+      {std::regex(R"(memory\(argmem:\s*readwrite\))"), "argmemonly"},
+      {std::regex(R"(memory\(argmem:\s*read\))"), "argmemonly readonly"},
+      {std::regex(R"(memory\(argmem:\s*write\))"), "argmemonly writeonly"},
+      {std::regex(R"(memory\(inaccessiblemem:\s*readwrite\))"), "inaccessiblememonly"},
+      {std::regex(R"(memory\(inaccessiblemem:\s*read\))"), "inaccessiblememonly readonly"},
+      {std::regex(R"(memory\(inaccessiblemem:\s*write\))"), "inaccessiblememonly writeonly"},
+      {std::regex(R"(memory\(argmem:\s*readwrite,\s*inaccessiblemem:\s*readwrite\))"),
+       "inaccessiblemem_or_argmemonly"},
+  };
+  for (const auto &[pattern, replacement] : mappings)
+    text = std::regex_replace(text, pattern, replacement);
 
   // Keep the textual IR parseable by older llvm-link builds used downstream.
   // Shared-memory views can fold into constant-expression GEPs. Older parsers
@@ -278,10 +314,21 @@ static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
   replaceAll(text, "getelementptr nusw ", "getelementptr ");
   replaceAll(text, "getelementptr nuw ", "getelementptr ");
   replaceAll(text, " captures(none)", "");
-  replaceAll(text, " memory(none)", "");
+  replaceAll(text, " memory(none)", " readnone");
   replaceAll(text, " memory(argmem: read)", "");
   replaceAll(text, " memory(argmem: write)", "");
   replaceAll(text, " memory(argmem: readwrite)", "");
+}
+
+static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
+  prepareRegisterMMAForLLVM(module);
+  prepareSharedMemoryForLegacyLLVM(module);
+
+  std::string text;
+  raw_string_ostream buffer(text);
+  module.print(buffer, nullptr);
+  buffer.flush();
+  legalizeLLVMTextForLegacyLLVM(text);
 
   os << text;
 }
@@ -379,6 +426,7 @@ std::string translateMLIRToLLVMIR(mlir::ModuleOp module, Target target, const in
 //       return nullptr;
 //   }
 
+  prepareRegisterMMAForLLVM(*llvmModule);
   auto optPipeline = makeOptimizingPipeline(/*optLevel=*/3, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
   if (auto err = optPipeline(llvmModule.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";

@@ -43,6 +43,10 @@ int main(int argc, char **argv) {
   mlir::registerPass([] {
     return mlir::frisk::createFinalizeThreadTilingPass();
   });
+  mlir::registerPass([] {
+    return mlir::frisk::createFriskFragIRReorderPass();
+  });
+  mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));
 }

@@ -1,4 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
@@ -6,6 +7,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Matchers.h"
@@ -13,12 +15,15 @@
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <limits>
 #include <optional>
 
 namespace mlir::frisk {
+#define GEN_PASS_DECL_IRDEEPOPTIMIZE
+#include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
 namespace {
 #define GEN_PASS_DEF_IRDEEPOPTIMIZE
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
@@ -74,6 +79,8 @@ static bool collectIndexLoops(Value value,
       return false;
   return true;
 }
+
+static void reorderUnrolledOperations(func::FuncOp function);
 
 class VectorOpLoopUnrollPass
     : public impl::IRDeepOptimizeBase<VectorOpLoopUnrollPass> {
@@ -131,6 +138,8 @@ class VectorOpLoopUnrollPass
       extraOperations += selectedCost;
       // Recollect after every rewrite: unrolling invalidates nested op handles.
     }
+    if (reorderAfterUnroll)
+      reorderUnrolledOperations(kernel);
   }
 };
 
@@ -221,6 +230,313 @@ static bool barrierRangesAreDisjoint(Value lhs, Value rhs) {
   };
   // Different function arguments, selects and region arguments can alias.
   return isAllocation(a.base) && isAllocation(b.base);
+}
+
+// Schedule only within straight-line windows. This is an IR issue-order
+// heuristic, not a GPU cycle model: instruction selection and the backend
+// scheduler still decide the machine schedule. Never rewrite arithmetic or MMA
+// operands, speculate across control flow, or remove hardware hazard padding.
+enum class IssueKind { Boundary, Support, Memory, Compute };
+
+struct IssueNode {
+  Operation *op;
+  IssueKind kind;
+  Value buffer;
+  bool write = false;
+  bool mma = false;
+  SmallVector<unsigned, 4> successors, predecessors;
+  unsigned pending = 0;
+  unsigned readyAt = 0;
+  unsigned feeds = 0;
+};
+
+// Match the COMPLETE register-only assembly emitted by ThreadLevelIRLegalize.
+// A mnemonic substring or a user marker is insufficient: an asm may also have
+// memory operations, clobbers, waits or other effects. Keep all MMAs in their
+// original relative order, including independent accumulator chains.
+static bool isSchedulableRegisterMMA(Operation *op) {
+  auto assembly = dyn_cast<LLVM::InlineAsmOp>(op);
+  if (!assembly || assembly.getConstraints() != "=v,v,v,0" ||
+      !assembly.getHasSideEffects() || assembly.getIsAlignStack() ||
+      assembly.getOperandAttrs() || op->getNumOperands() != 3 ||
+      op->getNumResults() != 1)
+    return false;
+  auto half4 = VectorType::get({4}, Float16Type::get(op->getContext()));
+  auto float4 = VectorType::get({4}, Float32Type::get(op->getContext()));
+  if (op->getOperand(0).getType() != half4 ||
+      op->getOperand(1).getType() != half4 ||
+      op->getOperand(2).getType() != float4 ||
+      op->getResult(0).getType() != float4)
+    return false;
+  return isPaddedRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
+}
+
+static IssueNode classifyIssue(Operation *op) {
+  IssueNode node{op, IssueKind::Boundary, {}};
+  if (op->getNumRegions() || op->getNumSuccessors() ||
+      op->hasTrait<OpTrait::IsTerminator>())
+    return node;
+  node.mma = isSchedulableRegisterMMA(op);
+  if (node.mma) {
+    node.kind = IssueKind::Compute;
+    return node;
+  }
+  // Only ordinary synchronous accesses: no masked transfers, async copies,
+  // atomics, volatile LLVM loads, calls or opaque assembly.
+  if (isa<memref::LoadOp, memref::StoreOp, affine::AffineLoadOp,
+          affine::AffineStoreOp, affine::AffineVectorLoadOp,
+          affine::AffineVectorStoreOp, vector::LoadOp, vector::StoreOp>(op)) {
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    cast<MemoryEffectOpInterface>(op).getEffects(effects);
+    if (effects.size() == 1 && effects[0].getValue() &&
+        isa<BaseMemRefType>(effects[0].getValue().getType()) &&
+        isa<MemoryEffects::Read, MemoryEffects::Write>(effects[0].getEffect())) {
+      node.kind = IssueKind::Memory;
+      node.buffer = effects[0].getValue();
+      node.write = isa<MemoryEffects::Write>(effects[0].getEffect());
+    }
+    return node;
+  }
+  // Collective operations (e.g. shuffle) and non-speculatable operations
+  // remain boundaries even if their memory-effect interface says "no effects".
+  if (!isMemoryEffectFree(op) || !isSpeculatable(op) ||
+      op->getName().getDialectNamespace() == "gpu" ||
+      isa<LLVM::InlineAsmOp>(op))
+    return node;
+  node.kind = IssueKind::Support;
+  StringRef dialect = op->getName().getDialectNamespace();
+  bool dataArithmetic = dialect == "arith" &&
+      !op->hasTrait<OpTrait::ConstantLike>() &&
+      llvm::any_of(op->getResultTypes(), [](Type type) {
+        return isa<FloatType, VectorType>(type);
+      });
+  if (dataArithmetic || dialect == "math" ||
+      isa<vector::FMAOp, vector::ReductionOp, vector::ContractionOp>(op))
+    node.kind = IssueKind::Compute;
+  return node;
+}
+
+static unsigned issueBit(IssueKind kind) {
+  return kind == IssueKind::Memory ? 1 : kind == IssueKind::Compute ? 2 : 0;
+}
+
+// A rough live-data budget, not physical VGPR accounting. Ignore index/address
+// scalars and track newly defined register data through their actual SSA uses.
+static uint64_t registerDataBits(Type type) {
+  if (auto vector = dyn_cast<VectorType>(type)) {
+    if (vector.isScalable())
+      return 4096;
+    return std::min<uint64_t>(4096, vector.getNumElements() *
+                                  registerDataBits(vector.getElementType()));
+  }
+  if (auto number = dyn_cast<FloatType>(type))
+    return number.getWidth();
+  if (auto number = dyn_cast<IntegerType>(type))
+    return number.getWidth();
+  return 0;
+}
+
+static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
+  bool hasMemory = false, hasCompute = false;
+  for (const auto &node : nodes) {
+    hasMemory |= node.kind == IssueKind::Memory;
+    hasCompute |= node.kind == IssueKind::Compute;
+  }
+  if (!hasMemory || !hasCompute)
+    return;
+  llvm::DenseMap<Operation *, unsigned> indices;
+  for (auto [index, node] : llvm::enumerate(nodes))
+    indices[node.op] = index;
+  auto edge = [&](unsigned from, unsigned to) {
+    nodes[from].successors.push_back(to);
+    nodes[to].predecessors.push_back(from);
+    ++nodes[to].pending;
+  };
+  SmallVector<unsigned> accesses;
+  std::optional<unsigned> previousMMA;
+  uint64_t pairs = 0;
+  for (auto [index, node] : llvm::enumerate(nodes)) {
+    llvm::SmallDenseSet<unsigned, 8> definitions;
+    for (Value operand : node.op->getOperands()) {
+      auto found = indices.find(operand.getDefiningOp());
+      if (found != indices.end())
+        definitions.insert(found->second);
+    }
+    for (unsigned from : definitions)
+      edge(from, index);
+    if (node.mma) {
+      if (previousMMA)
+        edge(*previousMMA, index);
+      previousMMA = index;
+    }
+    if (!node.buffer)
+      continue;
+    for (unsigned previous : accesses) {
+      if (++pairs > 1048576)
+        return; // No IR has moved; keep the original order beyond the budget.
+      auto &other = nodes[previous];
+      // Preserve RAW, WAR and WAW unless whole storage ranges are disjoint.
+      // Different indices in shared memory are NOT a cross-thread alias proof.
+      if ((node.write || other.write) &&
+          !barrierRangesAreDisjoint(node.buffer, other.buffer))
+        edge(previous, index);
+    }
+    accesses.push_back(index);
+  }
+  // Address arithmetic and vector packing should follow the issue class they
+  // unlock; do not count them as useful compute to fake load/compute alternation.
+  for (unsigned i = nodes.size(); i-- > 0;) {
+    nodes[i].feeds = issueBit(nodes[i].kind);
+    if (nodes[i].kind == IssueKind::Support)
+      for (unsigned next : nodes[i].successors)
+        nodes[i].feeds |= nodes[next].feeds;
+  }
+  // Keep small read packets together. Only support operations may originally
+  // separate members; never merge across a compute, store or different buffer.
+  // Vector loads are already packets. Four scalar elements match the MMA
+  // register fragments and preserve the SLP opportunities lost by scalar M/C
+  // alternation. No load is widened and no extra address is accessed here.
+  SmallVector<SmallVector<unsigned, 4>> batches;
+  SmallVector<unsigned> batchOf(nodes.size(), nodes.size());
+  bool extend = false;
+  Value buffer;
+  Type element;
+  for (unsigned i = 0; i < nodes.size(); ++i) {
+    auto &node = nodes[i];
+    if (node.kind == IssueKind::Support)
+      continue;
+    if (!node.buffer || node.write) {
+      extend = false;
+      continue;
+    }
+    Type type = node.op->getResult(0).getType();
+    bool scalar = !isa<VectorType>(type);
+    if (!extend || node.buffer != buffer || type != element ||
+        batches.back().size() == 4 || !scalar)
+      batches.emplace_back();
+    batchOf[i] = batches.size() - 1;
+    batches.back().push_back(i);
+    extend = scalar;
+    buffer = node.buffer;
+    element = type;
+  }
+  // Dependencies needed to complete an active packet. Such support/address
+  // operations may move with it; no unrelated compute can split its loads.
+  SmallVector<bool> needed(nodes.size(), false);
+  std::optional<unsigned> activeBatch;
+  auto activate = [&](unsigned batch) {
+    activeBatch = batch;
+    std::fill(needed.begin(), needed.end(), false);
+    SmallVector<unsigned> todo(batches[batch].begin(), batches[batch].end());
+    while (!todo.empty()) {
+      unsigned index = todo.pop_back_val();
+      if (needed[index])
+        continue;
+      needed[index] = true;
+      todo.append(nodes[index].predecessors);
+    }
+  };
+  llvm::DenseMap<Value, unsigned> remainingUses;
+  for (const auto &node : nodes)
+    for (Value result : node.op->getResults())
+      remainingUses[result] = std::distance(result.use_begin(), result.use_end());
+  SmallVector<unsigned> order;
+  SmallVector<bool> issued(nodes.size(), false);
+  uint64_t liveBits = 0;
+  constexpr uint64_t lookaheadBits = 512;
+  unsigned clock = 0, preferred = 1;
+  while (order.size() != nodes.size()) {
+    unsigned best = nodes.size(), bestRank = 5;
+    unsigned nextReady = std::numeric_limits<unsigned>::max();
+    unsigned desired = liveBits >= lookaheadBits ? 2 : preferred;
+    for (unsigned i = 0; i < nodes.size(); ++i) {
+      auto &node = nodes[i];
+      if (issued[i] || node.pending || (activeBatch && !needed[i]))
+        continue;
+      nextReady = std::min(nextReady, node.readyAt);
+      if (node.readyAt > clock)
+        continue;
+      unsigned bit = issueBit(node.kind);
+      unsigned rank = bit == desired ? 0 :
+          node.kind == IssueKind::Support && (node.feeds & desired) ? 1 :
+          bit ? 2 : 3;
+      if (activeBatch)
+        rank = batchOf[i] == *activeBatch ? 0 :
+               node.kind == IssueKind::Support ? 1 : 2;
+      if (rank < bestRank) {
+        best = i;
+        bestRank = rank;
+      }
+    }
+    if (best == nodes.size()) {
+      if (nextReady == std::numeric_limits<unsigned>::max())
+        return; // Defensive: do not apply a partial/cyclic schedule.
+      clock = std::max(clock, nextReady);
+      continue;
+    }
+    auto &node = nodes[best];
+    order.push_back(best);
+    issued[best] = true;
+    for (Value operand : node.op->getOperands()) {
+      auto found = remainingUses.find(operand);
+      if (found != remainingUses.end() && --found->second == 0)
+        liveBits -= registerDataBits(operand.getType());
+    }
+    for (Value result : node.op->getResults())
+      if (remainingUses[result])
+        liveBits += registerDataBits(result.getType());
+    if (!activeBatch && batchOf[best] != nodes.size())
+      activate(batchOf[best]);
+    if (activeBatch) {
+      if (llvm::all_of(batches[*activeBatch], [&](unsigned i) { return issued[i]; })) {
+        activeBatch.reset();
+        preferred = 2;
+      }
+    } else if (unsigned bit = issueBit(node.kind)) {
+      preferred = bit == 1 ? 2 : 1;
+    }
+    // Abstract readiness distances insert no waits. Within a packet we allow
+    // address dependencies but never fill an artificial wait with unrelated ops.
+    unsigned latency = node.buffer && !node.write ? 8 : node.mma ? 8 :
+                       node.kind == IssueKind::Compute ? 2 : 1;
+    for (unsigned next : node.successors) {
+      --nodes[next].pending;
+      nodes[next].readyAt = std::max(nodes[next].readyAt, clock + latency);
+    }
+    ++clock;
+  }
+  Operation *end = nodes.back().op->getNextNode();
+  assert(end && "a scheduling window ends before a boundary or terminator");
+  for (unsigned index : order)
+    nodes[index].op->moveBefore(end);
+}
+
+static void reorderUnrolledOperations(func::FuncOp function) {
+  // Hard window limits bound both graph construction and list scheduling.
+  // Partitioning a long basic block preserves all inter-window dependencies.
+  constexpr unsigned maxWindow = 4096;
+  function.walk([&](Block *block) {
+    SmallVector<IssueNode> window;
+    auto flush = [&] {
+      scheduleIssueWindow(window);
+      window.clear();
+    };
+    // Snapshot before moving operations, so iterator order cannot change.
+    SmallVector<Operation *> operations;
+    for (Operation &op : *block)
+      operations.push_back(&op);
+    for (Operation *op : operations) {
+      IssueNode node = classifyIssue(op);
+      if (node.kind == IssueKind::Boundary) {
+        flush();
+        continue;
+      }
+      window.push_back(std::move(node));
+      if (window.size() == maxWindow)
+        flush();
+    }
+    flush();
+  });
 }
 
 struct BarrierAccess {

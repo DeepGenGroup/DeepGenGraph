@@ -41,6 +41,19 @@ namespace frisk {
 namespace mlir {
 namespace frisk {
 
+LogicalResult FragmentOp::verify() {
+  if (getKind() != "load" && getKind() != "store" &&
+      getKind() != "compute" && getKind() != "gather")
+    return emitOpError("unknown fragment kind");
+  auto yield = dyn_cast<FragmentYieldOp>(getBody().front().getTerminator());
+  if (!yield || yield.getOperandTypes() != getResultTypes())
+    return emitOpError("requires fragment_yield matching its result types");
+  for (Type type : getResultTypes())
+    if (!isa<VectorType, FloatType, IntegerType, IndexType>(type))
+      return emitOpError("results must be register fragments or reduction scalars");
+  return success();
+}
+
 #if ENABLE_LAYOUT_INFER
 
 class GemmOp;

@@ -1017,25 +1017,20 @@ def Frisk_WgMmaAsyncLSOp : Frisk_Op<"wgmma_ls_async", []> {
 
 // 在instSelect阶段，我们以确保参数正确性。因此这里不需要特意强调acc和operator的type以及尺寸。一切由lowerinfo记录
 def Frisk_WarpMmaRROp : Frisk_Op<"warp_mma_rr", [
-    // 声明该 Op 具有内存副作用 (MemRead 和 MemWrite)
-    MemoryEffects<[MemRead, MemWrite]>
+    // Register MMA has no memory effects; do not mark it speculatable (collective).
+    MemoryEffects<[]>
 ]> {
-  let summary = "MMAC 16x16x16 FP16 到 FP32 的矩阵乘加指令 (累加器原地读写)";
+  let summary = "Register-fragment matrix multiply-accumulate";
   let description = [{
-    进行 C = A * B + C 的矩阵乘加计算，计算结果直接写回累加器 C 中。
-    注：参数类型约束为 MemRef，但具体元素类型(ElementType)与尺寸(Shape)校验由 instSelect 阶段及 lowerinfo 处理。
-
-    A: 只读 MemRef
-    B: 只读 MemRef
-    C: 读写 MemRef
+    Computes a new SSA register fragment C = A * B + C. A, B, and C are
+    vectors; the instruction shape and layout are selected by lowerinfo.
+    This collective instruction has no memory effects and is not speculatable.
   }];
 
-  // 定义输入参数：A, B, C
-  // 使用 AnyMemRef 强调内存引用语义，但不限制其元素类型与 Shape
   let arguments = (ins
-    Arg<AnyVectorOfNonZeroRank, "只读输入 A", [MemRead]>:$a,
-    Arg<AnyVectorOfNonZeroRank, "只读输入 B", [MemRead]>:$b,
-    Arg<AnyVectorOfNonZeroRank, "读写累加器 C", [MemRead, MemWrite]>:$c
+    AnyVectorOfNonZeroRank:$a,
+    AnyVectorOfNonZeroRank:$b,
+    AnyVectorOfNonZeroRank:$c
   );
 
   let results = (outs
@@ -1096,5 +1091,24 @@ def Frisk_FromThreadTileOp: Frisk_Op<"from_threadTile", [Pure]> {
   }];
 }
 
+
+// A scheduling unit executes exactly once. Keep its scalar implementation
+// encapsulated until fragment fusion/pipelining has finished. It deliberately
+// has no inlining canonicalizer and is not speculatable across control flow.
+def Frisk_FragmentOp : Frisk_Op<"fragment", [SingleBlock, NoRegionArguments,
+    RecursiveMemoryEffects]> {
+  let summary = "One fragment load, computation, gather or store";
+  let arguments = (ins StrAttr:$kind);
+  let results = (outs Variadic<AnyType>:$values);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$kind attr-dict-with-keyword (`->` `(` type($values)^ `)`)? $body";
+  let hasVerifier = 1;
+}
+
+def Frisk_FragmentYieldOp : Frisk_Op<"fragment_yield", [Pure, Terminator,
+    HasParent<"FragmentOp">]> {
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+}
 
 #endif // FRISK_OPS

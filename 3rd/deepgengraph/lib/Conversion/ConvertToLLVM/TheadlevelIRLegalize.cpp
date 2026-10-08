@@ -164,8 +164,7 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
       // about the instruction's minimum latency. Shorten only after measuring,
       // or replace the opaque asm with a target intrinsic with hazard handling.
       std::string padding;
-      for (int i = 0; i < 8; ++i)
-        padding += "s_nop 7\n\t";
+      padding += "s_nop 1\n\t"; // 经过测试，1个 s_nop 1 已经能够满足正确性。但不能不加
       asm_string = padding + asm_string + "\n\t" + padding;
     }
     auto constraints = op->getAttrOfType<StringAttr>("inst_constraints").data();

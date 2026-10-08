@@ -16,7 +16,9 @@ def ThreadLevelIRLegalize: Pass<"thread-ir-legalize", "::mlir::ModuleOp"> {
 }
 
 def IRDeepOptimize: Pass<"ir-deep-optimize", "func::FuncOp"> {
-  let summary = "Staticize register-vector indices by selective affine unrolling";
+  let summary = "Staticize vector indices, then interleave independent memory and compute ops";
+  let options = [Option<"reorderAfterUnroll", "reorder-after-unroll", "bool", "true",
+                       "Schedule straight-line memory/compute operations after unrolling">];
   let description = [{}];
 
   let constructor = "mlir::frisk::createIRDeepOptimizePass()";

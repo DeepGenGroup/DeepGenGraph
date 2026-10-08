@@ -91,6 +91,17 @@ func.func @loop(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %init: vecto
 }
 """
 
+DIRECT_SHARED_COPY = """
+func.func @direct_copy(%q: memref<64x128xf16, 3>, %k: memref<128x32xf16, 3>, %v: memref<32x128xf16, 3>) -> memref<64x128xf32> attributes {thread_num = 128 : i32} {
+  %qk = frisk.gemm(%q, %k) {transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16, 3> -> memref<64x32xf32>
+  %e = frisk.exp2 %qk : memref<64x32xf32> -> memref<64x32xf32, 3>
+  %p = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>
+  frisk.copy %e to %p [affine_map<() -> (2)>] : memref<64x32xf32, 3>, memref<64x32xf16, 3>
+  %o = frisk.gemm(%p, %v) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3> -> memref<64x128xf32>
+  return %o : memref<64x128xf32>
+}
+"""
+
 COPY_TO_REG = """
 func.func @copy_to_reg(%src: memref<32x32xf16, 3>, %i: index) -> vector<1x4xf32> attributes {thread_num = 64 : i32} {
   %v = frisk.copy_to_reg %src at (%i) [affine_map<(d0) -> (d0, 4)>] : memref<32x32xf16, 3> -> vector<1x4xf32>
@@ -259,14 +270,15 @@ def main():
             name = f"gemm-{m}-{n}-{k}-{threads}"
             ir = check(gemm(m,n,k,threads,space), directory, name)
             assert "frisk.gemm" not in ir
-            assert ir.count("frisk.warp_mma_rr") == m*n//(256*(threads//64))
+            assert ir.count("frisk.warp_mma_rr") == 1
+            assert 'iterLabel = "gemm_mn"' in ir and 'iterLabel = "gemm_k"' in ir
             assert f"-> memref<{m}x{n}xf32>" in ir
             print("PASS", name)
         for kind in ("add", "mul", "min", "max"):
             ir = check(COMBINED.replace('kind = "add"', f'kind = "{kind}"'), directory, "combined-"+kind)
             assert "gpu.shuffle" in ir
             assert "affine.store" in ir and "gpu.barrier" in ir
-            assert not re.search(r"frisk\.(?:fill|copy\b|reduce|exp2|add|sub|mul|div|alloc_buffer)", ir)
+            assert not re.search(r"frisk\.(?:fill|copy|reduce|exp2|add|sub|mul|div|alloc_buffer)\s", ir)
             print("PASS combined-"+kind)
         zero = COMBINED.replace("%s = frisk.add %e, %g", "%z = frisk.zero : memref<32x32xf32, 3>\n  %s = frisk.add %e, %z")
         assert "frisk.zero" not in check(zero, directory, "zero")
@@ -294,6 +306,46 @@ def main():
         assert not re.search(r"frisk\.(?:copy\b|copy_to_reg|gemm\b)", ir)
         assert "vector<64x128xf32>" in ir and "frisk.warp_mma_rr" in ir
         print("PASS pipeline slot layout propagation and whole-tile copy_to_reg")
+        for offset in ("(2)", "(0, 0)"):
+            direct = check(DIRECT_SHARED_COPY.replace("() -> (2)", "() -> " + offset),
+                           directory, "direct-shared-" + offset)
+            assert direct.count("memref.alloc()") == 1, "unexpected layout scratch"
+            assert direct.count("gpu.barrier") == 1, "retain the P publication barrier"
+            assert "arith.truncf" in direct
+        argument = DIRECT_SHARED_COPY.replace(
+            "%v: memref<32x128xf16, 3>)",
+            "%v: memref<32x128xf16, 3>, %p: memref<64x32xf16, 3>)").replace(
+            '  %p = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>\n', '')
+        fallback = check(argument, directory, "shared-copy-possible-alias")
+        assert re.search(r'memref.alloc\(\).*memref<64x32xf32, 3>', fallback)
+        result_copy = DIRECT_SHARED_COPY.replace("  frisk.copy", "  %copied = frisk.copy").replace(
+            "memref<64x32xf32, 3>, memref<64x32xf16, 3>\n",
+            "memref<64x32xf32, 3>, memref<64x32xf16, 3> -> memref<64x32xf16, 3>\n").replace(
+            "gemm(%p,", "gemm(%copied,")
+        fallback = check(result_copy, directory, "shared-copy-live-result")
+        assert fallback.count("memref.alloc()") == 2, "result layout exchange must remain"
+        print("PASS direct shared copy, zero offsets, possible aliases and live results")
+        rowsum_source = DIRECT_SHARED_COPY.replace(
+            "  %p =", '  %rows = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x1xf32, 3>\n'
+            '  frisk.reduce %e, %rows {dim = 1 : i64, kind = "add"} : memref<64x32xf32, 3>, memref<64x1xf32, 3>\n  %p ='
+        ).replace("  return %o :", '  %norm = frisk.div %o, %rows : memref<64x128xf32>, memref<64x1xf32, 3> -> memref<64x128xf32>\n  return %norm :')
+        for kind in ("add", "mul", "min", "max"):
+            forwarded = check(rowsum_source.replace('kind = "add"', f'kind = "{kind}"'),
+                              directory, "forward-reduction-" + kind)
+            assert not re.search(r'memref.alloc\(\).*memref<64x1xf32, 3>', forwarded)
+            assert "gpu.shuffle" in forwarded, "forwarding must retain the actual reduction"
+        escaped = rowsum_source.replace(
+            ") -> memref<64x128xf32> attributes",
+            ") -> (memref<64x128xf32>, memref<64x1xf32, 3>) attributes").replace(
+            "return %norm : memref<64x128xf32>",
+            "return %norm, %rows : memref<64x128xf32>, memref<64x1xf32, 3>")
+        reduction_line = next(line for line in rowsum_source.splitlines() if "frisk.reduce " in line)
+        twice_written = rowsum_source.replace(reduction_line, reduction_line + '\n' + reduction_line)
+        for name, source in [("escaped", escaped), ("two-writers", twice_written)]:
+            fallback = check(source, directory, "reduction-fallback-" + name)
+            assert re.search(r'memref.alloc\(\).*memref<64x1xf32, 3>', fallback)
+            assert "affine.store" in fallback and "gpu.barrier" in fallback
+        print("PASS reduction forwarding: four kinds, escaped storage and multiple writers")
         partial = check(PARTIAL_COPY, directory, "partial-copy")
         assert "frisk.buffer_view" in partial and "[16, 16]" in partial
         assert "return %arg2 : memref<64x64xf32, 3>" in partial, "copy result must alias full destination"
