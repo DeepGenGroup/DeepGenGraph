@@ -3,6 +3,7 @@
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
@@ -146,7 +147,7 @@ static bool isLowerInfoConflict(const LowerInfo &lhs, const LowerInfo &rhs) {
 void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConflict) {
   assert(info.buffer != nullptr);
   info.op = op;
-  llvm::outs() << "[debug] addLayout : " << op->getName().getStringRef() << " - "<< info.buffer;
+  // llvm::outs() << "[debug] addLayout : " << op->getName().getStringRef() << " - "<< info.buffer;
 
   auto &candidates = m_candidates[info.buffer];
   if (!llvm::any_of(candidates, [&](const LowerInfo &candidate) {
@@ -490,6 +491,15 @@ collectArithmeticMemrefs(Operation *op,
   }
 }
 
+static bool isLayoutControlOp(Operation *op) {
+  if (isa<scf::IfOp, scf::ForOp, affine::AffineForOp, affine::AffineYieldOp>(op))
+    return true;
+  if (auto yield = dyn_cast<scf::YieldOp>(op))
+    return isa<scf::ForOp>(yield->getParentOp());
+  auto select = dyn_cast<arith::SelectOp>(op);
+  return select && isa<MemRefType>(select.getType());
+}
+
 llvm::SmallVector<Operation*, 5>
 LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
   auto _kernelOp = mlir::dyn_cast<func::FuncOp>(kernelOp);
@@ -499,8 +509,8 @@ LowerInfoAnalysis::collectNeedInferOps(mlir::Operation *kernelOp) {
 
   llvm::SmallVector<Operation*, 5> need_infer_ops{};
   _kernelOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp, FillOp, affine::AffineForOp,
-            affine::AffineYieldOp, scf::IfOp>(op) ||
+    if (isa<CopyOp, BlockOp, GemmOp, ReduceOp, FillOp>(op) ||
+        isLayoutControlOp(op) ||
         isFriskArithmeticOp(op)) {
       need_infer_ops.push_back(op);
     }
@@ -631,7 +641,7 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
   info.mmaInst = mma;
   info.block_layout = block_layout;
   info.block_layout_order = {0, 1};
-  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_N});  // 
+  info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // C矩阵必须完整持有全部结果，不得覆盖
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
@@ -667,7 +677,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   if (!getDirectGemmBlockLayout(thread_num, block_layout, hw)) {
     block_layout = source_info.get_block_layout();
   }
-  info.bufferCalculateSemantic = source_info.bufferCalculateSemantic;
+  info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // C矩阵必须完整持有全部结果，不得覆盖
   info.block_layout = block_layout;
   info.block_layout_order = source_info.block_layout_order;
   if (hw->getKind() == HW_KIND_DCU) {
@@ -689,7 +699,7 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
                                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.A;
   info.mmaInst = mma;
-  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_K});
+  info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
@@ -715,7 +725,7 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
                                            MMAInstInfo *mma, AffineExpr zero) {
   info.buffer = problem.A;
   auto blockLayout = info.get_block_layout();
-  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_M, BUFFER_SEMANTIC_K});
+  info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
   info.base_layout = mma->desc_a;
   info.block_layout = {blockLayout[0], 1};
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
@@ -728,7 +738,7 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
                                        MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
   info.buffer = problem.B;
   info.mmaInst = mma;
-  info.bufferCalculateSemantic = getNewBufferSenamtic({BUFFER_SEMANTIC_K, BUFFER_SEMANTIC_N});
+  info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // B buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[0] = 1;
@@ -1145,7 +1155,7 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   _dstInfo.thread_own_data_size[0] = required_sz0;
   _dstInfo.thread_own_data_size[1] = required_sz1;
   _dstInfo.thread_own_data_size[dim] = 1; 
-  _dstInfo.bufferCalculateSemantic[dim] = BUFFER_SEMANTIC_REDUCE;
+  _dstInfo.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // 规约结果必须持有完整，不能覆盖
   buf_info_maps.addLowerInfo(op, _dstInfo);
   return true;
 }
@@ -1155,83 +1165,64 @@ bool LowerInfoAnalysis::inferOtherSimpleOp(
   Operation *op,
   LowerInfoMap &buf_info_maps,
   bool preferBefore) {
-  // Pipeline slot selectors have independent K/V/P results. Connect each
-  // result only to its own branch values, in both directions: a GEMM anchors
-  // the read selector, which anchors the slots and then the write selector.
-  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    if (ifOp.getNumResults() == 0)
+  // Each result position is an independent layout edge. Selectors describe
+  // addresses as well as computed values, so infer in both directions without
+  // merging different K/V/P slots or independent loop accumulators.
+  auto propagate = [&](Value result, ValueRange values, Operation *owner,
+                       Operation *yield = nullptr) {
+    if (!isa<ShapedType>(result.getType()))
       return true;
-    auto thenYield = cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
-    auto elseYield = cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
-    bool complete = true;
-    for (auto [index, result] : llvm::enumerate(ifOp.getResults())) {
-      if (!isa<ShapedType>(result.getType()))
-        continue;
-      Value thenValue = thenYield.getOperand(index);
-      Value elseValue = elseYield.getOperand(index);
-      LowerInfo *source = nullptr;
-      for (Value value : {Value(result), thenValue, elseValue}) {
-        source = getNearestInferedInfoEither(buf_info_maps, value, op,
-                                             preferBefore);
-        if (source)
-          break;
-      }
-      if (!source) {
-        complete = false;
-        continue;
-      }
-      LowerInfo layout = *source;
-      for (Value value : {Value(result), thenValue, elseValue}) {
-        LowerInfo candidate = layout;
-        candidate.buffer = value;
-        candidate.pos = value == result ? LowerInfo::BufPos::Out
-                                        : LowerInfo::BufPos::In;
-        buf_info_maps.addLowerInfo(ifOp, candidate);
-      }
+    LowerInfo *source = nullptr;
+    for (Value value : values) {
+      source = getNearestInferedInfoEither(buf_info_maps, value, op, preferBefore);
+      if (source) break;
     }
-    return complete;
-  }
-  // A loop carries independent SSA values. Propagate each recurrence on its
-  // own; the layout of one accumulator says nothing about another accumulator.
-  auto forOp = dyn_cast<affine::AffineForOp>(op);
-  if (auto yieldOp = dyn_cast<affine::AffineYieldOp>(op))
-    forOp = dyn_cast<affine::AffineForOp>(yieldOp->getParentOp());
-  if (forOp) {
-    auto yieldOp = cast<affine::AffineYieldOp>(forOp.getBody()->getTerminator());
-    bool complete = true;
-    for (unsigned i = 0; i < forOp.getNumRegionIterArgs(); ++i) {
-      Value init = forOp.getInits()[i];
-      Value arg = forOp.getRegionIterArgs()[i];
-      Value result = forOp.getResult(i);
-      Value yielded = yieldOp.getOperand(i);
-      if (!isa<ShapedType>(arg.getType()))
-        continue;
-      LowerInfo *source = nullptr;
-      for (Value value : {yielded, arg, init, result}) {
-        source = getNearestInferedInfoEither(buf_info_maps, value, op,
-                                             preferBefore);
-        if (source)
-          break;
-      }
-      if (!source) {
-        complete = false;
-        continue;
-      }
-      // Copy before addLowerInfo: inserting candidates can invalidate source.
-      LowerInfo layout = *source;
-      for (Value value : {init, arg, result, yielded}) {
-        LowerInfo candidate = layout;
-        candidate.buffer = value;
-        candidate.pos = value == result ? LowerInfo::BufPos::Out
-                                        : LowerInfo::BufPos::In;
-        buf_info_maps.addLowerInfo(forOp, candidate);
-      }
-      layout.buffer = yielded;
+    if (!source) return false;
+    LowerInfo layout = *source;
+    for (Value value : values) {
+      LowerInfo candidate = layout;
+      candidate.buffer = value;
+      candidate.pos = value == result ? LowerInfo::BufPos::Out
+                                      : LowerInfo::BufPos::In;
+      buf_info_maps.addLowerInfo(owner, candidate);
+    }
+    if (yield) {
+      layout.buffer = values.front();
       layout.pos = LowerInfo::BufPos::In;
-      buf_info_maps.addLowerInfo(yieldOp, layout);
+      buf_info_maps.addLowerInfo(yield, layout);
     }
+    return true;
+  };
+  if (auto select = dyn_cast<arith::SelectOp>(op))
+    return propagate(select.getResult(),
+        ValueRange{select.getResult(), select.getTrueValue(), select.getFalseValue()}, op);
+  if (auto branch = dyn_cast<scf::IfOp>(op)) {
+    bool complete = true;
+    for (auto [i, result] : llvm::enumerate(branch.getResults()))
+      complete &= propagate(result,
+          ValueRange{result, branch.thenYield().getOperand(i),
+                     branch.elseYield().getOperand(i)}, op);
     return complete;
   }
+  auto loopLayouts = [&](auto loop) {
+    Operation *yield = loop.getBody()->getTerminator();
+    bool complete = true;
+    for (unsigned i = 0; i < loop.getNumResults(); ++i) {
+      Value init = loop->getOperand(loop.getNumControlOperands() + i);
+      Value arg = loop.getRegionIterArgs()[i];
+      Value result = loop.getResult(i);
+      Value yielded = yield->getOperand(i);
+      complete &= propagate(result, ValueRange{yielded, arg, init, result}, loop, yield);
+    }
+    return complete;
+  };
+  Operation *owner = op;
+  if (isa<affine::AffineYieldOp, scf::YieldOp>(op))
+    owner = op->getParentOp();
+  if (auto loop = dyn_cast<affine::AffineForOp>(owner))
+    return loopLayouts(loop);
+  if (auto loop = dyn_cast<scf::ForOp>(owner))
+    return loopLayouts(loop);
   return false;
 }
 
@@ -1277,6 +1268,10 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
         }
       }
     }
+    // 计算结果必须完整持有，不能覆盖
+    if(pos == LowerInfo::BufPos::Out){
+      candidateInfo.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};
+    }
     buf_info_maps.addLowerInfo(op, candidateInfo);
   }
   return true;
@@ -1297,7 +1292,7 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
   // Control-flow layout edges live in yields/region arguments. Keep partially
   // inferred selectors and loops pending until each shaped result has an
   // anchor, without mixing layouts between different result positions.
-  if (isa<scf::IfOp, affine::AffineForOp, affine::AffineYieldOp>(op))
+  if (isLayoutControlOp(op))
     return inferOtherSimpleOp(op, buf_info_maps, preferBefore);
   // 提取op的所有memref 参数
   llvm::SmallVector<Value, 8> memrefsToCheck;
@@ -1417,7 +1412,7 @@ int LowerInfoAnalysis::block_threads = 0;
 
 // TODO : 建立 LowerInfo之间的双向链表，明确推断链条。当后面的LowerInfo发生冲突，需要修改，可直接传播到同链条的所有 info
 // 
-LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version){
+LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::string& hwKind ,const std::string& version, bool isNaiveInfer){
   auto hw = GetHWSpecification(hwKind, version, kernelOp->getContext());
   LowerInfoAnalysis::gemmCount = 0;
   buf_info_maps = LowerInfoMap{};
@@ -1453,8 +1448,8 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
 
   auto isInferTargetOp = [](Operation *op) {
     return op != nullptr &&
-           (isa<CopyOp, BlockOp, GemmOp, ReduceOp, affine::AffineForOp,
-                affine::AffineYieldOp, scf::IfOp>(op) ||
+           (isa<CopyOp, BlockOp, GemmOp, ReduceOp>(op) ||
+            isLayoutControlOp(op) ||
             isFriskArithmeticOp(op));
   };
   auto tryInferAt = [&](int opId, bool collectConflict, bool preferBefore) -> bool {

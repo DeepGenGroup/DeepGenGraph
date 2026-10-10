@@ -78,6 +78,8 @@ llvm-link "${LL_FILE}" \
 # ------------------------------------------------------------
 
 opt \
+    -mtriple=amdgcn-amd-amdhsa \
+    -mcpu="${GPU_ARCH}" \
     -passes="${IR_OPT_PIPELINE}" \
     -debugger-tune=gdb \
     merged.bc \

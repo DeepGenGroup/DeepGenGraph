@@ -352,6 +352,30 @@ shuffle 偏移 = 1*laneStride, 2*laneStride, 4*laneStride, ...
 
 切片 copy 的结果应表示完整目标。若实际复制二维 tile 到四维目标的一部分，最终返回原四维目标；不能把二维切片的布局推广到整个四维张量，也不能丢弃目标未修改的区域。
 
+整块 shared/global copy 的返回值也必须是物理目标的别名，不能替换为源寄存器的快照。
+这样，后续消费者从目标按自身布局读取；对目标的后续写入也能通过 copy 返回值观察到。
+
+`ComputedTile` trait（`IR/FriskTraits.h`）明确区分计算值与存储别名：带该 trait
+的操作产生独立逻辑值，即使结果类型是 memref，也不要求立即物化到对应内存空间。
+GEMM、逐元素算术、数值 cast、zero 和 mask 遵循该约定；view、fill 和 copy 返回值
+不属于此类。这个约定独立于 memory effects，不能用 `Pure` 代替别名判断。
+
+`insertConvertLayoutOps` 对“计算值 → 独立 shared allocation”的静态同 shape
+整块 copy（整块哨兵或显式全零偏移）直接采用生产者布局写回，保留发布 barrier，
+不先转换到消费者的寄存器布局。消费者布局不变，带返回值的 copy 也走同一路径。
+该规则依据 trait、形状、地址空间和目标所有权，不识别 attention、P、kernel 名或固定尺寸。
+切片、来源存储别名和非独立目标仍采用原有保守路径。物理 shared packing 是后续独立优化。
+
+作为 copy 目标的独立 shared allocation 及其 copy 返回值已经指向物理存储。分析中相邻使用点的线程
+布局差异不要求再做 `reg → scratch → reg`：Pass 保留各消费者的布局，直接从该存储
+取数。只有 memref 类型但实际表示计算值的结果不会被当作已物化存储；仅由 reduce 等
+其他操作写入的临时缓冲区仍交给各自的寄存器转发逻辑处理。
+
+`check_plan2_thread_tiles.py` 覆盖不同尺寸的普通 GEMM → cast → GEMM、返回值别名、
+中间写入、全零偏移、外部目标和切片；`check_attention_codegen.py` 继续检查完整链路的
+P 元素坐标、发布同步和 LLVM/ISA 导出。前者不执行 GPU，后者的 ISA 检查针对 gfx90a，
+均不代表 gfx936 上的性能测量。
+
 ## 8. 写回与布局交换
 
 ### 8.1 为什么 From 后还要 writeBackBlockTile
@@ -465,3 +489,25 @@ shared barrier 放在 leader 分支外，所有线程均可到达。写回也必
 - 先看第一阶段生成的 To/From 属性，再看第二阶段的真实 load/store，较容易定位索引错误。
 
 项目已有 [check_plan2_thread_tiles.py](../../../test/check_plan2_thread_tiles.py)，覆盖第一阶段的部分 GEMM、广播/归约、copy、循环更新、桥接折叠和重复执行场景。它需要可执行的编译器工具作为参数，其结果不能直接代替第二阶段或 GPU 数值正确性验证。
+
+
+## 计算结果写入 shared 的生产者/消费者联合布局
+
+`planSharedOperandPacking` 对自有、未逃逸、完整写入的二维 shared buffer 分析所有 producer/consumer。普通 GEMM → cast → GEMM 也走这条路径；不匹配 attention 名称、P 名称或固定 tile 尺寸。
+
+对于 GEMM A 的列轴，若 `ComputedTile` 生产者每个线程持有间隔为 `S` 的列，且消费者的指令 K 跨度为 `K`，在 `N` 可被 `2K` 整除、`K` 可被 `S` 整除、所有使用者布局兼容时，记录 `frisk.shared_store_stride=S` 和 `frisk.shared_store_pair=K`。这两个属性从 `frisk.alloc_buffer` 传播到低层 `memref.alloc`；`PackSharedMemory` 一次性重写该 buffer 的全部已知访问。
+
+令 `r = col floordiv S`、`G = K/S`，物理下标为：
+
+```text
+paired = (r floordiv (2G)) * (2G) + (r mod G) * 2 + ((r floordiv G) mod 2)
+physical = ((col mod S) * M + row) * (N/S) + paired
+```
+
+该排列是双射，不增加 shared 容量、不改变线程拥有的逻辑元素。生产者寄存器可合成连续 store；消费者相隔一个 K 指令跨度的元素可合并读取。未知访问、逃逸、切片、冲突的消费者布局或不可整除形状均保留保守路径。`pack-shared-operands=false` 关闭自动物理布局规划。
+
+展开循环后，`IRDeepOptimize` 在独立步骤中合并 rank-1 shared 标量访问：同一缓冲区的 store 仅在地址差被证明恒定且互不重叠时排序并合并，最宽 128 bit；相邻或反向相邻的 load 先合成两个元素，再尝试合并更宽的向量。常量采样仅用于提出候选地址差，Presburger 空集检查证明它对所有 affine 操作数成立。遇到 barrier、控制流、未知副作用、写入或读取依赖时停止对应的移动，不依赖算子名或 kernel 模板。
+
+此布局减少指令数并不保证所有访问的 bank 冲突都降低。当前 64×32 FP16 中间块的地址模型显示：128-bit 写入无冲突，32-bit 读取为 2 路集中；实际吞吐应结合目标硬件实测。
+
+回归检查：`check_lds_scalar_packets.py` 用 CPU 验证 FP16/FP32/i16/i32 的乱序写入与反向读取，并检查依赖边界；`check_shared_packing.py` 验证不同形状的地址双射、普通双 GEMM 的自动规划及保守回退；`check_attention_codegen.py` 验证完整 kernel 的逻辑坐标、publication barrier、LLVM 15 兼容性及 gfx90a 指令生成。

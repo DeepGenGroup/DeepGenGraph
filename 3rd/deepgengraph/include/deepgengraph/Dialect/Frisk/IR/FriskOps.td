@@ -27,6 +27,11 @@ class Frisk_Op<string mnemonic, list<Trait> traits = []> :
 
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
 
+// Fresh logical values; see FriskTraits.h for the storage/aliasing contract.
+def Frisk_ComputedTile : NativeOpTrait<"ComputedTile"> {
+  let cppNamespace = "::mlir::frisk";
+}
+
 // KernelOp
 def Frisk_KernelOp : Frisk_Op<"kernel", [
   ImplicitFriskTerminator, CallableOpInterface, FunctionOpInterface,
@@ -272,7 +277,7 @@ def Frisk_EndOp : Frisk_Op<"end", [Terminator, ReturnLike]> {
 }
 
 // gemmOp
-def Frisk_GemmOp: Frisk_Op<"gemm", [MemoryEffects<[MemWrite]>, MemoryEffects<[MemRead]>]> {
+def Frisk_GemmOp: Frisk_Op<"gemm", [Frisk_ComputedTile, MemoryEffects<[MemWrite]>, MemoryEffects<[MemRead]>]> {
   let summary = "General matrix multiplication operation";
   let description = [{}];
   let arguments = (ins
@@ -451,6 +456,11 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
     The destination address is calculated using an affine map applied to the provided
     map_operands.
 
+    For a memref destination, an optional result aliases the complete destination
+    buffer, including when only a slice is copied. It is not a snapshot of the
+    source registers. Physical shared-memory stores may use the source tile's
+    distribution; subsequent readers choose their own distribution.
+
     Example:
       frisk.copy %src to %dst at (%i, %j) [affine_map<(d0, d1) -> (0, 0, d0, d1)>]
         : memref<64x32xf32>, memref<1x32x1024x128xf32>
@@ -547,7 +557,7 @@ def Frisk_CopyToRegOp : Frisk_Op<"copy_to_reg", [
 
 // 2. 定义通用的二元算子基类模板
 class Frisk_ArithmeticOp<string mnemonic, list<Trait> traits = []> :
-    Frisk_Op<mnemonic, !listconcat(traits, [MemoryEffects<[MemRead]>])> {
+    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile, MemoryEffects<[MemRead]>])> {
 
   let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
   let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
@@ -575,7 +585,7 @@ class Frisk_ArithmeticOp<string mnemonic, list<Trait> traits = []> :
 }
 
 class Frisk_UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
-    Frisk_Op<mnemonic, !listconcat(traits, [MemoryEffects<[MemRead]>])> {
+    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile, MemoryEffects<[MemRead]>])> {
 
   let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
   let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
@@ -608,7 +618,7 @@ def Frisk_Exp2Op : Frisk_UnaryArithmeticOp<"exp2">;
 
 // Element-wise data type conversion.
 def Frisk_CastOp : Frisk_Op<"cast", [
-    MemoryEffects<[MemRead]>, SameOperandsAndResultShape
+    Frisk_ComputedTile, MemoryEffects<[MemRead]>, SameOperandsAndResultShape
 ]> {
   let summary = "Convert the data type of a scalar, memref or vector";
   let description = [{
@@ -680,7 +690,7 @@ def Frisk_FillOp: Frisk_Op<"fill", [MemoryEffects<[MemWrite]>]> {
 }
 
 //
-def Frisk_ZeroOp: Frisk_Op<"zero", [Pure]> {
+def Frisk_ZeroOp: Frisk_Op<"zero", [Frisk_ComputedTile, Pure]> {
   let summary = "zero";
   let description = [{
     zero
@@ -708,7 +718,7 @@ def MaskYieldOp: Frisk_Op<"mask_yield", [Pure, ReturnLike, Terminator, HasParent
   let assemblyFormat = "attr-dict $srcs `:` type($srcs)";
 }
 
-def MaskOp: Frisk_Op<"mask", [Pure, SingleBlockImplicitTerminator<"frisk::MaskYieldOp">, InferTypeOpAdaptor]> {
+def MaskOp: Frisk_Op<"mask", [Frisk_ComputedTile, Pure, SingleBlockImplicitTerminator<"frisk::MaskYieldOp">, InferTypeOpAdaptor]> {
   let summary = "";
   let description = [{}];
 

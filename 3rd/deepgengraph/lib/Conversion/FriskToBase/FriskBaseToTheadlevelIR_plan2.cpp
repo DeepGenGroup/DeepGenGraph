@@ -63,6 +63,7 @@
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "SharedBufferAliases.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -133,10 +134,42 @@ static void markTiled(Operation *op, OpBuilder &builder) {
 
 // 沿 buffer_view 的 source 链找到底层 buffer，用于识别真实内存空间。
 // 这里只追踪来源，不计算偏移；实际坐标合成由 resolveViewAccess 完成。
+// Stop at memref.transpose: its strided type is needed by copy vectorization
+// and shared packing to avoid treating a transposed logical row as contiguous.
 static Value getViewBuffer(Value value) {
   while (auto view = value.getDefiningOp<frisk::BufferViewOp>())
     value = view.getSource();
   return value;
+}
+
+// Which logical tile axis becomes the physical minor axis after folding all
+// views/transposes? A stride-one axis alone is not enough for vector.load:
+// it must become the final axis of the memref used by that operation.
+static std::optional<unsigned> getPhysicalMinorCopyAxis(Value source) {
+  auto type = dyn_cast<MemRefType>(source.getType());
+  if (!type || type.getRank() != 2)
+    return std::nullopt;
+  for (unsigned axis : {0u, 1u}) {
+    Value buffer = source;
+    unsigned mappedAxis = axis;
+    while (true) {
+      if (auto view = buffer.getDefiningOp<frisk::BufferViewOp>()) {
+        mappedAxis += view.getSourceType().getRank() - view.getViewType().getRank();
+        buffer = view.getSource();
+      } else if (auto transpose = buffer.getDefiningOp<memref::TransposeOp>()) {
+        mappedAxis = cast<AffineDimExpr>(
+            transpose.getPermutation().getResult(mappedAxis)).getPosition();
+        buffer = transpose.getIn();
+      } else {
+        break;
+      }
+    }
+    auto rootType = cast<MemRefType>(buffer.getType());
+    if (mappedAxis + 1 == unsigned(rootType.getRank()) &&
+        rootType.isLastDimUnitStride())
+      return axis;
+  }
+  return std::nullopt;
 }
 
 // 识别 global -> shared 搬运的特殊路径；忽略外层 view 后检查两端内存空间。
@@ -148,7 +181,7 @@ static bool isGlobalToSharedCopy(frisk::CopyOp op) {
          dst.getMemorySpaceAsInt() == int(friskMs::Shared);
 }
 
-// Plan a physical layout only for owned, non-escaping shared B operands whose
+// Plan a physical layout only for owned, non-escaping shared GEMM operands whose
 // complete producer/consumer set is understood. This is independent of kernel
 // names, attention shapes and surrounding graph operators. A logical memref
 // remains row-major until pack-shared-memory rewrites ALL accesses together.
@@ -156,49 +189,127 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
   auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
   if (!threads || threads.getInt() <= 0)
     return;
+  llvm::SmallPtrSet<Operation *, 16> visited;
   kernel.walk([&](frisk::AllocBufferOp alloc) {
+    if (visited.contains(alloc))
+      return;
     auto type = cast<MemRefType>(alloc.getResult().getType());
     if (type.getRank() != 2 || !type.hasStaticShape() ||
         !type.getLayout().isIdentity() ||
         type.getMemorySpaceAsInt() != int(friskMs::Shared))
       return;
-    int64_t width = 0;
-    bool writer = false;
-    for (Operation *user : alloc.getResult().getUsers()) {
+    SharedBufferAliases aliases;
+    if (!aliases.collect(alloc.getResult()))
+      return;
+    for (Operation *storage : aliases.allocations)
+      visited.insert(storage);
+    int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
+    SmallVector<frisk::CopyOp> writers;
+    for (OpOperand *use : aliases.accesses) {
+      Operation *user = use->getOwner();
+      Value buffer = use->get();
       if (auto gemm = dyn_cast<frisk::GemmOp>(user)) {
-        auto *info = layouts.getLowerInfo(alloc.getResult(), gemm);
-        if (gemm.getB() != alloc.getResult() || gemm.getA() == alloc.getResult() ||
-            !info || !info->mmaInst || info->get_thread_widths()[1] != 1)
+        auto *info = layouts.getLowerInfo(buffer, gemm);
+        if (!info || !info->mmaInst || gemm.getA() == gemm.getB())
           return;
-        int64_t candidate = info->get_thread_widths()[0];
-        if (width && width != candidate)
+        // Infer the contiguous register axis from the operand layout. Packing
+        // along columns interleaves A's row packets, avoiding the large row
+        // stride between lanes. The same mechanism applies to ordinary GEMM
+        // and fused producers; it does not identify P or attention by name.
+        int64_t candidateAxis;
+        if (gemm.getB() == buffer && info->get_thread_widths()[1] == 1)
+          candidateAxis = 0;
+        else if (gemm.getA() == buffer && info->get_thread_widths()[0] == 1)
+          candidateAxis = 1;
+        else
+          return;
+        int64_t candidate = info->get_thread_widths()[candidateAxis];
+        if (candidate <= 0)
+          return;
+        // Pair the same lane's fragments from two K instructions, rather
+        // than the fragments owned by adjacent lanes. The latter would make
+        // an eight-element packet contain another lane's operands.
+        int64_t stride = info->get_warpInst_widths()[candidateAxis];
+        int64_t candidateStride =
+            candidateAxis == 0 &&
+            candidate * 2 * type.getElementTypeBitWidth() == 128 &&
+            stride >= candidate && stride % candidate == 0 &&
+            type.getDimSize(0) % (2 * stride) == 0 &&
+            info->get_block_layout()[0] == 1 ? stride : 0;
+        if (width && (width != candidate || pairStride != candidateStride || axis != candidateAxis))
           return;
         width = candidate;
+        axis = candidateAxis;
+        pairStride = candidateStride;
+        if (instructionStride && instructionStride != stride)
+          return;
+        instructionStride = stride;
       } else if (auto copy = dyn_cast<frisk::CopyOp>(user)) {
         // Offset/sliced and escaping copy aliases conservatively keep their
         // original layout. Buffer-view origins on the source are supported.
         auto map = copy.getOffsetMap();
-        if (copy.getDstMemRef() != alloc.getResult() || !isGlobalToSharedCopy(copy) ||
-            !cast<MemRefType>(getViewBuffer(copy.getSrc()).getType()).isLastDimUnitStride() ||
-            cast<MemRefType>(copy.getSrc().getType()).getShape() != type.getShape() ||
-            (copy.hasValueResult() && !copy->use_empty()) ||
+        auto sourceType = dyn_cast<MemRefType>(copy.getSrc().getType());
+        if (use->getOperandNumber() != 1 || !sourceType ||
+            sourceType.getShape() != type.getShape() ||
             map.getNumInputs() != 0 || map.getNumResults() != 1 ||
             !isa<AffineConstantExpr>(map.getResult(0)) ||
             cast<AffineConstantExpr>(map.getResult(0)).getValue() != type.getRank())
           return;
-        writer = true;
+        writers.push_back(copy);
       } else {
         return;
       }
     }
-    if (!writer || width < 2 || !llvm::isPowerOf2_64(width) ||
+    if (writers.empty() || width < 2 || !llvm::isPowerOf2_64(width) ||
         width * type.getElementTypeBitWidth() > 128 ||
-        type.getDimSize(0) % width != 0 ||
-        type.getNumElements() % threads.getInt() != 0 ||
-        (type.getNumElements() / threads.getInt()) % width != 0)
+        type.getDimSize(axis) % width != 0 ||
+        (axis == 0 && (type.getNumElements() % threads.getInt() != 0 ||
+         (type.getNumElements() / threads.getInt()) % width != 0)))
       return;
-    alloc->setAttr("frisk.shared_pack", IntegerAttr::get(
-        IntegerType::get(kernel.getContext(), 64), width));
+    // Both row-major and column-major GLOBAL inputs can feed row-axis packing.
+    // The copy chooses ownership using physical strides; GEMM LowerInfo above
+    // still determines the shared packet axis/width and all consumer addresses.
+    if (axis == 0 && llvm::any_of(writers, [](frisk::CopyOp copy) {
+          return !isGlobalToSharedCopy(copy) ||
+              !getPhysicalMinorCopyAxis(copy.getSrc());
+        }))
+      return;
+    auto set = [&](StringRef name, int64_t value) {
+      for (Operation *storage : aliases.allocations)
+        storage->setAttr(name, IntegerAttr::get(
+            IntegerType::get(kernel.getContext(), 64), value));
+    };
+    set("frisk.shared_pack_axis", axis);
+    set("frisk.shared_pack", width);
+    // A computed producer can own strided columns even though the consumer
+    // reads contiguous register fragments. Put the producer's lane residue
+    // outside the row dimension and pair the consumer's successive K packets.
+    // Both sides then have contiguous subsets, without changing lane ownership.
+    if (axis == 1 && instructionStride > 0 &&
+        type.getDimSize(1) % (2 * instructionStride) == 0) {
+      int64_t storeStride = 0;
+      bool compatible = llvm::all_of(writers, [&](frisk::CopyOp copy) {
+        auto *producer = copy.getSrc().getDefiningOp();
+        auto *info = layouts.getLowerInfo(copy.getSrc(), copy);
+        if (!producer || !producer->hasTrait<frisk::ComputedTile>() || !info ||
+            info->get_thread_widths()[1] != 1 ||
+            info->get_block_layout()[1] != 1 ||
+            info->base_layout.warp_layout_order[0] != 0)
+          return false;
+        int64_t stride = info->get_warp_layout()[1];
+        if (stride < 2 || instructionStride % stride ||
+            !llvm::isPowerOf2_64(stride) || (storeStride && storeStride != stride))
+          return false;
+        storeStride = stride;
+        return true;
+      });
+      if (compatible) {
+        set("frisk.shared_store_stride", storeStride);
+        set("frisk.shared_store_pair", instructionStride);
+      }
+    }
+    if (pairStride && (type.getNumElements() / threads.getInt()) % (2 * width) == 0)
+      set("frisk.shared_pair_stride", pairStride);
   });
 }
 
@@ -219,7 +330,7 @@ static Value composeAccessIndex(OpBuilder &b, Location loc, AffineExpr expr,
 
 // A buffer_view is an index mapping, not a physical memref descriptor.
 // Its map gives the source origin; local coordinates occupy the trailing
-// source axes. Compose from the innermost view out to the original buffer.
+// source axes. Compose views and transpose permutations out to the input.
 // 将 view 内 indices 原地改写为真实 buffer 的 indices，同时更新 buffer。
 // 每层 view 的 index_map 给出切片起点；局部坐标叠加到源的末尾若干轴。
 // 例如二维 tile 位于四维张量 [batch, head, row0, col0]，局部 [i,j]
@@ -227,7 +338,18 @@ static Value composeAccessIndex(OpBuilder &b, Location loc, AffineExpr expr,
 // 保留原 buffer 类型，因此真实行跨度不会被误写成切片的宽度。
 static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
                               SmallVectorImpl<Value> &indices) {
-  while (auto view = buffer.getDefiningOp<frisk::BufferViewOp>()) {
+  while (true) {
+    if (auto transpose = buffer.getDefiningOp<memref::TransposeOp>()) {
+      SmallVector<Value> mapped(indices.size());
+      for (auto [dim, expr] : llvm::enumerate(transpose.getPermutation().getResults()))
+        mapped[cast<AffineDimExpr>(expr).getPosition()] = indices[dim];
+      indices.assign(mapped.begin(), mapped.end());
+      buffer = transpose.getIn();
+      continue;
+    }
+    auto view = buffer.getDefiningOp<frisk::BufferViewOp>();
+    if (!view)
+      break;
     auto map = view.getIndexMap();
     unsigned leading = map.getNumResults() - indices.size();
     SmallVector<Value> mapped;
@@ -409,10 +531,11 @@ static Value findThreadIdxOp(Operation *op, OpBuilder &builder) {
 // A whole-tile store into independent shared storage can use the producer's
 // register distribution. The consumer redistributes by loading that storage;
 // converting the registers first would introduce a second LDS round trip.
-// Keep slices, aliases and value-returning copies on the existing path.
+// Keep slices and potentially aliasing storage on the existing path. A copy
+// result aliases the physical destination and does not constrain store layout.
 static bool canStoreProducerLayout(frisk::CopyOp copy, Value input) {
-  if (input != copy.getSrc() || copy.hasValueResult() ||
-      !copy.getDst().getDefiningOp<frisk::AllocBufferOp>())
+  SharedBufferAliases aliases;
+  if (input != copy.getSrc() || !aliases.collect(copy.getDst()))
     return false;
   auto src = dyn_cast<MemRefType>(input.getType());
   auto dst = dyn_cast<MemRefType>(copy.getDst().getType());
@@ -420,11 +543,10 @@ static bool canStoreProducerLayout(frisk::CopyOp copy, Value input) {
       src.getShape() != dst.getShape() ||
       dst.getMemorySpaceAsInt() != int(friskMs::Shared))
     return false;
-  // These operations produce computed block tiles, not aliases of the target.
-  // In particular, do not bypass exchange for a source view or copy result.
-  if (!isa_and_nonnull<frisk::GemmOp, frisk::Exp2Op, frisk::AddOp,
-                       frisk::SubOp, frisk::MulOp, frisk::DivOp,
-                       frisk::MaskOp, frisk::ZeroOp>(input.getDefiningOp()))
+  // Use the IR's value/storage contract, not a list of producer op names.
+  // In particular, memory-effect-free views are still aliases, not values.
+  Operation *producer = input.getDefiningOp();
+  if (!producer || !producer->hasTrait<frisk::ComputedTile>())
     return false;
   auto map = copy.getOffsetMap();
   if (map.getNumInputs() != 0)
@@ -437,6 +559,22 @@ static bool canStoreProducerLayout(frisk::CopyOp copy, Value input) {
         return c && c.getValue() == 0;
       });
   return whole || zero;
+}
+
+// Owned shared storage has an address layout, not a register distribution.
+// Copy results retain that identity; each reader can load its requested lanes
+// directly. Do not classify computed memref-typed values as physical storage.
+static bool isSharedCopyStorage(Value value) {
+  SharedBufferAliases aliases;
+  if (!aliases.collect(value))
+    return false;
+  // Other destination-style operations can still forward their temporary
+  // registers through a ConvertLayoutOp (e.g. singleton-axis reductions).
+  // Leave those candidates intact until their own lowering decides whether
+  // the allocation must actually be materialized.
+  return llvm::any_of(aliases.accesses, [&](OpOperand *use) {
+    return isa<frisk::CopyOp>(use->getOwner()) && use->getOperandNumber() == 1;
+  });
 }
 
 static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
@@ -452,6 +590,12 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
       conversions.push_back({info.op, info.buffer, *info.convertFrom, info});
   }
   for (auto &conversion : conversions) {
+    if (isSharedCopyStorage(conversion.input)) {
+      // The previous user's access distribution does not constrain this
+      // memory read. Keep the consumer layout without staging through scratch.
+      infoMap.getLowerInfo(conversion.input, conversion.user)->convertFrom = nullptr;
+      continue;
+    }
     if (auto copy = dyn_cast<frisk::CopyOp>(conversion.user);
         copy && canStoreProducerLayout(copy, conversion.input)) {
       // Change only this copy's source layout. Destination readers (including
@@ -1401,6 +1545,12 @@ public:
       auto alloc = rewriter.create<memref::AllocOp>(op.getLoc(), type, op.getAlignmentAttr());
       if (auto pack = op->getAttr("frisk.shared_pack"))
         alloc->setAttr("frisk.shared_pack", pack);
+      if (auto axis = op->getAttr("frisk.shared_pack_axis"))
+        alloc->setAttr("frisk.shared_pack_axis", axis);
+      if (auto stride = op->getAttr("frisk.shared_pair_stride"))
+        alloc->setAttr("frisk.shared_pair_stride", stride);
+      for (StringRef name : {"frisk.shared_store_stride", "frisk.shared_store_pair"})
+        if (auto attr = op->getAttr(name)) alloc->setAttr(name, attr);
       markTiled(alloc, rewriter);
       rewriter.replaceOp(op, alloc.getResult());
       return success();
@@ -1657,9 +1807,9 @@ static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
   return simplifyAffineMap(AffineMap::get(tile.getRank() + 1, 0, results, ctx));
 }
 
-// A private-to-this-expression reduction temporary with one later layout read
-// has no observable storage. Forward only when that read needs the exact same
-// per-lane values; equal vector shapes alone do not prove this.
+// A hoisted reduction temporary may serve independent producer/reader pairs
+// in several blocks. Forward only locally proven pairs, never across a branch
+// or loop boundary. Equal vector shapes alone do not prove lane ownership.
 static bool forwardReductionTemporary(frisk::ReduceOp op, Value result,
                                       LowerInfo resultInfo,
                                       ConversionPatternRewriter &rewriter) {
@@ -1668,34 +1818,85 @@ static bool forwardReductionTemporary(frisk::ReduceOp op, Value result,
   if (!isa_and_nonnull<frisk::AllocBufferOp, memref::AllocOp>(allocation) ||
       cast<MemRefType>(dst.getType()).getMemorySpaceAsInt() != int(friskMs::Shared))
     return false;
-  frisk::ConvertLayoutOp consumer;
+  struct LocalPair {
+    frisk::ReduceOp writer;
+    SmallVector<OpOperand *> readers;
+  };
+  DenseMap<Block *, LocalPair> pairs;
   for (OpOperand &use : dst.getUses()) {
-    if (use.getOwner() == op && use.getOperandNumber() == 1)
-      continue;
-    auto convert = dyn_cast<frisk::ConvertLayoutOp>(use.getOwner());
-    if (!convert || consumer || convert->getBlock() != op->getBlock() ||
-        !op->isBeforeInBlock(convert))
+    auto &pair = pairs[use.getOwner()->getBlock()];
+    if (auto writer = dyn_cast<frisk::ReduceOp>(use.getOwner())) {
+      if (use.getOperandNumber() != 1 || pair.writer) return false;
+      pair.writer = writer;
+    } else if (auto convert = dyn_cast<frisk::ConvertLayoutOp>(use.getOwner())) {
+      // A layout conversion can also feed a destination-style writer. Such
+      // a use is not a read of this reduction and cannot become an SSA value.
+      if (!llvm::all_of(convert->getUsers(), [](Operation *reader) {
+            return reader->hasTrait<frisk::ComputedTile>() ||
+                   isa<frisk::CopyToRegOp>(reader);
+          }))
+        return false;
+      pair.readers.push_back(&use);
+    } else if (use.getOwner()->hasTrait<frisk::ComputedTile>())
+      pair.readers.push_back(&use);
+    else
       return false;
-    consumer = convert;
   }
-  if (!consumer)
-    return false;
-  auto found = convertLayoutInfo.find(consumer);
-  if (found == convertLayoutInfo.end())
-    return false;
-  LowerInfo targetInfo = found->second.second;
-  auto targetType = getFullThreadTileType(consumer->getResult(0), targetInfo);
+  for (auto &[block, pair] : pairs) {
+    if (!pair.writer)
+      return false;
+    for (OpOperand *use : pair.readers) {
+      Operation *reader = use->getOwner();
+      if (!pair.writer->isBeforeInBlock(reader))
+        return false;
+      // A nested region between this pair might write the same allocation.
+      // Known readers can occur between one another; nothing else may touch it.
+      for (Operation *next = pair.writer->getNextNode(); next != reader;
+           next = next->getNextNode()) {
+        bool touches = false;
+        next->walk([&](Operation *nested) {
+          for (OpOperand &operand : nested->getOpOperands())
+            if (operand.get() == dst && !llvm::is_contained(pair.readers, &operand))
+              touches = true;
+        });
+        if (touches) return false;
+      }
+    }
+  }
+  auto &readers = pairs[op->getBlock()].readers;
+  if (readers.empty()) return false;
+  SmallVector<LowerInfo, 2> targets;
   auto resultType = cast<VectorType>(result.getType());
-  if (failed(targetType) || *targetType != resultType)
-    return false;
   auto blockType = cast<ShapedType>(dst.getType());
-  if (effectiveThreadTileMap(resultInfo, blockType, resultType, op.getContext()) !=
-      effectiveThreadTileMap(targetInfo, blockType, resultType, op.getContext()))
-    return false;
-  Value forwarded = fromThreadTile(result, consumer->getResult(0).getType(),
-                                    targetInfo, rewriter, op.getLoc());
-  convertLayoutInfo.erase(consumer);
-  rewriter.replaceOp(consumer, forwarded);
+  for (OpOperand *use : readers) {
+    std::optional<LowerInfo> target;
+    if (auto consumer = dyn_cast<frisk::ConvertLayoutOp>(use->getOwner())) {
+      auto found = convertLayoutInfo.find(consumer);
+      if (found != convertLayoutInfo.end()) target = found->second.second;
+    } else {
+      target = findLowerInfoForValue(dst, use->getOwner());
+    }
+    if (!target) return false;
+    auto type = getFullThreadTileType(dst, *target);
+    if (failed(type) || *type != resultType ||
+        effectiveThreadTileMap(resultInfo, blockType, resultType, op.getContext()) !=
+        effectiveThreadTileMap(*target, blockType, resultType, op.getContext()))
+      return false;
+    targets.push_back(*target);
+  }
+  // Validate every reader before changing any of them. They all observe the
+  // same local reduction, so the physical store and its barrier are redundant.
+  for (auto [use, target] : llvm::zip(readers, targets)) {
+    Operation *reader = use->getOwner();
+    Value forwarded = fromThreadTile(result, dst.getType(), target,
+                                      rewriter, op.getLoc());
+    if (auto consumer = dyn_cast<frisk::ConvertLayoutOp>(reader)) {
+      convertLayoutInfo.erase(consumer);
+      rewriter.replaceOp(consumer, forwarded);
+    } else {
+      rewriter.modifyOpInPlace(reader, [&] { use->set(forwarded); });
+    }
+  }
   return true;
 }
 
@@ -1764,7 +1965,8 @@ public:
 // Partition a logical row-major tile into consecutive per-thread intervals.
 // Vector stores never cross a row, even when an interval spans several rows.
 // A short final interval is guarded, while every thread reaches the barrier.
-// global -> shared 的专用搬运：不按 LowerInfo，而按逻辑行优先序连续分块。
+// global -> shared 的专用搬运：源的物理连续轴决定搬运顺序，
+// GEMM LowerInfo 决定后续 shared packing，二者通过逻辑坐标衔接。
 // 每线程负责 ceil(总元素数/thread_num) 个元素；向量宽度取该数量与末轴长度的 gcd，
 // 保证一次 vector.store 不跨行。连续源显式使用至多 128-bit 的读取包；
 // 非连续源保留标量读取，随后组装向量，可做浮点位宽转换。
@@ -1784,17 +1986,45 @@ static LogicalResult lowerGlobalToSharedCopy(
   if (!physicalDst.isLastDimUnitStride())
     return rewriter.notifyMatchFailure(op, "vector copy requires unit destination row stride");
   auto loc = op.getLoc();
+  bool columnMajorSource = getPhysicalMinorCopyAxis(source) == 0;
   int64_t total = ShapedType::getNumElements(shape);
   int64_t perThread = llvm::divideCeil(total, threadsAttr.getInt());
-  auto allocation = getViewBuffer(destination).getDefiningOp();
-  auto packing = allocation ? allocation->getAttrOfType<IntegerAttr>("frisk.shared_pack")
-                            : IntegerAttr{};
-  int64_t pack = packing ? packing.getInt() : 1;
+  SharedBufferAliases aliases;
+  bool owned = aliases.collect(getViewBuffer(destination));
+  auto packing = owned ? dyn_cast_or_null<IntegerAttr>(aliases.commonAttribute("frisk.shared_pack"))
+                       : IntegerAttr{};
+  auto packAxis = owned ? dyn_cast_or_null<IntegerAttr>(aliases.commonAttribute("frisk.shared_pack_axis"))
+                        : IntegerAttr{};
+  bool columnPacking = packing && packAxis && packAxis.getInt() == 1;
+  int64_t pack = packing && !columnPacking ? packing.getInt() : 1;
+  // For a transposed input, transfer ownership follows the physical source
+  // order [0,1]. Shared packing remains a separate consumer-driven mapping.
+  if (columnMajorSource)
+    pack = 1;
   if (pack < 2 || !llvm::isPowerOf2_64(pack) || shape.size() != 2 ||
       pack > 128 / dstType.getElementTypeBitWidth() || shape[0] % pack ||
       total % threadsAttr.getInt() || perThread % pack)
     pack = 1;
   int64_t width = std::gcd(perThread, shape.back() * pack);
+  int64_t minorLanes = 1, minorRepeats = 1;
+  if (columnMajorSource) {
+    int64_t limit = std::max<int64_t>(1, 128 / srcType.getElementTypeBitWidth());
+    width = 1;
+    while (width * 2 <= limit && shape[0] % (width * 2) == 0)
+      width *= 2;
+    // A 128-byte contiguous lane group balances GLOBAL coalescing with the
+    // consumer's packed LDS stores. Letting all lanes advance along D can
+    // concentrate writes in the same banks. In LowerInfo terms this adjusts
+    // the transfer's lane shape as well as its fastest-axis-first order.
+    int64_t laneLimit = 1024 / (width * srcType.getElementTypeBitWidth());
+    while (minorLanes * 2 <= laneLimit &&
+           (shape[0] / width) % (minorLanes * 2) == 0 &&
+           threadsAttr.getInt() % (minorLanes * 2) == 0)
+      minorLanes *= 2;
+    minorRepeats = shape[0] / (width * minorLanes);
+    perThread = minorRepeats *
+        llvm::divideCeil(shape[1], threadsAttr.getInt() / minorLanes) * width;
+  }
   auto vectorType = VectorType::get({width}, srcType.getElementType());
   Value tid = findThreadIdxOp(op, rewriter);
   auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread / width, 1);
@@ -1802,10 +2032,19 @@ static LogicalResult lowerGlobalToSharedCopy(
   chunk->setAttr("frisk.fragment_loop", rewriter.getUnitAttr());
   chunk->setAttr("frisk.fragment_shape", rewriter.getDenseI64ArrayAttr({width}));
   chunk->setAttr("iterLabel", rewriter.getStringAttr("copy_transfer_fragment"));
+  if (columnMajorSource)
+    chunk->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
   rewriter.setInsertionPointToStart(chunk.getBody());
   Value start = composeAccessIndex(
       rewriter, loc,
-      rewriter.getAffineDimExpr(0) * perThread + rewriter.getAffineDimExpr(1) * width,
+      columnMajorSource
+          ? (rewriter.getAffineDimExpr(1).floorDiv(minorRepeats) *
+                 (threadsAttr.getInt() / minorLanes) +
+             rewriter.getAffineDimExpr(0).floorDiv(minorLanes)) * shape[0] +
+                ((rewriter.getAffineDimExpr(1) % minorRepeats) * minorLanes +
+                 rewriter.getAffineDimExpr(0) % minorLanes) * width
+          : rewriter.getAffineDimExpr(0) * perThread +
+                rewriter.getAffineDimExpr(1) * width,
       ValueRange{tid, chunk.getInductionVar()});
   scf::IfOp active;
   if (total % perThread != 0 || total / perThread < threadsAttr.getInt()) {
@@ -1816,9 +2055,19 @@ static LogicalResult lowerGlobalToSharedCopy(
     rewriter.setInsertionPointToStart(&active.getThenRegion().front());
   }
   auto coordinates = [&](Value flat, int64_t reg = 0) {
+    if (columnMajorSource) {
+      // Same fastest-axis-first convention as LowerInfo's *_order fields.
+      auto xy = UnflattenIndexToXY(rewriter.getAffineDimExpr(0),
+                                  coordXY_t{0, 1}, coordXY_t{shape[0], shape[1]});
+      return SmallVector<Value>{composeAccessIndex(rewriter, loc, xy[0], flat),
+                                composeAccessIndex(rewriter, loc, xy[1], flat)};
+    }
     if (pack > 1) {
       auto d = rewriter.getAffineDimExpr(0);
-      // Each thread transfers a consecutive PHYSICAL interval. Retain logical
+      // Each thread transfers a consecutive interval in the basic row-pack
+      // layout. Optional K pairing later permutes its four-element chunks;
+      // keep this producer ownership to preserve 128-bit GLOBAL loads.
+      // Retain logical
       // coordinates here, so even an unexecuted packing pass is semantically
       // valid. The later pass folds the inverse permutation and widens stores.
       // width divides N*pack and is a multiple of pack; start is a multiple
@@ -1839,6 +2088,12 @@ static LogicalResult lowerGlobalToSharedCopy(
     return indices;
   };
   Value packet = buildFragment(rewriter, loc, vectorType, "load", [&]() {
+    if (columnMajorSource) {
+      auto at = coordinates(start);
+      Value buffer = source;
+      resolveViewAccess(rewriter, loc, buffer, at);
+      return Value(rewriter.create<vector::LoadOp>(loc, vectorType, buffer, at));
+    }
     Value packet = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
     if (cast<MemRefType>(getViewBuffer(source).getType()).isLastDimUnitStride()) {
@@ -1896,12 +2151,16 @@ static LogicalResult lowerGlobalToSharedCopy(
   Value buffer = destination;
   resolveViewAccess(rewriter, loc, buffer, indices);
   buildFragment(rewriter, loc, Type{}, "store", [&]() -> Value {
-    if (pack == 1) {
+    if (pack == 1 && !columnPacking && !columnMajorSource) {
       auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
       markTiled(store, rewriter);
     } else {
       for (int64_t reg = 0; reg < width; ++reg) {
-        auto at = coordinates(start, reg);
+        // Column packing keeps the original row-major producer intervals.
+        // Emit scalar logical stores so the physical pass can remap them all,
+        // then coalesce exactly the packets that remain contiguous.
+        auto at = pack > 1 ? coordinates(start, reg) : coordinates(composeAccessIndex(
+            rewriter, loc, rewriter.getAffineDimExpr(0) + reg, start));
         Value target = destination;
         resolveViewAccess(rewriter, loc, target, at);
         Value scalar = rewriter.create<vector::ExtractOp>(loc, *converted,
@@ -2033,12 +2292,18 @@ public:
     Value block = fromThreadTile(*converted, destination.getType(), *info, rewriter, loc);
     writeBackBlockTile(block, destination, *info, rewriter, loc);
     if (op.hasValueResult()) {
-      if (block.getType() != op.getValueResult().getType()) {
+      auto destinationSpace = cast<MemRefType>(dstTy).getMemorySpaceAsInt();
+      if (destinationSpace == int(friskMs::Shared) ||
+          destinationSpace == int(friskMs::Global) ||
+          block.getType() != op.getValueResult().getType()) {
         // The FromThreadTile above represents only the copied slice. Its
         // writeback has updated the original destination in place, so the
         // copy result aliases that complete block-level memref. Do not tile
         // the enclosing buffer: it may be a rank-4 global tensor, and the
         // slice layout says nothing about elements outside this block's tile.
+        // Whole physical copies also return the destination, not the source
+        // register snapshot: readers use their own layouts and observe later
+        // writes through either alias, without an extra layout scratch buffer.
         block = adaptor.getDst();
       }
       rewriter.replaceOp(op, block);
@@ -2481,7 +2746,7 @@ static void foldThreadTilePairs(Operation *root) {
   static constexpr StringLiteral layoutAttrs[] = {
       "tile_layout", "thread_widths", "thread_creg_order", "warp_repeat",
       "warp_repeat_order", "warp_layout", "warp_layout_order",
-      "warp_inst_unroll", "block_repeat", "block_layout", "block_layout_order",
+      "warp_inst_unroll", "block_layout", "block_layout_order",
       "warp_threads", "ignore_dim"};
   bool changed;
   do {
@@ -3049,6 +3314,11 @@ public:
       auto toAttrs = NamedAttrList(op->getAttrs());
       fromAttrs.erase("frisk.fragment_source");
       toAttrs.erase("frisk.fragment_source");
+      // block_repeat budgets the full tile; it is absent from the per-element
+      // address mapping. Actual thread shapes are checked below. In particular,
+      // broadcasting a loop-carried rowsum changes this budget, not its values.
+      fromAttrs.erase("block_repeat");
+      toAttrs.erase("block_repeat");
       if (fromAttrs == toAttrs) {
         Value replacement = from.getThreadTile();
         if (replacement.getType() == thread) {

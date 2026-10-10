@@ -37,26 +37,34 @@ static const char* BLOCK_LABELS[] = {"iv_blockX", "iv_blockY"};
 #define BUFFER_SEMANTIC_N 2
 #define BUFFER_SEMANTIC_K 3
 
+enum class BufferAxisReuse : int32_t {
+  Hold = 0,      // 表示该轴的数据必须完整持有，需要在for外提前分配好buffer
+  CanReuse = 1   // 表示此轴数据可复用。for中可反复覆写
+};
+
 class LowerInfoAnalysis ;
 /**
  * @brief LowerInfo
  * 其表示了 在block层面的一块buffer，在降低到线程层面后，线程如何从 block-level的buffer里 根据自己的tid 去RW 该buffer里的数据（即索引[x,y]）
 [x,y] 可通过不同级别的 loop_iv （block_repeat, warp_repeat, thread_width） 配合 wid laneid 算出来
  */
+ // TODO : 是否还需要增加字段，描述该buffer的数据如何copy进来？
+ // 如果buffer 在shm，如何从global 拷贝进来
+ // 如果buffer在 reg，怎么从shm或global 拷贝得到
 class LowerInfo {
   friend LowerInfoAnalysis;
 public:
   enum class BufPos : int {
-    In = 1,  // buffer作为op输入参数  0b01
-    Out = 2  // buffer作为op输出参数  0b10
+    In = 0b01,  // buffer作为op输入参数  0b01
+    Out = 0b10  // buffer作为op输出参数  0b10
   };
   Value buffer = nullptr;
   mlir::Operation* op = nullptr;
   int warp_threads;
-  BufPos pos = LowerInfo::BufPos::In;  // 入参 出参
+  BufPos pos = LowerInfo::BufPos::In;  // 作为输入buffer还是输出buffer，或二者兼有
   coordXY_t warpInstUnroll = {1,1};
-  // 规定 -1=未定义 0=规约 {1,2,3}=mnk {4,5,6}=mnk 对不同gemm
-  coordXY_t bufferCalculateSemantic = {-1,-1};  // buffer 2dShape的计算语义是什么（mnk的哪两个。考虑多gemm以及冲突，应该不止mnk。还有规约轴）
+  std::array<BufferAxisReuse, 2> reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};
+
   int ignoreDim = -1;  // 需要忽略的维度（只看有效维度）
   LowerInfo* convertFrom = nullptr;  // 表示该Layout使用前，需要添加 LayoutConvertOp，从 convertFrom Layout转换到到自己（即：reg->shm->reg）
 
@@ -78,7 +86,7 @@ public:
 -
 */
 
-  LinearLayout2DDesc base_layout;
+  LinearLayout2DDesc base_layout;  // fragment的Layout。除了基础frag，还包括了 warp内thread的排列要求
 
   std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
   std::array<int64_t, 2> block_layout_order = {0, 1};  // block内warp布局的行列优先顺序 上例中为[1,0] 行优先（列优先也可）
@@ -315,8 +323,10 @@ private:
 class LowerInfoAnalysis {
 public:
   static LowerInfoMap* run(mlir::Operation* kernelOp,
-                                        const std::string& hwKind = HW_KIND_DCU,
-                                        const std::string& version = HW_VERSION_DCU_BW1000);
+                          const std::string& hwKind = HW_KIND_DCU,
+                          const std::string& version = HW_VERSION_DCU_BW1000,
+                          bool isNaiveInfer = false  // 是否进行简单推定（即仅根据buffer尺寸和block线程数，简单计算）
+                        );
   struct GemmProblem {
     Value A;
     Value B;

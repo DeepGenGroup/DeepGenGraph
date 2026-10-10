@@ -7,6 +7,7 @@ namespace mlir::func { class FuncOp; }
 namespace mlir::frisk {
 
 std::unique_ptr<mlir::Pass> createConvertFriskToBasePass();
+std::unique_ptr<mlir::Pass> createNormalizeAttentionKLayoutPass();
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass();
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
@@ -15,6 +16,7 @@ std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
 void packSharedMemory(mlir::func::FuncOp kernel);
 
 #define GEN_PASS_DECL_CONVERTFRISKBASETOTHREADLEVELIR
+#define GEN_PASS_DECL_NORMALIZEATTENTIONKLAYOUT
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
 #define GEN_PASS_REGISTRATION

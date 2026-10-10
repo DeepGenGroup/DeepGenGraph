@@ -1,5 +1,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
@@ -18,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/MathExtras.h"
 #include <limits>
 #include <optional>
 
@@ -81,6 +83,8 @@ static bool collectIndexLoops(Value value,
 }
 
 static void reorderUnrolledOperations(func::FuncOp function);
+static void coalesceUnrolledSharedReads(func::FuncOp function);
+static void coalesceUnrolledSharedScalars(func::FuncOp function);
 
 class VectorOpLoopUnrollPass
     : public impl::IRDeepOptimizeBase<VectorOpLoopUnrollPass> {
@@ -138,6 +142,10 @@ class VectorOpLoopUnrollPass
       extraOperations += selectedCost;
       // Recollect after every rewrite: unrolling invalidates nested op handles.
     }
+    coalesceUnrolledSharedScalars(kernel);
+    // Scalar packets can grow through several native widths, up to 128 bits.
+    for (unsigned i = 0; i < 3; ++i)
+      coalesceUnrolledSharedReads(kernel);
     if (reorderAfterUnroll)
       reorderUnrolledOperations(kernel);
   }
@@ -314,6 +322,221 @@ static IssueNode classifyIssue(Operation *op) {
       isa<vector::FMAOp, vector::ReductionOp, vector::ContractionOp>(op))
     node.kind = IssueKind::Compute;
   return node;
+}
+
+// After fragment loops have been unrolled, paired K packets are visible in
+// one block. Merge only two proven adjacent reads, never overfetch. Moving the
+// second read to the first is legal only within a window without writes,
+// barriers, control flow or unknown effects. Register-only MMAs are allowed,
+// but their order and hazard padding are untouched.
+static void coalesceUnrolledSharedReads(func::FuncOp function) {
+  function.walk([&](Block *block) {
+    SmallVector<vector::LoadOp> pending;
+    SmallVector<Operation *> operations;
+    for (Operation &op : *block)
+      operations.push_back(&op);
+    for (Operation *op : operations) {
+      auto node = classifyIssue(op);
+      if (node.kind == IssueKind::Boundary || node.write) {
+        pending.clear();
+        continue;
+      }
+      auto load = dyn_cast<vector::LoadOp>(op);
+      if (!load)
+        continue;
+      auto memref = load.getMemRefType();
+      auto type = load.getVectorType();
+      if (memref.getMemorySpaceAsInt() != 3 || memref.getRank() != 1 ||
+          !memref.isLastDimUnitStride() || type.getRank() != 1 ||
+          type.isScalable() || !type.getElementType().isIntOrFloat() ||
+          !llvm::isPowerOf2_64(type.getNumElements() * type.getElementTypeBitWidth()) ||
+          type.getNumElements() * type.getElementTypeBitWidth() > 64)
+        continue;
+      bool merged = false;
+      for (auto [i, first] : llvm::enumerate(pending)) {
+        if (first.getBase() != load.getBase() || first.getVectorType() != type)
+          continue;
+        OpBuilder b(first);
+        SmallVector<Value> indices{load.getIndices()[0], first.getIndices()[0]};
+        auto difference = AffineMap::get(2, 0, b.getAffineDimExpr(0) - b.getAffineDimExpr(1));
+        affine::fullyComposeAffineMapAndOperands(&difference, &indices);
+        affine::canonicalizeMapAndOperands(&difference, &indices);
+        difference = simplifyAffineMap(difference);
+        if (auto constant = dyn_cast<AffineConstantExpr>(difference.getResult(0))) {
+          if (constant.getValue() != type.getNumElements())
+            continue;
+        } else {
+          // Modulo lane coordinates have intrinsic bounds, e.g.
+          // ((lane % 64) / 16 + 4) / 8 == 0. Algebraic simplification alone
+          // misses these. Prove the delta for ALL integer operands, without
+          // assuming a particular thread id or adding alignment assertions.
+          FlatLinearConstraints bounds(difference.getNumDims(), difference.getNumSymbols());
+          if (failed(bounds.composeMatchingMap(difference)))
+            continue;
+          auto below = bounds;
+          below.addBound(presburger::BoundType::UB, 0, type.getNumElements() - 1);
+          if (!below.isIntegerEmpty())
+            continue;
+          bounds.addBound(presburger::BoundType::LB, 0, type.getNumElements() + 1);
+          if (!bounds.isIntegerEmpty())
+            continue;
+        }
+        int64_t width = type.getNumElements();
+        auto wideType = VectorType::get({2 * width}, type.getElementType());
+        auto wide = b.create<vector::LoadOp>(first.getLoc(), wideType,
+                                            first.getBase(), first.getIndices());
+        auto low = b.create<vector::ExtractStridedSliceOp>(first.getLoc(), wide,
+            ArrayRef<int64_t>{0}, ArrayRef<int64_t>{width}, ArrayRef<int64_t>{1});
+        auto high = b.create<vector::ExtractStridedSliceOp>(load.getLoc(), wide,
+            ArrayRef<int64_t>{width}, ArrayRef<int64_t>{width}, ArrayRef<int64_t>{1});
+        first.replaceAllUsesWith(low.getResult());
+        load.replaceAllUsesWith(high.getResult());
+        first.erase();
+        load.erase();
+        pending.erase(pending.begin() + i);
+        merged = true;
+        break;
+      }
+      if (!merged) {
+        if (pending.size() == 64)
+          pending.erase(pending.begin());
+        pending.push_back(load);
+      }
+    }
+  });
+}
+
+// Prove a constant displacement for every value of the affine operands. A
+// constant-folded sample only proposes a displacement; the two emptiness
+// checks prove it, including the intrinsic bounds of mod/floordiv expressions.
+static std::optional<int64_t> sharedDisplacement(Value from, Value to) {
+  auto *ctx = from.getContext();
+  SmallVector<Value> operands{to, from};
+  auto map = AffineMap::get(2, 0,
+      getAffineDimExpr(0, ctx) - getAffineDimExpr(1, ctx));
+  affine::fullyComposeAffineMapAndOperands(&map, &operands);
+  affine::canonicalizeMapAndOperands(&map, &operands);
+  map = simplifyAffineMap(map);
+  if (auto constant = dyn_cast<AffineConstantExpr>(map.getResult(0)))
+    return constant.getValue();
+  SmallVector<Attribute> zero(operands.size(), IntegerAttr::get(IndexType::get(ctx), 0));
+  SmallVector<Attribute> folded;
+  if (failed(map.constantFold(zero, folded)))
+    return std::nullopt;
+  int64_t delta = cast<IntegerAttr>(folded.front()).getInt();
+  if (delta == std::numeric_limits<int64_t>::min() ||
+      delta == std::numeric_limits<int64_t>::max())
+    return std::nullopt;
+  FlatLinearConstraints bounds(map.getNumDims(), map.getNumSymbols());
+  if (failed(bounds.composeMatchingMap(map)))
+    return std::nullopt;
+  auto lower = bounds;
+  lower.addBound(presburger::BoundType::UB, 0, delta - 1);
+  bounds.addBound(presburger::BoundType::LB, 0, delta + 1);
+  if (!lower.isIntegerEmpty() || !bounds.isIntegerEmpty())
+    return std::nullopt;
+  return delta;
+}
+
+static bool isScalarSharedBuffer(Value value) {
+  auto type = dyn_cast<MemRefType>(value.getType());
+  return type && type.getRank() == 1 && type.isLastDimUnitStride() &&
+      type.getMemorySpaceAsInt() == 3 && type.getElementType().isIntOrFloat() &&
+      llvm::isPowerOf2_64(type.getElementTypeBitWidth()) &&
+      type.getElementTypeBitWidth() <= 64;
+}
+
+static void coalesceUnrolledSharedScalars(func::FuncOp function) {
+  function.walk([&](Block *block) {
+    SmallVector<Operation *> operations;
+    for (Operation &op : *block) operations.push_back(&op);
+    SmallVector<memref::LoadOp> reads;
+    SmallVector<memref::StoreOp> writes;
+    auto flushWrites = [&]() {
+      if (writes.size() < 2) { writes.clear(); return; }
+      // Sort only disjoint stores to the same buffer in an effect-free window.
+      // Place the packed write at the final original store, after all values
+      // are available. Duplicate/unknown addresses retain their original order.
+      SmallVector<std::pair<int64_t, memref::StoreOp>> sorted;
+      for (auto store : writes) {
+        auto delta = sharedDisplacement(writes.front().getIndices()[0], store.getIndices()[0]);
+        if (!delta) { writes.clear(); return; }
+        sorted.push_back({*delta, store});
+      }
+      llvm::sort(sorted, [](auto a, auto b) { return a.first < b.first; });
+      for (unsigned i = 1; i < sorted.size(); ++i)
+        if (sorted[i-1].first == sorted[i].first) { writes.clear(); return; }
+      OpBuilder b(writes.back());
+      unsigned limit = 128 / cast<MemRefType>(writes.front().getMemRef().getType()).getElementTypeBitWidth();
+      SmallVector<Operation *> erase;
+      for (unsigned i = 0; i < sorted.size();) {
+        unsigned width = 1;
+        while (width * 2 <= limit && i + width * 2 <= sorted.size() &&
+               uint64_t(sorted[i + width * 2 - 1].first) - uint64_t(sorted[i].first) == uint64_t(width * 2 - 1))
+          width *= 2;
+        if (width == 1) { ++i; continue; }
+        auto first = sorted[i].second;
+        auto type = VectorType::get({int64_t(width)}, first.getValue().getType());
+        Value packet = b.create<arith::ConstantOp>(first.getLoc(), type, b.getZeroAttr(type));
+        for (unsigned j = 0; j < width; ++j) {
+          packet = b.create<vector::InsertOp>(first.getLoc(), sorted[i+j].second.getValue(), packet,
+              ArrayRef<OpFoldResult>{b.getIndexAttr(j)});
+          erase.push_back(sorted[i+j].second);
+        }
+        b.create<vector::StoreOp>(first.getLoc(), packet, first.getMemRef(), first.getIndices());
+        i += width;
+      }
+      for (Operation *op : erase) op->erase();
+      writes.clear();
+    };
+    for (Operation *op : operations) {
+      auto node = classifyIssue(op);
+      auto load = dyn_cast<memref::LoadOp>(op);
+      auto store = dyn_cast<memref::StoreOp>(op);
+      if (store && isScalarSharedBuffer(store.getMemRef())) {
+        reads.clear();
+        if (!writes.empty() && (writes.front().getMemRef() != store.getMemRef() || writes.size() == 64))
+          flushWrites();
+        writes.push_back(store);
+        continue;
+      }
+      if (node.kind == IssueKind::Boundary || node.kind == IssueKind::Memory)
+        flushWrites();
+      if (node.kind == IssueKind::Boundary || node.write) {
+        reads.clear();
+        continue;
+      }
+      if (!load || !isScalarSharedBuffer(load.getMemRef())) continue;
+      bool merged = false;
+      for (auto [i, first] : llvm::enumerate(reads)) {
+        if (first.getMemRef() != load.getMemRef()) continue;
+        auto delta = sharedDisplacement(first.getIndices()[0], load.getIndices()[0]);
+        if (!delta || (*delta != 1 && *delta != -1)) continue;
+        OpBuilder b(first);
+        Value index = first.getIndices()[0];
+        if (*delta == -1)
+          index = b.create<affine::AffineApplyOp>(first.getLoc(),
+              AffineMap::get(1, 0, b.getAffineDimExpr(0) - 1), index);
+        auto type = VectorType::get({2}, first.getType());
+        Value packet = b.create<vector::LoadOp>(first.getLoc(), type, first.getMemRef(), ValueRange{index});
+        Value a = b.create<vector::ExtractOp>(first.getLoc(), packet,
+            ArrayRef<OpFoldResult>{b.getIndexAttr(*delta == 1 ? 0 : 1)});
+        Value c = b.create<vector::ExtractOp>(load.getLoc(), packet,
+            ArrayRef<OpFoldResult>{b.getIndexAttr(*delta == 1 ? 1 : 0)});
+        first.replaceAllUsesWith(a);
+        load.replaceAllUsesWith(c);
+        first.erase(); load.erase();
+        reads.erase(reads.begin() + i);
+        merged = true;
+        break;
+      }
+      if (!merged) {
+        if (reads.size() == 64) reads.erase(reads.begin());
+        reads.push_back(load);
+      }
+    }
+    flushWrites();
+  });
 }
 
 static unsigned issueBit(IssueKind kind) {

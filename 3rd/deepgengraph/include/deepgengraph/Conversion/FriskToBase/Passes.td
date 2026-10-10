@@ -14,13 +14,29 @@ def ConvertFriskToBase: Pass<"convert-frisk-to-base", "::mlir::ModuleOp"> {
   ];
 }
 
+def NormalizeAttentionKLayout: Pass<"normalize-attention-k-layout", "::mlir::ModuleOp"> {
+  let summary = "Use a contiguous BHSD K input for the Attn_p2 example";
+  let description = [{
+    Changes the external ABI from BHDS to BHSD, keeping a zero-copy transpose
+    view for the internal QK tile. Run immediately after convert-frisk-to-base.
+    This is deliberately specific to four-argument Attn_p2 self-attention:
+    Q is argument 0, O is argument 3, and K is the unique argument among 1/2
+    whose trailing shape is reversed relative to Q. For S == D, key-arg must
+    explicitly identify the BHDS argument. Callers must supply BHSD storage.
+  }];
+  let constructor = "mlir::frisk::createNormalizeAttentionKLayoutPass()";
+  let options = [Option<"keyArg", "key-arg", "int", "-1",
+      "BHDS K argument index (1 or 2); -1 detects the example's reversed shape">];
+  let dependentDialects = ["mlir::memref::MemRefDialect"];
+}
+
 def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir::func::FuncOp"> {
   let summary = "frisk base 转换到thread级别的实现";
   let description = [{}];
 
   let constructor = "mlir::frisk::createConvertFriskBaseToThreadLevelIRPass()";
   let options = [Option<"packSharedOperands", "pack-shared-operands", "bool", "true",
-      "Plan packed LDS layouts for owned GEMM B operands">];
+      "Plan packed LDS layouts for owned GEMM operands">];
 
   let dependentDialects = [
     "mlir::frisk::FriskDialect"

@@ -621,7 +621,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
-  
+
+  AddPass(frisk::createNormalizeAttentionKLayoutPass());
+  llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n"; llvm::outs().flush();src->dump();
 
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。

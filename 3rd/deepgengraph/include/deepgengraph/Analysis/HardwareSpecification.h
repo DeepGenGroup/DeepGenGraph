@@ -169,7 +169,7 @@ using mlir::frisk::operator*;
  */
 
 
-
+// 用于wmma的 linear fragment 表示（ABC）
 struct LinearLayout2DDesc {
     mlir::frisk::friskMs memspace;  // 位于shm还是reg
     mlir::frisk::FriskDType  elementType;  // 数据类型

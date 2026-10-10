@@ -1,5 +1,6 @@
 add_deepgengraph_library(FriskToBase
   FriskToBasePass.cpp
+  NormalizeAttentionKLayout.cpp
   # FriskBaseToTheadlevelIR.cpp
   # FriskBaseToTheadlevelIR_selfTry.cpp
   FriskBaseToTheadlevelIR_plan2.cpp

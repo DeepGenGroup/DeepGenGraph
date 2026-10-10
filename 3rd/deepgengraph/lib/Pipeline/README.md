@@ -178,3 +178,40 @@ pm.addNestedPass<func::FuncOp>(mlir::pipeline::createPipelineSchedulePass());
   defining op 已经不是 `frisk.alloc_buffer` 了）；
 * 循环必须带 `iter_args`；
 * 每次运行只重写 func 里第一个被标注的循环（想处理多个就多跑几次）。
+
+## 下游 shared 布局与寄存器直传
+
+`FriskToBase/SharedBufferAliases.h` 将完整、同类型的 owned shared allocation
+与其 `scf.if`、`arith.select`、SCF/affine 循环携带值和 copy 返回句柄组成别名组。
+这表示可能引用哪些存储，不表示槽位里的数据相同。分析不依赖 attention 名称、
+tile 尺寸或 pipeline 属性，也用于普通 GEMM 和控制流。
+
+* 布局规划检查整组的 producer/consumer，然后给所有槽位同一 packing 方案。
+* 物理 packing 同时改写所有 allocation、选槽/循环描述符及实际访存地址。
+  未标记或布局冲突的备选槽位、未知来源、逃逸、未支持的 view/访存会让整组回退，
+  不会出现写入布局和读取布局不一致的半转换。
+* 计算结果可按 producer 的寄存器布局直接写入选中的存储；GEMM 按自己的布局读取。
+* 提升到循环外的归约临时量可在各个代码块内分别直传。必须证明读者观察的是本块的
+  归约结果、没有中间写入且逐 lane 地址映射相同；跨块读写和存储逃逸保留原路径。
+* 桥接折叠仍比较地址布局和实际线程形状；`block_repeat` 仅描述全 tile 预算，
+  不会再仅因 rowsum 广播改变预算而插入一次 LDS 中转。
+
+从仓库根目录运行回归：
+
+```bash
+python 3rd/deepgengraph/test/check_shared_buffer_aliases.py
+python 3rd/deepgengraph/test/check_attention_pipeline.py \
+  3rd/deepgengraph/build/test/MyTest /data2/xsl/install/bin/llvm-as
+python 3rd/deepgengraph/test/check_attention_codegen.py
+```
+
+第一项包含 CPU 逐坐标读写、两种选槽结果、零次循环和保守回退验证。第二项验证
+完整导出的 LLVM IR、相邻迭代 K/V/P 写入到 MMA 读取的地址关系，以及 rowsum 的
+FP32 shuffle/add 递推。第三项保护非 pipeline 的原有优化。这些检查不替代 gfx936
+上的完整数值验证和计时。
+
+当前 `test_input.mlir`（BM=64、BN=32、128 threads）的修复前后静态对照：
+LDS 49,408 → 40,960 B，稳态 LLVM barrier 调用点 8 → 4，K 读取
+128 条标量 half load → 16 条 `<8 x half>` load，稳态 P/rowsum 的 FP32 LDS
+读写均消除。调度层的单个同步点不代表最终代码只有一个 barrier；copy lowering
+仍保留发布同步，不能按 pipeline 标记直接删除。
