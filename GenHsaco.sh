@@ -18,10 +18,10 @@ LL_FILE=${1:-finalLLVMText.ll}
 OPT_LEVEL=${2:-0}
 KERNEL_FILE=${3:-kernel.hsaco}
 
-ROCM_BC=/opt/dtk/amdgcn/bitcode
-GPU_ARCH=gfx936
+ROCM_BC=${ROCM_BC:-/opt/dtk/amdgcn/bitcode}
+GPU_ARCH=${GPU_ARCH:-gfx936}
 DWARF_VERSION=${DWARF_VERSION:-4}
-
+LLVM_DIR=${LLVM_DIR:-/workspace/deepgengraph/dtk/aillvm/bin}
 # ------------------------------------------------------------
 # 参数检查
 # ------------------------------------------------------------
@@ -58,10 +58,10 @@ echo "========================================"
 # 1. Link LLVM IR + ROCm device bitcode
 # ------------------------------------------------------------
 
-llvm-link "${LL_FILE}" \
+${LLVM_DIR}/llvm-link "${LL_FILE}" \
     "${ROCM_BC}/ocml.bc" \
     "${ROCM_BC}/ockl.bc" \
-    "${ROCM_BC}/oclc_isa_version_936.bc" \
+    "${ROCM_BC}/oclc_isa_version_${GPU_ARCH#gfx}.bc" \
     "${ROCM_BC}/oclc_abi_version_400.bc" \
     "${ROCM_BC}/oclc_wavefrontsize64_on.bc" \
     "${ROCM_BC}/oclc_correctly_rounded_sqrt_off.bc" \
@@ -77,7 +77,7 @@ llvm-link "${LL_FILE}" \
 # 不要使用 strip-debug / strip-named-metadata。
 # ------------------------------------------------------------
 
-opt \
+${LLVM_DIR}/opt \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
     -passes="${IR_OPT_PIPELINE}" \
@@ -92,13 +92,15 @@ opt \
 # 3. LLVM IR -> AMDGPU object
 # ------------------------------------------------------------
 
-llc \
+# Keep ABI v4 for the older HIP runtime, including the assembly sidecar.
+${LLVM_DIR}/llc \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
     "${LLVM_CODEGEN_OPT}" \
     -debugger-tune=gdb \
     -dwarf-version="${DWARF_VERSION}" \
     -filetype=obj \
+    -amdhsa-code-object-version=4 \
     opt.bc \
     -o kernel.o
 
@@ -106,7 +108,7 @@ llc \
 # 4. Object -> HSACO
 # ------------------------------------------------------------
 
-ld.lld \
+${LLVM_DIR}/ld.lld \
     -shared \
     --build-id=sha1 \
     kernel.o \
@@ -118,9 +120,10 @@ ld.lld \
 # llvm-dwarfdump --debug-line "${KERNEL_FILE}"
 # llvm-objdump -d --line-numbers "${KERNEL_FILE}" | less
 
-llc -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
+${LLVM_DIR}/llc -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
     "${LLVM_CODEGEN_OPT}" -debugger-tune=gdb \
     -dwarf-version="${DWARF_VERSION}" -filetype=asm \
+    -amdhsa-code-object-version=4 \
     opt.bc -o "${KERNEL_FILE}.amdgcn"
     
 echo
