@@ -38,7 +38,7 @@
 // 【LowerInfo 的三个用途】
 //   1. 决定线程 tile 形状：thread_widths * warp_repeat * warpInstUnroll * block_repeat。
 //   2. 决定元素归属：(threadIdx.x, 线程内下标) -> block 内逻辑坐标。
-//   3. 判断生产者/消费者布局是否相容；不相容时通过共享内存交换数据。
+//   3. 判断生产者/消费者布局是否相容；WMMA C 优先 wave shuffle，其余通过共享内存交换。
 // 以上乘法均为二维数组逐维相乘；单例轴、归约轴需要额外投影。
 //
 // 建议阅读顺序：两个 pass 的 runOnOperation -> getFullThreadTileType ->
@@ -64,6 +64,7 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "SharedBufferAliases.h"
+#include "WmmaLayoutConversion.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -208,18 +209,24 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     for (OpOperand *use : aliases.accesses) {
       Operation *user = use->getOwner();
       Value buffer = use->get();
-      if (auto gemm = dyn_cast<frisk::GemmOp>(user)) {
-        auto *info = layouts.getLowerInfo(buffer, gemm);
-        if (!info || !info->mmaInst || gemm.getA() == gemm.getB())
+      auto gemm = dyn_cast<frisk::GemmOp>(user);
+      // Elementwise producers (e.g. scaling Q before MMA) read the same
+      // operand fragments. Include them in the all-access packing proof;
+      // previously only direct GEMM users were considered, leaving Q plain.
+      bool elementwise = isa<frisk::AddOp, frisk::SubOp, frisk::MulOp,
+                             frisk::DivOp, frisk::Exp2Op, frisk::CastOp>(user);
+      if (gemm || elementwise) {
+        auto *info = layouts.getLowerInfo(buffer, user);
+        if (!info || !info->mmaInst || (gemm && gemm.getA() == gemm.getB()))
           return;
         // Infer the contiguous register axis from the operand layout. Packing
         // along columns interleaves A's row packets, avoiding the large row
         // stride between lanes. The same mechanism applies to ordinary GEMM
         // and fused producers; it does not identify P or attention by name.
         int64_t candidateAxis;
-        if (gemm.getB() == buffer && info->get_thread_widths()[1] == 1)
+        if (gemm && gemm.getB() == buffer && info->get_thread_widths()[1] == 1)
           candidateAxis = 0;
-        else if (gemm.getA() == buffer && info->get_thread_widths()[0] == 1)
+        else if ((!gemm || gemm.getA() == buffer) && info->get_thread_widths()[0] == 1)
           candidateAxis = 1;
         else
           return;
@@ -230,12 +237,31 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
         // than the fragments owned by adjacent lanes. The latter would make
         // an eight-element packet contain another lane's operands.
         int64_t stride = info->get_warpInst_widths()[candidateAxis];
+        int64_t pairingStride = stride;
+        if (candidateAxis == 0 && info->logicalTransform) {
+          // A permuted K schedule may read row groups 0,4,... instead of
+          // 0,16,... . Choose the physical packet pairing in logical rows.
+          // This is only a packing heuristic: every access is rewritten by
+          // the bijective packer, and adjacent reads are proven separately.
+          auto map = info->logicalTransform;
+          if (map.getNumDims() == 2 && map.getNumSymbols() == 0 &&
+              !map.getResult(0).isFunctionOfDim(1)) {
+            OpBuilder builder(kernel);
+            SmallVector<Attribute> first, next;
+            if (succeeded(map.constantFold(
+                    {builder.getIndexAttr(0), builder.getIndexAttr(0)}, first)) &&
+                succeeded(map.constantFold(
+                    {builder.getIndexAttr(stride), builder.getIndexAttr(0)}, next)))
+              pairingStride = cast<IntegerAttr>(next[0]).getInt() -
+                              cast<IntegerAttr>(first[0]).getInt();
+          }
+        }
         int64_t candidateStride =
             candidateAxis == 0 &&
             candidate * 2 * type.getElementTypeBitWidth() == 128 &&
-            stride >= candidate && stride % candidate == 0 &&
-            type.getDimSize(0) % (2 * stride) == 0 &&
-            info->get_block_layout()[0] == 1 ? stride : 0;
+            pairingStride >= candidate && pairingStride % candidate == 0 &&
+            type.getDimSize(0) % (2 * pairingStride) == 0 &&
+            info->get_block_layout()[0] == 1 ? pairingStride : 0;
         if (width && (width != candidate || pairStride != candidateStride || axis != candidateAxis))
           return;
         width = candidate;
@@ -396,6 +422,10 @@ static std::optional<LowerInfo> findLowerInfoForValue(Value value, Operation *co
   LowerInfo info(warpThreads.getInt());
   info.buffer = value;
   info.ignoreDim = ignored.getInt();
+  if (auto divisor = bridge->getAttrOfType<IntegerAttr>("warp_id_divisor"))
+    info.warpIdDivisor = divisor.getInt();
+  if (auto transform = bridge->getAttrOfType<AffineMapAttr>("logical_transform"))
+    info.logicalTransform = transform.getValue();
   auto read = [&](StringRef name, coordXY_t &field) {
     auto attr = bridge->getAttrOfType<DenseI64ArrayAttr>(name);
     if (!attr || attr.size() != 2)
@@ -486,6 +516,10 @@ static void setTileLayout(Operation *bridge, const LowerInfo &info,
                           OpBuilder &builder) {
   LowerInfo layout = info;
   bridge->setAttr("tile_layout", AffineMapAttr::get(layout.getAffineMap()));
+  if (info.warpIdDivisor != 1)
+    bridge->setAttr("warp_id_divisor", builder.getI64IntegerAttr(info.warpIdDivisor));
+  if (info.logicalTransform)
+    bridge->setAttr("logical_transform", AffineMapAttr::get(info.logicalTransform));
   bridge->setAttr("thread_widths", builder.getDenseI64ArrayAttr(info.get_thread_widths()));
   bridge->setAttr("warp_repeat", builder.getDenseI64ArrayAttr(info.get_warp_repeat()));
   bridge->setAttr("warp_inst_unroll", builder.getDenseI64ArrayAttr(info.warpInstUnroll));
@@ -577,6 +611,82 @@ static bool isSharedCopyStorage(Value value) {
   });
 }
 
+static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
+                                        VectorType tile, MLIRContext *ctx);
+static bool sameThreadTileCoordinates(AffineMap a, AffineMap b, VectorType tile,
+                                       int64_t threads);
+
+// B-permuted C registers already hold contiguous groups, but their K groups
+// need not have the order of a conventional A fragment. Consume those registers
+// in place by permuting BOTH reduction operands. B must be physical storage:
+// changing the coordinates of another computed register tile is not a load.
+// The exhaustive coordinate proof below also rejects incompatible wave tilings.
+static void adaptGemmReductionLayouts(func::FuncOp kernel, LowerInfoMap &infos) {
+  auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+  if (!threads)
+    return;
+  kernel.walk([&](frisk::GemmOp gemm) {
+    if (isTiled(gemm))
+      return;
+    Operation *producer = gemm.getA().getDefiningOp();
+    if (!producer || !producer->hasTrait<frisk::ComputedTile>())
+      return;
+    auto *source = infos.getLowerInfo(gemm.getA(), producer);
+    auto *a = infos.getLowerInfo(gemm.getA(), gemm);
+    auto *b = infos.getLowerInfo(gemm.getB(), gemm);
+    if (!source || !source->logicalTransform || !a || !b ||
+        a->logicalTransform || !a->mmaInst || !b->mmaInst)
+      return;
+    auto aType = dyn_cast<MemRefType>(gemm.getA().getType());
+    auto bType = dyn_cast<MemRefType>(gemm.getB().getType());
+    if (!aType || !bType || aType.getRank() != 2 || bType.getRank() != 2 ||
+        !aType.hasStaticShape() || !bType.hasStaticShape() ||
+        aType.getDimSize(1) != bType.getDimSize(0) ||
+        bType.getMemorySpaceAsInt() != int(friskMs::Shared))
+      return;
+    Value root = getViewBuffer(gemm.getB());
+    auto argument = dyn_cast<BlockArgument>(root);
+    bool external = argument && isa<func::FuncOp>(argument.getOwner()->getParentOp());
+    if (!external && !isSharedCopyStorage(root))
+      return;
+
+    int64_t g = source->get_warp_layout()[1];
+    if (g <= 1 || g > 64 || !llvm::isPowerOf2_64(g))
+      return;
+    int64_t span = g * g * g;
+    if (aType.getDimSize(1) % span != 0)
+      return;
+    auto *ctx = kernel.getContext();
+    auto row = getAffineDimExpr(0, ctx), col = getAffineDimExpr(1, ctx);
+    // For g=4, hardware K=16*q+4*lane+reg becomes 16*lane+4*q+reg
+    // inside each 64-element group. This is a bijection of the full K axis.
+    auto permute = [&](AffineExpr k) {
+      return k.floorDiv(span) * span + (k.floorDiv(g) % g) * g * g +
+             (k.floorDiv(g * g) % g) * g + k % g;
+    };
+    LowerInfo target = *a;
+    target.logicalTransform = AffineMap::get(2, 0, {row, permute(col)}, ctx);
+    auto fromType = getFullThreadTileType(gemm.getA(), *source);
+    auto toType = getFullThreadTileType(gemm.getA(), target);
+    if (failed(fromType) || failed(toType) || *fromType != *toType ||
+        !sameThreadTileCoordinates(
+            effectiveThreadTileMap(*source, aType, *fromType, ctx),
+            effectiveThreadTileMap(target, aType, *toType, ctx),
+            *toType, threads.getInt()))
+      return;
+    // Preserve a possible independent N permutation of B/C (GEMM chains).
+    auto bMap = b->logicalTransform;
+    if (bMap && (bMap.getNumDims() != 2 || bMap.getNumSymbols() != 0 ||
+                 bMap.getNumResults() != 2 || bMap.getResult(0) != row ||
+                 bMap.getResult(1).isFunctionOfDim(0)))
+      return;
+    target.convertFrom = nullptr;
+    *a = target;
+    b->logicalTransform = AffineMap::get(
+        2, 0, {permute(row), bMap ? bMap.getResult(1) : col}, ctx);
+  });
+}
+
 static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
   struct Conversion { Operation *user; Value input; LowerInfo from; LowerInfo to; };
   SmallVector<Conversion, 8> conversions;
@@ -590,6 +700,10 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
       conversions.push_back({info.op, info.buffer, *info.convertFrom, info});
   }
   for (auto &conversion : conversions) {
+    // A preceding conversion may already serve this use.
+    if (conversion.user->getNumOperands() &&
+        !llvm::is_contained(conversion.user->getOperands(), conversion.input))
+      continue;
     if (isSharedCopyStorage(conversion.input)) {
       // The previous user's access distribution does not constrain this
       // memory read. Keep the consumer layout without staging through scratch.
@@ -612,8 +726,167 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
     auto op = builder.create<frisk::ConvertLayoutOp>(conversion.user->getLoc(),
         conversion.input.getType(), conversion.input, builder.getStringAttr("lowerinfo.convert"));
     infoMap.updateLowerInfoForLayoutConvertOp(op, conversion.to);
+    annotateWmmaLayoutConversion(op, conversion.from, conversion.to);
     convertLayoutInfo.insert({op, {conversion.from, conversion.to}});
+    // Share a dominating conversion with every consumer requesting the same
+    // logical coordinates. Otherwise later GEMMs can materialize the entire
+    // producer tile inside each fragment load. This is a value/dominance and
+    // layout proof, independent of attention, tile dimensions, or MMA names.
+    auto kernel = op->getParentOfType<func::FuncOp>();
+    auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+    auto block = dyn_cast<ShapedType>(conversion.input.getType());
+    auto targetType = getFullThreadTileType(conversion.input, conversion.to);
+    Operation *producer = conversion.input.getDefiningOp();
+    bool immutableTile = isa<VectorType>(conversion.input.getType()) ||
+        (producer && producer->hasTrait<frisk::ComputedTile>());
+    if (immutableTile && threads && block && succeeded(targetType)) {
+      DominanceInfo dominance(kernel);
+      auto targetMap = effectiveThreadTileMap(conversion.to, block, *targetType,
+                                              op.getContext());
+      SmallVector<Operation *> users(conversion.input.getUsers());
+      for (Operation *user : users) {
+        if (user == op || !dominance.properlyDominates(op, user))
+          continue;
+        auto *info = infoMap.getLowerInfo(conversion.input, user);
+        if (!info)
+          continue;
+        auto type = getFullThreadTileType(conversion.input, *info);
+        if (succeeded(type) && *type == *targetType &&
+            sameThreadTileCoordinates(targetMap,
+                effectiveThreadTileMap(*info, block, *type, op.getContext()),
+                *type, threads.getInt()))
+          user->replaceUsesOfWith(conversion.input, op->getResult(0));
+      }
+    }
     conversion.user->replaceUsesOfWith(conversion.input, op->getResult(0));
+  }
+}
+
+// Inference propagates the contiguous public C layout to all consumers. Keep
+// the instruction accumulator in its hardware layout and make the boundary
+// explicit, once per GEMM result (including branched uses).
+static void insertWmmaCLayoutOps(func::FuncOp kernel, LowerInfoMap &infoMap) {
+  kernel.walk([&](frisk::GemmOp gemm) {
+    if (!gemm->hasAttr("frisk.contiguous_c"))
+      return;
+    auto *info = infoMap.getLowerInfo(gemm.getC(), gemm);
+    if (!info || !info->mmaInst || info->logicalTransform)
+      return;
+    LowerInfo target = *info, source = target;
+    source.base_layout = info->mmaInst->desc_c;
+    LowerInfo contiguous = source;
+    if (!makeWmmaCContiguous(contiguous) ||
+        target.get_thread_widths() != contiguous.get_thread_widths() ||
+        target.get_warp_repeat() != contiguous.get_warp_repeat())
+      return;
+    OpBuilder b(gemm);
+    b.setInsertionPointAfter(gemm);
+    auto convert = b.create<frisk::ConvertLayoutOp>(gemm.getLoc(),
+        gemm.getC().getType(), gemm.getC(), b.getStringAttr("wmmaC"));
+    annotateWmmaLayoutConversion(convert, source, target);
+    infoMap.updateLowerInfoForLayoutConvertOp(convert, target);
+    // A scalar block records layouts on its enclosing frisk.block, whereas
+    // the actual SSA use is a nested affine.load. Preserve these analysis
+    // keys too; updateLowerInfoForLayoutConvertOp handles only direct users.
+    SmallVector<LowerInfo, 4> nestedUses;
+    for (auto &entry : infoMap)
+      if (entry.second.buffer == gemm.getC() && entry.second.op != gemm &&
+          entry.second.op != convert) {
+        LowerInfo use = entry.second;
+        use.buffer = convert->getResult(0);
+        nestedUses.push_back(use);
+      }
+    for (const LowerInfo &use : nestedUses)
+      infoMap.addLowerInfo(use.op, use);
+    convertLayoutInfo.insert({convert, {source, target}});
+    gemm.getC().replaceAllUsesExcept(convert->getResult(0), convert);
+    // Reacquire after inserting map entries, which can invalidate pointers.
+    *infoMap.getLowerInfo(gemm.getC(), gemm) = source;
+  });
+}
+
+// A layout permutation commutes with an elementwise recurrence. Keep the
+// carrier in the producer's layout and convert only the loop result. Unlike
+// seeding MMA with the outer accumulator, this preserves the FP addition
+// grouping (including the zero-initialized inner matrix reduction).
+// Match the legacy whole-vector writeback explicitly; do not move physical
+// memory, partial updates, extra carrier reads, or nonuniform initial values.
+static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) {
+  SmallVector<frisk::ConvertLayoutOp> candidates;
+  kernel.walk([&](frisk::ConvertLayoutOp op) { candidates.push_back(op); });
+  for (auto convert : candidates) {
+    auto loop = dyn_cast<affine::AffineForOp>(convert->getParentOp());
+    auto found = convertLayoutInfo.find(convert);
+    if (!loop || found == convertLayoutInfo.end() ||
+        !getWmmaShufflePlan(convert) || !convert->hasOneUse())
+      continue;
+    auto add = dyn_cast<frisk::AddOp>(*convert->getUsers().begin());
+    if (!add || add->getBlock() != loop.getBody() || !add->hasOneUse())
+      continue;
+    Value carrier = add.getLhs() == convert->getResult(0)
+                        ? add.getRhs() : add.getLhs();
+    auto arg = dyn_cast<BlockArgument>(carrier);
+    if (!arg || arg.getOwner() != loop.getBody() || arg.getArgNumber() == 0 ||
+        !isa<VectorType>(arg.getType()))
+      continue;
+    unsigned index = arg.getArgNumber() - 1;
+    auto initial = loop.getInits()[index].getDefiningOp<arith::ConstantOp>();
+    auto splat = initial ? dyn_cast<DenseElementsAttr>(initial.getValue())
+                         : DenseElementsAttr{};
+    auto copy = dyn_cast<frisk::CopyOp>(*add->getUsers().begin());
+    Operation *yield = loop.getBody()->getTerminator();
+    if (!splat || !splat.isSplat() || !copy || copy.getSrc() != add.getResult() ||
+        copy.getDst() != carrier || copy->getBlock() != loop.getBody() ||
+        !copy->use_empty() || yield->getOperand(index) != carrier)
+      continue;
+    auto map = copy.getOffsetMap();
+    if (map.getNumInputs() || map.getNumResults() != 1 ||
+        map.getResult(0) != getAffineConstantExpr(2, kernel.getContext()))
+      continue;
+    if (llvm::any_of(carrier.getUses(), [&](OpOperand &use) {
+          return use.getOwner() != add && use.getOwner() != copy &&
+                 use.getOwner() != yield;
+        }))
+      continue;
+    // No carrier may be yielded in a second result with a different layout.
+    if (llvm::count(yield->getOperands(), carrier) != 1)
+      continue;
+    auto [source, target] = found->second;
+    auto type = cast<ShapedType>(carrier.getType());
+    if (type.getShape() != cast<ShapedType>(convert.getMemref().getType()).getShape())
+      continue;
+    OpBuilder b(loop);
+    b.setInsertionPointAfter(loop);
+    Value result = loop.getResult(index);
+    auto boundary = b.create<frisk::ConvertLayoutOp>(loop.getLoc(),
+        result.getType(), result, b.getStringAttr("loop_result"));
+    infos.updateLowerInfoForLayoutConvertOp(boundary, target);
+    annotateWmmaLayoutConversion(boundary, source, target);
+    convertLayoutInfo.insert({boundary, {source, target}});
+    result.replaceAllUsesExcept(boundary->getResult(0), boundary);
+    // Initial splats are permutation-invariant; other uses retain their layout.
+    for (auto &entry : infos) {
+      auto &info = entry.second;
+      if (info.buffer != carrier && info.buffer != add.getResult() &&
+          !(info.buffer == result && info.op == loop) &&
+          !(info.buffer == loop.getInits()[index] && info.op == loop))
+        continue;
+      Value buffer = info.buffer;
+      Operation *owner = info.op;
+      auto pos = info.pos;
+      info = source;
+      info.buffer = buffer;
+      info.op = owner;
+      info.pos = pos;
+      info.convertFrom = nullptr;
+    }
+    LowerInfo input = source;
+    input.buffer = convert.getMemref();
+    input.pos = LowerInfo::BufPos::In;
+    infos.addLowerInfo(add, input);
+    convert->getResult(0).replaceAllUsesWith(convert.getMemref());
+    convertLayoutInfo.erase(convert);
+    convert.erase();
   }
 }
 
@@ -1581,30 +1854,46 @@ struct MaskTileElement {
   frisk::MaskOp::Adaptor adaptor;
   Block *body;
   frisk::MaskYieldOp yieldOp;
+  Value addend;
+  bool maskOnLhs = false;
+  Value clear;
   // 计算 mask 中一个线程拥有的元素；IRMapping 仅用于本次 region 克隆。
   Value emit(ArrayRef<Value> tileIvs, Value initVector) {
-    auto accessIndices = buildMappedAccessIndices(
-        rewriter, loc, *resultInfo, tidx, tileIvs, resultTy.getRank());
-    SmallVector<Value, 2> regionArgs;
-    regionArgs.reserve(accessIndices.size());
-    for (auto [start, accessIndex] :
-         llvm::zip(adaptor.getStarts(), accessIndices)) {
-      regionArgs.push_back(addIndexValues(rewriter, loc, start, accessIndex));
-    }
-
-    IRMapping mapper;
-    for (auto [oldArg, newArg] : llvm::zip(body->getArguments(), regionArgs)) {
-      mapper.map(oldArg, newArg);
-    }
-    for (auto &childOp : body->without_terminator()) {
-      auto *cloned = rewriter.clone(childOp, mapper);
-      for (auto [oldResult, newResult] :
-           llvm::zip(childOp.getResults(), cloned->getResults())) {
-        mapper.map(oldResult, newResult);
+    Value scalar = clear;
+    if (!scalar) {
+      auto accessIndices = buildMappedAccessIndices(
+          rewriter, loc, *resultInfo, tidx, tileIvs, resultTy.getRank());
+      SmallVector<Value, 2> regionArgs;
+      regionArgs.reserve(accessIndices.size());
+      for (auto [start, accessIndex] :
+           llvm::zip(adaptor.getStarts(), accessIndices)) {
+        regionArgs.push_back(addIndexValues(rewriter, loc, start, accessIndex));
       }
-    }
 
-    Value scalar = mapper.lookupOrDefault(yieldOp->getOperand(0));
+      IRMapping mapper;
+      for (auto [oldArg, newArg] : llvm::zip(body->getArguments(), regionArgs)) {
+        mapper.map(oldArg, newArg);
+      }
+      for (auto &childOp : body->without_terminator()) {
+        auto *cloned = rewriter.clone(childOp, mapper);
+        for (auto [oldResult, newResult] :
+             llvm::zip(childOp.getResults(), cloned->getResults())) {
+          mapper.map(oldResult, newResult);
+        }
+      }
+
+      scalar = mapper.lookupOrDefault(yieldOp->getOperand(0));
+    }
+    if (addend) {
+      SmallVector<OpFoldResult> positions(tileIvs.begin(), tileIvs.end());
+      Value other = rewriter.create<vector::ExtractOp>(loc, addend, positions);
+      // Keep the original operand order and the addition even for a clear
+      // mask: x + +0 is not an identity for -0 under strict FP semantics.
+      auto add = rewriter.create<arith::AddFOp>(
+          loc, maskOnLhs ? scalar : other, maskOnLhs ? other : scalar);
+      add->setAttr("frisk.fused_mask_add", rewriter.getUnitAttr());
+      scalar = add;
+    }
     return scalar;
   }
 };
@@ -1614,8 +1903,10 @@ struct MaskTileElement {
 // 校验 mask 的静态结果形状、LowerInfo、region 参数数和单标量 yield，
 // 创建线程 vector，并通过 MaskTileElement 遍历填充，最终桥接回原结果类型。
 class MaskOpTiling : public OpConversionPattern<frisk::MaskOp> {
+  bool uniformMasks, fuseMaskAdd;
 public:
-  using OpConversionPattern::OpConversionPattern;
+  MaskOpTiling(MLIRContext *context, bool uniformMasks, bool fuseMaskAdd)
+      : OpConversionPattern(context), uniformMasks(uniformMasks), fuseMaskAdd(fuseMaskAdd) {}
 
   LogicalResult
   matchAndRewrite(frisk::MaskOp op, OpAdaptor adaptor,
@@ -1636,6 +1927,34 @@ public:
     if (!resultInfo)
       return rewriter.notifyMatchFailure(op, "LowerInfo not found for mask");
 
+    // Fuse only an adjacent, sole consumer. This keeps memory reads at their
+    // original program point and leaves escaping/multi-use masks untouched.
+    // Coordinates are derived from the CONSUMER layout, not a fixed MMA shape.
+    frisk::AddOp add;
+    Value other;
+    if (fuseMaskAdd && op.getResult().hasOneUse() &&
+        isa<FloatType>(resultTy.getElementType()) &&
+        llvm::all_of(op.getRegion().front().without_terminator(),
+                     [](Operation &child) { return isMemoryEffectFree(&child); })) {
+      auto candidate = dyn_cast<frisk::AddOp>(*op.getResult().getUsers().begin());
+      if (candidate && op->getNextNode() == candidate.getOperation() && !isTiled(candidate) &&
+          candidate.getResult().getType() == resultTy) {
+        Value operand = candidate.getLhs() == op.getResult() ? candidate.getRhs() : candidate.getLhs();
+        auto info = findLowerInfoForValue(candidate.getResult(), candidate);
+        auto shape = dyn_cast<ShapedType>(operand.getType());
+        bool compatible = shape && shape.hasStaticShape() &&
+            shape.getShape() == resultTy.getShape() &&
+            shape.getElementType() == resultTy.getElementType() &&
+            (isa<MemRefType>(shape) ||
+             (isa<VectorType>(shape) && !cast<VectorType>(shape).isScalable()));
+        if (compatible && info &&
+            succeeded(getFullThreadTileType(candidate.getResult(), *info))) {
+          add = candidate;
+          other = operand;
+          resultInfo = info;
+        }
+      }
+    }
     auto tileType = getFullThreadTileType(op.getResult(), *resultInfo);
     if (failed(tileType))
       return rewriter.notifyMatchFailure(op, "invalid mask thread tile");
@@ -1660,14 +1979,87 @@ public:
 
     auto tidx = findThreadIdxOp(op, rewriter);
 
+    Value addend;
+    if (add) {
+      auto operand = materializeElementwiseOperand(other, rewriter.getRemappedValue(other),
+          *resultInfo, vecTy, rewriter, loc);
+      if (failed(operand))
+        return rewriter.notifyMatchFailure(op, "incompatible fused mask operand");
+      addend = *operand;
+    }
+
     MaskTileElement element{rewriter, loc,     &*resultInfo, tidx,
-                            resultTy, adaptor, body,       yieldOp};
-    resultVector =
+                            resultTy, adaptor, body,       yieldOp,
+                            addend, add && add.getLhs() == op.getResult(), {}};
+    auto emitMask = [&]() -> Value {
+      return
         FragmentTileLoopNest(rewriter, loc, vectorShape, {"tiled", "mask_fragment"},
                            getFragmentShape(vectorShape, *resultInfo))
             .emit(resultVector, element);
-    rewriter.replaceOp(op, fromThreadTile(resultVector, op.getResult().getType(),
-                                          *resultInfo, rewriter, loc));
+    };
+    Value complete, unmasked;
+    if (uniformMasks && resultTy.getRank() == 2 && resultTy.hasStaticShape() &&
+        resultTy.getDimSize(0) > 0 && resultTy.getDimSize(1) > 0) {
+      // Recognize select(row + nonnegative diagonal <= col, masked, clear).
+      // All other regions retain the general per-element implementation.
+      auto select = yieldOp->getOperand(0).getDefiningOp<arith::SelectOp>();
+      auto compare = select ? select.getCondition().getDefiningOp<arith::CmpIOp>() : arith::CmpIOp{};
+      auto add = compare ? compare.getLhs().getDefiningOp<arith::AddIOp>() : arith::AddIOp{};
+      auto offset = add ? add.getRhs().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
+      auto clear = select ? select.getFalseValue().getDefiningOp<arith::ConstantOp>() : arith::ConstantOp{};
+      bool pure = llvm::all_of(body->without_terminator(), [](Operation &inst) {
+        return isa<arith::ConstantOp, arith::AddIOp, arith::CmpIOp, arith::SelectOp>(inst);
+      });
+      if (pure && compare && compare.getPredicate() == arith::CmpIPredicate::ule &&
+          add && add.getLhs() == body->getArgument(0) && offset && offset.value() >= 0 &&
+          compare.getRhs() == body->getArgument(1) && clear) {
+        auto plus = [&](Value start, int64_t delta) -> Value {
+          return rewriter.create<arith::AddIOp>(loc, start, createIndexConstant(rewriter, loc, delta));
+        };
+        auto uge = [&](Value a, Value b) -> Value {
+          return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, a, b);
+        };
+        Value row = adaptor.getStarts()[0], col = adaptor.getStarts()[1];
+        Value rowEnd = plus(row, resultTy.getDimSize(0) - 1);
+        Value colEnd = plus(col, resultTy.getDimSize(1) - 1);
+        Value first = plus(row, offset.value()), last = plus(rowEnd, offset.value());
+        // Unsigned comparisons also guard index wraparound. A wrapping span
+        // must always use the original elementwise predicate.
+        Value safeRow = rewriter.create<arith::AndIOp>(loc, uge(rowEnd, row), uge(last, rowEnd));
+        Value safe = rewriter.create<arith::AndIOp>(loc, safeRow, uge(colEnd, col));
+        Value past = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, first, colEnd);
+        complete = rewriter.create<arith::AndIOp>(loc, safe, past);
+        unmasked = rewriter.create<arith::ConstantOp>(loc, clear.getValue());
+      }
+    }
+    if (complete) {
+      auto choose = rewriter.create<scf::IfOp>(loc, TypeRange{vecTy}, complete, true);
+      choose->setAttr("frisk.uniform_mask", rewriter.getUnitAttr());
+      rewriter.setInsertionPointToStart(&choose.getThenRegion().front());
+      Value vector;
+      if (add) {
+        element.clear = unmasked;
+        vector = emitMask();
+        element.clear = {};
+      } else {
+        vector = rewriter.create<vector::BroadcastOp>(loc, vecTy, unmasked);
+      }
+      rewriter.create<scf::YieldOp>(loc, vector);
+      rewriter.setInsertionPointToStart(&choose.getElseRegion().front());
+      rewriter.create<scf::YieldOp>(loc, emitMask());
+      rewriter.setInsertionPointAfter(choose);
+      resultVector = choose.getResult(0);
+    } else {
+      resultVector = emitMask();
+    }
+    Value block = fromThreadTile(resultVector, op.getResult().getType(),
+                                *resultInfo, rewriter, loc);
+    if (add) {
+      rewriter.replaceOp(add, block);
+      rewriter.eraseOp(op);
+    } else {
+      rewriter.replaceOp(op, block);
+    }
     return success();
   }
 };
@@ -1771,18 +2163,20 @@ struct ReduceTileElement {
 // Compose the same tid/thread-index decomposition as buildMappedAccessIndices.
 // Project singleton axes before comparing: their layout metadata may differ
 // even though every lane holds exactly the same surviving coordinates.
-static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
-                                        VectorType tile, MLIRContext *ctx) {
+static AffineMap effectiveThreadTileMap(AffineMap layout, coordXY_t widths,
+    coordXY_t repeats, coordXY_t unrolls, coordXY_t regOrder,
+    coordXY_t repeatOrder, int64_t ignoreDim, ShapedType block, VectorType tile) {
+  MLIRContext *ctx = layout.getContext();
   auto zero = getAffineConstantExpr(0, ctx);
   SmallVector<AffineExpr> br, iu, wr, reg;
   for (unsigned axis = 0; axis < 2; ++axis) {
-    int dim = tile.getRank() == 1 ? (axis == (info.ignoreDim == 0 ? 1 : 0) ? 0 : -1)
+    int dim = tile.getRank() == 1 ? (axis == (ignoreDim == 0 ? 1 : 0) ? 0 : -1)
                                   : int(axis);
     AffineExpr iv = dim < 0 || tile.getDimSize(dim) == 1
         ? zero : getAffineDimExpr(dim + 1, ctx);
-    int64_t width = info.get_thread_widths()[axis];
-    int64_t repeat = info.get_warp_repeat()[axis];
-    int64_t unroll = info.warpInstUnroll[axis];
+    int64_t width = widths[axis];
+    int64_t repeat = repeats[axis];
+    int64_t unroll = unrolls[axis];
     br.push_back(iv.floorDiv(width * repeat * unroll));
     iu.push_back(iv.floorDiv(width * repeat) % unroll);
     wr.push_back((iv % (width * repeat)).floorDiv(width));
@@ -1793,18 +2187,51 @@ static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
   };
   SmallVector<AffineExpr> operands{
       getAffineDimExpr(0, ctx), br[0], br[1], iu[0], iu[1],
-      flatten(wr, info.base_layout.warp_repeat_order, info.get_warp_repeat()),
-      flatten(reg, info.base_layout.thread_creg_order, info.get_thread_widths())};
-  auto map = info.getAffineMap().replaceDimsAndSymbols(
+      flatten(wr, repeatOrder, repeats),
+      flatten(reg, regOrder, widths)};
+  auto map = layout.replaceDimsAndSymbols(
       operands, {}, tile.getRank() + 1, 0);
   SmallVector<AffineExpr> results;
   for (int dim = 0; dim < tile.getRank(); ++dim) {
-    int axis = tile.getRank() == 1 && info.ignoreDim == 0 ? 1 : dim;
+    int axis = tile.getRank() == 1 && ignoreDim == 0 ? 1 : dim;
     results.push_back(block.getDimSize(dim) == 1 ||
-                              (tile.getRank() == 2 && info.ignoreDim == axis)
+                              (tile.getRank() == 2 && ignoreDim == axis)
                           ? zero : map.getResult(axis));
   }
   return simplifyAffineMap(AffineMap::get(tile.getRank() + 1, 0, results, ctx));
+}
+
+static AffineMap effectiveThreadTileMap(LowerInfo info, ShapedType block,
+                                        VectorType tile, MLIRContext *) {
+  return effectiveThreadTileMap(info.getAffineMap(), info.get_thread_widths(),
+      info.get_warp_repeat(), info.warpInstUnroll, info.base_layout.thread_creg_order,
+      info.base_layout.warp_repeat_order, info.ignoreDim, block, tile);
+}
+
+// Affine simplification does not in general know the finite lane/register
+// domains (e.g. x mod 4 == x for a register index in [0,4)). Exhaustive folding
+// on these small static domains is an exact proof, not sampling addresses.
+static bool sameThreadTileCoordinates(AffineMap a, AffineMap b, VectorType tile,
+                                       int64_t threads) {
+  if (a == b) return true;
+  if (threads <= 0 || tile.getNumElements() > 262144 / threads) return false;
+  MLIRContext *ctx = a.getContext();
+  for (int64_t tid = 0; tid < threads; ++tid) {
+    for (int64_t reg = 0; reg < tile.getNumElements(); ++reg) {
+      SmallVector<Attribute> operands(tile.getRank() + 1);
+      operands[0] = IntegerAttr::get(IndexType::get(ctx), tid);
+      int64_t remaining = reg;
+      for (int dim = tile.getRank() - 1; dim >= 0; --dim) {
+        operands[dim + 1] = IntegerAttr::get(IndexType::get(ctx),
+                                           remaining % tile.getDimSize(dim));
+        remaining /= tile.getDimSize(dim);
+      }
+      SmallVector<Attribute> x, y;
+      if (failed(a.constantFold(operands, x)) || failed(b.constantFold(operands, y)) || x != y)
+        return false;
+    }
+  }
+  return true;
 }
 
 // A hoisted reduction temporary may serve independent producer/reader pairs
@@ -2027,6 +2454,42 @@ static LogicalResult lowerGlobalToSharedCopy(
   }
   auto vectorType = VectorType::get({width}, srcType.getElementType());
   Value tid = findThreadIdxOp(op, rewriter);
+  Value transferTid = tid;
+  if (columnPacking && !columnMajorSource && shape.size() == 2 &&
+      total % threadsAttr.getInt() == 0 && shape[1] % perThread == 0) {
+    // With multiple transfer threads per row, contiguous thread IDs would
+    // write different column packs of the same row to identical banks.
+    // Assign one row to each lane of a 128-byte LDS write phase instead.
+    // This is a bijection of transfer ownership; source packets and the
+    // consumer's physical layout are unchanged.
+    int64_t rowThreads = shape[1] / perThread;
+    int64_t phase = 1024 / (packing.getInt() * dstType.getElementTypeBitWidth());
+    int64_t group = rowThreads * phase;
+    if (rowThreads > 1 && phase > 0 && threadsAttr.getInt() % group == 0) {
+      auto t = rewriter.getAffineDimExpr(0);
+      transferTid = composeAccessIndex(rewriter, loc,
+          t.floorDiv(group) * group + (t % phase) * rowThreads +
+              (t.floorDiv(phase) % rowThreads), tid);
+    }
+  }
+  auto pair = owned ? dyn_cast_or_null<IntegerAttr>(
+      aliases.commonAttribute("frisk.shared_pair_stride")) : IntegerAttr{};
+  if (pack > 1 && pair && !columnMajorSource &&
+      (shape[1] * pack) % perThread == 0) {
+    // Pairing places one row-group bit in the low/high 64-bit half of a
+    // 128-bit LDS packet. Bring that bit into each 16-lane write phase.
+    // Swap two ownership bits, not the physical layout: every logical value
+    // is still copied once, with the original per-thread GLOBAL packets.
+    int64_t low = shape[1] * pack / perThread;
+    int64_t high = low * (pair.getInt() / pack);
+    if (llvm::isPowerOf2_64(low) && llvm::isPowerOf2_64(high) &&
+        low < high && high < 32 && threadsAttr.getInt() % (2 * high) == 0) {
+      auto t = rewriter.getAffineDimExpr(0);
+      transferTid = composeAccessIndex(rewriter, loc,
+          t + ((t.floorDiv(low) % 2) - (t.floorDiv(high) % 2)) *
+                  (high - low), tid);
+    }
+  }
   auto chunk = rewriter.create<affine::AffineForOp>(loc, 0, perThread / width, 1);
   markTiled(chunk, rewriter);
   chunk->setAttr("frisk.fragment_loop", rewriter.getUnitAttr());
@@ -2045,7 +2508,7 @@ static LogicalResult lowerGlobalToSharedCopy(
                  rewriter.getAffineDimExpr(0) % minorLanes) * width
           : rewriter.getAffineDimExpr(0) * perThread +
                 rewriter.getAffineDimExpr(1) * width,
-      ValueRange{tid, chunk.getInductionVar()});
+      ValueRange{transferTid, chunk.getInductionVar()});
   scf::IfOp active;
   if (total % perThread != 0 || total / perThread < threadsAttr.getInt()) {
     Value limit = createIndexConstant(rewriter, loc, total);
@@ -2393,7 +2856,8 @@ struct LayoutReadBackElement {
   }
 };
 
-// 落实显式布局转换：按 fromInfo 取源寄存器 -> 按源坐标写 shared scratch ->
+// 落实显式布局转换：已验证的 WMMA C 计划使用寄存器 shuffle；其余转换
+// 按 fromInfo 取源寄存器 -> 按源坐标写 shared scratch ->
 // 同步 -> 按 toInfo 坐标读成新寄存器 vector -> 再同步 -> FromThreadTile。
 // 第一次同步由 writeBackBlockTile 生成，第二次保护 scratch 不被过早复用。
 // 转换改变的是线程/lane 对元素的持有关系，矩阵的逻辑值和 block 类型保持不变。
@@ -2412,9 +2876,78 @@ public:
     auto toTy = getFullThreadTileType(op->getResult(0), toInfo);
     if (failed(fromTy) || failed(toTy))
       return failure();
-    auto blockTy = cast<MemRefType>(op.getMemref().getType());
+    auto blockTy = cast<ShapedType>(op.getMemref().getType());
     auto loc = op.getLoc();
     Value source = toThreadTile(adaptor.getMemref(), *fromTy, fromInfo, rewriter, loc);
+    // Layout descriptors are not canonical: changing the order of a singleton
+    // register axis, for example, changes no element's owner or register index.
+    // Compare the composed logical-coordinate maps, not descriptor fields or
+    // vector shapes alone. This also covers computed tiles typed as shared
+    // memrefs: their FromThreadTile bridge is still a register SSA value.
+    if (*fromTy == *toTy && sameThreadTileCoordinates(
+        effectiveThreadTileMap(fromInfo, blockTy, *fromTy, op.getContext()),
+        effectiveThreadTileMap(toInfo, blockTy, *toTy, op.getContext()),
+        *fromTy, op->getParentOfType<func::FuncOp>()
+                     ->getAttrOfType<IntegerAttr>("thread_num").getInt())) {
+      rewriter.replaceOp(op, fromThreadTile(source, op->getResult(0).getType(),
+                                            toInfo, rewriter, loc));
+      return success();
+    }
+    auto plan = op->getAttrOfType<DictionaryAttr>("frisk.shuffle_plan");
+    // Do not trust a stale or hand-written plan without checking the complete
+    // source/target mapping. Unsupported conversions keep the shared path.
+    if (plan && plan == getWmmaShufflePlan(op) && *fromTy == *toTy) {
+      auto masks = plan.getAs<DenseI64ArrayAttr>("xor_masks");
+      int64_t registers = plan.getAs<IntegerAttr>("registers").getInt();
+      Value tid = findThreadIdxOp(op, rewriter);
+      Value lane = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), tid);
+      Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+      Value width = rewriter.create<arith::ConstantIntOp>(loc,
+          plan.getAs<IntegerAttr>("width").getInt(), 32);
+      SmallVector<Value> offsets, bits;
+      for (int64_t mask : masks.asArrayRef()) {
+        Value offset = rewriter.create<arith::ConstantIntOp>(loc, mask, 32);
+        offsets.push_back(offset);
+        Value bit = rewriter.create<arith::AndIOp>(loc, lane, offset);
+        bits.push_back(rewriter.create<arith::CmpIOp>(loc,
+            arith::CmpIPredicate::ne, bit, zero));
+      }
+      Value result = mapFragments(rewriter, loc, *toTy, {1, registers},
+          [&](ArrayRef<Value> origins, VectorType fragmentType) -> Value {
+        Value fragment = transferFragment(rewriter, loc, source, fragmentType, origins);
+        SmallVector<Value> values;
+        for (int64_t reg = 0; reg < registers; ++reg)
+          values.push_back(rewriter.create<vector::ExtractOp>(loc, fragment,
+              ArrayRef<int64_t>{0, reg}));
+        for (auto [stage, offset] : llvm::enumerate(offsets)) {
+          int64_t registerBit = int64_t(1) << stage;
+          for (int64_t lo = 0; lo < registers; ++lo) {
+            if (lo & registerBit)
+              continue;
+            int64_t hi = lo | registerBit;
+            Value send = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                        values[lo], values[hi]);
+            auto shuffle = rewriter.create<gpu::ShuffleOp>(loc, send, offset,
+                                                           width, gpu::ShuffleMode::XOR);
+            shuffle->setAttr("frisk.layout_role", rewriter.getStringAttr("wmmaC"));
+            Value received = shuffle.getResult(0);
+            Value low = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                       received, values[lo]);
+            Value high = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                        values[hi], received);
+            values[lo] = low;
+            values[hi] = high;
+          }
+        }
+        for (int64_t reg = 0; reg < registers; ++reg)
+          fragment = rewriter.create<vector::InsertOp>(loc, values[reg], fragment,
+                                                       ArrayRef<int64_t>{0, reg});
+        return fragment;
+      });
+      rewriter.replaceOp(op, fromThreadTile(result, op->getResult(0).getType(),
+                                            toInfo, rewriter, loc));
+      return success();
+    }
     auto scratchTy = MemRefType::get(blockTy.getShape(), blockTy.getElementType(),
         AffineMap{}, rewriter.getI64IntegerAttr(int(friskMs::Shared)));
     auto scratch = rewriter.create<memref::AllocOp>(loc, scratchTy);
@@ -2747,7 +3280,7 @@ static void foldThreadTilePairs(Operation *root) {
       "tile_layout", "thread_widths", "thread_creg_order", "warp_repeat",
       "warp_repeat_order", "warp_layout", "warp_layout_order",
       "warp_inst_unroll", "block_layout", "block_layout_order",
-      "warp_threads", "ignore_dim"};
+      "warp_threads", "ignore_dim", "logical_transform", "warp_id_divisor"};
   bool changed;
   do {
     changed = false;
@@ -2864,6 +3397,20 @@ public:
     // 分析从 MMA 硬件描述确定 GEMM 布局，再向前/向后传播给其他操作，
     // 最后解决同一值不同使用点的布局冲突，必要时设置 convertFrom。
     LowerInfoMap emptyInfo;
+    StringRef method = wmmaLayout;
+    if (method != "auto" && method != "shared" && method != "shuffle" &&
+        method != "b-permute") {
+      kernel.emitError("wmma-layout must be auto, shared, shuffle, or b-permute");
+      signalPassFailure();
+      return;
+    }
+    bool useShuffle = method == "auto" ? bool(wmmaShuffle) : true;
+    // An explicit method overrides any earlier planner request. Legacy auto
+    // preserves wmma-shuffle=false and separately planned contiguous outputs.
+    if (method != "auto")
+      selectGemmAInputLayoutMethod(kernel, method);
+    if (useShuffle)
+      planWmmaLayoutConversions(kernel, /*contiguousOutputs=*/true);
     s_info = needsLayoutAnalysis ? LowerInfoAnalysis::run(kernel) : &emptyInfo;
     if (!s_info) {
       signalPassFailure();
@@ -2875,7 +3422,16 @@ public:
       kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, info.get_block_layout()));
       kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, info.get_block_layout_order()));
     }
+    adaptGemmReductionLayouts(kernel, *s_info);
     insertConvertLayoutOps(*s_info);
+    insertWmmaCLayoutOps(kernel, *s_info);
+    sinkLoopLayoutConversions(kernel, *s_info);
+    if (useShuffle)
+      planWmmaLayoutConversions(kernel, /*contiguousOutputs=*/false);
+    else
+      kernel.walk([](frisk::ConvertLayoutOp op) {
+        op->removeAttr("frisk.shuffle_plan");
+      });
     if (packSharedOperands)
       planSharedOperandPacking(kernel, *s_info);
     llvm::outs() << "----- after insertConvertLayoutOps:\n" << kernel << "\n"; llvm::outs().flush();
@@ -2888,7 +3444,8 @@ public:
       return !isBlockTileOperation(op) || isTiled(op);
     });
     RewritePatternSet patterns(context);
-    patterns.add<GemmOpTiling, MaskOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
+    patterns.add<MaskOpTiling>(context, uniformMasks, fuseMaskAdd);
+    patterns.add<GemmOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
         ZeroOpTiling, AllocBufferOpTiling, CopyOpTiling, CopyToRegOpTiling,
         ReduceOpTiling, BlockOpTiling, ConvertLayoutOpTiling>(context);
     patterns.add<FriskBinaryOpTiling<frisk::AddOp, arith::AddFOp>,
@@ -3319,7 +3876,27 @@ public:
       // broadcasting a loop-carried rowsum changes this budget, not its values.
       fromAttrs.erase("block_repeat");
       toAttrs.erase("block_repeat");
-      if (fromAttrs == toAttrs) {
+      // A shared producer can feed several consumers without an explicit
+      // ConvertLayoutOp at each use. Prove bridge equivalence from actual
+      // coordinates too; comparing metadata alone would rematerialize the
+      // entire block in LDS for every additional consumer.
+      bool sameCoordinates = false;
+      auto vectorType = dyn_cast<VectorType>(thread);
+      ThreadTileAccess sourceAccess;
+      auto kernel = op->getParentOfType<func::FuncOp>();
+      auto threads = kernel ? kernel->getAttrOfType<IntegerAttr>("thread_num")
+                            : IntegerAttr{};
+      if (vectorType && from.getThreadTile().getType() == thread && threads &&
+          access.map && succeeded(sourceAccess.read(from, block, thread)) &&
+          sourceAccess.map) {
+        auto effective = [&](const ThreadTileAccess &a) {
+          return effectiveThreadTileMap(a.map, a.widths, a.repeats, a.unroll,
+              a.regOrder, a.repeatOrder, a.ignoreDim, block, vectorType);
+        };
+        sameCoordinates = sameThreadTileCoordinates(effective(sourceAccess),
+            effective(access), vectorType, threads.getInt());
+      }
+      if (fromAttrs == toAttrs || sameCoordinates) {
         Value replacement = from.getThreadTile();
         if (replacement.getType() == thread) {
           rewriter.replaceOp(op, replacement);

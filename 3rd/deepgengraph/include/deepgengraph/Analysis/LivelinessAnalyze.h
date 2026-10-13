@@ -68,6 +68,12 @@ ShmReusePlan planShmReuse(const ShmLivenessResult &liveness);
 
 void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os);
 
+/// Protect shared-buffer reads from the next iteration's writes. Run after
+/// physical accesses are exposed and before pooling. Unlike storage handoffs,
+/// this also applies when a loop repeatedly uses a single allocation. Inserts
+/// barriers only in provably block-uniform loops; returns the number inserted.
+unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel);
+
 /// Recompute analysis, pack into memref<Nxi8, 3>, replace allocations with typed
 /// memref.view and insert gpu.barrier at storage handoffs as needed.
 /// Requires a function executed collectively by a thread block (thread_num attr).

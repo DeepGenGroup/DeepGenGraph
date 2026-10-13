@@ -1,4 +1,5 @@
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/WmmaLayout.h"
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -98,6 +99,8 @@ static bool isSameLinearLayout(const LinearLayout2DDesc &lhs,
 static bool isSameLayout(const LowerInfo &lhs, const LowerInfo &rhs) {
   // 是否需要考虑 ignoreDim的情况？
   if(lhs.warp_threads == rhs.warp_threads &&
+        lhs.logicalTransform == rhs.logicalTransform &&
+        lhs.warpIdDivisor == rhs.warpIdDivisor &&
         isSameLinearLayout(lhs.base_layout, rhs.base_layout) &&
         lhs.block_layout == rhs.block_layout &&
         lhs.block_layout_order == rhs.block_layout_order &&
@@ -254,7 +257,9 @@ void LowerInfoMap::conflictResolve() {
       return isLowerInfoConflict(selectedInfo, candidate);
     });
     bool isBaselayoutMismatch = llvm::any_of(bufferInfoCandidates, [&](const LowerInfo &candidate) {
-      return !isSameLinearLayout(selectedInfo.base_layout, candidate.base_layout);
+      return selectedInfo.logicalTransform != candidate.logicalTransform ||
+             selectedInfo.warpIdDivisor != candidate.warpIdDivisor ||
+             !isSameLinearLayout(selectedInfo.base_layout, candidate.base_layout);
     });
     
     if(isBaselayoutMismatch){
@@ -604,8 +609,23 @@ MMAInstInfo* LowerInfoAnalysis::selectGemmInst(LowerInfoAnalysis::GemmProblem pr
 bool LowerInfoAnalysis::getDirectGemmBlockLayout(
   uint64_t thread_num,
   std::array<int64_t, 2> &block_layout,
-  HWSpecification* hw
+  HWSpecification* hw,
+  Operation *anchor
 ) {
+  // Explicit wave placement must agree for both QK and its dependent PV.
+  auto kernel = anchor->getParentOfType<func::FuncOp>();
+  if (kernel && kernel->hasAttr("frisk.block_warps")) {
+    auto layout = kernel->getAttrOfType<DenseI64ArrayAttr>("frisk.block_warps");
+    if (hw->getKind() != HW_KIND_DCU || !layout || layout.size() != 2 ||
+        layout[0] <= 0 || layout[1] <= 0 ||
+        thread_num % hw->getWarpsize() != 0 ||
+        layout[0] * layout[1] != thread_num / hw->getWarpsize()) {
+      anchor->emitError("frisk.block_warps must match the DCU block wave count");
+      return false;
+    }
+    block_layout = {layout[0], layout[1]};
+    return true;
+  }
   if(hw->getKind() == HW_KIND_NVIDIA){
     int warpgroup_num = thread_num / 128;
     auto [y, x] = squareFactor(warpgroup_num);
@@ -658,6 +678,16 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
     info.block_repeat = {problem.bm / info.get_block_widths()[0],
                          problem.bn / info.get_block_widths()[1]};  // 这里的 block_repeat 可能不准。因为 block_layout 可根据conflict动态调整
   }
+  // Infer consumers from the public, contiguous C layout. Thread tiling
+  // materializes the raw instruction -> public layout boundary explicitly.
+  auto *gemm = problem.C.getDefiningOp();
+  if (gemm->hasAttr("frisk.b_permute") && makeWmmaBPermutedC(info))
+    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("b-permute"));
+  else if (gemm->hasAttr("frisk.contiguous_c")) {
+    makeWmmaCContiguous(info);
+    if (gemm->hasAttr("frisk.b_permute"))
+      gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("shuffle-fallback"));
+  }
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
   info.pos = LowerInfo::BufPos::Out;
@@ -674,7 +704,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   info.buffer = problem.C;
   info.thread_bound = thread_num;
   std::array<int64_t, 2> block_layout;
-  if (!getDirectGemmBlockLayout(thread_num, block_layout, hw)) {
+  if (!getDirectGemmBlockLayout(thread_num, block_layout, hw, problem.C.getDefiningOp())) {
     block_layout = source_info.get_block_layout();
   }
   info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // C矩阵必须完整持有全部结果，不得覆盖
@@ -689,6 +719,14 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   }
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
                        problem.bn / info.get_block_widths()[1]};
+  auto *gemm = problem.C.getDefiningOp();
+  if (gemm->hasAttr("frisk.b_permute") && makeWmmaBPermutedC(info))
+    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("b-permute"));
+  else if (gemm->hasAttr("frisk.contiguous_c")) {
+    makeWmmaCContiguous(info);
+    if (gemm->hasAttr("frisk.b_permute"))
+      gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("shuffle-fallback"));
+  }
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
   info.pos = LowerInfo::BufPos::Out;
@@ -697,6 +735,8 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
 
 void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                              MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
+  info.logicalTransform = {};
+  info.warpIdDivisor = info.block_layout_order[0] == 1 ? info.block_layout[1] : 1;
   info.buffer = problem.A;
   info.mmaInst = mma;
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
@@ -723,6 +763,8 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
 
 void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &problem,
                                            MMAInstInfo *mma, AffineExpr zero) {
+  info.logicalTransform = {};
+  info.warpIdDivisor = info.block_layout_order[0] == 1 ? info.block_layout[1] : 1;
   info.buffer = problem.A;
   auto blockLayout = info.get_block_layout();
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
@@ -736,6 +778,7 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
 
 void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &problem,
                                        MMAInstInfo *mma, AffineExpr zero, HWSpecification* hw) {
+  info.warpIdDivisor = info.block_layout_order[0] == 0 ? info.block_layout[0] : 1;
   info.buffer = problem.B;
   info.mmaInst = mma;
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // B buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
@@ -1024,7 +1067,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
   }
 
   std::array<int64_t, 2> block_layout;  // block 内的warp 分布[x,y]
-  if (!getDirectGemmBlockLayout(thread_num, block_layout, hw)) {
+  if (!getDirectGemmBlockLayout(thread_num, block_layout, hw, op)) {
     return false;
   }
   if(!checkGemmProblem(problem, hw)){

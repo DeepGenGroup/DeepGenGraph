@@ -19,18 +19,34 @@ int main(int argc, char **argv) {
     llvm::outs() << text;
     return 0;
   }
-  if (argc != 2) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text] <input.ll or ->\n";
+  bool approximate = argc == 3 && llvm::StringRef(argv[1]) == "--approx-register-math";
+  bool fuseMMAC = argc == 3 && llvm::StringRef(argv[1]) == "--fuse-mmac-accumulator";
+  bool lifetimes = argc == 3 && llvm::StringRef(argv[1]) == "--optimize-register-lifetimes";
+  bool nativeExp2 = argc == 3 && llvm::StringRef(argv[1]) == "--native-exp2";
+  bool reciprocal = argc == 3 && llvm::StringRef(argv[1]) == "--reciprocal";
+  bool prefetch = argc == 3 && llvm::StringRef(argv[1]) == "--prefetch-global-packets";
+  if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch) {
+    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
   llvm::SMDiagnostic diagnostic;
-  auto module = llvm::parseIRFile(argv[1], diagnostic, context);
+  auto module = llvm::parseIRFile(argv[argc == 3 ? 2 : 1], diagnostic, context);
   if (!module) {
     diagnostic.print(argv[0], llvm::errs());
     return 1;
   }
   mlir::frisk::prepareRegisterMMAForLLVM(*module);
+  if (approximate)
+    mlir::frisk::optimizeApproximateRegisterMath(*module);
+  else if (fuseMMAC)
+    mlir::frisk::fuseMMACAccumulators(*module);
+  else if (lifetimes)
+    mlir::frisk::optimizeRegisterLifetimes(*module);
+  else if (nativeExp2 || reciprocal)
+    mlir::frisk::optimizeRegisterMath(*module, nativeExp2, reciprocal);
+  else if (prefetch)
+    mlir::frisk::prefetchGlobalPackets(*module);
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(*module);
   if (llvm::verifyModule(*module, &llvm::errs()))
     return 1;

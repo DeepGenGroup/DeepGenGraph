@@ -65,6 +65,9 @@ declare void @other_location(ptr) memory(other: read)
     assert legalize(unmatched) == unmatched, 'unmatched effects must not be deleted'
     fallback = '''define ptr @gep(ptr captures(none) %p, i64 %i) {
   %n = add nuw nsw i64 %i, 1
+  %flags = or disjoint i64 %i, 16
+  %small = trunc i64 %i to i32
+  %wide = zext nneg i32 %small to i64
   %a = getelementptr inbounds nuw i8, ptr %p, i64 %n
   %b = getelementptr nusw i8, ptr %a, i64 1
   %c = getelementptr nuw i8, ptr %b, i64 1
@@ -74,7 +77,7 @@ declare void @other_location(ptr) memory(other: read)
     expected = fallback.replace(' captures(none)', '').replace(
         'getelementptr inbounds nuw ', 'getelementptr inbounds ').replace(
         'getelementptr nusw ', 'getelementptr ').replace(
-        'getelementptr nuw ', 'getelementptr ')
+        'getelementptr nuw ', 'getelementptr ').replace('or disjoint ', 'or ').replace('zext nneg ', 'zext ')
     assert legalize(fallback) == expected
     assert legalize(source + unmatched + fallback) == converted + unmatched + expected
     print('PASS unmatched effects preserved and existing GEP/captures fallback unchanged')

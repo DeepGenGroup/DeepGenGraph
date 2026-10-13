@@ -19,17 +19,22 @@ def f32(value):
     return struct.unpack('f', struct.pack('f', value))[0]
 
 
-def check(text):
+def check(text, body=None):
     defs = dict(re.findall(r'^  (%[\w.]+) = (.*?)(?:, !dbg !\d+)?$', text, re.M))
     tid = next(n for n, e in defs.items() if '@llvm.amdgcn.workitem.id.x()' in e)
-    mma = [n for n, e in defs.items() if 'asm sideeffect "' in e and 'v_mmac_' in e]
-    exp = [n for n, e in defs.items() if '@__ocml_exp2_f32(' in e]
-    phis = [n for n, e in defs.items() if e.startswith('phi [2 x <1 x float>]')]
+    active = defs if body is None else dict(re.findall(
+        r'^  (%[\w.]+) = (.*?)(?:, !dbg !\d+)?$', body, re.M))
+    mma = [n for n, e in active.items() if 'asm sideeffect "' in e and 'v_mmac_' in e]
+    exp = [n for n, e in active.items() if '@__ocml_exp2_f32(' in e]
+    phis = [n for n, e in active.items() if e.startswith('phi [2 x <1 x float>]')]
     assert len(mma) == 64 and len(exp) == 16 and len(phis) == 1
     phi = phis[0]
-    recurrence = re.findall(r'\[ (%[\w.]+), %\w+ \]', defs[phi])
+    recurrence = [value for value, label in re.findall(
+        r'\[ (%[\w.]+), %(\w+) \]', defs[phi])
+        if body is None or re.search(r'^' + label + ':', body, re.M)]
     assert len(recurrence) == 1
     coordinates = []
+    traces = []
     for thread in range(128):
         context = {tid: thread}
         for i, name in enumerate(mma[:32]):
@@ -37,7 +42,8 @@ def check(text):
             row = tile // 2 * 32 + thread // 64 * 16 + thread % 16
             col = tile % 2 * 16 + thread % 64 // 16
             context[name] = [(row, col + 4 * r) for r in range(4)]
-        trace = Trace(defs, context)
+        traces.append(Trace(defs, context, traces))
+    for trace in traces:
         coords = {name: trace.value(name) for name in exp}
         assert all(value[0] == 'exp2' for value in coords.values())
         coordinates.append({name: value[1] for name, value in coords.items()})
@@ -93,11 +99,14 @@ def check(text):
             local = []
             for thread in range(128):
                 row = thread // 64 * 16 + thread % 16
-                column = thread % 64 // 16
                 sums = []
                 for r in (row, row + 32):
                     acc = 0.0
-                    for c in range(column, 32, 4):
+                    # Coordinate tracing above follows the emitted WMMA C
+                    # shuffles, so this also supports contiguous C fragments.
+                    columns = sorted(c for rr, c in coordinates[thread].values() if rr == r)
+                    assert len(columns) == 8 and len(set(columns)) == 8
+                    for c in columns:
                         acc = f32(acc + values[r][c])
                     sums.append(acc)
                 local.append(sums)

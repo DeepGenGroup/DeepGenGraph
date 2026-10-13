@@ -21,7 +21,7 @@ def main():
     source = Path(__file__).with_name("test_input.mlir").resolve()
     with tempfile.TemporaryDirectory(prefix="attention-pipeline-") as directory:
         output = Path(directory) / "attention.ll"
-        proc = subprocess.run([str(tool), str(source), str(output)],
+        proc = subprocess.run([str(tool), str(source), "1", str(output)],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=120)
         assert proc.returncode == 0, proc.stdout[-8000:]
@@ -43,10 +43,24 @@ def main():
         assert scheduled.count("frisk.copy_to_reg") == 2
         thread = module_after(proc.stdout,
                               "---------- after createConvertFriskBaseToThreadLevelIRPass ---------")
-        assert not re.search(r"frisk\.(?:copy_to_reg|to_threadTile|from_threadTile|gemm)\b", thread)
+        assert not re.search(r"frisk\.(?:copy_to_reg|gemm)\b", thread)
+        finalized = module_after(proc.stdout,
+                                  "---------- after createFinalizeThreadTilingPass ---------")
+        assert not re.search(r"frisk\.(?:copy_to_reg|to_threadTile|from_threadTile|gemm)\b", finalized)
         llvm = output.read_text()
         assert "define amdgpu_kernel void @Attn_p2" in llvm
         assert "v_mmac_f32_16x16x16_f16" in llvm
+        from check_pipeline_storage import check, loop_text
+        check(llvm)
+        _, steady = loop_text(llvm)
+        from check_rowsum_forward import check as check_rowsum
+        check_rowsum(llvm, steady)
+        assert not re.search(r"\b(?:load|store) float.*ptr addrspace\(3\)", steady), \
+            "P and rowsum must retain register forwarding in the pipeline"
+        assert re.search(r"load <8 x half>, ptr addrspace\(3\)", steady)
+        assert not re.search(r"load half, ptr addrspace\(3\)", steady), \
+            "selected K/V/P slots must retain physical packing"
+        assert steady.count("call void @llvm.amdgcn.s.barrier") <= 4
         if len(sys.argv) > 2:
             subprocess.run([sys.argv[2], str(output), "-o",
                             str(Path(directory) / "attention.bc")], check=True)

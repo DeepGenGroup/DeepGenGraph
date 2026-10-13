@@ -35,8 +35,8 @@ def flatten(coords, shape):
     return result
 
 
-def cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem):
-    src_type, dst_type = memref(src_shape), memref(dst_shape, elem)
+def cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem, src_elem):
+    src_type, dst_type = memref(src_shape, src_elem), memref(dst_shape, elem)
     lines = ["func.func @main() -> i32 {",
              f"%src = memref.alloc() : {src_type}",
              f"%dst = memref.alloc() : {dst_type}",
@@ -50,7 +50,7 @@ def cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem):
     terms = " + ".join(f"d{i} * {math.prod(src_shape[i+1:])}" for i in range(len(src_shape)))
     lines += [f"%linear = affine.apply affine_map<({dims}) -> ({terms})>({ivs})",
               "%int = arith.index_cast %linear : index to i32",
-              "%value = arith.sitofp %int : i32 to f32",
+              f"%value = arith.sitofp %int : i32 to {src_elem}",
               f"memref.store %value, %src[{ivs}] : {src_type}"]
     lines += ["}"] * len(src_shape)
     lines.append(f"%all = affine.for %tid = 0 to {threads} iter_args(%prior = %ok) -> i1 {{")
@@ -92,20 +92,28 @@ def cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem):
 def main():
     binary = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else TEST_DIR.parent / "build/test/ThreadTilingTest"
     llvm = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/data2/xsl/install/bin")
-    pipeline = "builtin.module(func.func(convert-friskbase-to-thread,finalize-thread-tiling))"
+    pipeline = "builtin.module(func.func(convert-friskbase-to-thread,finalize-thread-tiling,lower-frisk-fragments))"
     # No GEMM or LowerInfo anchor: every copy must lower from thread_num alone.
     cases = [
-        ("rank4_K_stride", (1, 2, 16, 64), (8, 16), (8, 16), (0, 1, 3, 16), (0, 0), 8, "f32", False),
-        ("nested_source_destination", (2, 12, 20), (8, 12), (4, 8), (1, 3, 4), (2, 2), 8, "f32", True),
-        ("partial_thread_interval", (8, 16), (3, 5), (3, 5), (2, 3), (0, 0), 8, "f32", False),
-        ("idle_threads_and_cast", (8, 16), (1, 3), (1, 3), (2, 3), (0, 0), 32, "f16", False),
-        ("interval_spans_rows", (8, 16), (4, 6), (4, 6), (2, 3), (0, 0), 2, "f32", False),
+        ("rank4_K_stride", (1, 2, 16, 64), (8, 16), (8, 16), (0, 1, 3, 16), (0, 0), 8, "f32", False, "f32"),
+        ("nested_source_destination", (2, 12, 20), (8, 12), (4, 8), (1, 3, 4), (2, 2), 8, "f32", True, "f32"),
+        ("partial_thread_interval", (8, 16), (3, 5), (3, 5), (2, 3), (0, 0), 8, "f32", False, "f32"),
+        ("idle_threads_and_cast", (8, 16), (1, 3), (1, 3), (2, 3), (0, 0), 32, "f16", False, "f32"),
+        ("interval_spans_rows", (8, 16), (4, 6), (4, 6), (2, 3), (0, 0), 2, "f32", False, "f32"),
+        # Deliberately offset by one element: wide loads must not introduce an
+        # unproven vector-width alignment requirement on the external pointer.
+        ("wide_f16", (4, 160), (2, 128), (2, 128), (1, 1), (0, 0), 4, "f16", False, "f16"),
+        ("wide_f32", (4, 48), (2, 32), (2, 32), (1, 1), (0, 0), 2, "f32", False, "f32"),
+        ("wide_f64", (4, 24), (2, 16), (2, 16), (1, 1), (0, 0), 2, "f64", False, "f64"),
+        ("odd_f16", (4, 32), (2, 15), (2, 15), (1, 1), (0, 0), 2, "f16", False, "f16"),
+        ("vector_cast", (4, 48), (2, 32), (2, 32), (1, 1), (0, 0), 2, "f16", False, "f32"),
+        ("rank1_offset", (64,), (24,), (24,), (3,), (0,), 2, "f32", False, "f32"),
     ]
     with tempfile.TemporaryDirectory(prefix="affine-copy-") as temp:
         work = Path(temp)
-        for name, src_shape, dst_shape, tile, origin, dst_origin, threads, elem, nested in cases:
-            src_type, dst_type = memref(src_shape, space=1), memref(dst_shape, elem, 3)
-            view_type = memref(tile, space=1)
+        for name, src_shape, dst_shape, tile, origin, dst_origin, threads, elem, nested, src_elem in cases:
+            src_type, dst_type = memref(src_shape, src_elem, 1), memref(dst_shape, elem, 3)
+            view_type = memref(tile, src_elem, 1)
             if nested:
                 views = f"""
   %outer = frisk.buffer_view %src[1, symbol(%offset), 3], ranges = [8, 12]
@@ -122,7 +130,8 @@ def main():
             else:
                 # Exercise copy's own offset map, including dims and symbols.
                 expressions = list(map(str, origin))
-                expressions[-2] = f"s0 + {origin[-2] - 2}"
+                axis = max(0, len(origin) - 2)
+                expressions[axis] = f"s0 + {origin[axis] - 2}"
                 amap = "affine_map<()[s0] -> (" + ", ".join(expressions) + ")>"
                 views = f"frisk.copy %src to %dst at (%offset) [{amap}] : {src_type}, {dst_type}"
             source = f"""module {{
@@ -142,6 +151,14 @@ func.func @copy(%src: {src_type}, %dst: {dst_type}, %offset: index, %tid: index)
             assert "vector.store" in ir and ir.count("frisk.sync_threads_in_block") == 1, ir
             assert re.search(r"^    frisk.sync_threads_in_block", ir, re.M), "barrier must be outside the per-thread guard"
             assert "gpu.thread_id" in ir and "tile_layout" not in ir, ir
+            widths = [int(w) for w in re.findall(
+                r"vector.load[^\n]*vector<(\d+)x" + src_elem + r">", ir)]
+            assert widths and all(w * int(src_elem[1:]) <= 128 for w in widths), ir
+            assert all(w & (w - 1) == 0 for w in widths), widths
+            if name.startswith("wide_"):
+                assert max(widths) * int(src_elem[1:]) == 128, widths
+            if name == "odd_f16":
+                assert widths == [8, 4, 2, 1], widths
             # Check exact coverage and per-thread contiguous intervals in the
             # lowered code by executing one thread at a time. Other elements
             # must remain untouched; this also detects replicated writes.
@@ -149,7 +166,7 @@ func.func @copy(%src: {src_type}, %dst: {dst_type}, %offset: index, %tid: index)
                          r"\1 = affine.apply affine_map<(d0) -> (d0)>(%arg3)", ir)
             cpu = re.sub(r"\s*frisk.sync_threads_in_block[^\n]*", "", cpu)
             cpu = re.sub(r", [13](?=>)", "", cpu)
-            cpu = cpu.rstrip().rsplit("}", 1)[0] + cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem) + "\n}"
+            cpu = cpu.rstrip().rsplit("}", 1)[0] + cpu_main(src_shape, dst_shape, tile, origin, dst_origin, threads, elem, src_elem) + "\n}"
             lowered = run([llvm / "mlir-opt", "--lower-affine", "--convert-scf-to-cf",
                            "--convert-vector-to-llvm", "--finalize-memref-to-llvm",
                            "--convert-arith-to-llvm", "--convert-cf-to-llvm",
@@ -159,7 +176,26 @@ func.func @copy(%src: {src_type}, %dst: {dst_type}, %offset: index, %tid: index)
             ll = work / "copy.ll"
             ll.write_text(llvm_ir)
             run([llvm / "lli", ll])
-            print(f"PASS {name}: direct original-buffer accesses, vector stores, sync, CPU values")
+            print(f"PASS {name}: bounded vector loads, original-buffer addresses, sync, CPU values")
+
+        # Neither a nonunit nor an unknown physical stride is a contiguous
+        # vector load, even if the logical view has an identity layout.
+        for stride in ("2", "?"):
+            ty = f"memref<4x32xf32, strided<[64, {stride}], offset: ?>, 1>"
+            source = f'''func.func @strided(%src: {ty}, %dst: memref<2x16xf32, 3>)
+                attributes {{thread_num = 2 : i32}} {{
+              %v = frisk.buffer_view %src[1, 1], ranges = [2, 16]
+                  : {ty} -> memref<2x16xf32, 1>
+              frisk.copy %v to %dst [affine_map<() -> (2)>]
+                  : memref<2x16xf32, 1>, memref<2x16xf32, 3>
+              return
+            }}'''
+            path.write_text(source)
+            run([binary, path, "--pass-pipeline=" + pipeline, "-o", output])
+            ir = output.read_text()
+            assert "vector.load" not in ir and "affine.load" in ir, ir
+            assert "vector.store" in ir and "frisk.buffer_view" not in ir, ir
+            print(f"PASS physical source stride={stride}: scalar fallback through view")
 
         # Both memref and affine consumers must compose their own indices with
         # nested view origins, including non-identity affine load/store maps.

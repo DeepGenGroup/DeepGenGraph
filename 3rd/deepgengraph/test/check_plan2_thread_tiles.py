@@ -260,11 +260,100 @@ func.func @memref_bridges(%x: memref<2x32xf16>, %v: vector<2x32xf16>) -> (vector
     print("PASS memref bridge loads, write ordering, live users and guards")
 
 
+def check_computed_tile_stores(directory):
+    # Two ordinary matrix multiplies with a numeric cast between them. No
+    # softmax, attention naming, fixed tile shape or special kernel pattern.
+    for m, k, n, out, threads in [(32,32,32,64,64), (64,64,32,32,128),
+                                   (32,64,64,32,128)]:
+        a = f"memref<{m}x{k}xf16, 3>"
+        b = f"memref<{k}x{n}xf16, 3>"
+        c = f"memref<{m}x{n}xf32>"
+        p = f"memref<{m}x{n}xf16, 3>"
+        rhs = f"memref<{n}x{out}xf16, 3>"
+        result = f"memref<{m}x{out}xf32>"
+        source = f'''func.func @matmul_cast_matmul(%a: {a}, %b: {b}, %rhs: {rhs}) -> ({result}, {p}) attributes {{thread_num = {threads} : i32}} {{
+  %c = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+  %value = frisk.cast %c : {c} -> {p}
+  %storage = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {p}
+  %alias = frisk.copy %value to %storage [affine_map<() -> (2)>] : {p}, {p} -> {p}
+  %r = frisk.gemm(%alias, %rhs) {{transA = false, transB = false}} : {p}, {rhs} -> {result}
+  return %r, %alias : {result}, {p}
+}}'''
+        name = f"computed-store-{m}-{k}-{n}-{out}-{threads}"
+        ir = check(source, directory, name)
+        assert ir.count("memref.alloc()") == 1, "cast producer introduced layout scratch"
+        assert ir.count("gpu.barrier") == 1, "one publication barrier is sufficient"
+        allocation = re.search(r"(%\w+) = memref.alloc\(\)", ir)[1]
+        assert re.search(r"return %\w+, " + re.escape(allocation) + r" :", ir), \
+            "copy result must retain physical destination identity"
+        no_result = source.replace("%alias = frisk.copy", "frisk.copy").replace(
+            f": {p}, {p} -> {p}", f": {p}, {p}").replace("%alias", "%storage")
+        stored = check(no_result, directory, name + "-no-result")
+        assert stored.count("memref.alloc()") == 1
+        assert stored.count("gpu.barrier") == 1
+        # Both aliases must observe an intervening write, not an old register
+        # snapshot; preserve the store before the consumer's shared load.
+        mutation = source.replace("  %r =", f'''  %zero = arith.constant 0 : index
+  %new = arith.constant 7.0 : f16
+  %tid = gpu.thread_id x
+  %leader = arith.cmpi eq, %tid, %zero : index
+  scf.if %leader {{
+    memref.store %new, %storage[%zero, %zero] : {p}
+  }}
+  gpu.barrier
+  %r =''')
+        changed = check(mutation, directory, name + "-mutation")
+        allocation = re.search(r"(%\w+) = memref.alloc\(\)", changed)[1]
+        assert re.search(r"return %\w+, " + re.escape(allocation) + r" :", changed)
+        assert re.search(r"memref.store %\w+, " + re.escape(allocation) + r"\[", changed)
+        assert "frisk.to_threadTile " + allocation + " " in changed
+        assert changed.count("memref.alloc()") == 1
+        # One physical tile feeds both A and B operands, which have distinct
+        # lane distributions. Neither consumer needs a second shared buffer.
+        left = f"memref<{out}x{m}xf16, 3>"
+        other = f"memref<{out}x{n}xf32>"
+        multiple = source.replace(f"%rhs: {rhs})", f"%rhs: {rhs}, %left: {left})")
+        multiple = multiple.replace(f"-> ({result}, {p})", f"-> ({result}, {other}, {p})")
+        multiple = multiple.replace(f"  return %r, %alias : {result}, {p}", f'''
+  %other = frisk.gemm(%left, %alias) {{transA = false, transB = false}} : {left}, {p} -> {other}
+  return %r, %other, %alias : {result}, {other}, {p}''')
+        shared = check(multiple, directory, name + "-multiple-consumers")
+        assert shared.count("memref.alloc()") == 1
+        assert shared.count("gpu.barrier") == 1
+        allocation = re.search(r"(%\w+) = memref.alloc\(\)", shared)[1]
+        reads = [line for line in shared.splitlines()
+                 if "frisk.to_threadTile " + allocation + " " in line]
+        assert any("thread_widths = array<i64: 1, 4>" in line for line in reads)
+        assert any("thread_widths = array<i64: 4, 1>" in line for line in reads)
+        # Finish lowering with an explicit output store (block-value function
+        # returns are intentionally outside the finalization pass's ABI).
+        global_out = f"memref<{m}x{out}xf32, 1>"
+        finalized_source = source.replace(f"%rhs: {rhs})", f"%rhs: {rhs}, %out: {global_out})")
+        finalized_source = finalized_source.replace(f"-> ({result}, {p})", f"-> {p}")
+        finalized_source = finalized_source.replace(
+            f"return %r, %alias : {result}, {p}",
+            f"frisk.copy %r to %out [affine_map<() -> (2)>] : {result}, {global_out}\n"
+            f"  return %alias : {p}")
+        path, output = directory/(name + "-final.mlir"), directory/(name + "-final.out.mlir")
+        path.write_text(finalized_source)
+        proc = subprocess.run([str(TOOL), str(path), "--convert-friskbase-to-thread",
+                               "--finalize-thread-tiling", "--verify-each", "-o", str(output)],
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr[-6000:]
+        final = output.read_text()
+        assert not re.search(r"frisk\.(?:to_threadTile|from_threadTile|cast|convert_layout)\b", final)
+        assert final.count("memref.alloc()") == 1
+        allocation = re.search(r"(%\w+) = memref.alloc\(\)", final)[1]
+        assert f"return {allocation} : {p}" in final
+        print("PASS", name, "cast, alias, intervening write and A/B consumers")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="plan2-tiles-") as temp:
         directory = Path(temp)
         check_bridge_pairs(directory)
         check_memref_bridge_pairs(directory)
+        check_computed_tile_stores(directory)
         for m, n, k, threads, space in [(16,16,16,64,3), (64,32,128,64,3),
                 (64,128,32,128,3), (64,128,32,256,0)]:
             name = f"gemm-{m}-{n}-{k}-{threads}"
@@ -317,13 +406,20 @@ def main():
             "%v: memref<32x128xf16, 3>, %p: memref<64x32xf16, 3>)").replace(
             '  %p = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>\n', '')
         fallback = check(argument, directory, "shared-copy-possible-alias")
-        assert re.search(r'memref.alloc\(\).*memref<64x32xf32, 3>', fallback)
+        # Potential aliases require publication to the original destination
+        # and a subsequent physical read. Register shuffles can eliminate the
+        # intermediate f32 allocation without changing that storage contract.
+        stores = list(re.finditer(r'affine.store .*?, %arg3\[', fallback))
+        reads = list(re.finditer(r'frisk.to_threadTile %arg3\b', fallback))
+        assert stores and reads
+        assert stores[-1].start() < fallback.index('gpu.barrier') < reads[0].start()
         result_copy = DIRECT_SHARED_COPY.replace("  frisk.copy", "  %copied = frisk.copy").replace(
             "memref<64x32xf32, 3>, memref<64x32xf16, 3>\n",
             "memref<64x32xf32, 3>, memref<64x32xf16, 3> -> memref<64x32xf16, 3>\n").replace(
             "gemm(%p,", "gemm(%copied,")
-        fallback = check(result_copy, directory, "shared-copy-live-result")
-        assert fallback.count("memref.alloc()") == 2, "result layout exchange must remain"
+        direct = check(result_copy, directory, "shared-copy-live-result")
+        assert direct.count("memref.alloc()") == 1, "copy result must read the physical destination"
+        assert direct.count("gpu.barrier") == 1
         print("PASS direct shared copy, zero offsets, possible aliases and live results")
         rowsum_source = DIRECT_SHARED_COPY.replace(
             "  %p =", '  %rows = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x1xf32, 3>\n'

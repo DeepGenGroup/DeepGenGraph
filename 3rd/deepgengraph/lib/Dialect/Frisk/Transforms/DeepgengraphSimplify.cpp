@@ -165,6 +165,10 @@ struct ModifyKernelSignaturePattern : public mlir::OpConversionPattern<deepgengr
           oldOutputTypes[i] = mlir::IndexType::get(op->getContext());
           rewriter.setInsertionPoint(oldEmptyOp);
           auto newop = rewriter.create<deepgengraph::triton::PointerOfOp>(oldEmptyOp->getLoc(), op.getFunctionBody().getArgument(i + oldType.getNumInputs()) );
+          // Preserve the fresh-allocation contract when making the output an
+          // explicit ABI argument. Loop transformations must not infer noalias
+          // merely from two different argument numbers.
+          newop->setAttr("frisk.fresh_output", rewriter.getUnitAttr());
           rewriter.replaceOp(oldEmptyOp, newop);
         }
       }

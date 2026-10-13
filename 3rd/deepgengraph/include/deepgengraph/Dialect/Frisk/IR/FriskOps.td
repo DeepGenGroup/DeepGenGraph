@@ -646,16 +646,16 @@ def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, 
   }];
 
   let arguments = (ins
-    Arg<AnyMemRef, "", [MemWrite, MemRead]>:$memref,
+    Arg<Frisk_MemRefOrVector, "", [MemWrite, MemRead]>:$memref,
     AnyAttr:$value
   );
 
   let results = (outs
-    Variadic<AnyMemRef>:$result
+    Variadic<Frisk_MemRefOrVector>:$result
   );
 
   let extraClassDeclaration = [{
-    MemRefType getMemType() { return cast<MemRefType>(getMemref().getType()); }
+    ShapedType getMemType() { return cast<ShapedType>(getMemref().getType()); }
   }];
 
   let assemblyFormat = [{

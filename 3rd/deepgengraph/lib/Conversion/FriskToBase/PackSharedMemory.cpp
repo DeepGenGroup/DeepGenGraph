@@ -268,13 +268,17 @@ static void packAllocation(memref::AllocOp alloc,
         // Pairing K alone puts the copy lanes' 64-bit stores at the same bank
         // offset. Fold the producer column group into the packet's low bits.
         // Keep columns 0:3 and 4:7 separate for the paired LDS read phases;
-        // the row-group high bit is equal for each pair of read lane groups.
+        // With adjacent K-fragment pairing (groups=1), the low group bit
+        // distinguishes the two read phases; the ordinary strided pairing
+        // uses the next bit. Using group/2 for both leaves a 2-way conflict
+        // in the producer-permuted B layout.
         // This is a bijection, requires no padding, and leaves both halves of
         // a K packet adjacent. Express it in affine arithmetic so adjacency
         // remains provable after fragment unrolling.
         auto columnGroup = column.floorDiv(8);
         column = columnGroup * 8 +
-            ((column.floorDiv(4) + columnGroup.floorDiv(4) + group.floorDiv(2)) % 2) * 4 +
+            ((column.floorDiv(4) + columnGroup.floorDiv(4) +
+              group.floorDiv(groups == 1 ? 1 : 2)) % 2) * 4 +
             (column + columnGroup) % 4;
       }
       auto physicalIndex = (group * type.getDimSize(1) + column) * (2 * pack) +

@@ -563,6 +563,7 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
     }
     // The prefetch schedule is now fixed, and all physical reads are visible.
     // Allocate shared storage only against these final operation lifetimes.
+    synchronizeSharedMemoryLoopBackedges(getOperation());
     reuseSharedMemory(getOperation());
     SmallVector<Loop> loops;
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) {

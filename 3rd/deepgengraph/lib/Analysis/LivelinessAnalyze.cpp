@@ -468,6 +468,63 @@ void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os) {
   }
 }
 
+unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
+  if (kernel.isExternal() || !kernel->hasAttr("thread_num") ||
+      !llvm::hasSingleElement(kernel.getBody()))
+    return 0;
+  auto liveness = analyzeShmLiveness(kernel);
+  Block *entry = &kernel.getBody().front();
+  unsigned inserted = 0;
+  // Inner loops must synchronize their own backedges: an enclosing loop's
+  // barrier cannot stop a faster wave overwriting Q during the dk reduction.
+  kernel.walk<WalkOrder::PostOrder>([&](Operation *loop) {
+    Block *body = getLoopBody(loop);
+    if (!body || !isCollectiveLoop(loop, entry))
+      return;
+    for (const auto &info : liveness.buffers) {
+      if (!info.reusable)
+        continue;
+      Operation *firstWrite = nullptr, *lastRead = nullptr;
+      for (Operation *access : info.accesses) {
+        if (!loop->isProperAncestor(access))
+          continue;
+        auto effects = dyn_cast<MemoryEffectOpInterface>(access);
+        Operation *top = getTopLevelUser(access, body);
+        if (!effects || !top)
+          continue;
+        SmallVector<MemoryEffects::EffectInstance> instances;
+        effects.getEffects(instances);
+        for (const auto &effect : instances) {
+          if (!llvm::is_contained(info.aliases, effect.getValue()))
+            continue;
+          if (isa<MemoryEffects::Write>(effect.getEffect()) &&
+              (!firstWrite || top->isBeforeInBlock(firstWrite)))
+            firstWrite = top;
+          if (isa<MemoryEffects::Read>(effect.getEffect()) &&
+              (!lastRead || lastRead->isBeforeInBlock(top)))
+            lastRead = top;
+        }
+      }
+      if (!firstWrite || !lastRead)
+        continue;
+      // Only a barrier in the tail or prefix protects this wrapped handoff.
+      // The publication barrier AFTER the write does not protect old readers.
+      bool protectedBackedge = false;
+      for (Operation &op : *body)
+        if (isBarrier(&op) &&
+            (op.isBeforeInBlock(firstWrite) || lastRead->isBeforeInBlock(&op)))
+          protectedBackedge = true;
+      if (!protectedBackedge) {
+        OpBuilder builder(body->getTerminator());
+        builder.create<gpu::BarrierOp>(loop->getLoc());
+        ++inserted;
+        break; // The tail barrier protects every buffer in this loop.
+      }
+    }
+  });
+  return inserted;
+}
+
 bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   if (stats)
     *stats = {};

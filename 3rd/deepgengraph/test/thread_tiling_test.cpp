@@ -3,6 +3,22 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 namespace {
+struct TestShmLoopSyncPass
+    : mlir::PassWrapper<TestShmLoopSyncPass,
+                       mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestShmLoopSyncPass)
+  llvm::StringRef getArgument() const final { return "test-shm-loop-sync"; }
+  llvm::StringRef getDescription() const final {
+    return "Protect shared-memory loop backedges for regression tests";
+  }
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::gpu::GPUDialect>();
+  }
+  void runOnOperation() override {
+    mlir::frisk::synchronizeSharedMemoryLoopBackedges(getOperation());
+  }
+};
+
 struct TestShmReusePass
     : mlir::PassWrapper<TestShmReusePass,
                        mlir::OperationPass<mlir::func::FuncOp>> {
@@ -35,8 +51,17 @@ int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<mlir::frisk::FriskDialect,
+                  mlir::deepgengraph::triton::DeepgengraphTritonDialect,
                   mlir::deepgengraph::DeepgengraphDialect>();
+  mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
+  mlir::PassRegistration<TestShmLoopSyncPass>();
+  mlir::registerPass([] {
+    return mlir::frisk::createNormalizeAttentionKLayoutPass();
+  });
+  mlir::registerPass([] {
+    return mlir::frisk::createPlanWmmaLayoutConversionsPass();
+  });
   mlir::registerPass([] {
     return mlir::frisk::createConvertFriskBaseToThreadLevelIRPass();
   });
@@ -47,6 +72,7 @@ int main(int argc, char **argv) {
     return mlir::frisk::createFriskFragIRReorderPass();
   });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
+  mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));
 }

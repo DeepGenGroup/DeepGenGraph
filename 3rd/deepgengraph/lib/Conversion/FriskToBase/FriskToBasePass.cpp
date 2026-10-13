@@ -412,6 +412,18 @@ public:
       rewriter.setInsertionPointToEnd(newBlock);
       for (Operation &childOp : oldBlock->without_terminator()) {
         if (auto nestedFor = dyn_cast<affine::AffineForOp>(childOp)) {
+          bool usesOuterBuffer = false;
+          nestedFor.walk([&](Operation *nested) {
+            for (Value operand : nested->getOperands())
+              usesOuterBuffer |= getBufferIndex(operand).has_value();
+          });
+          if (!usesOuterBuffer) {
+            // QK's D loop does not update O or rowsum. Passing those through
+            // it creates needless full-tile carriers that thread tiling cannot
+            // resolve, and obscures their later writes in the sequence loop.
+            rewriter.clone(childOp, mapper);
+            continue;
+          }
           SmallVector<Value> nestedInits =
               remapValueRange(nestedFor.getInits());
           nestedInits.append(currentVectors.begin(), currentVectors.end());
@@ -428,7 +440,9 @@ public:
           newNestedFor->setAttr("local_yield_transformed",
                                 rewriter.getBoolAttr(true));
 
-          IRMapping nestedMapper;
+          // Preserve mappings of values defined in the enclosing body. An
+          // empty map leaves nested copies referring to the erased old body.
+          IRMapping nestedMapper = mapper;
           nestedMapper.map(nestedFor.getBody()->getArgument(0),
                            newNestedFor.getBody()->getArgument(0));
           for (auto [oldArg, newArg] :
@@ -608,16 +622,30 @@ public:
     target.addIllegalOp<KernelOp>();
     target.addIllegalOp<ParallelOp>();
     target.addIllegalOp<ForOp>();
-    target.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op) {
-      return op->hasAttr("local_yield_transformed");
-    });
     RewritePatternSet patterns(context);
     patterns.add<KernelOpConversion>(context);
     patterns.add<ParallelOpConversion>(context);
     patterns.add<ForOpConversion>(context);
-    patterns.add<AffineForOpConversion>(context);
     if (failed(applyPartialConversion(mod, target, std::move(patterns)))){
       return signalPassFailure();
+    }
+    // Promote inner accumulators first. Promoting an outer loop clones its
+    // nested loops; doing that first loses buffers initialized inside it
+    // (such as the score accumulator reset for every attention key tile).
+    SmallVector<affine::AffineForOp> loops;
+    mod.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
+      loops.push_back(loop);
+    });
+    ConversionTarget loopTarget(*context);
+    loopTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    loopTarget.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp loop) {
+      return loop->hasAttr("local_yield_transformed");
+    });
+    for (auto loop : loops) {
+      RewritePatternSet loopPatterns(context);
+      loopPatterns.add<AffineForOpConversion>(context);
+      if (failed(applyPartialConversion(loop, loopTarget, std::move(loopPatterns))))
+        return signalPassFailure();
     }
   }
 };

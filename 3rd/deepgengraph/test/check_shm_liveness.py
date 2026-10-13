@@ -302,7 +302,7 @@ def main():
 
     # Exercise the actual integration point without block operations to retile.
     integrated, _ = run(kernel(ALLOCS + A + B + RETURN),
-                        "convert-friskbase-to-thread")
+                        "convert-friskbase-to-thread,finalize-thread-tiling,lower-frisk-fragments")
     assert "frisk.shm_pool" in integrated, integrated
 
     if len(sys.argv) > 2:
@@ -312,7 +312,7 @@ def main():
         deferred, _ = run(source)
         if "frisk.to_threadTile" in source:
             assert "frisk.shm_pool" not in deferred
-        ir, report = run(source, "finalize-thread-tiling,test-shm-reuse")
+        ir, report = run(source, "finalize-thread-tiling,lower-frisk-fragments,test-shm-reuse")
         pools = re.findall(r"memref.alloc\(\)[^\n]*frisk.shm_pool[^\n]*memref<(\d+)xi8, 3>", ir)
         assert pools, report
         if "pipeline.scheduled" not in source:
@@ -323,7 +323,7 @@ def main():
         marker = "---------- after frisk-pipeline-schedule ---------"
         if marker in log:
             scheduled = module_after(log, marker)
-            integrated, _ = run(scheduled, "convert-friskbase-to-thread,finalize-thread-tiling")
+            integrated, _ = run(scheduled, "convert-friskbase-to-thread,finalize-thread-tiling,lower-frisk-fragments")
             assert "frisk.shm_pool" in integrated
             assert "frisk.to_threadTile" not in integrated
             print("PASS scheduled attention through conversion and bridge finalization: SHM pool applied")

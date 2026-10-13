@@ -63,10 +63,18 @@ public:
   int warp_threads;
   BufPos pos = LowerInfo::BufPos::In;  // 作为输入buffer还是输出buffer，或二者兼有
   coordXY_t warpInstUnroll = {1,1};
+  // Optional bijection from instruction-space coordinates to logical tensor
+  // coordinates. Keep the hardware fragment descriptor unchanged: consumers,
+  // copies and layout conversions must all compose this map, not reinterpret
+  // an equal-sized thread vector as the same distribution.
+  mlir::AffineMap logicalTransform;
+  // Project away a faster-varying wave axis when an operand is broadcast
+  // over that axis (B is shared by all M waves, A by all N waves).
+  int64_t warpIdDivisor = 1;
   std::array<BufferAxisReuse, 2> reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};
 
   int ignoreDim = -1;  // 需要忽略的维度（只看有效维度）
-  LowerInfo* convertFrom = nullptr;  // 表示该Layout使用前，需要添加 LayoutConvertOp，从 convertFrom Layout转换到到自己（即：reg->shm->reg）
+  LowerInfo* convertFrom = nullptr;  // 布局冲突：插入 ConvertLayoutOp，优先 wave shuffle，否则 reg->shm->reg。
 
 public:
   explicit LowerInfo(int _warp_threads);
@@ -218,6 +226,9 @@ public:
     printI64Vec("block_repeat", get_block_repeat());
     printI64Vec("warpInstUnroll", warpInstUnroll);
     printI64Vec("thread_own_data", get_thread_own_data_size());
+    llvm::outs() << "warp_id_divisor = " << warpIdDivisor << "\n";
+    if (logicalTransform)
+      llvm::outs() << "logical_transform = " << logicalTransform << "\n";
     llvm::outs() << "ignoreDim = " << ignoreDim << "\n";
     llvm::outs() << "pos = " << int(pos) << "\n";
     auto cvf = convertFrom == nullptr? "NULL" : "notNull";
@@ -250,7 +261,7 @@ public:
     // tid covers the whole block. Split it into the lane inside one warp and
     // the warp's coordinate inside the block before applying the warp layout.
     auto laneId = tid % warp_threads;
-    auto warpId = tid.floorDiv(warp_threads) % flat_size(block_layout);
+    auto warpId = tid.floorDiv(warp_threads * warpIdDivisor) % flat_size(block_layout);
     auto[t0,t1] = UnflattenIndexToXY(laneId, base_layout.warp_layout_order, base_layout.warp_layout);
     auto[bw0,bw1] = UnflattenIndexToXY(warpId, block_layout_order, block_layout);
     auto[i_wr0, i_wr1] = UnflattenIndexToXY(i_wr_flatten, base_layout.warp_repeat_order, base_layout.warp_repeat);
@@ -269,7 +280,7 @@ public:
 
     auto affine_map = mlir::AffineMap::get(pos, 0, indices, buffer.getContext());
 
-    return affine_map;
+    return logicalTransform ? logicalTransform.compose(affine_map) : affine_map;
   }
 
   std::vector<affine::AffineForOp> getForLoops(mlir::OpBuilder& b, mlir::Location loc, std::vector<mlir::Value>& iterVars){
@@ -353,7 +364,8 @@ private:
   static uint64_t getRegionThreadNum(Operation *op);
   static bool checkGemmProblem(GemmProblem p, HWSpecification* hw);
   static bool getDirectGemmBlockLayout(uint64_t thread_num,
-                                       std::array<int64_t, 2> &block_layout, HWSpecification* hw);
+                                       std::array<int64_t, 2> &block_layout, HWSpecification* hw,
+                                       Operation *anchor);
   static LowerInfo makeDirectGemmCInfo(OpBuilder b, const GemmProblem &problem,
                                        MMAInstInfo *mma, uint64_t thread_num,
                                        HWSpecification *hw,

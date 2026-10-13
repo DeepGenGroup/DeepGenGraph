@@ -17,9 +17,9 @@ def split_args(text):
     start = 0
     result = []
     for i, char in enumerate(text):
-        if char in "<([":
+        if char in "<([{":
             depth += 1
-        elif char in ">)]":
+        elif char in ">)]}":
             depth -= 1
         elif char == "," and depth == 0:
             result.append(text[start:i].strip())

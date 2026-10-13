@@ -313,6 +313,11 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text) {
   replaceAll(text, "getelementptr inbounds nuw ", "getelementptr inbounds ");
   replaceAll(text, "getelementptr nusw ", "getelementptr ");
   replaceAll(text, "getelementptr nuw ", "getelementptr ");
+  // InstCombine after MMAC fusion may infer disjoint OR operands. The flag
+  // is newer than LLVM 15; dropping the promise preserves the OR result.
+  replaceAll(text, "or disjoint ", "or ");
+  replaceAll(text, "zext nneg ", "zext ");
+  replaceAll(text, "icmp samesign ", "icmp ");
   replaceAll(text, " captures(none)", "");
   replaceAll(text, " memory(none)", " readnone");
   replaceAll(text, " memory(argmem: read)", "");

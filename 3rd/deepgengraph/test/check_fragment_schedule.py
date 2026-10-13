@@ -67,7 +67,7 @@ FUSED = r'''func.func @fused(%a: memref<8xf32>, %base: index) -> f32 {
 '''
 
 
-def check_mma_addresses(text):
+def check_mma_addresses(text, packed_b=True, paired_b=True, packed_a=True):
     # Trace the emitted LLVM operands back to physical byte addresses, keeping
     # every lane/register distinct. This catches wrong MN/K fragment selection
     # even when ordinary numerical fixtures contain equal values.
@@ -85,12 +85,20 @@ def check_mma_addresses(text):
                 elif opcode == 'fmul':
                     # Q scaling preserves the source coordinates.
                     self.cache[name] = self.typed(split_args(body)[0])
+                elif opcode == 'load' and body.startswith('<'):
+                    ty, pointer, *_ = split_args(body)
+                    count = int(ty.split()[0][1:])
+                    base, offset = self.typed(pointer)
+                    assert 'half>' in ty
+                    self.cache[name] = [(base, offset + 2*r) for r in range(count)]
             return super().value(name)
 
     tid = next(n for n, e in definitions.items() if '@llvm.amdgcn.workitem.id.x()' in e)
     mma = [n for n, e in definitions.items() if 'asm sideeffect "' in e and 'v_mmac_' in e]
     operands = [split_args(re.search(r'"\((.*)\)', definitions[n]).group(1)) for n in mma]
     assert len(mma) == 64  # QK: 4 MN * 8 K; PV: 16 MN * 2 K.
+    first_exp = text.index('call float @__ocml_exp2_f32')
+    contiguous_c = 'call i32 @llvm.amdgcn.ds.bpermute' in text[:first_exp]
     for start, k_count, n_count, n_width, k_width in [(0,8,2,32,128), (32,2,8,128,32)]:
         evaluator = ByteAddresses(definitions, {tid: 0})
         a_base = evaluator.typed(operands[start][0])[0]
@@ -109,8 +117,20 @@ def check_mma_addresses(text):
                 kk = k * 16 + lane // 16 * 4
                 a = evaluator.typed(operands[start+i][0])
                 b = evaluator.typed(operands[start+i][1])
-                expected_a = [(a_base[0], a_base[1] + 2*(row*k_width+kk+r)) for r in range(4)]
-                expected_b = [(b_base[0], b_base[1] + 2*((kk+r)*n_width+col)) for r in range(4)]
+                def physical_a(r, k):
+                    if packed_a and start == 32 and contiguous_c:
+                        return (k//4*64+r)*4+k%4
+                    return ((k%4*64+r)*8 + k//4%4*2 + k//16) if packed_a and start == 32 else r*k_width+k
+                expected_a = [(a_base[0], a_base[1] + 2*physical_a(row,kk+r)) for r in range(4)]
+                def physical(k, n):
+                    if packed_b and paired_b:
+                        group = k//32*4+k%16//4
+                        column_group = n//8
+                        n = (column_group*8 + (n//4+column_group//4+group//2)%2*4
+                             + (n+column_group)%4)
+                        return (group*n_width+n)*8+k//16%2*4+k%4
+                    return (k//4*n_width+n)*4+k%4 if packed_b else k*n_width+n
+                expected_b = [(b_base[0], b_base[1] + 2*physical(kk+r, col)) for r in range(4)]
                 assert a == expected_a, (thread, i, a, expected_a)
                 assert b == expected_b, (thread, i, b, expected_b)
     print('PASS attention: 65536 QK/PV operand addresses and 64 accumulator inputs')

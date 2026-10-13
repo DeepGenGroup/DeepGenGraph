@@ -483,9 +483,12 @@ void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
 } // namespace
 
 frisk::KernelConfig* frisk::GetKernelConfig() {
-  static frisk::KernelConfig cfg;
-  cfg.num_threads = 128;
-  cfg.gridDimXYZ = {64,32,1};
+  static frisk::KernelConfig cfg = [] {
+    frisk::KernelConfig value;
+    value.num_threads = 128;
+    value.gridDimXYZ = {64,32,1};
+    return value;
+  }();
   return &cfg;
 }
 
@@ -522,6 +525,63 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
           ? argv[2] : "finalLLVMText.ll";
   bool reorderEnabled = argc < 5 || StringRef(argv[4]) == "1";
   bool packSharedEnabled = argc < 6 || StringRef(argv[5]) == "1";
+  StringRef wmmaLayout = argc > 6 ? argv[6] : "shuffle";
+  uint64_t carrierWords = 24576;
+  if (argc > 7 && StringRef(argv[7]).getAsInteger(10, carrierWords)) {
+    llvm::errs() << "carrier budget must be a nonnegative number of 32-bit words/block\n";
+    return 1;
+  }
+  StringRef mathMode = argc > 8 ? argv[8] : "strict";
+  bool optimizeLifetimes = argc < 12 || StringRef(argv[11]) == "1";
+  bool uniformMasks = argc > 12 && StringRef(argv[12]) == "1";
+  bool prefetchPackets = argc > 13 && StringRef(argv[13]) == "1";
+  bool fuseMaskAdd = argc < 15 || StringRef(argv[14]) == "1";
+  if (argc > 14 && StringRef(argv[14]) != "0" && StringRef(argv[14]) != "1") {
+    llvm::errs() << "fuse-mask-add must be 0 or 1\n";
+    return 1;
+  }
+  if (argc > 13 && StringRef(argv[13]) != "0" && StringRef(argv[13]) != "1") {
+    llvm::errs() << "prefetch-packets must be 0 or 1\n";
+    return 1;
+  }
+  if (argc > 12 && StringRef(argv[12]) != "0" && StringRef(argv[12]) != "1") {
+    llvm::errs() << "uniform-masks must be 0 or 1\n";
+    return 1;
+  }
+  if (argc > 11 && StringRef(argv[11]) != "0" && StringRef(argv[11]) != "1") {
+    llvm::errs() << "register-lifetimes must be 0 or 1\n";
+    return 1;
+  }
+  unsigned threads = 128;
+  if (argc > 9 && (StringRef(argv[9]).getAsInteger(10, threads) ||
+                  threads == 0 || threads > 1024 || threads % 64)) {
+    llvm::errs() << "threads must be a multiple of 64 in [64,1024]\n";
+    return 1;
+  }
+  SmallVector<int64_t> blockWarps;
+  if (argc > 10) {
+    auto axes = StringRef(argv[10]).split(',');
+    unsigned m = 0, n = 0;
+    if (axes.first.getAsInteger(10, m) || axes.second.getAsInteger(10, n) ||
+        !m || !n || m > 16 || n > 16 || m * n != threads / 64) {
+      llvm::errs() << "block-warps must be M,N with M*N = threads/64\n";
+      return 1;
+    }
+    blockWarps = {int64_t(m), int64_t(n)};
+  }
+  frisk::GetKernelConfig()->num_threads = threads;
+  if (mathMode != "strict" && mathMode != "mmac" && mathMode != "approx" &&
+      mathMode != "mmac-exp2" && mathMode != "mmac-recip") {
+    llvm::errs() << "math mode must be strict, mmac, mmac-exp2, mmac-recip, or approx\n";
+    return 1;
+  }
+  if (wmmaLayout == "3.1") wmmaLayout = "shared";
+  if (wmmaLayout == "3.2") wmmaLayout = "shuffle";
+  if (wmmaLayout == "3.3") wmmaLayout = "b-permute";
+  if (wmmaLayout != "shared" && wmmaLayout != "shuffle" && wmmaLayout != "b-permute") {
+    llvm::errs() << "WMMA layout must be 3.1/shared, 3.2/shuffle, or 3.3/b-permute\n";
+    return 1;
+  }
   if (argc > 5 && StringRef(argv[5]) != "0" && StringRef(argv[5]) != "1") {
     llvm::errs() << "pack-shared must be 0 or 1\n";
     return 1;
@@ -602,6 +662,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
+  auto tensorLoops = frisk::createOptimizeTensorLoopsPass();
+  if (failed(tensorLoops->initializeOptions(
+          "max-carrier-words=" + std::to_string(carrierWords),
+          [](const llvm::Twine &message) { llvm::errs() << message << "\n"; return failure(); })))
+    return 1;
+  pm.addPass(std::move(tensorLoops));
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createMemspaceAnalyzePass());
   pm.run(src->getOperation());
   llvm::outs() << "\n---------- after scfForConversion ---------\n"; llvm::outs().flush();src->dump();
@@ -617,6 +683,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createFriskFuseBlockOpsPass ---------\n"; llvm::outs().flush();src->dump();
 
   AddPass(frisk::createConvertFriskToBasePass());
+  src->walk([&](func::FuncOp function) {
+    if (!function->hasAttr("thread_num")) return;
+    OpBuilder builder(function);
+    if (argc > 9) {
+      function->setAttr("thread_num", builder.getI32IntegerAttr(threads));
+      function.walk([&](gpu::ThreadIdOp id) {
+        if (id.getDimension() == gpu::Dimension::x)
+          id->setAttr("range", builder.getIndexAttr(threads));
+      });
+    }
+    if (!blockWarps.empty())
+      function->setAttr("frisk.block_warps", builder.getDenseI64ArrayAttr(blockWarps));
+  });
   if (failed(annotateAttentionSeqLenPipeline(*src)))
     return 1;
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
@@ -635,8 +714,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   
 
   auto tiling = mlir::frisk::createConvertFriskBaseToThreadLevelIRPass();
+  std::string tilingOptions = std::string("pack-shared-operands=") +
+      (packSharedEnabled ? "true" : "false") + " wmma-layout=" + wmmaLayout.str();
+  tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
+  tilingOptions += std::string(" fuse-mask-add=") + (fuseMaskAdd ? "true" : "false");
   if (failed(tiling->initializeOptions(
-          packSharedEnabled ? "pack-shared-operands=true" : "pack-shared-operands=false",
+          tilingOptions,
           [&](const llvm::Twine &message) {
             llvm::errs() << message << '\n';
             return failure();
@@ -736,6 +819,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   llvmModule->setSourceFileName(argv[1]);
+  if (mathMode == "approx")
+    frisk::optimizeApproximateRegisterMath(*llvmModule);
+  else if (mathMode == "mmac-exp2" || mathMode == "mmac-recip")
+    frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-exp2", mathMode == "mmac-recip");
+  else if (mathMode == "mmac")
+    frisk::fuseMMACAccumulators(*llvmModule);
+  if (prefetchPackets)
+    frisk::prefetchGlobalPackets(*llvmModule);
+  if (optimizeLifetimes)
+    frisk::optimizeRegisterLifetimes(*llvmModule);
+  // Register math canonicalization can introduce new vector splats. Materialize
+  // after it so exported IR remains parseable by the LLVM 15 DTK backend.
   materializeSplatVectorConstants(*llvmModule);
 
   // 4. 将 llvm::Module 打印为文本
@@ -1033,8 +1128,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 6) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1]\n";
+  if (argc < 2 || argc > 15) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

@@ -232,6 +232,18 @@ static AffineExpr GetExprOfValue(
   else{
     llvm::outs() << "[def] " << defOp->getName().getStringRef() << "\n";llvm::outs().flush();
   }
+  if (auto apply = mlir::dyn_cast<affine::AffineApplyOp>(defOp)) {
+    // Partial unroll-and-jam expresses each slice offset as affine.apply.
+    // Compose its dimensions AND symbols into the same pointer-coordinate
+    // domain instead of treating the result as an unsupported arithmetic op.
+    SmallVector<AffineExpr> operands;
+    for (Value operand : apply.getMapOperands())
+      operands.push_back(GetExprOfValue(operand, dims, arglist));
+    auto map = apply.getAffineMap();
+    return map.getResult(0).replaceDimsAndSymbols(
+        ArrayRef<AffineExpr>(operands).take_front(map.getNumDims()),
+        ArrayRef<AffineExpr>(operands).drop_front(map.getNumDims()));
+  }
   if(mlir::isa<arith::AddIOp>(defOp)){
     auto lhs = defOp->getOperand(0);
     auto rhs = defOp->getOperand(1);
@@ -335,7 +347,7 @@ static AffineExpr GetExprOfValue(
 }
 
 // 
-struct ArgIdViewBuffer {
+struct BlockPointerBufferInfo {
   frisk::AllocBufferOp shmbuffer = nullptr;
   AffineMap baseLinearOffsetMap;
   AffineMap baseOffsetMap;
@@ -346,8 +358,30 @@ struct ArgIdViewBuffer {
   std::vector<int64_t> order2D;
 };
 
-// 存放 argId : { arg对应的initView ， arg开辟view时建立的shm buffer }
-static std::vector<ArgIdViewBuffer*>  s_argId_bufferInfo;
+// Keep address and staging-buffer identity per block pointer, not per kernel
+// argument: distinct slices of the same argument can be live simultaneously.
+// Access operations survive region signature conversion, unlike pointer SSA
+// values. This state is local to one pass invocation (no cross-kernel globals).
+struct BlockPointerConversionState {
+  DenseMap<Operation *, std::shared_ptr<BlockPointerBufferInfo>> pointers;
+  DenseMap<Operation *, std::shared_ptr<BlockPointerBufferInfo>> accesses;
+  DenseMap<BlockPointerBufferInfo *, dgt::BlockAdvanceOp> advances;
+};
+
+static dgt::BlockPointerOfOp findBlockPointer(Value value) {
+  if (auto ptr = value.getDefiningOp<dgt::BlockPointerOfOp>()) return ptr;
+  if (auto advance = value.getDefiningOp<dgt::BlockAdvanceOp>())
+    return findBlockPointer(advance.getSrcPointer());
+  if (auto result = dyn_cast<OpResult>(value))
+    if (auto loop = dyn_cast<affine::AffineForOp>(result.getOwner()))
+      return findBlockPointer(loop.getInits()[result.getResultNumber()]);
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    if (auto loop = dyn_cast<affine::AffineForOp>(arg.getOwner()->getParentOp()))
+      if (arg.getArgNumber() > 0)
+        return findBlockPointer(loop.getInits()[arg.getArgNumber() - 1]);
+  }
+  return {};
+}
 
 static std::vector<int64_t> getPhysicalStrides(ArrayRef<int64_t> shape) {
   std::vector<int64_t> strides(shape.size(), 1);
@@ -486,9 +520,6 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
         newInputs.push_back(newArgTy);
       }
     }
-    for(auto n : newInputs){
-      s_argId_bufferInfo.push_back(nullptr);
-    }
     // 1. build new function type
     auto newFuncType = rewriter.getFunctionType(newInputs, newOutputs);
     // 2. convert old region signature, inline it after new frisk.kernel
@@ -555,7 +586,7 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
   }
 };
 
-static coordXY_t GetPhysicalBlockShapeWithOrder(ArgIdViewBuffer* info){
+static coordXY_t GetPhysicalBlockShapeWithOrder(BlockPointerBufferInfo* info){
   // 真实block Shape 由order判定。规定 [x,y] 的y为连续维度，即order[0] 指示的维度。
   std::array<int64_t,2> realBlockShape = {0,0};
   realBlockShape[1 - info->order2D[0]] = info->blockShape[0];  // [128,32] order [0,1] -> 128为连续
@@ -592,7 +623,10 @@ struct PointerOfConversionPattern : public OpConversionPattern<deepgengraph::tri
 
 struct BlockPointerOfConversionPattern
     : public OpConversionPattern<deepgengraph::triton::BlockPointerOfOp> {
-  using OpConversionPattern::OpConversionPattern;
+  BlockPointerOfConversionPattern(TypeConverter &tc, MLIRContext *ctx,
+      BlockPointerConversionState &state)
+      : OpConversionPattern(tc, ctx), state(state) {}
+  BlockPointerConversionState &state;
   // block_ptr_of -> alloc_buffer[shared]
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockPointerOfOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
@@ -607,7 +641,8 @@ struct BlockPointerOfConversionPattern
     llvm::outs().flush();
 
     // 根据是否有read属性，建立 allocBufferOp （read：后续有loadOp读取指针指向的数据。 write：后续有storeOp 向指针指向的内存写入数据）
-    auto info = new ArgIdViewBuffer{};
+    auto info = state.pointers.lookup(op);
+    if (!info) return op.emitError("missing block pointer lowering state");
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     auto memTy = mlir::dyn_cast<MemRefType>(resTy);
     frisk::AllocBufferOp newOp = nullptr;
@@ -674,7 +709,6 @@ struct BlockPointerOfConversionPattern
     info->sourceStrides = std::move(sourceStrides);
     info->blockStrides = std::move(blockStrides);
     info->order2D = op.getOrder();
-    s_argId_bufferInfo[argId] = info;
     if(newOp){
       // 含read，需要创建buffer存数据
       rewriter.replaceOp(op, newOp);
@@ -690,7 +724,10 @@ struct BlockPointerOfConversionPattern
 };
 
 struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::triton::BlockLoadOp> {
-  using OpConversionPattern::OpConversionPattern;
+  BlockLoadConversionPattern(TypeConverter &tc, MLIRContext *ctx,
+      BlockPointerConversionState &state)
+      : OpConversionPattern(tc, ctx), state(state) {}
+  BlockPointerConversionState &state;
   // block_load -> buffer_view + frisk.copy(view, dstMem)  之后用dstMem替换 blockLoad的结果. 如果有 block_advance, 删除之
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockLoadOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
@@ -698,25 +735,17 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
     // find info
     auto loc = op->getLoc();
     auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
-    if(s_argId_bufferInfo[argId] == nullptr){
-      assert(false);
-    }
-    auto info = s_argId_bufferInfo[argId];
+    auto info = state.accesses.lookup(op);
+    if (!info) return op.emitError("missing block load address information");
 
     // 检查该 blockPtr 是否会move
     auto parentKernel = op->getParentOfType<frisk::KernelOp>();
     std::vector<Value> globalBuffers;
-    dgt::BlockAdvanceOp ptrAdvance = nullptr;
+    dgt::BlockAdvanceOp ptrAdvance = state.advances.lookup(info.get());
     if(parentKernel != nullptr){
       for(auto arg : parentKernel.getBody()->getArguments()){
         globalBuffers.push_back(arg);
       }
-      parentKernel->walk([&](dgt::BlockAdvanceOp advanceOp){
-        auto id = advanceOp->getAttrOfType<IntegerAttr>("argId").getInt();
-        if(argId == id){
-          ptrAdvance = advanceOp;
-        }
-      });
     }
     if(!ptrAdvance){
       // 没有 ptr_advance, 索引只依赖于 block_ptr_of 的 baseOffset 索引
@@ -842,7 +871,6 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
       rewriter.create<frisk::CopyOp>(loc, view, info->shmbuffer);
       
       rewriter.replaceOp(op, info->shmbuffer);
-      rewriter.eraseOp(ptrAdvance);
     }
 
     return success();
@@ -850,7 +878,10 @@ struct BlockLoadConversionPattern : public OpConversionPattern<deepgengraph::tri
 };
 
 struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::triton::BlockStoreOp> {
-  using OpConversionPattern::OpConversionPattern;
+  BlockStoreConversionPattern(TypeConverter &tc, MLIRContext *ctx,
+      BlockPointerConversionState &state)
+      : OpConversionPattern(tc, ctx), state(state) {}
+  BlockPointerConversionState &state;
   // block_store %14, %24 :  直接替换
   LogicalResult matchAndRewrite(deepgengraph::triton::BlockStoreOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override 
@@ -866,8 +897,10 @@ struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::tr
     if(dstMemref.getRank() > srcMemref.getRank() || dstMemref.getShape() != srcMemref.getShape()){
       // 从shm拷贝到global
       auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
-      auto& offsetMap = s_argId_bufferInfo[argId]->baseOffsetMap;
-      auto& mapOperands = s_argId_bufferInfo[argId]->baseOffsetMapOperands;
+      auto info = state.accesses.lookup(op);
+      if (!info) return op.emitError("missing block store address information");
+      auto& offsetMap = info->baseOffsetMap;
+      auto& mapOperands = info->baseOffsetMapOperands;
       auto newOp = rewriter.create<frisk::CopyOp>(op->getLoc(), src,dst, mapOperands, offsetMap);
       rewriter.replaceOp(op, newOp);
     }
@@ -1117,26 +1150,20 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       }
     );
 
-    // 2. 将旧循环体中的所有操作克隆/移动到新循环体的末尾
-    // 注意：此时 newForOp 已经拥有一个合法的、带有一个 iv 参数的 Block
+    // Move the body instead of cloning it. Cloning an outer loop also clones
+    // nested illegal loops while dialect conversion is tracking their values,
+    // preventing nested tensor accumulators from being legalized.
     Block *oldBlock = op.getBody();
     Block *newBlock = newForOp.getBody();
-
-    // 3. 设置参数映射：旧循环体的第一个参数（IV）映射到新循环体的 IV
-    // 旧循环体的后续 iter_args 参数在最终结果中会被废弃（因为我们要删掉它们）
-    IRMapping mapping;
-    mapping.map(oldBlock->getArgument(0), newBlock->getArgument(0));
-
-    // 4. 将旧 Block 中的操作（除了最后的 Terminator 以外）全部克隆到新 Block 中
-    rewriter.setInsertionPointToStart(newBlock);
-    for (auto &nestedOp : oldBlock->without_terminator()) {
-      rewriter.clone(nestedOp, mapping);
-    }
+    SmallVector<Value> replacements{newBlock->getArgument(0)};
+    replacements.append(newResults.begin(), newResults.end());
+    rewriter.mergeBlocks(oldBlock, newBlock, replacements);
 
     // 5. 单独处理旧的 Terminator (AffineYieldOp)。
     // 清空 iter_args/yield 后，原来的 loop-carried memref 结果需要显式写回
     // 对应 init buffer，才能保留 SSA iter_arg 的累加语义。
-    auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(oldBlock->getTerminator());
+    auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(newBlock->getTerminator());
+    rewriter.setInsertionPoint(oldYieldOp);
     for (auto [idx, initVal] : llvm::enumerate(op.getInits())) {
       Operation *initDef = initVal.getDefiningOp();
       if (!initDef || !isa<frisk::AllocBufferOp, frisk::ZeroOp>(initDef)) {
@@ -1146,7 +1173,7 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
         continue;
       }
       auto dstTy = dyn_cast<MemRefType>(initVal.getType());
-      auto src = mapping.lookupOrDefault(oldYieldOp.getOperand(idx));
+      auto src = oldYieldOp.getOperand(idx);
       src = applyProducerMemspaceToMaterializedMemref(src);
       if (dstTy) {
         src = stripMemrefTensorRoundTrip(src, dstTy);
@@ -1157,7 +1184,7 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       }
       rewriter.create<frisk::CopyOp>(oldYieldOp.getLoc(), src, initVal);
     }
-    rewriter.create<affine::AffineYieldOp>(oldYieldOp.getLoc());
+    rewriter.replaceOpWithNewOp<affine::AffineYieldOp>(oldYieldOp);
 
     // 6. 用新 Op 替代旧 Op，并返回成功
     
@@ -1442,6 +1469,35 @@ public:
     auto *ctx = getOperation()->getContext();
     Operation *op = getOperation();
     
+    BlockPointerConversionState pointerState;
+    op->walk([&](dgt::BlockPointerOfOp ptr) {
+      pointerState.pointers[ptr] = std::make_shared<BlockPointerBufferInfo>();
+    });
+    bool invalidPointer = false;
+    op->walk([&](Operation *access) {
+      Value pointer;
+      if (auto load = dyn_cast<dgt::BlockLoadOp>(access)) pointer = load.getSrcPointer();
+      else if (auto store = dyn_cast<dgt::BlockStoreOp>(access)) pointer = store.getDstPointer();
+      else if (auto advance = dyn_cast<dgt::BlockAdvanceOp>(access)) pointer = advance.getSrcPointer();
+      else return;
+      auto root = findBlockPointer(pointer);
+      if (!root) {
+        access->emitError("cannot resolve block pointer provenance");
+        invalidPointer = true;
+        return;
+      }
+      auto info = pointerState.pointers.lookup(root);
+      pointerState.accesses[access] = info;
+      if (auto advance = dyn_cast<dgt::BlockAdvanceOp>(access)) {
+        if (pointerState.advances.count(info.get())) {
+          access->emitError("multiple advances of one block pointer are unsupported");
+          invalidPointer = true;
+        }
+        pointerState.advances[info.get()] = advance;
+      }
+    });
+    if (invalidPointer) return signalPassFailure();
+
     // ===== 1. Lower mem相关的op ==========
     {
       TypeConverter tc;
@@ -1480,28 +1536,29 @@ public:
       t0.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp>();
   
       RewritePatternSet ps0(ctx);
-      ps0.add<PointerOfConversionPattern, BlockPointerOfConversionPattern>(tc, ctx);
-      applyPartialConversion(op, t0, std::move(ps0));
+      ps0.add<PointerOfConversionPattern>(tc, ctx);
+      ps0.add<BlockPointerOfConversionPattern>(tc, ctx, pointerState);
+      if (failed(applyPartialConversion(op, t0, std::move(ps0))))
+        return signalPassFailure();
       
       // stage 2 : 指针读写op -> memref 读写
       RewritePatternSet ps1(ctx);
-      ps1.add<BlockLoadConversionPattern,
-        BlockStoreConversionPattern,ZeroOpConversionPattern ,ConvertOpConversionPattern,
+      ps1.add<BlockLoadConversionPattern, BlockStoreConversionPattern>(tc, ctx, pointerState);
+      ps1.add<ZeroOpConversionPattern, ConvertOpConversionPattern,
         ForTypeConversionPattern, YieldTypeConversionPattern
       >(tc, ctx);
       ConversionTarget t1 = target;
       t1.addIllegalOp<dgt::PointerOfOp, dgt::BlockPointerOfOp,
         dgt::BlockLoadOp, dgt::BlockStoreOp,
-        dgt::TensorFromOp, dg::ZeroOp, dg::ConvertOp,
-        dgt::BlockAdvanceOp >();
+        dgt::TensorFromOp, dg::ZeroOp, dg::ConvertOp>();
       t1.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp forOp) {
         for (Value initArg : forOp.getInits()) {
-          if (isTritonPointerLike(initArg.getType())){
+          if (isTritonPointerLike(initArg.getType()) || isa<TensorType>(initArg.getType())){
             return false;
           }
         }
         for (Type resultType : forOp.getResultTypes()) {
-          if (isTritonPointerLike(resultType)){
+          if (isTritonPointerLike(resultType) || isa<TensorType>(resultType)){
             return false;
           }
         }
@@ -1510,14 +1567,23 @@ public:
   
       t1.addDynamicallyLegalOp<affine::AffineYieldOp>([](affine::AffineYieldOp yieldOp) {
         for (Value operand : yieldOp.getOperands()) {
-          if (isTritonPointerLike(operand.getType())){
+          if (isTritonPointerLike(operand.getType()) || isa<TensorType>(operand.getType())){
             return false;
           }
         }
         return true;
       });
   
-      applyPartialConversion(op, t1, std::move(ps1));
+      if (failed(applyPartialConversion(op, t1, std::move(ps1))))
+        return signalPassFailure();
+      // All loads have consumed their advance expressions. Keep these ops
+      // alive until now so multiple loads of one pointer share valid metadata.
+      SmallVector<dgt::BlockAdvanceOp> advances;
+      op->walk([&](dgt::BlockAdvanceOp advance) { advances.push_back(advance); });
+      for (auto advance : advances) {
+        advance.getResult().replaceAllUsesWith(advance.getSrcPointer());
+        advance.erase();
+      }
   
       // stage 3 ：constant 分配的tensor 改为 分配memref
       ConversionTarget t2(*ctx);

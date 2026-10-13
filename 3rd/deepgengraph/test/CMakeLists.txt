@@ -1,5 +1,11 @@
 add_compile_options(-g)
 add_executable(MyTest test_src.cpp)
+add_executable(MyTestAsync test_src_async.cpp)
+llvm_update_compile_flags(MyTestAsync)
+target_link_libraries(MyTestAsync PRIVATE
+  MLIRParser MLIRROCDLDialect MLIRLLVMDialect MLIRTargetLLVMIRExport
+  MLIRBuiltinToLLVMIRTranslation MLIRLLVMToLLVMIRTranslation
+  MLIRROCDLToLLVMIRTranslation)
 add_executable(FragmentOptTest fragment_opt_test.cpp)
 add_executable(ThreadTilingTest thread_tiling_test.cpp)
 add_executable(LegacyLLVMExportTest legacy_llvm_export_test.cpp)

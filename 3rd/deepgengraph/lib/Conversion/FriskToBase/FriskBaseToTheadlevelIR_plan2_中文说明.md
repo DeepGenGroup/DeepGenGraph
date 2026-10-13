@@ -394,7 +394,35 @@ shared barrier 放在 leader 分支外，所有线程均可到达。写回也必
 
 ### 8.2 真实布局转换不是 reshape
 
-显式 `ConvertLayoutOpTiling` 的过程是：
+`plan-wmma-layout-conversions` 为 WMMA C 选择连续寄存器布局。线程切分
+Pass 默认调用它：推导前给 GEMM 添加 `frisk.contiguous_c`，推导以连续
+C 布局向下游传播；推导后在 GEMM 硬件输出和连续输出之间插入一次
+`convert_layout`。这适用于所有符合布局条件的 GEMM，不依赖 attention
+或 QK 的名字。WMMA 的 K 累加过程仍使用原硬件 C 布局。
+
+每个转换携带 `frisk.source_layout`、`frisk.target_layout`。来自硬件 C
+分布的转换另有 `frisk.layout_role = "wmmaC"` 和
+`frisk.wmma_instruction = {name = ..., shape = array<i64: M, N, K>}`。
+规划 Pass 检查完整源/目标布局后添加 `frisk.shuffle_plan`；独立运行此
+Pass 也可重新规划已序列化的转换，失效的旧计划会被删除。
+
+当前支持 wave64、f32 的方形 lane/register 转置。源、目标必须保持相同
+的 warp/block 分工、指令平铺及重复次数，并完整覆盖逻辑矩阵。
+图示 16×16 C 的计划为：
+
+```mlir
+frisk.shuffle_plan = {algorithm = "xor_transpose", registers = 4 : i64,
+                     width = 64 : i64, xor_masks = array<i64: 16, 32>}
+```
+
+`ConvertLayoutOpTiling` 对每个 1×4 fragment 生成两阶段转置，每阶段两个
+`gpu.shuffle xor`。源坐标为 `(lane % 16, lane / 16 + 4 * reg)`，
+转换后为 `(lane % 16, 4 * (lane / 16) + reg)`。每个线程的四个寄存器
+因此对应连续四列，外层 fragment 循环覆盖更大的 tile。此路径不产生
+shared scratch 或 block barrier；后续 DCU lowering 将 shuffle 转为
+`ds_bpermute`。XOR mask 从 lane 布局和寄存器数量生成，不从指令名解析。
+
+未通过检查的显式 `ConvertLayoutOpTiling` 保留以下过程：
 
 ```text
 源线程寄存器
@@ -406,6 +434,12 @@ shared barrier 放在 leader 分支外，所有线程均可到达。写回也必
 ```
 
 第一次同步保证写完再读；第二次保证共享存储复用前，所有线程读完。源布局的重复元素仍通过 leader 写入。
+
+`--convert-friskbase-to-thread=wmma-shuffle=false` 可关闭自动连续 C 规划
+及 shuffle lowering；若此前已运行独立规划 Pass 请求连续 C，则该转换
+使用 shared 回退。回归入口为 `test/check_wmma_layout_shuffle.py`，覆盖
+实际生成的 select/shuffle 数据流、多个 wave、不同 tile、规划幂等性、
+失效 metadata、shared 回退及完整 attention lowering。
 
 剩余桥接若形成不同布局的 `To(From(...))`，`ToThreadTileFinalization` 也可从 From 属性恢复源布局，执行类似的共享中转。并非所有未支持的桥接组合都可转换，失败会由最终检查暴露。
 

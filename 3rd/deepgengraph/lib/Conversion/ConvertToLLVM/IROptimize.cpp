@@ -365,6 +365,25 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
         if (auto constant = dyn_cast<AffineConstantExpr>(difference.getResult(0))) {
           if (constant.getValue() != type.getNumElements())
             continue;
+        } else if (auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
+                   threads && threads.getInt() > 0 && threads.getInt() <= 1024 &&
+                   indices.size() == 1 && indices[0].getDefiningOp<gpu::ThreadIdOp>()) {
+          // A composed K permutation plus physical LDS packing can make the
+          // unbounded Presburger proof extremely expensive. Check EVERY legal
+          // thread coordinate instead; this is an exact finite-domain proof,
+          // not sampling. The block's total thread count bounds each axis.
+          bool adjacent = true;
+          for (int64_t tid = 0; tid < threads.getInt(); ++tid) {
+            SmallVector<Attribute> folded;
+            if (failed(difference.constantFold({b.getIndexAttr(tid)}, folded)) ||
+                folded.size() != 1 ||
+                cast<IntegerAttr>(folded[0]).getInt() != type.getNumElements()) {
+              adjacent = false;
+              break;
+            }
+          }
+          if (!adjacent)
+            continue;
         } else {
           // Modulo lane coordinates have intrinsic bounds, e.g.
           // ((lane % 64) / 16 + 4) / 8 == 0. Algebraic simplification alone

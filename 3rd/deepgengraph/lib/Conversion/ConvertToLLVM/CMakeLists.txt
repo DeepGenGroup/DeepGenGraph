@@ -5,6 +5,10 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   LowerPipe.cpp
   IROptimize.cpp
   FuseFragmentAccumulator.cpp
+  FuseMMACAccumulator.cpp
+  OptimizeRegisterLifetimes.cpp
+  OptimizeRegisterMath.cpp
+  PrefetchGlobalPackets.cpp
 
   DEPENDS
   ThreadToLLVMPasseIncGen
