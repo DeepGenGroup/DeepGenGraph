@@ -2,6 +2,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -55,7 +56,8 @@ void exposeThreadBounds(llvm::Function &function) {
     auto *bound = llvm::mdconst::dyn_extract<llvm::ConstantInt>(size->getOperand(axis));
     if (!bound || bound->getValue().getActiveBits() > 11 ||
         bound->isZero() || bound->getZExtValue() > 1024) continue;
-    auto range = llvm::computeConstantRange(&inst, false).intersectWith(
+    auto range = llvm::computeConstantRange(
+        &inst, false, llvm::SimplifyQuery(function.getDataLayout())).intersectWith(
         llvm::ConstantRange(llvm::APInt(32, 0), llvm::APInt(32, bound->getZExtValue())));
     if (!range.isEmptySet() && !range.isFullSet())
       inst.setMetadata(llvm::LLVMContext::MD_range,
@@ -86,7 +88,8 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
   for (auto &inst : llvm::instructions(function))
     if (isThreadID(&inst)) ids.push_back(llvm::cast<llvm::IntrinsicInst>(&inst));
   for (auto *id : ids) {
-    auto range = llvm::computeConstantRange(id, false);
+    auto range = llvm::computeConstantRange(
+        id, false, llvm::SimplifyQuery(function.getDataLayout()));
     if (!range.getUnsignedMin().isZero() || range.isFullSet() ||
         range.getUnsignedMax().uge(1024)) continue;
     unsigned count = range.getUnsignedMax().getZExtValue() + 1;
@@ -244,7 +247,8 @@ llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
   call->addFnAttr(llvm::Attribute::Convergent);
   call->setMetadata(marker, llvm::MDNode::get(before->getContext(), {}));
   if (isThreadID(value)) {
-    auto range = llvm::computeConstantRange(value, false);
+    auto range = llvm::computeConstantRange(
+        value, false, llvm::SimplifyQuery(before->getDataLayout()));
     // The identity must retain known thread bounds, otherwise constant-index
     // divisions may become much more expensive after hiding the intrinsic.
     if (auto *size = before->getFunction()->getMetadata("reqd_work_group_size")) {

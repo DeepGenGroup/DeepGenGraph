@@ -53,7 +53,7 @@ struct FlattenDynamicVectorExtract
     VectorType flatType = VectorType::get(
         {sourceType.getNumElements()}, sourceType.getElementType());
     Value flatVector = rewriter.create<vector::ShapeCastOp>(
-        loc, flatType, op.getVector());
+        loc, flatType, op.getSource());
     Value linearIndex = linearizeVectorPosition(
         rewriter, loc, sourceType, op.getMixedPosition());
     rewriter.replaceOpWithNewOp<vector::ExtractOp>(op, flatVector,
@@ -209,6 +209,8 @@ struct VectorToLLVMPass : public PassWrapper<VectorToLLVMPass, OperationPass<Mod
       mlir::vector::populateVectorStepLoweringPatterns(patterns);
       mlir::vector::populateVectorRankReducingFMAPattern(patterns);
       mlir::vector::populateVectorGatherLoweringPatterns(patterns);
+      mlir::vector::populateVectorFromElementsUnrollPatterns(patterns);
+      mlir::vector::populateVectorToElementsUnrollPatterns(patterns);
       patterns.add<FlattenDynamicVectorExtract, FlattenDynamicVectorInsert>(
           &getContext(), PatternBenefit(2));
       (void)applyPatternsGreedily(getOperation(), std::move(patterns));

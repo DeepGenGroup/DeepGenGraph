@@ -50,7 +50,7 @@ public:
     KernelOp k = getOperation();
 
     patterns.add<ReplaceExpWithExp2Pattern>(context);
-    if (applyPatternsAndFoldGreedily(k, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(k, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

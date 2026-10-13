@@ -51,7 +51,7 @@
 #include "mlir/Dialect/Linalg/Passes.h"
 #include <cassert>
 #include "mlir/Dialect/Affine/Transforms/Transforms.h"
-#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/InitAllPasses.h"
 

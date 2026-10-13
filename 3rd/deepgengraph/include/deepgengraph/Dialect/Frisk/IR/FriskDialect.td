@@ -9,6 +9,9 @@ def Frisk_Dialect : Dialect {
 
   let cppNamespace = "::mlir::frisk";
 
+  // Preserve the existing IR syntax with inherent attributes in attr-dict.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let summary = "Frisk Dialact in MLIR";
 
   let description = [{

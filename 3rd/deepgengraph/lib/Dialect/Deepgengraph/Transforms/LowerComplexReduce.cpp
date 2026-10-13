@@ -79,7 +79,7 @@ public:
 
     patterns.add<SoftmaxPattern>(context);
     patterns.add<NormalizePattern>(context);
-    if (applyPatternsAndFoldGreedily(op, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(op, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

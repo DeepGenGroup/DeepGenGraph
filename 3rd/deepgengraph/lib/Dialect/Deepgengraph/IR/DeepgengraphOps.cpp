@@ -121,7 +121,7 @@ LogicalResult SpecifyTypeOp::inferReturnTypes(::mlir::MLIRContext *context, std:
 
 #define BINARY_ELEMENTWISE_OP_INFER_RETURN_TYPES(Op)                                                                   \
   LogicalResult Op::inferReturnTypes(MLIRContext *context, std::optional<Location> location, ValueRange operands,      \
-                                     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,      \
+                                     DictionaryAttr attributes, PropertyRef properties, RegionRange regions,      \
                                      SmallVectorImpl<Type> &inferredReturnTypes) {                                     \
     auto expected_result_shape =                                                                                       \
         BroadcastableBinaryOpInterface::Trait<Op>::getExpectedResultShapeBy(operands[0], operands[1]);                 \

@@ -50,6 +50,16 @@
 #include <vector>
 
 namespace mlir::frisk {
+
+KernelConfig *GetKernelConfig() {
+  static KernelConfig cfg = [] {
+    KernelConfig value;
+    value.num_threads = 128;
+    value.gridDimXYZ = {64, 32, 1};
+    return value;
+  }();
+  return &cfg;
+}
   
 #define GEN_PASS_DEF_KERNELOPTOFRISK
 #define GEN_PASS_DEF_MEMANDCALCOPTOFRISK
@@ -615,8 +625,7 @@ struct PointerOfConversionPattern : public OpConversionPattern<deepgengraph::tri
     // 删除
     auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
     auto blockArg = getKernelArgById(op, argId);
-    rewriter.replaceAllUsesWith(op, blockArg);
-    rewriter.eraseOp(op);
+    rewriter.replaceOp(op, blockArg);
     return success();
   }
 };
@@ -716,8 +725,7 @@ struct BlockPointerOfConversionPattern
     else{
       // write，将所有使用op结果的位置替换为 globalMem，之后删除op
       auto kernelOp = op->getParentOfType<frisk::KernelOp>();
-      rewriter.replaceAllUsesExcept(op, kernelOp.getArgument(argId), op);
-      rewriter.eraseOp(op);
+      rewriter.replaceOp(op, kernelOp.getArgument(argId));
     }
     return success();
   }
@@ -890,13 +898,17 @@ struct BlockStoreConversionPattern : public OpConversionPattern<deepgengraph::tr
     auto temp = mlir::cast<MemRefType>(src.getType());
     auto newSrcTy = MemRefType::get(temp.getShape(), temp.getElementType(), AffineMap{}, int(friskMs::Shared));
     src.setType(newSrcTy);
-    auto dst = adaptor.getDstPointer();
+    // The adaptor converts a block pointer to a tile-shaped memref, but a
+    // global store needs the original kernel buffer and its physical layout.
+    // Using the adaptor here leaves materialization casts between the tile
+    // and global buffer types and loses the base-offset addressing.
+    auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
+    auto dst = getKernelArgById(op, argId);
     auto dstMemref = mlir::dyn_cast<MemRefType>(dst.getType());
     auto srcMemref = mlir::dyn_cast<MemRefType>(src.getType());
 
     if(dstMemref.getRank() > srcMemref.getRank() || dstMemref.getShape() != srcMemref.getShape()){
       // 从shm拷贝到global
-      auto argId = op->getAttrOfType<IntegerAttr>("argId").getInt();
       auto info = state.accesses.lookup(op);
       if (!info) return op.emitError("missing block store address information");
       auto& offsetMap = info->baseOffsetMap;
@@ -1130,12 +1142,6 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       newResults.push_back(defOp->getResult(0));
     }
     llvm::outs() << "op.getNumIterOperands() = " << op.getNumIterOperands() << "\n";llvm::outs().flush();
-    for(int i=0;i<op.getNumIterOperands();++i){
-      auto to = newResults[i];
-      auto from = op.getRegionIterArgs()[i];
-      rewriter.replaceAllUsesExcept(from, to, op);
-    }
-
     auto vr = ValueRange{};
 
     // 1. 创建新的 AffineForOp，并为其生成带有正确参数（仅感应变量 Index）的空 Body 
@@ -1157,6 +1163,8 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
     Block *newBlock = newForOp.getBody();
     SmallVector<Value> replacements{newBlock->getArgument(0)};
     replacements.append(newResults.begin(), newResults.end());
+    // mergeBlocks also replaces the old block arguments. Register each
+    // replacement only once with the conversion rewriter.
     rewriter.mergeBlocks(oldBlock, newBlock, replacements);
 
     // 5. 单独处理旧的 Terminator (AffineYieldOp)。
@@ -1188,8 +1196,7 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
 
     // 6. 用新 Op 替代旧 Op，并返回成功
     
-    rewriter.replaceAllUsesWith(op->getResults(), newResults);
-    rewriter.eraseOp(op);
+    rewriter.replaceOp(op, newResults);
     return success();
   }
 };

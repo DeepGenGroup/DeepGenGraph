@@ -59,7 +59,7 @@
 #include "mlir/Dialect/Linalg/Passes.h"
 #include <cassert>
 #include "mlir/Dialect/Affine/Transforms/Transforms.h"
-#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/InitAllPasses.h"
 
@@ -307,9 +307,10 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
 
   auto diFile = LLVM::DIFileAttr::get(ctx, basename.str(), directory.str());
   auto compileUnit = LLVM::DICompileUnitAttr::get(
-      ctx, DistinctAttr::create(UnitAttr::get(ctx)), llvm::dwarf::DW_LANG_C,
+      DistinctAttr::create(UnitAttr::get(ctx)), llvm::dwarf::DW_LANG_C,
       diFile, builder.getStringAttr("DeepGenGraph MLIR"), false,
-      LLVM::DIEmissionKind::LineTablesOnly, LLVM::DINameTableKind::Default);
+      LLVM::DIEmissionKind::LineTablesOnly, /*isDebugInfoForProfiling=*/false,
+      LLVM::DINameTableKind::Default);
   auto subroutineType =
       LLVM::DISubroutineTypeAttr::get(ctx, ArrayRef<LLVM::DITypeAttr>{});
 
@@ -360,138 +361,20 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
   });
 }
 
-llvm::Value *materializeSplatConstant(llvm::Constant *constant,
-                                      llvm::Instruction *insertBefore,
-                                      llvm::Constant *zero,
-                                      llvm::DebugLoc debugLoc) {
-  if (!constant ||
-      llvm::isa<llvm::ConstantAggregateZero, llvm::UndefValue,
-                llvm::PoisonValue>(constant)) {
-    return constant;
-  }
-
-  if (auto *vectorType =
-          llvm::dyn_cast<llvm::FixedVectorType>(constant->getType())) {
-    llvm::Constant *splatValue = constant->getSplatValue();
-    if (!splatValue ||
-        llvm::isa<llvm::UndefValue, llvm::PoisonValue>(splatValue)) {
-      return constant;
-    }
-
-    auto *insert = llvm::InsertElementInst::Create(
-        llvm::PoisonValue::get(vectorType), splatValue, zero,
-        "compat.splat.insert", insertBefore);
-    insert->setDebugLoc(debugLoc);
-    llvm::SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
-    auto *shuffle = new llvm::ShuffleVectorInst(
-        insert, llvm::PoisonValue::get(vectorType), mask, "compat.splat",
-        insertBefore);
-    shuffle->setDebugLoc(debugLoc);
-    return shuffle;
-  }
-
-  if (!constant->getType()->isAggregateType() || constant->getNumOperands() == 0) {
-    return constant;
-  }
-
-  bool changed = false;
-  llvm::SmallVector<llvm::Value *, 8> elements;
-  elements.reserve(constant->getNumOperands());
-  for (llvm::Use &operand : constant->operands()) {
-    auto *elementConstant = llvm::dyn_cast<llvm::Constant>(operand.get());
-    if (!elementConstant) {
-      return constant;
-    }
-    llvm::Value *element =
-        materializeSplatConstant(elementConstant, insertBefore, zero, debugLoc);
-    changed |= element != elementConstant;
-    elements.push_back(element);
-  }
-  if (!changed) {
-    return constant;
-  }
-
-  llvm::Value *aggregate = llvm::PoisonValue::get(constant->getType());
-  for (auto [idx, element] : llvm::enumerate(elements)) {
-    auto *insert = llvm::InsertValueInst::Create(
-        aggregate, element, {static_cast<unsigned>(idx)},
-        "compat.splat.aggregate", insertBefore);
-    insert->setDebugLoc(debugLoc);
-    aggregate = insert;
-  }
-  return aggregate;
-}
-
-void materializeSplatVectorConstants(llvm::Module &module) {
-  llvm::LLVMContext &context = module.getContext();
-  llvm::Type *i32Type = llvm::Type::getInt32Ty(context);
-  llvm::Constant *zero = llvm::ConstantInt::get(i32Type, 0);
-
-  for (llvm::Function &function : module) {
-    for (llvm::BasicBlock &block : function) {
-      for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
-        if (auto *phi = llvm::dyn_cast<llvm::PHINode>(&inst)) {
-          for (unsigned idx = 0, e = phi->getNumIncomingValues(); idx < e;
-               ++idx) {
-            auto *constant =
-                llvm::dyn_cast<llvm::Constant>(phi->getIncomingValue(idx));
-            if (!constant) {
-              continue;
-            }
-            llvm::Instruction *insertBefore =
-                phi->getIncomingBlock(idx)->getTerminator();
-            llvm::Value *materialized = materializeSplatConstant(
-                constant, insertBefore, zero, phi->getDebugLoc());
-            if (materialized != constant) {
-              phi->setIncomingValue(idx, materialized);
-            }
-          }
-          continue;
-        }
-
-        for (unsigned idx = 0, e = inst.getNumOperands(); idx < e; ++idx) {
-          auto *constant =
-              llvm::dyn_cast<llvm::Constant>(inst.getOperand(idx));
-          if (!constant) {
-            continue;
-          }
-          llvm::Value *materialized =
-              materializeSplatConstant(constant, &inst, zero, inst.getDebugLoc());
-          if (materialized != constant) {
-            inst.setOperand(idx, materialized);
-          }
-        }
-      }
-    }
-  }
-}
-
-void printLegacyCompatibleLLVMIR(llvm::Module &module, llvm::raw_ostream &os) {
+void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
-  mlir::frisk::prepareSharedMemoryForLegacyLLVM(module);
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
   module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
   buffer.flush();
 
-  mlir::frisk::legalizeLLVMTextForLegacyLLVM(text);
+  mlir::frisk::legalizeLLVMTextForLLVM22(text);
 
   os << text;
 }
 
 } // namespace
-
-frisk::KernelConfig* frisk::GetKernelConfig() {
-  static frisk::KernelConfig cfg = [] {
-    frisk::KernelConfig value;
-    value.num_threads = 128;
-    value.gridDimXYZ = {64,32,1};
-    return value;
-  }();
-  return &cfg;
-}
-
 
 void frisk::AppendNameToLoc(mlir::Operation* targetOp){
   // 假设 op 是已有的 Operation*，newOpName 是你要追加的信息
@@ -829,9 +712,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::prefetchGlobalPackets(*llvmModule);
   if (optimizeLifetimes)
     frisk::optimizeRegisterLifetimes(*llvmModule);
-  // Register math canonicalization can introduce new vector splats. Materialize
-  // after it so exported IR remains parseable by the LLVM 15 DTK backend.
-  materializeSplatVectorConstants(*llvmModule);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -843,7 +723,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
                  << ec.message() << "\n";
     return 1;
   }
-  printLegacyCompatibleLLVMIR(*llvmModule, os);
+  printLLVM22CompatibleIR(*llvmModule, os);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

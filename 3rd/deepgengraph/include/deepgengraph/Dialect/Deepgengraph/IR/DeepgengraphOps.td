@@ -131,7 +131,7 @@ def CmpOp: Deepgengraph_Op<"cmp", [Pure, BroadcastableBinaryOpInterface, InferTy
     Deepgengraph_CmpTypeAttr:$cmp_type
   );
   let results = (outs AS_BoolTensor:$result);
-  let assemblyFormat =  "$cmp_type $lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat =  "enum($cmp_type) $lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
@@ -154,7 +154,7 @@ def RngOp: Deepgengraph_Op<"rng", [Pure]> {
 
   let results = (outs AS_AnyTensor:$result);
 
-  let assemblyFormat =  "`distribution` `=` $rng_distribution attr-dict `:` type($result)";
+  let assemblyFormat =  "`distribution` `=` enum($rng_distribution) attr-dict `:` type($result)";
 
 }
 
@@ -357,7 +357,7 @@ def ReduceOp: Deepgengraph_Op<"reduce", [Pure, SameOperandsAndResultElementType,
     }]>
   ];
 
-  let assemblyFormat =  "`(` $operand ( `,` `init` `=` $init^ )? `)` `,` `dim` `=` $reduce_dimension `,` `op` `=` $reduce_type attr-dict `,` `keep_dim` `=` $keep_dim `:` functional-type(operands, results)";
+  let assemblyFormat =  "`(` $operand ( `,` `init` `=` $init^ )? `)` `,` `dim` `=` $reduce_dimension `,` `op` `=` enum($reduce_type) attr-dict `,` `keep_dim` `=` $keep_dim `:` functional-type(operands, results)";
 
   // let hasVerifier = 1;
 }
@@ -615,7 +615,7 @@ def MaskYieldOp: Deepgengraph_Op<"mask_yield", [Pure, ReturnLike, Terminator, Ha
   let arguments = (ins Variadic<AS_FloatIntLike>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
 
   let assemblyFormat = "attr-dict $srcs `:` type($srcs)";
@@ -624,7 +624,7 @@ def MaskYieldOp: Deepgengraph_Op<"mask_yield", [Pure, ReturnLike, Terminator, Ha
 
 def KernelOp: Deepgengraph_Op<"kernel", [
   AffineScope, AutomaticAllocationScope,
-  CallableOpInterface, FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface
+  CallableOpInterface, SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface
 ]> {
   let summary = "deepgengraph kernel";
   let description = [{
@@ -775,7 +775,7 @@ def ReturnOp : Deepgengraph_Op<"return", [Pure, HasParent<"KernelOp">, /*MemRefs
   let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
@@ -833,7 +833,7 @@ def CallOp : Deepgengraph_Op<"call", [/*CallOpInterface,*/ /*MemRefsNormalizable
 
     // Set the callee for this operation.
     void setCalleeFromCallable(CallInterfaceCallable callee) {
-      (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
+      (*this)->setAttr("callee", cast<SymbolRefAttr>(callee));
     }
 
     // Required by CallOpInterface.
@@ -868,7 +868,7 @@ def ParallelYieldOp: Deepgengraph_Op<"parallel_yield", [Pure, ReturnLike, Termin
   let description = [{}];
   let arguments = (ins Variadic<AS_AnyTensor>:$srcs);
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
   let assemblyFormat = "attr-dict $srcs `:` type($srcs)";
 }

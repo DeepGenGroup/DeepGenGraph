@@ -21,6 +21,13 @@ def body(text, name):
     return re.search(r'define [^@]*@' + name + r'\(.*?\n\}', text, re.S)[0]
 
 
+def normalize_metadata_ids(text):
+    # Metadata slot numbers may change when LLVM parses and prints the IR.
+    slots = {slot: str(index) for index, slot in enumerate(
+        re.findall(r'^!(\d+) =', text, re.M))}
+    return re.sub(r'!(\d+)\b', lambda match: '!' + slots[match[1]], text)
+
+
 def main():
     tool = Path(sys.argv[1]).resolve()
     llvm = Path('/data2/xsl/install/bin')
@@ -60,7 +67,7 @@ define half @scalar(float %x) {
 }
 declare i32 @llvm.amdgcn.workitem.id.y()
 declare i32 @llvm.amdgcn.workitem.id.z()
-define amdgpu_kernel void @axes(ptr addrspace(1) %out, i1 %cond) !reqd_work_group_size !0 {
+define amdgpu_kernel void @axes(ptr addrspace(1) %out, i1 %cond) "amdgpu-flat-work-group-size"="256,256" !reqd_work_group_size !0 {
 entry:
   %y = call i32 @llvm.amdgcn.workitem.id.y()
   %z = call i32 @llvm.amdgcn.workitem.id.z()
@@ -106,7 +113,8 @@ define <2 x half> @unknown_math(float %x) {
 '''
     output = run([tool, '--optimize-register-lifetimes', '-'], source)
     run([llvm / 'opt', '-passes=verify', '-disable-output', '-'], output)
-    assert run([tool, '--optimize-register-lifetimes', '-'], output) == output
+    repeated = run([tool, '--optimize-register-lifetimes', '-'], output)
+    assert normalize_metadata_ids(repeated) == normalize_metadata_ids(output)
     address = body(output, 'address')
     assert 'address.local' not in address.split('loop:')[0]
     assert address.count('load volatile') == 1 and address.count('store volatile') == 1

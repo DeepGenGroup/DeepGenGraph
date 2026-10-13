@@ -220,6 +220,7 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
     auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
         op->getLoc(),newRetTy , vr, asm_string, constraints,
         /*has_side_effects=*/true, /*is_align_stack=*/false,
+        LLVM::tailcallkind::TailCallKind::None, /*convergent=*/true,
         /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr);
     auto ret = asmOp.getResult(0);
 

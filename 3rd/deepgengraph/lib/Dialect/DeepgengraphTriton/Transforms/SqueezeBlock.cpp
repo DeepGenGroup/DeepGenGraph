@@ -134,7 +134,7 @@ public:
     KernelOp k = getOperation();
 
     patterns.add<SqueezeBlockPattern>(context);
-    if (applyPatternsAndFoldGreedily(k, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(k, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

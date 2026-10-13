@@ -57,7 +57,7 @@ public:
     ModuleOp m = getOperation();
 
     patterns.add<MulScalarHoistingPattern>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

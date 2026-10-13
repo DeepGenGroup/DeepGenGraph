@@ -256,7 +256,7 @@ def YieldOp : Tilelang_Op<"yield", [Terminator]> {
   let summary = "indicates val reused among iterations for T.SerialFor";
   let arguments = (ins Variadic<AnyType>:$srcs);
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
 }
@@ -271,7 +271,7 @@ def ReturnOp : Tilelang_Op<"return", [Pure, HasParent<"PrimFuncOp">, /*MemRefsNo
   let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
@@ -357,7 +357,7 @@ def WithScopeOp : Tilelang_Op<"with_scope", [
 }
 
 
-def PrimFuncOp: Tilelang_Op<"prim_func", [FunctionOpInterface, IsolatedFromAbove]> {
+def PrimFuncOp: Tilelang_Op<"prim_func", [SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove]> {
   let summary = "@T.prim_func";
   let description = [{
   用于声明一个 tilelang 中的 prim_func
@@ -439,7 +439,7 @@ def ParallelYieldOp: Tilelang_Op<"parallel_yield", [Pure, ReturnLike, Terminator
   let description = [{}];
   let arguments = (ins Variadic<AnyTensor>:$srcs);
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
   let assemblyFormat = "attr-dict $srcs `:` type($srcs)";
 }

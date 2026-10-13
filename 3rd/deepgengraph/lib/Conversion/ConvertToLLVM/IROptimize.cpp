@@ -42,7 +42,7 @@ static bool collectIndexLoops(Value value,
   // every other input to the recurrence must still be statically determined.
   if (!visiting.insert(value).second)
     return true;
-  auto guard = llvm::make_scope_exit([&] { visiting.erase(value); });
+  auto guard = llvm::scope_exit([&] { visiting.erase(value); });
   auto collectLoop = [&](affine::AffineForOp loop) {
     auto count = affine::getConstantTripCount(loop);
     if (!count || *count == 0 || *count > 64)

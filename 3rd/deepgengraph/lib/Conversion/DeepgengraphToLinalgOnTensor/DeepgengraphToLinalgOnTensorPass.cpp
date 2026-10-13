@@ -173,7 +173,7 @@ struct DivOpConversion : public OpConversionPattern<deepgengraph::DivOp> {
     // 生成 Maps
     auto affineMaps = getLeftAlignedAffineMap(rewriter, lhs_shape, rhs_shape, resShape);
 
-    auto kind = linalg::ElementwiseKindAttr::get(rewriter.getContext(), ::mlir::linalg::ElementwiseKind::div);
+    auto kind = ::mlir::linalg::ElementwiseKind::div;
     
     // 创建 Generic Op / Elementwise Op
     // 注意：linalg::ElementwiseOp 在某些 LLVM 版本可能是指 linalg.generic 的一种特化 helper
@@ -266,7 +266,7 @@ struct ExpOpConversion : public OpConversionPattern<deepgengraph::ExpOp> {
     }
     auto inMap = AffineMap::get(retShape.size(),0,dims,rewriter.getContext());
     auto outMap = mlir::AffineMap::getMultiDimIdentityMap(retShape.size(), rewriter.getContext());
-    auto kind = linalg::ElementwiseKindAttr::get(rewriter.getContext(), ::mlir::linalg::ElementwiseKind::exp);
+    auto kind = ::mlir::linalg::ElementwiseKind::exp;
     std::vector<AffineMap> map = {inMap, outMap};
     auto newOp = rewriter.create<linalg::ElementwiseOp>(
         loc,
@@ -340,7 +340,7 @@ struct AddOpConversion : public OpConversionPattern<deepgengraph::AddOp> {
     AffineMap lhsMap = AffineMap::get(retShape.size(), 0, lhsDims, rewriter.getContext());
     AffineMap rhsMap = AffineMap::get(retShape.size(), 0, rhsDims, rewriter.getContext());
     AffineMap outMap = mlir::AffineMap::getMultiDimIdentityMap(retShape.size(), rewriter.getContext());
-    auto kind = linalg::ElementwiseKindAttr::get(rewriter.getContext(), ::mlir::linalg::ElementwiseKind::add);
+    auto kind = ::mlir::linalg::ElementwiseKind::add;
     std::vector<AffineMap> map = {lhsMap, rhsMap, outMap};
     auto newOp = rewriter.create<linalg::ElementwiseOp>(
         loc,
@@ -631,7 +631,7 @@ struct BroadcastableBinaryOpInterfaceRewritePattern : public OpInterfaceConversi
       return emitError(loc, "Unsupported op!");
     }
 
-    auto kind = linalg::ElementwiseKindAttr::get(rewriter.getContext(), enumKind);
+    auto kind = enumKind;
     std::vector<AffineMap> map = {lhsMap, rhsMap, outMap};
     auto newOp = rewriter.create<linalg::ElementwiseOp>(
         loc,
@@ -698,7 +698,7 @@ struct ElementwiseUnaryOpConversion : public OpInterfaceConversionPattern<deepge
     else{
       return emitError(loc,"Unsupported Op");
     }
-    auto kind = linalg::ElementwiseKindAttr::get(rewriter.getContext(), enumKind);
+    auto kind = enumKind;
     std::vector<AffineMap> map = {inMap, outMap};
     
     auto newOp = rewriter.create<linalg::ElementwiseOp>(

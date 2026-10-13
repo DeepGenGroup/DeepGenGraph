@@ -91,7 +91,7 @@ public:
     ModuleOp m = getOperation();
 
     patterns.add<PermuteHoistingPattern>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

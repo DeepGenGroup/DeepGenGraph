@@ -8,6 +8,10 @@ class Module;
 }
 
 namespace mlir::frisk {
+/// Emit LLVM 24 floating-point literals in LLVM 22 syntax without changing
+/// their bit patterns. Preserve LLVM 22 memory effects, flags and attributes.
+void legalizeLLVMTextForLLVM22(std::string &text);
+
 /// Apply legalizeLLVMText.py's memory-attribute mappings first, then the
 /// existing legacy text rewrites. Unmatched memory effects are not stripped.
 void legalizeLLVMTextForLegacyLLVM(std::string &text);

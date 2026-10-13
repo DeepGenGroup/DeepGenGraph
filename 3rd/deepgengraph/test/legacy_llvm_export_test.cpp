@@ -8,14 +8,18 @@
 #include "llvm/Support/raw_ostream.h"
 
 int main(int argc, char **argv) {
-  if (argc == 3 && llvm::StringRef(argv[1]) == "--legalize-text") {
+  if (argc == 3 && (llvm::StringRef(argv[1]) == "--legalize-text" ||
+                    llvm::StringRef(argv[1]) == "--llvm22-text")) {
     auto buffer = llvm::MemoryBuffer::getFileOrSTDIN(argv[2]);
     if (!buffer) {
       llvm::errs() << buffer.getError().message() << "\n";
       return 1;
     }
     std::string text = (*buffer)->getBuffer().str();
-    mlir::frisk::legalizeLLVMTextForLegacyLLVM(text);
+    if (llvm::StringRef(argv[1]) == "--llvm22-text")
+      mlir::frisk::legalizeLLVMTextForLLVM22(text);
+    else
+      mlir::frisk::legalizeLLVMTextForLegacyLLVM(text);
     llvm::outs() << text;
     return 0;
   }

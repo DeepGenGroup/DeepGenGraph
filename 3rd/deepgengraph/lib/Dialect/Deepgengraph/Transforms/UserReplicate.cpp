@@ -58,7 +58,7 @@ public:
     ModuleOp m = getOperation();
 
     patterns.add<UserReplicatePattern>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

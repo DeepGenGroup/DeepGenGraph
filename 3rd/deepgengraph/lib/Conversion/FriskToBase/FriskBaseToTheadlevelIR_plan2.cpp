@@ -2744,10 +2744,13 @@ public:
         // this iteration. Replace only dominated block-tile uses, including
         // yields, while retaining pre-copy reads and loop initial values.
         DominanceInfo dominance(op->getParentOfType<func::FuncOp>());
-        rewriter.replaceUsesWithIf(op.getDst(), block, [&](OpOperand &use) {
-          return use.getOwner() != op &&
-                 dominance.properlyDominates(block.getDefiningOp(), use.getOwner());
-        });
+        // Conditional replacement is unavailable in conversion rollback mode.
+        // These same-type operand edits can be tracked and rolled back in place.
+        for (OpOperand &use : llvm::make_early_inc_range(op.getDst().getUses())) {
+          if (use.getOwner() != op &&
+              dominance.properlyDominates(block.getDefiningOp(), use.getOwner()))
+            rewriter.modifyOpInPlace(use.getOwner(), [&] { use.set(block); });
+        }
         rewriter.eraseOp(op);
       }
       return success();

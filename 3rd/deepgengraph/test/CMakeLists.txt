@@ -19,6 +19,7 @@ get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 # get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 get_property(deepgengraph_libs GLOBAL PROPERTY DEEPGENGRAPH_LIBS)
 target_link_libraries(ThreadTilingTest PRIVATE
+  MLIRRegisterAllDialects
   ${dialect_libs} ${conversion_libs} ${extension_libs}
   FriskToBase DeepgengraphAnalysis FriskIR DeepgengraphIR
   DeepgengraphTritonIR TilelangIR MLIROptLib)
@@ -30,6 +31,8 @@ target_link_libraries(LegacyLLVMExportTest PRIVATE
   ConvertThreadToLLVMIR LLVMIRReader)
 
 target_link_libraries(MyTest PRIVATE
+  MLIRRegisterAllDialects
+  MLIRRegisterAllExtensions
   ${dialect_libs}
   ${conversion_libs}
   ${extension_libs}

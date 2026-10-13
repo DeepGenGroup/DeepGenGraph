@@ -4,6 +4,7 @@
 #include "llvm/IR/InlineAsm.h"
 #undef TID
 #include <cassert>
+#include <cctype>
 #include <dlfcn.h>
 #include <filesystem>
 #include "llvm/Passes/OptimizationLevel.h"
@@ -19,10 +20,12 @@
 #include <climits>
 #include <cfloat>
 #include "llvm/ADT/StringRef.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 
+#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -156,7 +159,7 @@ void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
       // An invoke result is only available on its normal edge; splitting that
       // edge needs an EH-aware transform. Frisk emits ordinary branch edges.
       if (!llvm::all_of(phi->blocks(), [](BasicBlock *block) {
-            return isa<BranchInst, SwitchInst>(block->getTerminator());
+            return isa<UncondBrInst, CondBrInst, SwitchInst>(block->getTerminator());
           }))
         continue;
       builder.SetInsertPoint(phi->getParent(), phi->getParent()->getFirstInsertionPt());
@@ -173,118 +176,83 @@ void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
   convertUsersOfConstantsToInstructions(sharedGlobals);
 }
 
-static llvm::Value *materializeSplatConstant(llvm::Constant *constant,
-                                             llvm::Instruction *insertBefore,
-                                             llvm::Constant *zero,
-                                             llvm::DebugLoc debugLoc) {
-  if (!constant ||
-      llvm::isa<llvm::ConstantAggregateZero, llvm::UndefValue,
-                llvm::PoisonValue>(constant)) {
-    return constant;
-  }
-
-  if (auto *vectorType =
-          llvm::dyn_cast<llvm::FixedVectorType>(constant->getType())) {
-    llvm::Constant *splatValue = constant->getSplatValue();
-    if (!splatValue ||
-        llvm::isa<llvm::UndefValue, llvm::PoisonValue>(splatValue)) {
-      return constant;
-    }
-
-    auto *insert = llvm::InsertElementInst::Create(
-        llvm::PoisonValue::get(vectorType), splatValue, zero,
-        "compat.splat.insert", insertBefore);
-    insert->setDebugLoc(debugLoc);
-    llvm::SmallVector<int, 16> mask(vectorType->getNumElements(), 0);
-    auto *shuffle = new llvm::ShuffleVectorInst(
-        insert, llvm::PoisonValue::get(vectorType), mask, "compat.splat",
-        insertBefore);
-    shuffle->setDebugLoc(debugLoc);
-    return shuffle;
-  }
-
-  if (!constant->getType()->isAggregateType() || constant->getNumOperands() == 0) {
-    return constant;
-  }
-
-  bool changed = false;
-  llvm::SmallVector<llvm::Value *, 8> elements;
-  elements.reserve(constant->getNumOperands());
-  for (llvm::Use &operand : constant->operands()) {
-    auto *elementConstant = llvm::dyn_cast<llvm::Constant>(operand.get());
-    if (!elementConstant) {
-      return constant;
-    }
-    llvm::Value *element =
-        materializeSplatConstant(elementConstant, insertBefore, zero, debugLoc);
-    changed |= element != elementConstant;
-    elements.push_back(element);
-  }
-  if (!changed) {
-    return constant;
-  }
-
-  llvm::Value *aggregate = llvm::PoisonValue::get(constant->getType());
-  for (auto [idx, element] : llvm::enumerate(elements)) {
-    auto *insert = llvm::InsertValueInst::Create(
-        aggregate, element, {static_cast<unsigned>(idx)},
-        "compat.splat.aggregate", insertBefore);
-    insert->setDebugLoc(debugLoc);
-    aggregate = insert;
-  }
-  return aggregate;
-}
-
-static void materializeSplatVectorConstants(Module &module) {
-  LLVMContext &context = module.getContext();
-  llvm::Type *i32Type = llvm::Type::getInt32Ty(context);
-  llvm::Constant *zero = llvm::ConstantInt::get(i32Type, 0);
-
-  for (llvm::Function &function : module) {
-    for (llvm::BasicBlock &block : function) {
-      for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
-        if (auto *phi = llvm::dyn_cast<llvm::PHINode>(&inst)) {
-          for (unsigned idx = 0, e = phi->getNumIncomingValues(); idx < e;
-               ++idx) {
-            auto *constant =
-                llvm::dyn_cast<llvm::Constant>(phi->getIncomingValue(idx));
-            if (!constant) {
-              continue;
-            }
-            llvm::Instruction *insertBefore =
-                phi->getIncomingBlock(idx)->getTerminator();
-            llvm::Value *materialized = materializeSplatConstant(
-                constant, insertBefore, zero, phi->getDebugLoc());
-            if (materialized != constant) {
-              phi->setIncomingValue(idx, materialized);
-            }
-          }
-          continue;
-        }
-
-        for (unsigned idx = 0, e = inst.getNumOperands(); idx < e; ++idx) {
-          auto *constant =
-              llvm::dyn_cast<llvm::Constant>(inst.getOperand(idx));
-          if (!constant) {
-            continue;
-          }
-          llvm::Value *materialized =
-              materializeSplatConstant(constant, &inst, zero, inst.getDebugLoc());
-          if (materialized != constant) {
-            inst.setOperand(idx, materialized);
-          }
-        }
-      }
-    }
-  }
-}
-
 static void replaceAll(std::string &text, StringRef from, StringRef to) {
   size_t pos = 0;
   while ((pos = text.find(from.str(), pos)) != std::string::npos) {
     text.replace(pos, from.size(), to.str());
     pos += to.size();
   }
+}
+
+void legalizeLLVMTextForLLVM22(std::string &text) {
+  // LLVM 24 prints decimal literals rounded at the declared precision, plus
+  // f0x/inf/nan spellings. LLVM 22 requires exact hexadecimal constants.
+  // Track the last scalar FP type on each line, including vector element
+  // types, since binary instructions do not repeat the second operand's type.
+  // Skip strings/comments so assembly, names and debug info remain unchanged.
+  static const std::regex literal(
+      R"re(("(?:[^"\\]|\\.)*"|;[^\n]*|\n)|\b(half|bfloat|float|double)\b|(f0x[0-9A-Fa-f]+|[+-]?(?:[0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?|inf|qnan|s?nan\(0x[0-9A-Fa-f]+\))))re");
+  llvm::LLVMContext context;
+  llvm::Module module("llvm22-float-constants", context);
+  std::string result;
+  std::string type;
+  size_t position = 0;
+  for (std::sregex_iterator it(text.begin(), text.end(), literal), end;
+       it != end; ++it) {
+    const auto &match = *it;
+    if (match[1].matched) {
+      if (match.str() == "\n")
+        type.clear();
+      continue;
+    }
+    auto isNameChar = [](unsigned char c) {
+      return std::isalnum(c) || c == '_' || c == '.' || c == '$' ||
+             c == '-' || c == '%' || c == '@' || c == '!';
+    };
+    size_t begin = match.position(), tokenEnd = begin + match.length();
+    if ((begin && isNameChar(text[begin - 1])) ||
+        (tokenEnd < text.size() && isNameChar(text[tokenEnd])))
+      continue;
+    if (match[2].matched) {
+      type = match.str();
+      continue;
+    }
+    if (type.empty())
+      continue;
+    llvm::SMDiagnostic diagnostic;
+    auto *constant = llvm::dyn_cast_or_null<llvm::ConstantFP>(
+        llvm::parseConstantValue(type + " " + match.str(), diagnostic, module));
+    if (!constant)
+      continue;
+    llvm::APFloat value = constant->getValueAPF();
+    llvm::APInt bits = value.bitcastToAPInt();
+    if (type == "float") {
+      if (value.isNaN()) {
+        // APFloat::convert quiets signaling NaNs. Widen the encoding directly
+        // so the sign, signaling bit and payload survive the textual roundtrip.
+        uint64_t raw = bits.getZExtValue();
+        bits = llvm::APInt(64, ((raw & 0x80000000ULL) << 32) |
+                                  0x7ff0000000000000ULL |
+                                  ((raw & 0x007fffffULL) << 29));
+      } else {
+        bool losesInfo;
+        value.convert(llvm::APFloat::IEEEdouble(),
+                      llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+        bits = value.bitcastToAPInt();
+      }
+    }
+    llvm::SmallString<32> hex;
+    bits.toStringUnsigned(hex, 16);
+    result.append(text, position, match.position() - position);
+    result += "0x";
+    if (type == "half") result += 'H';
+    if (type == "bfloat") result += 'R';
+    result.append((bits.getBitWidth() + 3) / 4 - hex.size(), '0');
+    result.append(hex.data(), hex.size());
+    position = match.position() + match.length();
+  }
+  result.append(text, position, std::string::npos);
+  text = std::move(result);
 }
 
 void legalizeLLVMTextForLegacyLLVM(std::string &text) {
@@ -325,44 +293,34 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text) {
   replaceAll(text, " memory(argmem: readwrite)", "");
 }
 
-static void printLegacyCompatibleLLVMIR(Module &module, raw_ostream &os) {
+static void printLLVM22CompatibleIR(Module &module, raw_ostream &os) {
   prepareRegisterMMAForLLVM(module);
-  prepareSharedMemoryForLegacyLLVM(module);
-
   std::string text;
   raw_string_ostream buffer(text);
   module.print(buffer, nullptr);
   buffer.flush();
-  legalizeLLVMTextForLegacyLLVM(text);
+  legalizeLLVMTextForLLVM22(text);
 
   os << text;
 }
 
-static std::optional<OptimizationLevel> mapToLevel(unsigned optLevel, unsigned sizeLevel) {
+static std::optional<OptimizationLevel> mapToLevel(unsigned optLevel) {
   switch (optLevel) {
   case 0:
     return OptimizationLevel::O0;
   case 1:
     return OptimizationLevel::O1;
   case 2:
-    switch (sizeLevel) {
-    case 0:
-      return OptimizationLevel::O2;
-    case 1:
-      return OptimizationLevel::Os;
-    case 2:
-      return OptimizationLevel::Oz;
-    }
-    break;
+    return OptimizationLevel::O2;
   case 3:
     return OptimizationLevel::O3;
   }
   return std::nullopt;
 }
 
-static std::function<Error(Module *)> makeOptimizingPipeline(unsigned optLevel, unsigned sizeLevel, TargetMachine *targetMachine) {
-  return [optLevel, sizeLevel, targetMachine](Module *m) -> Error {
-    std::optional<OptimizationLevel> ol = mapToLevel(optLevel, sizeLevel);
+static std::function<Error(Module *)> makeOptimizingPipeline(unsigned optLevel, TargetMachine *targetMachine) {
+  return [optLevel, targetMachine](Module *m) -> Error {
+    std::optional<OptimizationLevel> ol = mapToLevel(optLevel);
     if (!ol) {
       assert(false);
     }
@@ -432,15 +390,14 @@ std::string translateMLIRToLLVMIR(mlir::ModuleOp module, Target target, const in
 //   }
 
   prepareRegisterMMAForLLVM(*llvmModule);
-  auto optPipeline = makeOptimizingPipeline(/*optLevel=*/3, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
+  auto optPipeline = makeOptimizingPipeline(/*optLevel=*/3, /*targetMachine=*/nullptr);
   if (auto err = optPipeline(llvmModule.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
     return "";
   }  
-  materializeSplatVectorConstants(*llvmModule);
   std::string str;
   llvm::raw_string_ostream os(str);
-  printLegacyCompatibleLLVMIR(*llvmModule, os);
+  printLLVM22CompatibleIR(*llvmModule, os);
   os.flush();
   return str;
 }

@@ -34,7 +34,7 @@ def Frisk_ComputedTile : NativeOpTrait<"ComputedTile"> {
 
 // KernelOp
 def Frisk_KernelOp : Frisk_Op<"kernel", [
-  ImplicitFriskTerminator, CallableOpInterface, FunctionOpInterface,
+  ImplicitFriskTerminator, CallableOpInterface, SymbolName, SymbolVisibility, FunctionOpInterface,
   IsolatedFromAbove
 ]> {
     let summary = "Kernel operation";
@@ -184,6 +184,7 @@ def Frisk_BlockOp : Frisk_Op<"block", [RecursiveMemoryEffects, ImplicitFriskTerm
 
   let regions = (region SizedRegion<1>:$region);
 
+  let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "ArrayRef<int64_t>":$ranges,
                CArg<"function_ref<void(ValueRange)>", "nullptr">:$bodyBuilder)>
@@ -712,7 +713,7 @@ def MaskYieldOp: Frisk_Op<"mask_yield", [Pure, ReturnLike, Terminator, HasParent
   let arguments = (ins Variadic<AnyType> :$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, ValueRange{});
   }]>];
 
   let assemblyFormat = "attr-dict $srcs `:` type($srcs)";

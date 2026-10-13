@@ -8,6 +8,7 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/Attributes.h"
@@ -141,7 +142,7 @@ void PrimFuncOp::build(OpBuilder &builder, OperationState &state, StringRef name
     return;
   assert(type.getNumInputs() == argAttrs.size());
   call_interface_impl::addArgAndResultAttrs(
-      builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
+      builder, state, argAttrs, /*resultAttrs=*/ArrayRef<DictionaryAttr>{},
       getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
 
@@ -164,7 +165,7 @@ void PrimFuncOp::print(OpAsmPrinter &p) {
 }
 
 void WithKernelOp::getAsmBlockArgumentNames(::mlir::Region&region, ::mlir::OpAsmSetValueNameFn setNameFn){
-  if(&region != getBody()){
+  if(&region != &getBody()){
     return;
   }
   if (!region.empty() && region.front().getNumArguments() >= 3) {
@@ -338,7 +339,7 @@ void SerialForOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &stat
 }
 
 void SerialForOp::getAsmBlockArgumentNames(::mlir::Region&region, ::mlir::OpAsmSetValueNameFn setNameFn){
-  if(&region != getScopedBody()){
+  if(&region != &getScopedBody()){
     return;
   }
   // 检查 Block 参数数量是否符合预期

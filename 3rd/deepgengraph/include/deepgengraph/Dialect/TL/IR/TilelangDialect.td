@@ -8,6 +8,9 @@ def Tilelang_Dialect : Dialect {
 
   let cppNamespace = "::mlir::tilelang";
 
+  // Preserve the existing IR syntax with inherent attributes in attr-dict.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let summary = "Tilelang Dialact in MLIR";
 
   let description = [{
@@ -21,7 +24,7 @@ def Tilelang_Dialect : Dialect {
     "::mlir::math::MathDialect",
     "::mlir::scf::SCFDialect",
     "::mlir::cf::ControlFlowDialect",
-    "memref::MemRefDialect"
+    "::mlir::memref::MemRefDialect"
   ];
   let useDefaultTypePrinterParser = 1;
   // let useDefaultAttributePrinterParser = 1;

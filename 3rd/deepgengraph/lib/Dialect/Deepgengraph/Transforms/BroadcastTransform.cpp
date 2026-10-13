@@ -160,7 +160,7 @@ public:
     patterns.add<DotDivPattern>(context);
     patterns.add<DotMulPattern>(context);
     patterns.add<DivDotPattern>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

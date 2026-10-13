@@ -315,7 +315,7 @@ public:
     
     // 2. move return value into kernelOp input arg list
     ps2.add<ModifyKernelSignaturePattern >(tc, &getContext());
-    if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(), std::move(ps1)))) {
+    if (mlir::failed(mlir::applyPatternsGreedily(getOperation(), std::move(ps1)))) {
       signalPassFailure();
     }
     
@@ -329,7 +329,7 @@ public:
     }
     // 3. add info on load/store/advance op to identify arg usage
     ps3.add<BlockAdvanceOpAddInfoPattern, BlockLoadOpAddInfoPattern, BlockStoreOpAddInfoPattern>(&getContext());
-    if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(), std::move(ps3)))) {
+    if (mlir::failed(mlir::applyPatternsGreedily(getOperation(), std::move(ps3)))) {
       signalPassFailure();
     }
 

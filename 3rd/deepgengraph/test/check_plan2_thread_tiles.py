@@ -34,8 +34,10 @@ def check(source, directory, name):
     for line in ir.splitlines():
         if "frisk.to_threadTile" in line or "frisk.from_threadTile" in line:
             assert "tiled = true" in line, line
+    # Reparse both sides so affine-printer normalization is not a pass change.
+    normalized = run(ir, directory, name + "-normalized", lower=False)
     twice = run(ir, directory, name + "-twice")
-    assert ir == twice, name + ": repeated tiling changed IR"
+    assert normalized == twice, name + ": repeated tiling changed IR"
     return ir
 
 

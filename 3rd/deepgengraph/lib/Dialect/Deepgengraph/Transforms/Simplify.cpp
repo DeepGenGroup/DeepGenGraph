@@ -287,7 +287,7 @@ public:
     patterns.add<RemoveNoEffectConvertPattern>(context);
     patterns.add<MulAfterTriluPattern>(context);
     patterns.add<ConsecutiveElementWiseComputationWithConstant>(context);
-    if (applyPatternsAndFoldGreedily(op, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(op, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

@@ -664,7 +664,7 @@ public:
 
     patterns.add<ToDynamicBlockForPattern>(context);
     patterns.add<EarlyStopByMaskPattern>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

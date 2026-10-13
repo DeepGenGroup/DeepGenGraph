@@ -1,6 +1,8 @@
 #include "deepgengraph/Common.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -48,7 +50,7 @@ struct AmendAllocaOpAddrSpacePass : public PassWrapper<AmendAllocaOpAddrSpacePas
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<AmendAllocaOpAddrSpace>(&getContext(), target);
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
   }
@@ -486,7 +488,7 @@ struct GPUBarrierToNVVMLowering : public OpRewritePattern<gpu::BarrierOp> {
   using OpRewritePattern<gpu::BarrierOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(gpu::BarrierOp brOp, PatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<NVVM::Barrier0Op>(brOp);
+    rewriter.replaceOpWithNewOp<NVVM::BarrierOp>(brOp);
     return success();
   }
 };
@@ -534,7 +536,7 @@ struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, Operation
       // patterns.add<GPUPrintfOpToLLVMCallLowering>(typeConverter);
       patterns.add<GPUShuffleOpToROCDLLowering>(typeConverter, &getContext());
       patterns.add<GPUBarrierToROCDLLowering>(&getContext());
-      populateMathToROCDLConversionPatterns(typeConverter, patterns);  // exp仅支持fp64/16
+      populateMathToROCDLConversionPatterns(typeConverter, patterns, std::nullopt);  // exp仅支持fp64/16
     } else if (target == Target::CUDA) {
       // populateGpuToNVVMConversionPatterns(typeConverter, patterns, 10);
       patterns.add<GPUIndexIntrinsicOpLowering<gpu::BlockIdOp, NVVM::BlockIdXOp, 

@@ -96,7 +96,7 @@ public:
     KernelOp k = getOperation();
 
     patterns.add<TriluToMaskPattern>(context);
-    if (applyPatternsAndFoldGreedily(k, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(k, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }

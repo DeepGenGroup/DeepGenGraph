@@ -261,7 +261,7 @@ void init_ffi_ir_builder(py::module_ &m) {
       // constant
       .def("get_int64",
            [](OpBuilderWithLoc &self, int64_t v) -> Value {
-             return Value(self.create<arith::ConstantIntOp>(v, self.getBuilder().getI64Type()));
+             return Value(self.create<arith::ConstantIntOp>(self.getBuilder().getI64Type(), v));
            })
       .def("get_f16",
            [](OpBuilderWithLoc &self, float v) -> Value {

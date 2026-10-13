@@ -10,7 +10,7 @@ namespace mlir::frisk {
 /// consumers early. Empty tied-register asm makes these boundaries survive
 /// subsequent LICM and instruction combining; it emits no GPU instruction.
 class OptimizeRegisterLifetimesPass
-    : public llvm::PassInfoMixin<OptimizeRegisterLifetimesPass> {
+    : public llvm::OptionalPassInfoMixin<OptimizeRegisterLifetimesPass> {
 public:
   llvm::PreservedAnalyses run(llvm::Function &function,
                               llvm::FunctionAnalysisManager &analyses);

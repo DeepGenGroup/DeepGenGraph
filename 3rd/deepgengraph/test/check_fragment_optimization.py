@@ -27,8 +27,8 @@ def fixture(reverse=False, offsets=((0, 0), (0, 4), (1, 0), (1, 4)),
     for i, (row, col) in enumerate(offsets):
         dest = '%zero' if i == 0 else f'%t{i-1}'
         body.append(f'%t{i} = vector.insert_strided_slice %d{i}, {dest} '
-                    f'{{offsets = [{row}, {col}], strides = [1, 1], '
-                    'frisk.mma_fragment} : vector<1x4xf32> into vector<2x8xf32>')
+                    f'offsets = [{row}, {col}], strides = [1, 1] '
+                    '{frisk.mma_fragment} : vector<1x4xf32> into vector<2x8xf32>')
     last = f'%t{len(offsets)-1}'
     old = '%old'
     if late_accumulator:

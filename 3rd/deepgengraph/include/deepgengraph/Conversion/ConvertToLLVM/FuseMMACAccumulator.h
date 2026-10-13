@@ -9,7 +9,7 @@ namespace mlir::frisk {
 /// Does not approximate exponentials or division. Run InstCombine first to
 /// expose chains hidden by vector extraction/insertion wrappers.
 class FuseMMACAccumulatorPass
-    : public llvm::PassInfoMixin<FuseMMACAccumulatorPass> {
+    : public llvm::OptionalPassInfoMixin<FuseMMACAccumulatorPass> {
 public:
   llvm::PreservedAnalyses run(llvm::Function &function,
                               llvm::FunctionAnalysisManager &analyses);
