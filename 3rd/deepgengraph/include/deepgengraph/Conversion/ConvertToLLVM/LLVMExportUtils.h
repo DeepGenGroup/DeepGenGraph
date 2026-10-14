@@ -21,6 +21,11 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text);
 /// immediately after MLIR translation, before LLVM optimizations or printing.
 void prepareRegisterMMAForLLVM(llvm::Module &module);
 
+/// Pin each complete global-to-LDS DMA source address before final export.
+/// Prevent backend source-offset folding from also shifting the LDS address.
+/// Retains DMA and synchronization; safe to call repeatedly.
+void protectAsyncDMASourceAddresses(llvm::Module &module);
+
 /// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
 void fuseMMACAccumulators(llvm::Module &module);
@@ -37,6 +42,9 @@ void optimizeApproximateRegisterMath(llvm::Module &module);
 void optimizeRegisterMath(llvm::Module &module, bool nativeExp2, bool reciprocal);
 /// Hoist a bounded batch of global loads across pure exp2 work, before lifetime scheduling.
 void prefetchGlobalPackets(llvm::Module &module, unsigned maxWords = 8);
+/// Reuse identical vector LDS reads within a synchronization-free block phase.
+/// Budget overlapping retained packets; do not move loads, calls or barriers.
+void reuseLDSFragments(llvm::Module &module, unsigned maxWords = 8);
 
 /// LLVM 15 LDS lowering can miss shared pointers hidden inside constant memref
 /// descriptors. Split aggregate selects/PHIs into scalar joins, then expose

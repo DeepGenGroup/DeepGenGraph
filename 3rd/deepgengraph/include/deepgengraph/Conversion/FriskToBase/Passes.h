@@ -15,6 +15,9 @@ std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();
 std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
+std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();
+std::unique_ptr<mlir::Pass> createLowerFriskAsyncToSyncPass();
+std::unique_ptr<mlir::Pass> createScheduleAsyncCopiesPass();
 void packSharedMemory(mlir::func::FuncOp kernel);
 
 #define GEN_PASS_DECL_CONVERTFRISKBASETOTHREADLEVELIR

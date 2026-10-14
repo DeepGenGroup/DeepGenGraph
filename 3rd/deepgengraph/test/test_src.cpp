@@ -83,6 +83,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 
 using namespace mlir;
@@ -363,6 +364,7 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
 
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
+  mlir::frisk::protectAsyncDMASourceAddresses(module);
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -400,6 +402,13 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+  const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
+  StringRef copyMode = copyModeEnv ? copyModeEnv : "legacy";
+  if (copyMode != "legacy" && copyMode != "async" && copyMode != "sync" &&
+      copyMode != "hybrid") {
+    llvm::errs() << "FRISK_GM_TO_SHM_MODE must be legacy, async, sync, or hybrid\n";
+    return 1;
+  }
   bool isPipelineSched = argc > 2 && StringRef(argv[2]) == "1";
   // Preserve the historical <input> <output.ll> spelling as well as the
   // numeric pipeline switch. Expose independent reorder A/B runs explicitly.
@@ -419,6 +428,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool uniformMasks = argc > 12 && StringRef(argv[12]) == "1";
   bool prefetchPackets = argc > 13 && StringRef(argv[13]) == "1";
   bool fuseMaskAdd = argc < 15 || StringRef(argv[14]) == "1";
+  unsigned ldsReuseWords = 0;
+  if (argc > 15 && StringRef(argv[15]).getAsInteger(10, ldsReuseWords)) {
+    llvm::errs() << "lds-reuse-words must be a nonnegative number of 32-bit words/thread\n";
+    return 1;
+  }
   if (argc > 14 && StringRef(argv[14]) != "0" && StringRef(argv[14]) != "1") {
     llvm::errs() << "fuse-mask-add must be 0 or 1\n";
     return 1;
@@ -586,6 +600,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   AddPass(frisk::createNormalizeAttentionKLayoutPass());
   llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n"; llvm::outs().flush();src->dump();
+  if (copyMode != "legacy") {
+    auto promote = frisk::createPromoteGlobalToSharedAsyncPass();
+    if (const char *alignment = std::getenv("FRISK_GM_TO_SHM_ALIGNMENT")) {
+      if (failed(promote->initializeOptions(
+              std::string("assume-alignment=") + alignment,
+              [](const llvm::Twine &message) { llvm::errs() << message << "\n"; return failure(); })))
+        return 1;
+    }
+    AddFuncPass(std::move(promote));
+    llvm::outs() << "\n---------- after promote-gm-to-shm-async ---------\n";
+    llvm::outs().flush(); src->dump();
+  }
 
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
@@ -596,11 +622,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   
 
+  if (copyMode == "sync")
+    AddFuncPass(frisk::createLowerFriskAsyncToSyncPass());
   auto tiling = mlir::frisk::createConvertFriskBaseToThreadLevelIRPass();
   std::string tilingOptions = std::string("pack-shared-operands=") +
       (packSharedEnabled ? "true" : "false") + " wmma-layout=" + wmmaLayout.str();
   tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
   tilingOptions += std::string(" fuse-mask-add=") + (fuseMaskAdd ? "true" : "false");
+  tilingOptions += std::string(" async-direct-only=") + (copyMode == "hybrid" ? "true" : "false");
   if (failed(tiling->initializeOptions(
           tilingOptions,
           [&](const llvm::Twine &message) {
@@ -682,7 +711,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   mlir::ModuleOp mod = *src;
   if (!frisk::firstLowering(mod, src->getContext()) ||
-      !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm))
+      !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
+                            copyMode != "sync"))
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush(); 
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
@@ -712,6 +742,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::prefetchGlobalPackets(*llvmModule);
   if (optimizeLifetimes)
     frisk::optimizeRegisterLifetimes(*llvmModule);
+  if (ldsReuseWords)
+    frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -1008,8 +1040,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 15) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1]\n";
+  if (argc < 2 || argc > 16) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

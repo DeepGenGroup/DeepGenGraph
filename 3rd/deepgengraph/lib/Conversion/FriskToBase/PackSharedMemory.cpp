@@ -58,6 +58,16 @@ static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> 
       accesses.push_back({user, buffer, llvm::to_vector(store.getMapOperands()), store.getAffineMap(), store.getValue()});
     else if (auto free = dyn_cast<memref::DeallocOp>(user))
       deallocs.push_back(free);
+    else if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(user)) {
+      if (use->getOperandNumber() != 1 ||
+          cast<MemRefType>(buffer.getType()).getNumElements() > (1 << 20) ||
+          cast<MemRefType>(copy.getSrc().getType()).getShape() !=
+              cast<MemRefType>(buffer.getType()).getShape() ||
+          copy->hasAttr("frisk.source_map"))
+        return false;
+    } else if (isa<WaitBufferReadyOp>(user)) {
+      // Its descriptor is rewritten together with the issue and all readers.
+    }
     else
       // Includes escaping descriptors, calls, atomics, subviews and
       // preexisting vector accesses whose footprint has not been proven.
@@ -243,6 +253,45 @@ static void packAllocation(memref::AllocOp alloc,
         (col % storeStride * type.getDimSize(0) + row) *
             (type.getDimSize(1) / storeStride) + paired);
   }
+  // Async copies traverse PHYSICAL destination packets. Record the inverse
+  // permutation so the source lookup retains logical coordinates (including
+  // transposed source descriptors). Never feed a swizzled per-lane LDS address
+  // to hardware that implicitly adds lane_id * 4.
+  auto p = b.getAffineDimExpr(0);
+  auto inverseRow = p.floorDiv(pack * type.getDimSize(1)) * pack + p % pack;
+  auto inverseCol = p.floorDiv(pack) % type.getDimSize(1);
+  if (axis == 1) {
+    inverseRow = p.floorDiv(pack) % type.getDimSize(0);
+    inverseCol = p.floorDiv(pack * type.getDimSize(0)) * pack + p % pack;
+  }
+  if (storeStride) {
+    int64_t rowSize = type.getDimSize(1) / storeStride;
+    int64_t groups = storePair / storeStride;
+    auto paired = p % rowSize;
+    auto reg = paired.floorDiv(2 * groups) * (2 * groups) +
+               (paired % 2) * groups + paired.floorDiv(2) % groups;
+    inverseRow = p.floorDiv(rowSize) % type.getDimSize(0);
+    inverseCol = p.floorDiv(rowSize * type.getDimSize(0)) + storeStride * reg;
+  }
+  if (pairStride) {
+    int64_t groups = pairStride / pack;
+    auto group = p.floorDiv(2 * pack * type.getDimSize(1));
+    auto column = p.floorDiv(2 * pack) % type.getDimSize(1);
+    inverseRow = (group.floorDiv(groups) * (2 * groups) +
+                  (p.floorDiv(pack) % 2) * groups + group % groups) * pack + p % pack;
+    inverseCol = column;
+    if (2 * pack * type.getElementTypeBitWidth() == 128 && type.getDimSize(1) % 8 == 0) {
+      auto columnGroup = column.floorDiv(8);
+      inverseCol = columnGroup * 8 +
+          ((column.floorDiv(4) - columnGroup.floorDiv(4) -
+            group.floorDiv(groups == 1 ? 1 : 2)) % 2) * 4 +
+          (column - columnGroup) % 4;
+    }
+  }
+  auto inverse = AffineMap::get(1, 0, {inverseRow, inverseCol}, b.getContext());
+  for (OpOperand *use : aliases.accesses)
+    if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
+      copy->setAttr("frisk.source_map", AffineMapAttr::get(inverse));
   llvm::SetVector<std::pair<Block *, Value>> blocks;
   for (auto &access : accesses) {
     b.setInsertionPoint(access.op);

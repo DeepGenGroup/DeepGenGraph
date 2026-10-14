@@ -1,8 +1,25 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 namespace {
+struct TestAsyncToLLVMPass
+    : mlir::PassWrapper<TestAsyncToLLVMPass, mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAsyncToLLVMPass)
+  llvm::StringRef getArgument() const final { return "test-async-to-llvm"; }
+  llvm::StringRef getDescription() const final { return "Exercise the complete GPU lowering"; }
+  void getDependentDialects(mlir::DialectRegistry &registry) const final {
+    mlir::registerAllDialects(registry);
+  }
+  void runOnOperation() final {
+    auto module = getOperation();
+    if (!mlir::frisk::firstLowering(module, &getContext()) ||
+        !mlir::frisk::secondLowering(module, &getContext(), mlir::frisk::Target::ROCm))
+      signalPassFailure();
+  }
+};
 struct TestShmLoopSyncPass
     : mlir::PassWrapper<TestShmLoopSyncPass,
                        mlir::OperationPass<mlir::func::FuncOp>> {
@@ -55,6 +72,9 @@ int main(int argc, char **argv) {
                   mlir::deepgengraph::DeepgengraphDialect>();
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
+  mlir::PassRegistration<TestAsyncToLLVMPass>();
+  mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
+  mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });
   mlir::PassRegistration<TestShmLoopSyncPass>();
   mlir::registerPass([] {
     return mlir::frisk::createNormalizeAttentionKLayoutPass();
@@ -73,6 +93,9 @@ int main(int argc, char **argv) {
   });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
+  mlir::registerPass([] { return mlir::frisk::createPromoteGlobalToSharedAsyncPass(); });
+  mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncToSyncPass(); });
+  mlir::registerPass([] { return mlir::frisk::createScheduleAsyncCopiesPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));
 }

@@ -22,7 +22,7 @@ target_link_libraries(ThreadTilingTest PRIVATE
   MLIRRegisterAllDialects
   ${dialect_libs} ${conversion_libs} ${extension_libs}
   FriskToBase DeepgengraphAnalysis FriskIR DeepgengraphIR
-  DeepgengraphTritonIR TilelangIR MLIROptLib)
+  DeepgengraphTritonIR TilelangIR ConvertThreadToLLVMIR FriskPipeline MLIROptLib)
 target_link_libraries(FragmentOptTest PRIVATE
   ${dialect_libs} ${conversion_libs} ${extension_libs}
   ConvertThreadToLLVMIR MLIROptLib)

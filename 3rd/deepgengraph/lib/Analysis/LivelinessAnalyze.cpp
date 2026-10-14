@@ -31,7 +31,19 @@ bool isShared(MemRefType type) {
 }
 
 bool isBarrier(Operation *op) {
-  return isa<gpu::BarrierOp, SyncThreadsInBlockOp>(op);
+  return isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp>(op);
+}
+
+// Only pair an issue with an exact-descriptor wait in the same block. A wait
+// in a conditional/next iteration is not a completion proof for storage reuse.
+bool hasLocalCompletion(AsyncCopyGmToShmOp issue) {
+  for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
+    if (auto wait = dyn_cast<WaitBufferReadyOp>(next);
+        wait && wait.getBuffer() == issue.getDst()) return true;
+    if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(next);
+        copy && copy.getDst() == issue.getDst()) return false;
+  }
+  return false;
 }
 
 // These regions finish synchronously. async.execute and parallel regions must
@@ -130,6 +142,16 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
         }
       }
       if (!isSynchronousAccess(user)) {
+        if (auto issue = dyn_cast<AsyncCopyGmToShmOp>(user);
+            issue && use.getOperandNumber() == 1 && hasLocalCompletion(issue)) {
+          recordUse();
+          continue;
+        }
+        if (isa<WaitBufferReadyOp>(user)) {
+          // This is a real storage use: the write stays live through the wait.
+          recordUse();
+          continue;
+        }
         info.skipReason = "unsupported or escaping use: " +
                           user->getName().getStringRef().str();
         return;
@@ -237,6 +259,10 @@ bool fullyOverwrites(Operation *op, const ShmLiveInterval &info,
                      func::FuncOp kernel) {
   auto allocation = info.allocation;
   Value buffer = allocation.getResult();
+  if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(op))
+    return copy.getDst() == buffer && hasLocalCompletion(copy) &&
+        cast<MemRefType>(copy.getSrc().getType()).getNumElements() ==
+            cast<MemRefType>(buffer.getType()).getNumElements();
   if (auto copy = dyn_cast<memref::CopyOp>(op))
     return copy.getTarget() == buffer && copy.getSource() != buffer;
   ValueRange indices;
@@ -481,6 +507,20 @@ unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
     Block *body = getLoopBody(loop);
     if (!body || !isCollectiveLoop(loop, entry))
       return;
+    // Also protect async buffers that could not prove a local completion and
+    // therefore do not participate in reuse (e.g. rotated pipeline slots).
+    // Readiness waits publish new data; they do not release old readers.
+    bool asyncCopy = false;
+    loop->walk([&](frisk::AsyncCopyGmToShmOp) { asyncCopy = true; });
+    if (asyncCopy) {
+      Operation *tail = body->getTerminator()->getPrevNode();
+      if (!tail || !isBarrier(tail)) {
+        OpBuilder builder(body->getTerminator());
+        builder.create<gpu::BarrierOp>(loop->getLoc());
+        ++inserted;
+      }
+      return;
+    }
     for (const auto &info : liveness.buffers) {
       if (!info.reusable)
         continue;

@@ -14,11 +14,13 @@ std::unique_ptr<OperationPass<ModuleOp>> createAmendAllocaOpAddrSpacePass(Target
 std::unique_ptr<mlir::Pass>  createVectorOpLoopUnrollPass();
 std::unique_ptr<mlir::Pass> createIRDeepOptimizePass();
 std::unique_ptr<mlir::Pass> createBarrierOptimizePass();
+std::unique_ptr<mlir::Pass> createLowerFriskAsyncCopyPass(bool useAsyncCopy = true);
 std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 
 // -------- Lower Pipeline ----------
 bool firstLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context) ;
-bool secondLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context, Target target) ;
+bool secondLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context, Target target,
+                    bool useAsyncCopy = true);
 std::string translate(mlir::ModuleOp& mod, mlir::frisk::Target target) ;
 
 #define GEN_PASS_REGISTRATION

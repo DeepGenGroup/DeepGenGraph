@@ -53,9 +53,9 @@ module attributes {llvm.target_triple = "amdgcn-amd-amdhsa"} {
     llvm.cond_br %valid, ^store, ^exit
   ^store:
     %slot = llvm.getelementptr %lds[%tid] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f32
-    %value = llvm.load %slot {alignment = 4 : i64} : !llvm.ptr<3> -> f32
+    %value = llvm.load %slot <{alignment = 4 : i64}> : !llvm.ptr<3> -> f32
     %dst = llvm.getelementptr %B[%index] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
-    llvm.store %value, %dst {alignment = 4 : i64} : f32, !llvm.ptr<1>
+    llvm.store %value, %dst <{alignment = 4 : i64}> : f32, !llvm.ptr<1>
     llvm.br ^exit
   ^exit:
     llvm.return

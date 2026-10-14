@@ -205,7 +205,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     for (Operation *storage : aliases.allocations)
       visited.insert(storage);
     int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
-    SmallVector<frisk::CopyOp> writers;
+    SmallVector<Operation *> writers;
     for (OpOperand *use : aliases.accesses) {
       Operation *user = use->getOwner();
       Value buffer = use->get();
@@ -282,6 +282,13 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
             cast<AffineConstantExpr>(map.getResult(0)).getValue() != type.getRank())
           return;
         writers.push_back(copy);
+      } else if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(user)) {
+        auto sourceType = cast<MemRefType>(copy.getSrc().getType());
+        if (use->getOperandNumber() != 1 || sourceType.getShape() != type.getShape())
+          return;
+        writers.push_back(copy);
+      } else if (isa<frisk::WaitBufferReadyOp>(user)) {
+        // Readiness observes the same descriptor, without imposing a layout.
       } else {
         return;
       }
@@ -295,9 +302,10 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     // Both row-major and column-major GLOBAL inputs can feed row-axis packing.
     // The copy chooses ownership using physical strides; GEMM LowerInfo above
     // still determines the shared packet axis/width and all consumer addresses.
-    if (axis == 0 && llvm::any_of(writers, [](frisk::CopyOp copy) {
-          return !isGlobalToSharedCopy(copy) ||
-              !getPhysicalMinorCopyAxis(copy.getSrc());
+    if (axis == 0 && llvm::any_of(writers, [](Operation *writer) {
+          if (auto copy = dyn_cast<frisk::CopyOp>(writer))
+            return !isGlobalToSharedCopy(copy) || !getPhysicalMinorCopyAxis(copy.getSrc());
+          return !getPhysicalMinorCopyAxis(cast<frisk::AsyncCopyGmToShmOp>(writer).getSrc());
         }))
       return;
     auto set = [&](StringRef name, int64_t value) {
@@ -314,7 +322,9 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     if (axis == 1 && instructionStride > 0 &&
         type.getDimSize(1) % (2 * instructionStride) == 0) {
       int64_t storeStride = 0;
-      bool compatible = llvm::all_of(writers, [&](frisk::CopyOp copy) {
+      bool compatible = llvm::all_of(writers, [&](Operation *writer) {
+        auto copy = dyn_cast<frisk::CopyOp>(writer);
+        if (!copy) return false;
         auto *producer = copy.getSrc().getDefiningOp();
         auto *info = layouts.getLowerInfo(copy.getSrc(), copy);
         if (!producer || !producer->hasTrait<frisk::ComputedTile>() || !info ||
@@ -607,7 +617,8 @@ static bool isSharedCopyStorage(Value value) {
   // Leave those candidates intact until their own lowering decides whether
   // the allocation must actually be materialized.
   return llvm::any_of(aliases.accesses, [&](OpOperand *use) {
-    return isa<frisk::CopyOp>(use->getOwner()) && use->getOperandNumber() == 1;
+    return isa<frisk::CopyOp, frisk::AsyncCopyGmToShmOp>(use->getOwner()) &&
+           use->getOperandNumber() == 1;
   });
 }
 
@@ -2635,8 +2646,10 @@ static LogicalResult lowerGlobalToSharedCopy(
     return {};
   });
   rewriter.setInsertionPointAfter(chunk);
-  auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
-  markTiled(sync, rewriter);
+  if (!op->hasAttr("frisk.explicit_wait")) {
+    auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
+    markTiled(sync, rewriter);
+  }
   if (op.hasValueResult())
     rewriter.replaceOp(op, result);
   else
@@ -3437,6 +3450,38 @@ public:
       });
     if (packSharedOperands)
       planSharedOperandPacking(kernel, *s_info);
+    if (asyncDirectOnly) {
+      // Select before thread tiling: late scalar fallback loses the ordinary
+      // copy path's coalesced global packets and bank-safe packed LDS stores.
+      // A sub-dword packet along a noncontiguous source axis cannot use direct
+      // DMA. Keep the planned consumer layout and let CopyOpTiling distribute
+      // the transfer, without allocating a second LDS tile for repacking.
+      SmallVector<frisk::AsyncCopyGmToShmOp> synchronous;
+      kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
+        auto *storage = getViewBuffer(issue.getDst()).getDefiningOp();
+        auto axis = storage ? storage->getAttrOfType<IntegerAttr>("frisk.shared_pack_axis")
+                            : IntegerAttr{};
+        auto sourceAxis = getPhysicalMinorCopyAxis(issue.getSrc());
+        auto type = cast<MemRefType>(issue.getSrc().getType());
+        auto wait = dyn_cast_or_null<frisk::WaitBufferReadyOp>(issue->getNextNode());
+        // Leave already pipelined/nonlocal waits alone; their readiness must
+        // remain explicit until the original scheduled completion point.
+        if (axis && sourceAxis && axis.getInt() != *sourceAxis &&
+            type.getElementTypeBitWidth() < 32 && wait &&
+            wait.getBuffer() == issue.getDst())
+          synchronous.push_back(issue);
+      });
+      for (auto issue : synchronous) {
+        OpBuilder b(issue);
+        auto *wait = issue->getNextNode();
+        // The ordinary copy publishes its stores with a block barrier.
+        b.create<frisk::CopyOp>(issue.getLoc(), issue.getSrc(), issue.getDst());
+        wait->erase();
+        issue.erase();
+      }
+      llvm::errs() << "Async direct-only: " << synchronous.size()
+                   << " packed copies selected for vectorized synchronous lowering\n";
+    }
     llvm::outs() << "----- after insertConvertLayoutOps:\n" << kernel << "\n"; llvm::outs().flush();
 
     // 未 tiled 的目标 Frisk op 必须被转换；其他 op 动态合法。
@@ -4043,6 +4088,28 @@ public:
 // WarpMmaRROp 等并不由这里全部降成机器指令；它仍需后续专门的转换 pass。
 class FinalizeThreadTiling : public impl::FinalizeThreadTilingBase< FinalizeThreadTiling>{
 public:
+  // Async tile operations retain whole descriptors until target lowering.
+  // Ordinary accesses fold buffer_view into indices instead. Materialize only
+  // the async users, preserving physical strides and nested view origins.
+  static Value materializeAsyncView(Value value, OpBuilder &b, Location loc) {
+    auto view = value.getDefiningOp<frisk::BufferViewOp>();
+    if (!view) return value;
+    Value source = materializeAsyncView(view.getSource(), b, loc);
+    auto sourceType = cast<MemRefType>(source.getType());
+    auto type = cast<MemRefType>(value.getType());
+    SmallVector<OpFoldResult> offsets, sizes, strides;
+    for (unsigned i = 0; i < sourceType.getRank(); ++i) {
+      offsets.push_back(b.create<affine::AffineApplyOp>(loc,
+          view.getIndexMap().getSubMap({i}), view.getIndices()).getResult());
+      int64_t dim = int64_t(i) - (sourceType.getRank() - type.getRank());
+      sizes.push_back(b.getIndexAttr(dim < 0 ? 1 : type.getDimSize(dim)));
+      strides.push_back(b.getIndexAttr(1));
+    }
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(
+        type.getShape(), sourceType, offsets, sizes, strides);
+    return b.create<memref::SubViewOp>(loc, cast<MemRefType>(resultType),
+                                      source, offsets, sizes, strides);
+  }
   // 声明本 pass 会创建的 dialect，让 pass 管理器提前加载相应 IR 定义。
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<frisk::FriskDialect, arith::ArithDialect, affine::AffineDialect,
@@ -4055,6 +4122,12 @@ public:
     if (!kernel->hasAttr("thread_num")){
       return;
     }
+    kernel.walk([&](Operation *op) {
+      if (!isa<frisk::AsyncCopyGmToShmOp, frisk::WaitBufferReadyOp>(op)) return;
+      OpBuilder b(op);
+      for (OpOperand &operand : op->getOpOperands())
+        operand.set(materializeAsyncView(operand.get(), b, op->getLoc()));
+    });
     // Keep cast/bridge cancellation ahead of materialization, otherwise a
     // register-only conversion would accidentally become a shared-memory copy.
     // 先把类型转换和循环边界移动到线程值上，暴露更多可抵消的 To(From(...))。

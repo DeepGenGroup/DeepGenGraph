@@ -3,12 +3,14 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   GPUToNvvmRocdl.cpp
   TranslateToLLVM.cpp
   LowerPipe.cpp
+  LowerFriskAsyncCopy.cpp
   IROptimize.cpp
   FuseFragmentAccumulator.cpp
   FuseMMACAccumulator.cpp
   OptimizeRegisterLifetimes.cpp
   OptimizeRegisterMath.cpp
   PrefetchGlobalPackets.cpp
+  ReuseLDSFragments.cpp
 
   DEPENDS
   ThreadToLLVMPasseIncGen
@@ -18,6 +20,9 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   MLIRIR
   MLIRPass
   MLIRTransforms
+  MLIRAMDGPUDialect
+  MLIRROCDLDialect
+  MLIRLLVMCommonConversion
   MLIRBuiltinToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
   MLIRNVVMToLLVMIRTranslation

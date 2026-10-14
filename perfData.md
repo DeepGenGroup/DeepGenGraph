@@ -22,7 +22,7 @@ out = O/reduce_acc
   3.3 或者定制化方法（Q不变，改变K的数据排布，使得4次wmma后，thread自然持有位置连续的4个数据，符合gemmPV的要求，已加入）
 4. 使用fragment为粒度，组织op以及for循环。方便进行 fragment 加载-计算的交叠（用Pass 做 reorder）
 5. 写回global O 时直接用reg，不经过shm中转
-6. 异步拷贝KV（未实现）（rocdl.global.load.async.lds 或者其向量化版本）
+6. 异步拷贝 （ amdgpu.global.load.async.lds + asyncmark + wait_asyncmark ）
 
 ## 师兄的已有高效kernel尺寸参照：
 BM=128 BN=128 BK=32 , shm= 16384, 一个CU 能跑4block。无double-buffer ，异步copy QKV

@@ -20,6 +20,14 @@ class Trace(ByteAddresses):
         tid = next(n for n, e in definitions.items() if '@llvm.amdgcn.workitem.id.x()' in e)
         self.thread = context[tid]
 
+    def typed(self, text):
+        constant_gep = re.search(r'getelementptr(?: inbounds| nuw| nusw)* \((.*)\)$', text)
+        if constant_gep:
+            ty, pointer, index = split_args(constant_gep[1])
+            base, offset = self.typed(pointer)
+            return base, offset + {'i8': 1, 'half': 2, 'float': 4}[ty] * self.typed(index)
+        return super().typed(text)
+
     def value(self, name):
         if name in ('poison', 'undef'):
             return None
@@ -35,7 +43,7 @@ class Trace(ByteAddresses):
                 a, b, indices = map(self.typed, split_args(body))
                 self.cache[name] = [None if i is None else (a + b)[i] for i in indices]
             elif opcode in ('sext', 'zext', 'trunc'):
-                src, value, _, dst = body.split()
+                src, value, _, dst = re.sub(r'^nneg ', '', body).split()
                 bits = int(src[1:])
                 unsigned = self.value(value) % (1 << bits)
                 if opcode == 'sext':
@@ -76,7 +84,10 @@ class Trace(ByteAddresses):
             elif opcode == 'getelementptr':
                 ty, ptr, index = split_args(body)
                 base, offset = self.typed(ptr)
-                size = {'i8': 1, 'half': 2, 'float': 4}[ty.split()[-1]]
+                element = re.sub(r'^(?:(?:inbounds|nuw|nusw) )*', '', ty)
+                array = re.fullmatch(r'\[(\d+) x (i8|half|float)\]', element)
+                size = (int(array[1]) * {'i8': 1, 'half': 2, 'float': 4}[array[2]]
+                        if array else {'i8': 1, 'half': 2, 'float': 4}[element])
                 self.cache[name] = (base, offset + size * self.typed(index))
             elif opcode == 'fadd':
                 # QK + causal mask preserves the QK coordinate.

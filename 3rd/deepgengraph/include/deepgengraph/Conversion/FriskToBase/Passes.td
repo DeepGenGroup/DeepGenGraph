@@ -62,6 +62,8 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
   let constructor = "mlir::frisk::createConvertFriskBaseToThreadLevelIRPass()";
   let options = [Option<"packSharedOperands", "pack-shared-operands", "bool", "true",
       "Plan packed LDS layouts for owned GEMM operands">,
+    Option<"asyncDirectOnly", "async-direct-only", "bool", "false",
+      "Use vectorized synchronous copies when packed halfword packets require LDS staging">,
     Option<"uniformMasks", "uniform-masks", "bool", "false",
       "Skip elementwise upper-triangular masks for provably complete tiles">,
     Option<"fuseMaskAdd", "fuse-mask-add", "bool", "true",
@@ -80,6 +82,16 @@ def PackSharedMemory: Pass<"pack-shared-memory", "::mlir::func::FuncOp"> {
   let summary = "Pack owned shared buffers and coalesce proven contiguous accesses";
   let constructor = "mlir::frisk::createPackSharedMemoryPass()";
   let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect"];
+}
+
+def PromoteGlobalToSharedAsync: Pass<"frisk-promote-gm-to-shm-async", "::mlir::func::FuncOp"> {
+  let summary = "Represent global/shared copies with explicit buffer readiness";
+  let constructor = "mlir::frisk::createPromoteGlobalToSharedAsyncPass()";
+}
+
+def LowerFriskAsyncToSync: Pass<"frisk-lower-async-to-sync", "::mlir::func::FuncOp"> {
+  let summary = "Select ordinary copies and block synchronization before thread tiling";
+  let constructor = "mlir::frisk::createLowerFriskAsyncToSyncPass()";
 }
 
 def FinalizeThreadTiling: Pass<"finalize-thread-tiling", "::mlir::func::FuncOp"> {

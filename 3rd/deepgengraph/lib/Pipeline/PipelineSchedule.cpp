@@ -182,6 +182,10 @@ SmallVector<Value, 2> bufferHandles(Value buffer, ArrayRef<Statement> stmts) {
 // buffer 的别名），frisk.reduce 取 dst，
 // 其它 op 取所有 memref/vector 结果（比如 gemm 产出的 memref)
 void collectWrittenValues(Operation *op, SmallVectorImpl<Value> &out) {
+  if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(op)) {
+    out.push_back(bufferOf(copy.getDst()));
+    return;
+  }
   if (auto copy = dyn_cast<frisk::CopyOp>(op)) {
     out.push_back(bufferOf(copy.getDstMemRef()));
     return;
@@ -411,6 +415,43 @@ LogicalResult PipelineScheduler::collectStatements() {
 }
 // 算几条槽
 LogicalResult PipelineScheduler::collectRotatedBuffers() {
+  // A scheduled consumer needs both the issue and the completion dependency.
+  // Readiness follows the destination slot, not the most recently issued copy.
+  for (const Statement &producer : stmts) {
+    for (Operation *operation : producer.ops) {
+      auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(operation);
+      if (!copy) continue;
+      Value buffer = bufferOf(copy.getDst());
+      SmallVector<frisk::WaitBufferReadyOp> waits;
+      for (Operation *user : buffer.getUsers())
+        if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(user))
+          if (opToStmt.count(wait)) waits.push_back(wait);
+      for (Operation *user : buffer.getUsers()) {
+        if (user == operation || isa<frisk::WaitBufferReadyOp>(user)) continue;
+        auto found = opToStmt.find(user);
+        if (found == opToStmt.end()) continue; // Diagnosed below.
+        const Statement &consumer = stmts[found->second];
+        bool ready = llvm::any_of(waits, [&](frisk::WaitBufferReadyOp wait) {
+          const Statement &completion = stmts[opToStmt.lookup(wait)];
+          if (completion.stage < producer.stage || completion.stage > consumer.stage)
+            return false;
+          if (completion.stage == producer.stage && completion.order < producer.order)
+            return false;
+          if (completion.stage == producer.stage && completion.order == producer.order &&
+              !operation->isBeforeInBlock(wait))
+            return false;
+          if (completion.stage == consumer.stage) {
+            if (completion.order > consumer.order) return false;
+            if (completion.order == consumer.order && !wait->isBeforeInBlock(user))
+              return false;
+          }
+          return true;
+        });
+        if (!ready)
+          return user->emitError("async buffer consumer requires wait_buffer_ready scheduled between issue and consumption");
+      }
+    }
+  }
   DenseSet<Value> seen;
   for (Statement &st : stmts) {
     // 对每条语句写出的每个值

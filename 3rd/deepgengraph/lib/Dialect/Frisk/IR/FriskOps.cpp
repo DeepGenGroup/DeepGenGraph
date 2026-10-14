@@ -13,6 +13,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
@@ -2362,6 +2363,61 @@ LogicalResult InitBarrierOp::verify() {
            << getBarriers().size()
            << ") must match num attribute (" << num << ")";
   }
+  return success();
+}
+
+LogicalResult AsyncCopyGmToShmOp::verify() {
+  auto src = dyn_cast<MemRefType>(getSrc().getType());
+  auto dst = dyn_cast<MemRefType>(getDst().getType());
+  auto sourceMap = (*this)->getAttrOfType<AffineMapAttr>("frisk.source_map");
+  if (!src || !dst || !src.hasStaticShape() || !dst.hasStaticShape() ||
+      src.getRank() == 0 || dst.getRank() == 0 ||
+      (!sourceMap && src.getShape() != dst.getShape()))
+    return emitOpError("requires equal, static, non-scalar tile shapes");
+  if (sourceMap) {
+    auto map = sourceMap.getValue();
+    if (dst.getRank() != 1 || src.getNumElements() != dst.getNumElements() ||
+        map.getNumDims() != 1 || map.getNumSymbols() != 0 ||
+        map.getNumResults() != unsigned(src.getRank()))
+      return emitOpError("source_map must map flat destination elements to source coordinates");
+    // A bounded exact proof rejects out-of-range and duplicate coordinates.
+    // The packing pass uses finite owned tiles; do not trust an arbitrary map.
+    int64_t count = src.getNumElements();
+    if (count <= 0 || count > (1 << 20))
+      return emitOpError("source_map tile exceeds the bounded permutation proof");
+    SmallVector<bool> seen(count, false);
+    for (int64_t i = 0; i < count; ++i) {
+      SmallVector<Attribute> coordinates;
+      if (failed(map.constantFold({IntegerAttr::get(IndexType::get(getContext()), i)}, coordinates)))
+        return emitOpError("source_map must be a static permutation");
+      int64_t flat = 0;
+      for (auto [dim, coordinate] : llvm::enumerate(coordinates)) {
+        int64_t c = cast<IntegerAttr>(coordinate).getInt();
+        if (c < 0 || c >= src.getDimSize(dim))
+          return emitOpError("source_map coordinate outside source tile");
+        flat = flat * src.getDimSize(dim) + c;
+      }
+      if (seen[flat]) return emitOpError("source_map must be bijective");
+      seen[flat] = true;
+    }
+  }
+  if (src.getElementType() != dst.getElementType() ||
+      !src.getElementType().isIntOrFloat())
+    return emitOpError("requires identical integer or floating-point element types");
+  auto srcSpace = dyn_cast_or_null<IntegerAttr>(src.getMemorySpace());
+  auto dstSpace = dyn_cast_or_null<IntegerAttr>(dst.getMemorySpace());
+  if (!srcSpace || !dstSpace || srcSpace.getInt() != 1 || dstSpace.getInt() != 3)
+    return emitOpError("requires global (1) source and shared (3) destination");
+  if (getAlignment() <= 0 || !llvm::isPowerOf2_64(getAlignment()))
+    return emitOpError("alignment must be a positive power of two");
+  return success();
+}
+
+LogicalResult WaitBufferReadyOp::verify() {
+  auto type = dyn_cast<MemRefType>(getBuffer().getType());
+  auto space = type ? dyn_cast_or_null<IntegerAttr>(type.getMemorySpace()) : IntegerAttr{};
+  if (!space || space.getInt() != 3)
+    return emitOpError("requires a ranked shared (3) buffer");
   return success();
 }
 

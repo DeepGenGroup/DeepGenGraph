@@ -29,8 +29,10 @@ int main(int argc, char **argv) {
   bool nativeExp2 = argc == 3 && llvm::StringRef(argv[1]) == "--native-exp2";
   bool reciprocal = argc == 3 && llvm::StringRef(argv[1]) == "--reciprocal";
   bool prefetch = argc == 3 && llvm::StringRef(argv[1]) == "--prefetch-global-packets";
-  if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets] <input.ll or ->\n";
+  bool ldsReuse = argc == 3 && llvm::StringRef(argv[1]) == "--reuse-lds-fragments";
+  bool guardDMA = argc == 3 && llvm::StringRef(argv[1]) == "--guard-dma-addresses";
+  if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA) {
+    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -51,6 +53,10 @@ int main(int argc, char **argv) {
     mlir::frisk::optimizeRegisterMath(*module, nativeExp2, reciprocal);
   else if (prefetch)
     mlir::frisk::prefetchGlobalPackets(*module);
+  else if (ldsReuse)
+    mlir::frisk::reuseLDSFragments(*module);
+  else if (guardDMA)
+    mlir::frisk::protectAsyncDMASourceAddresses(*module);
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(*module);
   if (llvm::verifyModule(*module, &llvm::errs()))
     return 1;

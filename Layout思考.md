@@ -299,7 +299,7 @@ friskIR-fragment 阶段 ： friskIR-thread阶段细化为 fragment粒度， 更�
 8. buffer的规约轴不能跨wave。
 
 ## 更好的图IR表达？
-
+```python
 # Q: [B, H, M, D]
 # K: [B, H, N, D]
 # V: [B, H, N, Dv]
@@ -327,32 +327,30 @@ p7 = linalg.div(p5, p6)
 O = linalg.matmul(p7, V)                 # [B,H,M,Dv]
 
 return O
-
+```
 
 进一步：
 ```python
-# Q: [B,H,M,D]
-# K: [B,H,N,D]
-# V: [B,H,N,DV]
+# 串行化表达 —— 为了做并行化做铺垫。便于分析哪些for能切，哪些不能
+# Q: [B,H,S,D]
+# K: [B,H,S,D]
+# V: [B,H,S,D]
 #
-# BM, BN, BK: configurable
-# BV: optional, default DV
+# BM, BN, BK
 
 for b in range(B):
   for h in range(H):
-    for m in range(0, M, BM):
+    for m in range(0, S, BM):
 
       # Online Softmax state
       row_max = full([BM, 1], -inf)
       row_sum = zeros([BM, 1])
-      acc     = zeros([BM, DV])
+      acc     = zeros([BM, D])
 
-      for n in range(0, N, BN):
-
+      for n in range(0, S, BN):
         # ----------------------------------
         # 1. QK^T with D-dimension tiling
         # ----------------------------------
-
         p = zeros([BM, BN])
         pv1 = zeros([BM, BK])
 
@@ -361,26 +359,26 @@ for b in range(B):
           ktile = tile_from(K, [b,h,n,k], [1,1,BN,BK])
 
           kt = transpose(ktile)
-          p0 = linalg.matmul(qtile, kt)  # [BM,BN]
-          p  = linalg.add(p, p0)   # [BM,BN]
+          p0 = matmul(qtile, kt)  # [BM,BN]
+          p  = add(p, p0)   # [BM,BN]
 
         # ----------------------------------
         # 2. Scale and causal mask
         # ----------------------------------
 
-        p1 = linalg.mul(p, 1.0 / sqrt(D))
-        mask = frisk.mask(m, n, BM, BN)
-        p2 = linalg.add(p1, mask)
+        p1 = mul(p, 1.0 / sqrt(D))
+        mask = frisk.mask(m, n, BM, BN)  # [BM,BN]
+        p2 = add(p1, mask)
 
         # ----------------------------------
         # 3. Online Softmax
         # ----------------------------------
 
-        block_max = reduce_max(p2, axis=1)
-        new_max = maximum(row_max, block_max)
+        block_max = reduce_max(p2, axis=1)  # [BM,1]
+        new_max = maximum(row_max, block_max) # [BM,1]
 
-        alpha = exp(row_max - new_max)
-        p3 = exp(p2 - new_max)
+        alpha = exp(row_max - new_max)  # [BM,1]
+        p3 = exp(p2 - new_max)   # [BM,BN] - [BM,1]  braodcast-semantic 
 
         block_sum = reduce_sum(p3, axis=1)
         new_sum = row_sum * alpha + block_sum
@@ -391,11 +389,203 @@ for b in range(B):
 
         for k in range(0, D, BK):
           vtile = tile_from(V, [b,h,n,k], [1,1,BN,BK])  # [BN,BK]
-          pv0 = linalg.matmul(p3, vtile)  # [BM,BK]
+          pv0 = matmul(p3, vtile)  # [BM,BK]
+          pv  = add(pv, pv0)
 
-          pv  = linalg.add(pv, pv0)
+        acc = acc * alpha + pv
 
-        pv = linalg.matmul(p3, vtile)
+        row_max = new_max
+        row_sum = new_sum
+
+      # ----------------------------------
+      # 5. Normalize and store
+      # ----------------------------------
+
+      out = acc / row_sum
+      tile_store(O, [b,h,m,0], out)
+```
+
+
+再进一步，用fragment表示 matmul 结构
+```python
+# 串行化表达 —— 为了做并行化做铺垫。便于分析哪些for能切，哪些不能
+# Q: [B,H,S,D]
+# K: [B,H,S,D]
+# V: [B,H,S,D]
+#
+# BM, BN, BK
+
+for b in range(B):  # 可并行
+  for h in range(H):  # 可并行
+    for m in range(0, S, BM):  # 串行轴
+
+      # Online Softmax state
+      row_max = full([BM, 1], -inf)
+      row_sum = zeros([BM, 1])
+      acc     = zeros([BM, D])
+
+      for n in range(0, S, BN):
+        # ----------------------------------
+        # 1. QK^T with D-dimension tiling
+        # ----------------------------------
+        p = zeros([BM, BN])
+        pv = zeros([BM, BK])
+
+        for k in range(0, D, BK): # reduce 轴
+          qtile = tile_from(Q, [b,h,m,k], [1,1,BM,BK])
+          ktile = tile_from(K, [b,h,n,k], [1,1,BN,BK])
+          kt = transpose(ktile)
+          # p0 = matmul(qtile, kt)  # [BM,BK] @ [BK,BN] = [BM,BN]
+          p0 = zeros([BM,BN])
+          for mmaM in range(0,BM, mma_m) :
+            for mmaN in range(0,BN, mma_n) :
+              for mmaK in range(0, BK, mma_k):  # reduce 轴
+                fq = frag_from(qtile, mmaM, mmaK)  # [mma_m, mma_k]
+                fk = frag_from(kt, mmaK, mmaN)  # [mma_k, mma_n ]
+                fv = warp_mma(fq,fk) # [mma_m ,mma_n]
+                ptemp = tile_from(p0,[ mmaM, mmaN])  # [mma_m ,mma_n]
+                p0temp = add(fv, ptemp)  # [mma_m ,mma_n]
+                tile_store_to(p0temp, p0)  # [mma_m ,mma_n] store to [BM,BN]
+          p  = add(p, p0)   # [BM,BN]
+
+        # ----------------------------------
+        # 2. Scale and causal mask
+        # ----------------------------------
+
+        p1 = mul(p, 1.0 / sqrt(D))
+        mask = frisk.mask(m, n, BM, BN)  # [BM,BN]
+        p2 = add(p1, mask)
+
+        # ----------------------------------
+        # 3. Online Softmax
+        # ----------------------------------
+
+        block_max = reduce_max(p2, axis=1)  # [BM,1]
+        new_max = maximum(row_max, block_max) # [BM,1]
+
+        alpha = exp(row_max - new_max)  # [BM,1]
+        p3 = exp(p2 - new_max)   # [BM,BN] - [BM,1]  braodcast-semantic 
+
+        block_sum = reduce_sum(p3, axis=1)
+        new_sum = row_sum * alpha + block_sum
+
+        # ----------------------------------
+        # 4. Accumulate PV
+        # ----------------------------------
+        for k in range(0, D, BK):  # reduce 轴
+          vtile = tile_from(V, [b,h,n,k], [1,1,BN,BK])  # [BN,BK]
+
+          # pv0 = matmul(p3, vtile)  #  [BM,BN] @ [BN,BK]
+          pv0 = zeros([BM,BK])
+          for mmaM in range(0,BM, mma_m) :
+            for mmaN in range(0,BK, mma_n) :
+              for mmaK in range(0, BN, mma_k):  # reduce 轴
+                fp3 = frag_from(p3, mmaM, mmaK)  # [mma_m, mma_k]
+                fvtile = frag_from(vtile, mmaK, mmaN)  # [mma_k, mma_n ]
+                fo = warp_mma(fp3,fvtile) # [mma_m ,mma_n]
+                ptemp = tile_from(pv0, mmaM, mmaN)  # [mma_m ,mma_n]
+                p0temp = add(fo, ptemp)  # [mma_m ,mma_n]
+                tile_store_to(p0temp, pv0, [mmaM,mmaN])  # [mma_m ,mma_n] store to [BM,BN]
+          pv  = add(pv, pv0)
+
+        acc = acc * alpha + pv
+
+        row_max = new_max
+        row_sum = new_sum
+
+      # ----------------------------------
+      # 5. Normalize and store
+      # ----------------------------------
+
+      out = acc / row_sum
+      tile_store(O, [b,h,m,0], out)
+```
+
+改完matmul到frag上的表示后，其他op也能用frag 表示。依据是matmul 参数的传播。
+（ buffer-frag 建立联系。 frag = frag_from(buffer) frag也能存回buffer ）
+之后，通过Layout分析，可对 frag-buffer-frag 的模式做简化（如果 buffer 的 frag_from 和 frag_to 索引规则一样，就能保持数据在 frag 里）
+
+还要做循环分析 ： 哪些for必须串，哪些能并行(是不是有跨迭代依赖)
+
+```python
+# 串行化表达 —— 为了做并行化做铺垫。便于分析哪些for能切，哪些不能
+# Q: [B,H,S,D]
+# K: [B,H,S,D]
+# V: [B,H,S,D]
+#
+# BM, BN, BK
+
+for b in range(B):  # 可并行 step=1， 可直接分到gpu.blockId 上
+  for h in range(H):  # 可并行  step=1， 可直接分到gpu.blockId 上
+    for m in range(0, S, BM):  # 可并行
+
+      # Online Softmax state
+      row_max = full([BM, 1], -inf)
+      row_sum = zeros([BM, 1])
+      acc     = zeros([BM, D])
+
+      for n in range(0, S, BN):  # 可并行？
+        # ----------------------------------
+        # 1. QK^T with D-dimension tiling
+        # ----------------------------------
+        p = zeros([BM, BN])
+        pv = zeros([BM, BK])
+
+        for k in range(0, D, BK): # # 串行
+          qtile = tile_from(Q, [b,h,m,k], [1,1,BM,BK])
+          ktile = tile_from(K, [b,h,n,k], [1,1,BN,BK])
+          kt = transpose(ktile)
+          # p0 = matmul(qtile, kt)  # [BM,BK] @ [BK,BN] = [BM,BN]
+          p0 = zeros([BM,BN])
+          for mmaM in range(0,BM, mma_m) :
+            for mmaN in range(0,BN, mma_n) :
+              for mmaK in range(0, BK, mma_k):  # # 串行
+                fq = frag_from(qtile, mmaM, mmaK)  # [mma_m, mma_k]
+                fk = frag_from(kt, mmaK, mmaN)  # [mma_k, mma_n ]
+                fv = warp_mma(fq,fk) # [mma_m ,mma_n]
+                ptemp = tile_from(p0,[ mmaM, mmaN])  # [mma_m ,mma_n]
+                p0temp = add(fv, ptemp)  # [mma_m ,mma_n]
+                tile_store_to(p0temp, p0)  # [mma_m ,mma_n] store to [BM,BN]
+          p  = add(p, p0)   # [BM,BN]
+
+        # ----------------------------------
+        # 2. Scale and causal mask
+        # ----------------------------------
+        p1 = mul(p, 1.0 / sqrt(D))
+        mask = frisk.mask(m, n, BM, BN)  # [BM,BN]
+        p2 = add(p1, mask)
+
+        # ----------------------------------
+        # 3. Online Softmax
+        # ----------------------------------
+
+        block_max = reduce_max(p2, axis=1)  # [BM,1]
+        new_max = maximum(row_max, block_max) # [BM,1]
+
+        alpha = exp(row_max - new_max)  # [BM,1]
+        p3 = exp(p2 - new_max)   # [BM,BN] - [BM,1]  braodcast-semantic 
+
+        block_sum = reduce_sum(p3, axis=1)
+        new_sum = row_sum * alpha + block_sum
+
+        # ----------------------------------
+        # 4. Accumulate PV
+        # ----------------------------------
+        for k in range(0, D, BK):  # # 串行
+          vtile = tile_from(V, [b,h,n,k], [1,1,BN,BK])  # [BN,BK]
+
+          # pv0 = matmul(p3, vtile)  #  [BM,BN] @ [BN,BK]
+          pv0 = zeros([BM,BK])
+          for mmaM in range(0,BM, mma_m) :
+            for mmaN in range(0,BK, mma_n) :
+              for mmaK in range(0, BN, mma_k):  # # 串行
+                fp3 = frag_from(p3, mmaM, mmaK)  # [mma_m, mma_k]
+                fvtile = frag_from(vtile, mmaK, mmaN)  # [mma_k, mma_n ]
+                fo = warp_mma(fp3,fvtile) # [mma_m ,mma_n]
+                ptemp = tile_from(pv0, mmaM, mmaN)  # [mma_m ,mma_n]
+                p0temp = add(fo, ptemp)  # [mma_m ,mma_n]
+                tile_store_to(p0temp, pv0, [mmaM,mmaN])  # [mma_m ,mma_n] store to [BM,BN]
+          pv  = add(pv, pv0)
 
         acc = acc * alpha + pv
 

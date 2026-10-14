@@ -139,6 +139,44 @@ void prepareRegisterMMAForLLVM(llvm::Module &module) {
       }
 }
 
+void protectAsyncDMASourceAddresses(llvm::Module &module) {
+  // The global_load_* lds immediate applies to BOTH global and LDS addresses.
+  // Source-only constant-offset folding in affected backends leaves M0
+  // uncompensated. Pin the final source, rather than an intermediate base.
+  // The tied empty asm preserves all pointer bits and keeps the DMA visible
+  // to the backend's memory/synchronization analysis.
+  for (llvm::Function &function : module)
+    for (llvm::BasicBlock &block : function)
+      for (llvm::Instruction &inst : block) {
+        auto *dma = llvm::dyn_cast<llvm::CallInst>(&inst);
+        if (!dma || !dma->getCalledFunction() ||
+            dma->getCalledFunction()->getName() != "llvm.amdgcn.global.load.async.lds")
+          continue;
+        llvm::Value *source = dma->getArgOperand(0);
+        // Recognize the structural identity as well as our own exports, so
+        // importing a previously guarded diagnostic does not add another one.
+        if (auto *pointer = llvm::dyn_cast<llvm::IntToPtrInst>(source))
+          if (auto *call = llvm::dyn_cast<llvm::CallInst>(pointer->getOperand(0)))
+            if (auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
+                assembly && assembly->hasSideEffects() &&
+                assembly->getAsmString().empty() &&
+                assembly->getConstraintString() == "=v,0" &&
+                call->getType()->isIntegerTy(64) && call->arg_size() == 1)
+              continue;
+        llvm::IRBuilder<> builder(dma);
+        builder.SetCurrentDebugLocation(dma->getDebugLoc());
+        auto *type = builder.getInt64Ty();
+        auto *bits = builder.CreatePtrToInt(source, type, "dma.source.bits");
+        auto *signature = llvm::FunctionType::get(type, {type}, false);
+        auto *identity = llvm::InlineAsm::get(signature, "", "=v,0", true);
+        auto *guard = builder.CreateCall(signature, identity, {bits}, "dma.source.opaque");
+        guard->setDoesNotAccessMemory();
+        guard->setDoesNotThrow();
+        guard->addFnAttr(llvm::Attribute::Convergent);
+        dma->setArgOperand(0, builder.CreateIntToPtr(guard, source->getType(), "dma.source.ptr"));
+      }
+}
+
 void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
   SmallVector<Instruction *> joins;
   for (Function &function : module)
@@ -295,6 +333,7 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text) {
 
 static void printLLVM22CompatibleIR(Module &module, raw_ostream &os) {
   prepareRegisterMMAForLLVM(module);
+  protectAsyncDMASourceAddresses(module);
   std::string text;
   raw_string_ostream buffer(text);
   module.print(buffer, nullptr);

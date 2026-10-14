@@ -20,6 +20,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createFuseFragmentAccumulatorPass(); });
   mlir::registerPass([] { return mlir::frisk::createIRDeepOptimizePass(); });
   mlir::registerPass([] { return mlir::frisk::createBarrierOptimizePass(); });
+  registry.insert<mlir::frisk::FriskDialect>();
+  mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Fragment optimization tests\n", registry));
 }

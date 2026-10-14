@@ -34,6 +34,11 @@ def BarrierOptimize: Pass<"barrier-optimize", "func::FuncOp"> {
   let constructor = "mlir::frisk::createBarrierOptimizePass()";
 }
 
+def LowerFriskAsyncCopy: Pass<"frisk-lower-async-copy", "::mlir::ModuleOp"> {
+  let summary = "Lower block tile copies and buffer readiness for gfx936";
+  let constructor = "mlir::frisk::createLowerFriskAsyncCopyPass()";
+}
+
 def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
   let summary = "Fuse a full-tile add into independent MMA fragment updates";
   let constructor = "mlir::frisk::createFuseFragmentAccumulatorPass()";

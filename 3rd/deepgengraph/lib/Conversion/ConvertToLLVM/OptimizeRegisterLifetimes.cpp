@@ -406,15 +406,25 @@ public:
     // Snapshot accesses before inserting instructions. Per-block caching
     // shares nearby addresses, but never carries their expanded DAGs through
     // another block/loop. Uniform base pointers and loop PHIs remain shared.
-    llvm::SmallVector<llvm::Instruction *> accesses;
-    for (llvm::Instruction &inst : block)
-      if (llvm::isa<llvm::LoadInst, llvm::StoreInst>(inst)) accesses.push_back(&inst);
-    for (llvm::Instruction *inst : accesses) {
-      unsigned pointer = llvm::isa<llvm::LoadInst>(inst) ? 0 : 1;
-      auto *type = llvm::cast<llvm::PointerType>(inst->getOperand(pointer)->getType());
-      if (type->getAddressSpace() != 1 && type->getAddressSpace() != 3) continue;
-      if (!affordable(inst->getOperand(pointer))) continue;
-      inst->setOperand(pointer, rebuild(inst->getOperand(pointer), inst));
+    llvm::SmallVector<std::pair<llvm::Instruction *, unsigned>> accesses;
+    for (llvm::Instruction &inst : block) {
+      if (llvm::isa<llvm::LoadInst, llvm::StoreInst>(inst)) {
+        unsigned operand = llvm::isa<llvm::LoadInst>(inst) ? 0 : 1;
+        auto *type = llvm::cast<llvm::PointerType>(inst.getOperand(operand)->getType());
+        if (type->getAddressSpace() == 1 || type->getAddressSpace() == 3)
+          accesses.push_back({&inst, operand});
+      } else if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&inst)) {
+        // DMA source addresses are memory operands too. Its LDS wave base is
+        // passed through readfirstlane: rebuild that call's integer input in
+        // place, never clone/move the convergent call or the DMA itself.
+        if (intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_global_load_async_lds ||
+            intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_readfirstlane)
+          accesses.push_back({&inst, 0});
+      }
+    }
+    for (auto [inst, operand] : accesses) {
+      if (!affordable(inst->getOperand(operand))) continue;
+      inst->setOperand(operand, rebuild(inst->getOperand(operand), inst));
     }
   }
 };

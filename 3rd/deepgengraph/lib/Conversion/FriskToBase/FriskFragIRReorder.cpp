@@ -15,6 +15,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -546,6 +547,107 @@ static bool pipelineFragments(Loop loop) {
 #define GEN_PASS_DEF_LOWERFRISKFRAGMENTS
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
+// Schedule only within a block, after physical layouts and all accesses are
+// visible, but BEFORE storage reuse. Thus an early issue extends the live range
+// that the allocator sees. Never move an issue after allocation against a stale
+// reuse plan, and never speculate across a barrier or an unknown effect.
+static void scheduleAsyncCopies(func::FuncOp kernel) {
+  AliasAnalysis aliases(kernel);
+  auto independent = [&](Operation *op, AsyncCopyGmToShmOp issue) {
+    return !op->walk([&](Operation *nested) {
+      if (isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp,
+              AsyncCopyGmToShmOp>(nested)) return WalkResult::interrupt();
+      if (isa<affine::AffineForOp, scf::ForOp, scf::IfOp>(nested))
+        return WalkResult::advance(); // Inspect their bodies, not just operands.
+      auto effects = dyn_cast<MemoryEffectOpInterface>(nested);
+      if (!effects) return WalkResult::interrupt();
+      SmallVector<MemoryEffects::EffectInstance> instances;
+      effects.getEffects(instances);
+      for (const auto &effect : instances) {
+        Value value = effect.getValue();
+        if (!value || !isa<MemoryEffects::Read, MemoryEffects::Write>(effect.getEffect()))
+          return WalkResult::interrupt();
+        if (!aliases.alias(value, issue.getDst()).isNo() ||
+            (isa<MemoryEffects::Write>(effect.getEffect()) &&
+             !aliases.alias(value, issue.getSrc()).isNo()))
+          return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }).wasInterrupted();
+  };
+  SmallVector<AsyncCopyGmToShmOp> issues;
+  kernel.walk([&](AsyncCopyGmToShmOp op) { issues.push_back(op); });
+  for (auto issue : issues) {
+    // Do not reschedule manually staged copies before their slot selection or
+    // across iterations. Descriptor dependencies bound the motion naturally.
+    llvm::SetVector<Operation *> setup;
+    llvm::SmallPtrSet<Operation *, 16> anchors;
+    std::function<void(Value)> collect = [&](Value value) {
+      Operation *def = value.getDefiningOp();
+      if (!def || def->getBlock() != issue->getBlock() || setup.contains(def) || anchors.contains(def))
+        return;
+      auto allocation = dyn_cast<memref::AllocOp>(def);
+      bool staticShared = allocation && allocation.getType().hasStaticShape() &&
+          allocation.getType().getMemorySpaceAsInt() == 3 && allocation->getNumOperands() == 0;
+      if (setup.size() >= 128 || def->getNumRegions() || (!isPure(def) && !staticShared)) {
+        anchors.insert(def);
+        return;
+      }
+      for (Value operand : def->getOperands()) collect(operand);
+      setup.insert(def);
+    };
+    collect(issue.getSrc());
+    collect(issue.getDst());
+    Operation *first = issue;
+    for (Operation *prev = issue->getPrevNode(); prev; prev = prev->getPrevNode()) {
+      if (anchors.contains(prev)) break;
+      if (!setup.contains(prev) && !independent(prev, issue)) break;
+      first = prev;
+    }
+    while (first != issue.getOperation() && setup.contains(first))
+      first = first->getNextNode();
+    if (first != issue.getOperation()) {
+      // Preserve the original topological order of the descriptor slice.
+      for (Operation *op : setup)
+        if (op != first && first->isBeforeInBlock(op)) op->moveBefore(first);
+      issue->moveBefore(first);
+    }
+    // Keep completion as late as possible, immediately before the first access
+    // that may observe/write the destination or mutate the source. A barrier
+    // remains a hard boundary even if it does not name the copied buffer.
+    auto wait = dyn_cast_or_null<WaitBufferReadyOp>(issue->getNextNode());
+    // Hoisting normally leaves wait at its original location; find its exact
+    // same-block descriptor match, stopping at a second issue into that tile.
+    if (!wait || wait.getBuffer() != issue.getDst()) {
+      wait = {};
+      for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
+        if (auto ready = dyn_cast<WaitBufferReadyOp>(next);
+            ready && ready.getBuffer() == issue.getDst()) { wait = ready; break; }
+        if (auto other = dyn_cast<AsyncCopyGmToShmOp>(next);
+            other && other.getDst() == issue.getDst()) break;
+      }
+    }
+    if (wait)
+      while (Operation *next = wait->getNextNode()) {
+        // Preserve completion before another DMA issue, even for disjoint
+        // tiles. Alias independence alone does not validate grouped completion
+        // on the target backend. Keep the conservative policy while target
+        // numerics remain unresolved for both grouped and separate waits.
+        if (next->hasTrait<OpTrait::IsTerminator>() ||
+            !independent(next, issue)) break;
+        wait->moveAfter(next);
+      }
+  }
+}
+
+class ScheduleAsyncCopies : public PassWrapper<ScheduleAsyncCopies, OperationPass<func::FuncOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleAsyncCopies)
+  StringRef getArgument() const final { return "frisk-schedule-async-copies"; }
+  StringRef getDescription() const final { return "Schedule tile DMA against physical memory dependencies"; }
+  void runOnOperation() final { scheduleAsyncCopies(getOperation()); }
+};
+
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     packSharedMemory(getOperation());
@@ -561,6 +663,7 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
         body.front().moveBefore(fragment);
       fragment.erase();
     }
+    scheduleAsyncCopies(getOperation());
     // The prefetch schedule is now fixed, and all physical reads are visible.
     // Allocate shared storage only against these final operation lifetimes.
     synchronizeSharedMemoryLoopBackedges(getOperation());
@@ -623,5 +726,8 @@ std::unique_ptr<Pass> createFriskFragIRReorderPass() {
 }
 std::unique_ptr<Pass> createLowerFriskFragmentsPass() {
   return std::make_unique<LowerFriskFragments>();
+}
+std::unique_ptr<Pass> createScheduleAsyncCopiesPass() {
+  return std::make_unique<ScheduleAsyncCopies>();
 }
 } // namespace mlir::frisk

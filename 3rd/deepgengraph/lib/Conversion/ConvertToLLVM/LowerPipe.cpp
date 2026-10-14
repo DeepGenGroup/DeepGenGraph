@@ -6,6 +6,7 @@
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include <memory>
 #include <optional>
 
@@ -254,12 +255,19 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 }
 
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
-                    Target target) {
+                    Target target, bool useAsyncCopy) {
   mlir::PassManager pm(context);
+  // Keep the tile/readiness contract through scheduling and storage planning.
+  // The synchronous form is also valid for non-ROCm targets.
+  pm.addPass(mlir::frisk::createLowerFriskAsyncCopyPass(
+      useAsyncCopy && target == Target::ROCm));
 
   // 1. 结构与高阶方言转换 (SCF, Affine, Vector -> SCF)
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createLoopInvariantCodeMotionPass());
   pm.addPass(mlir::frisk::createAmendAllocaOpAddrSpacePass(target));
+  // Tile descriptors can now contain subviews with dynamic origins. The
+  // final memref-to-LLVM pass expects those metadata operations expanded.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createConvertVectorToSCFPass());
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::createCanonicalizerPass());

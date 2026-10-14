@@ -507,6 +507,55 @@ def Frisk_CopyOp : Frisk_Op<"copy", [
 }
 
 // copy
+def Frisk_AsyncCopyGmToShmOp : Frisk_Op<"async_copy_gm_to_shm", [
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+  let summary = "Issue a block-cooperative global-to-shared tile copy";
+  let description = [{
+    Copies equal-shaped, equal-element-type memref tiles from global (1) to
+    shared (3) memory. Views express source and destination slices. All threads
+    of the block execute this op with the same descriptors. Issuing the copy
+    does NOT make the destination ready. A wait_buffer_ready on the destination
+    must precede consumers, reuse, or release of either buffer. The source must
+    remain unchanged until completion. There is no implicit type conversion.
+
+    This is a semantic operation: lowering may use asynchronous DMA or a
+    synchronous copy when disabled by the user or unsupported by the layout.
+    A 4-byte-aligned source and destination permit the gfx936 dword DMA path;
+    the alignment attribute is a caller guarantee on the tile origins.
+
+    After physical packing, the destination may be a flat tile of equal element
+    count. In that form, frisk.source_map is an affine map from one physical
+    destination element index to logical source coordinates. The verifier
+    requires a bounded bijection; synchronous fallback uses the same map.
+    Target lowering may stage a copy when source and destination packet orders
+    differ, preserving the named destination's physical layout and readiness.
+  }];
+  let arguments = (ins AnyMemRef:$src, AnyMemRef:$dst,
+      DefaultValuedAttr<I64Attr, "4">:$alignment);
+  let assemblyFormat = "$src `to` $dst attr-dict `:` type($src) `,` type($dst)";
+  let hasVerifier = 1;
+}
+
+def Frisk_WaitBufferReadyOp : Frisk_Op<"wait_buffer_ready", [
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+  let summary = "Make a shared tile ready for block-wide consumption";
+  let description = [{
+    All threads in the block participate with the same shared buffer descriptor.
+    On return, prior copies into this buffer are complete and visible to the
+    block. Backends may wait for additional buffers. Async gfx936 lowering uses
+    wait.asyncmark 0 followed by a block barrier. Synchronous lowering only
+    needs a block barrier, which subsequent dependency analysis may remove.
+    This does not prove that consumers have finished: buffer reuse after reads
+    may still need sync_threads_in_block. Keep this op with its consumer tile
+    when software pipelining, including the rotated buffer slot.
+  }];
+  let arguments = (ins AnyMemRef:$buffer);
+  let assemblyFormat = "$buffer attr-dict `:` type($buffer)";
+  let hasVerifier = 1;
+}
+
 def Frisk_CopyToRegOp : Frisk_Op<"copy_to_reg", [
     MemoryEffects<[MemRead, MemWrite]>,
     DeclareOpInterfaceMethods<OpAsmOpInterface>

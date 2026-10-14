@@ -14,7 +14,7 @@ from check_direct_shared_copy import Trace
 from check_packed_lds_banks import multiplicity
 
 
-def check(text):
+def check(text, minimum_locations=6):
     definitions = dict(re.findall(r'^  (%[\w.]+) = (.*?)(?:, !dbg !\d+)?$', text, re.M))
     tid = next(n for n, e in definitions.items() if '@llvm.amdgcn.workitem.id.x()' in e)
     threads = int(re.search(r'"amdgpu-flat-work-group-size"="\d+,(\d+)"', text)[1])
@@ -27,7 +27,7 @@ def check(text):
                    if e.startswith('phi i64 ') or '@llvm.amdgcn.workgroup.id.' in e}
         traces = [Trace(definitions, {**context, tid: lane}) for lane in range(threads)]
         for line, instruction in enumerate(text.splitlines(), 1):
-            if not re.search(r'\b(load|store)\b.*ptr addrspace\(3\)', instruction):
+            if not re.search(r'(?:= load |^  store ).*ptr addrspace\(3\)', instruction):
                 continue
             match = re.search(r'(load|store) <(\d+) x half>(?:, | %[\w.]+, )ptr addrspace\(3\) (%[\w.]+)', instruction)
             assert match, ('unexpected scalar/unmodeled LDS access', line, instruction)
@@ -47,7 +47,7 @@ def check(text):
                 assert concentration == 1, (line, op, width, value, concentration)
             stats[op, width] += 1
             seen.add(re.search(r'!dbg !(\d+)', instruction)[1])
-    assert len(seen) >= 6, 'Must cover Q, K and V producers AND consumers'
+    assert len(seen) >= minimum_locations, 'Insufficient Q/K/V access coverage'
     print(f'PASS all Q/K/V LDS packets, all {threads} lanes, three loop contexts:', dict(stats))
 
 
