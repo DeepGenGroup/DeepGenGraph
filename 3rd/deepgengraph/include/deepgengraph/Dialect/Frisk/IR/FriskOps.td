@@ -523,6 +523,10 @@ def Frisk_AsyncCopyGmToShmOp : Frisk_Op<"async_copy_gm_to_shm", [
     synchronous copy when disabled by the user or unsupported by the layout.
     A 4-byte-aligned source and destination permit the gfx936 dword DMA path;
     the alignment attribute is a caller guarantee on the tile origins.
+    Full-width plans carry frisk.dma_bytes selected from HWSpecification and
+    optionally frisk.copy_threads (whole waves). All block threads still
+    execute completion and publication. Unsupported explicit widths fail
+    instead of silently selecting a synchronous or narrower copy.
 
     After physical packing, the destination may be a flat tile of equal element
     count. In that form, frisk.source_map is an affine map from one physical

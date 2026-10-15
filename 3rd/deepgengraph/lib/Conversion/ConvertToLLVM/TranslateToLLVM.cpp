@@ -2,6 +2,8 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Analysis/ValueTracking.h"
 #undef TID
 #include <cassert>
 #include <cctype>
@@ -150,7 +152,8 @@ void protectAsyncDMASourceAddresses(llvm::Module &module) {
       for (llvm::Instruction &inst : block) {
         auto *dma = llvm::dyn_cast<llvm::CallInst>(&inst);
         if (!dma || !dma->getCalledFunction() ||
-            dma->getCalledFunction()->getName() != "llvm.amdgcn.global.load.async.lds")
+            (dma->getCalledFunction()->getName() != "llvm.amdgcn.global.load.async.lds" &&
+             dma->getCalledFunction()->getName() != "llvm.hcu.global.load.dwordx4.lds"))
           continue;
         llvm::Value *source = dma->getArgOperand(0);
         // Recognize the structural identity as well as our own exports, so
@@ -175,6 +178,164 @@ void protectAsyncDMASourceAddresses(llvm::Module &module) {
         guard->addFnAttr(llvm::Attribute::Convergent);
         dma->setArgOperand(0, builder.CreateIntToPtr(guard, source->getType(), "dma.source.ptr"));
       }
+}
+
+void lowerWideAsyncDMAToHCU(llvm::Module &module) {
+  auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
+  if (!generic) return;
+  SmallVector<llvm::CallInst *> wide;
+  for (llvm::User *user : generic->users())
+    if (auto *call = llvm::dyn_cast<llvm::CallInst>(user))
+      if (auto *bytes = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+          bytes && bytes->equalsInt(16))
+        wide.push_back(call);
+  if (wide.empty()) return;
+  // IntrinsicsHCU.td / HCUGlobalLoadLDS: (global AS1, LDS AS3,
+  // imm offset, aux/cpol, bps). Width is encoded in the intrinsic name.
+  // bps=0 selects the ordinary M0-based, non-swizzled LDS packet layout.
+  auto hcu = module.getOrInsertFunction("llvm.hcu.global.load.dwordx4.lds",
+                                       generic->getFunctionType());
+  auto *declaration = llvm::cast<llvm::Function>(hcu.getCallee());
+  declaration->addFnAttr(llvm::Attribute::Convergent);
+  declaration->addFnAttr(llvm::Attribute::NoUnwind);
+  declaration->addFnAttr(llvm::Attribute::WillReturn);
+  for (auto *call : wide) {
+    llvm::Value *offset = call->getArgOperand(3);
+    llvm::Value *aux = call->getArgOperand(4);
+    call->setCalledFunction(hcu);
+    // Do not inherit upstream intrinsic memory attributes: HCU performs a
+    // global read AND an LDS write, even in an upstream-only verifier build.
+    call->setAttributes(llvm::AttributeList{});
+    call->addFnAttr(llvm::Attribute::Convergent);
+    call->setArgOperand(2, offset);
+    call->setArgOperand(3, aux);
+    call->setArgOperand(4, llvm::ConstantInt::get(offset->getType(), 0));
+  }
+  if (generic->use_empty()) generic->eraseFromParent();
+}
+
+void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes) {
+  auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
+  if (!generic) return;
+  if (!sourceBytes) llvm::report_fatal_error("buffer DMA requires a nonzero tensor byte range");
+  SmallVector<llvm::CallInst *> copies;
+  for (llvm::User *user : generic->users())
+    if (auto *call = llvm::dyn_cast<llvm::CallInst>(user)) copies.push_back(call);
+  SmallVector<llvm::Function *> functions;
+  for (auto *call : copies) {
+    auto *width = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+    auto *offset = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(3));
+    auto *aux = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(4));
+    auto *source = call->getArgOperand(0);
+    auto *base = llvm::dyn_cast<llvm::Argument>(llvm::getUnderlyingObject(source, 32));
+    if (!width || !width->equalsInt(16) || !offset || !offset->isZero() ||
+        !aux || !aux->isZero() || !base ||
+        call->getFunction()->getCallingConv() != llvm::CallingConv::AMDGPU_KERNEL)
+      llvm::report_fatal_error("asm128 requires 16B/zero-control DMA from a kernel tensor argument");
+    if (!llvm::is_contained(functions, call->getFunction())) functions.push_back(call->getFunction());
+    llvm::IRBuilder<> b(call);
+    b.SetCurrentDebugLocation(call->getDebugLoc());
+    auto *i32 = b.getInt32Ty();
+    auto *v4i32 = llvm::FixedVectorType::get(i32, 4);
+    auto *baseBits = b.CreatePtrToInt(base, b.getInt64Ty());
+    auto *srcBits = b.CreatePtrToInt(source, b.getInt64Ty());
+    auto *byteOffset = b.CreateTrunc(b.CreateSub(srcBits, baseBits), i32, "dma.buffer.offset");
+    llvm::Value *rsrc = llvm::PoisonValue::get(v4i32);
+    rsrc = b.CreateInsertElement(rsrc, b.CreateTrunc(baseBits, i32), uint64_t(0));
+    rsrc = b.CreateInsertElement(rsrc, b.CreateTrunc(b.CreateLShr(baseBits, 32), i32), 1);
+    rsrc = b.CreateInsertElement(rsrc, b.getInt32(sourceBytes), 2);
+    // CK's gfx9 raw byte-addressed buffer descriptor: stride=0, no swizzle.
+    rsrc = b.CreateInsertElement(rsrc, b.getInt32(0x00020000), 3, "dma.buffer.rsrc");
+    auto *readFirst = llvm::Intrinsic::getOrInsertDeclaration(&module,
+        llvm::Intrinsic::amdgcn_readfirstlane, {i32});
+    auto *lds = b.CreateCall(readFirst,
+        {b.CreatePtrToInt(call->getArgOperand(1), i32)}, "dma.buffer.lds");
+    // M0 is an explicit output (its post-asm value is the LDS base), not an
+    // opaque reserved-register clobber. The unused result still describes the
+    // register definition to codegen and avoids the reserved clobber warning.
+    auto *type = llvm::FunctionType::get(i32, {i32, i32, v4i32}, false);
+    auto *assembly = llvm::InlineAsm::get(type,
+        "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds",
+        "={m0},s,v,s,~{memory}", true);
+    auto *issue = b.CreateCall(type, assembly, {lds, byteOffset, rsrc});
+    issue->addFnAttr(llvm::Attribute::Convergent);
+    issue->setDoesNotThrow();
+    call->eraseFromParent();
+  }
+  // Inline asm is opaque to asyncmark bookkeeping. This path only accepts
+  // drain-all waits, and emits an explicit hardware wait before publication.
+  for (auto *function : functions) {
+    SmallVector<llvm::CallInst *> markers;
+    for (auto &block : *function)
+      for (auto &inst : block)
+        if (auto *call = llvm::dyn_cast<llvm::CallInst>(&inst))
+          if (auto *callee = call->getCalledFunction(); callee &&
+              (callee->getName() == "llvm.amdgcn.asyncmark" ||
+               callee->getName() == "llvm.amdgcn.wait.asyncmark")) markers.push_back(call);
+    for (auto *call : markers) {
+      if (call->arg_size()) {
+        auto *count = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(0));
+        if (!count || !count->isZero()) llvm::report_fatal_error("asm128 requires wait.asyncmark(0)");
+        llvm::IRBuilder<> b(call);
+        b.SetCurrentDebugLocation(call->getDebugLoc());
+        auto *type = llvm::FunctionType::get(b.getVoidTy(), false);
+        auto *wait = b.CreateCall(type, llvm::InlineAsm::get(type,
+            "s_waitcnt vmcnt(0)", "~{memory}", true));
+        wait->addFnAttr(llvm::Attribute::Convergent);
+        wait->setDoesNotThrow();
+      }
+      call->eraseFromParent();
+    }
+  }
+  if (generic->use_empty()) generic->eraseFromParent();
+}
+
+void splitFullWaveAsyncDMAToDwords(llvm::Module &module) {
+  auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
+  if (!generic) return;
+  SmallVector<llvm::CallInst *> wide;
+  for (llvm::User *user : generic->users())
+    if (auto *call = llvm::dyn_cast<llvm::CallInst>(user))
+      if (auto *bytes = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+          bytes && bytes->equalsInt(16))
+        wide.push_back(call);
+  if (wide.empty()) return;
+  auto *loCount = llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::amdgcn_mbcnt_lo);
+  auto *hiCount = llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::amdgcn_mbcnt_hi);
+  auto *permute = llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::amdgcn_ds_bpermute);
+  for (auto *call : wide) {
+    // The generated attention copies have zero immediate offset. Fold any
+    // source displacement into the address before using this transformation.
+    auto *offset = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(3));
+    if (!offset || !offset->isZero())
+      llvm::report_fatal_error("split DMA requires zero immediate offset");
+    llvm::IRBuilder<> b(call);
+    b.SetCurrentDebugLocation(call->getDebugLoc());
+    auto *lowLane = b.CreateCall(loCount, {b.getInt32(-1), b.getInt32(0)});
+    auto *lane = b.CreateCall(hiCount, {b.getInt32(-1), lowLane}, "dma.lane");
+    auto *bits = b.CreatePtrToInt(call->getArgOperand(0), b.getInt64Ty());
+    auto *low = b.CreateTrunc(bits, b.getInt32Ty());
+    auto *high = b.CreateTrunc(b.CreateLShr(bits, 32), b.getInt32Ty());
+    auto *word = b.CreateShl(b.CreateAnd(lane, b.getInt32(3)), 2);
+    for (unsigned part = 0; part < 4; ++part) {
+      // Original destination = base + 16*sourceLane + 4*word.
+      // Instruction part stores at base + 256*part + 4*lane, hence
+      // sourceLane = 16*part + lane/4, word = lane%4.
+      auto *index = b.CreateAdd(b.CreateAnd(lane, b.getInt32(60)), b.getInt32(64 * part));
+      auto *srcLow = b.CreateCall(permute, {index, low});
+      auto *srcHigh = b.CreateCall(permute, {index, high});
+      auto *address = b.CreateOr(b.CreateZExt(srcLow, b.getInt64Ty()),
+          b.CreateShl(b.CreateZExt(srcHigh, b.getInt64Ty()), 32));
+      address = b.CreateAdd(address, b.CreateZExt(word, b.getInt64Ty()));
+      auto *src = b.CreateIntToPtr(address, call->getArgOperand(0)->getType());
+      auto *dst = b.CreateGEP(b.getInt8Ty(), call->getArgOperand(1), b.getInt32(part * 256));
+      b.CreateCall(generic, {src, dst, b.getInt32(4), b.getInt32(0), call->getArgOperand(4)});
+    }
+    call->eraseFromParent();
+  }
+  // Guard the final shuffled source plus subword offset, not just the original
+  // wide pointer. Otherwise backend offset folding can shift LDS as well.
+  protectAsyncDMASourceAddresses(module);
 }
 
 void prepareSharedMemoryForLegacyLLVM(llvm::Module &module) {
@@ -334,6 +495,7 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text) {
 static void printLLVM22CompatibleIR(Module &module, raw_ostream &os) {
   prepareRegisterMMAForLLVM(module);
   protectAsyncDMASourceAddresses(module);
+  lowerWideAsyncDMAToHCU(module);
   std::string text;
   raw_string_ostream buffer(text);
   module.print(buffer, nullptr);

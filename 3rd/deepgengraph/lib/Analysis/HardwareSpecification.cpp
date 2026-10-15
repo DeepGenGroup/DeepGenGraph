@@ -100,6 +100,16 @@ std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
 
 }
 
+const DMATransferInfo *DataCopyInfo::getMaxDMATransfer() const {
+    const DMATransferInfo *result = nullptr;
+    if (!supportAsyncCopy) return result;
+    for (const auto &transfer : dmaTransfers)
+        if (transfer.ldsLaneStrideBytes == transfer.bytesPerLane &&
+            (!result || transfer.bytesPerLane > result->bytesPerLane))
+            result = &transfer;
+    return result;
+}
+
 const DMATransferInfo *DataCopyInfo::getDMATransfer(unsigned bytesPerLane) const {
     for (const auto &transfer : dmaTransfers)
         if (transfer.bytesPerLane == bytesPerLane)
@@ -167,8 +177,9 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
         s->dataCopyInfo.singleBankBytes = 4;
         if(version == HW_VERSION_DCU_BW1000){
             s->dataCopyInfo.supportAsyncCopy = true;
-            // Target-confirmed direct GM->LDS widths. 16B support does not
-            // imply an 8B instruction. Lowering may use a narrower legal set.
+            // Layout candidates, not a guarantee of target compiler support.
+            // The supplied gfx936 DTK selects 4B global DMA but rejects 16B;
+            // packed attention can retain a 16B layout using split32 export.
             s->dataCopyInfo.dmaTransfers = {{4, 4, 4}, {16, 16, 16}};
             s->dataCopyInfo.asyncCopyAlignBytesNonSwizzle = 4;
             s->syncGranularity.innerBlockLevelSync = true;

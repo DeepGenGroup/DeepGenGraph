@@ -64,6 +64,8 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
       "Plan packed LDS layouts for owned GEMM operands">,
     Option<"asyncDirectOnly", "async-direct-only", "bool", "false",
       "Use vectorized synchronous copies when packed halfword packets require LDS staging">,
+    Option<"dmaPackMode", "dma-pack-mode", "std::string", "\"legacy\"",
+      "legacy, useKPack (caller coarsens tiles), or noKPack (reduce copy waves); require maximum hardware DMA width">,
     Option<"uniformMasks", "uniform-masks", "bool", "false",
       "Skip elementwise upper-triangular masks for provably complete tiles">,
     Option<"fuseMaskAdd", "fuse-mask-add", "bool", "true",

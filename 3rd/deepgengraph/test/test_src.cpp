@@ -362,9 +362,16 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
   });
 }
 
-void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os) {
+void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
+                             bool splitPackedDMA, unsigned asmSourceBytes) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
+  if (asmSourceBytes)
+    mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
+  else if (splitPackedDMA)
+    mlir::frisk::splitFullWaveAsyncDMAToDwords(module);
   mlir::frisk::protectAsyncDMASourceAddresses(module);
+  if (!splitPackedDMA && !asmSourceBytes)
+    mlir::frisk::lowerWideAsyncDMAToHCU(module);
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -401,9 +408,107 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
   targetOp->setLoc(newLoc);
 }
 
+// Coarsen this benchmark's two split-D loops before tensor loop optimization.
+// Keep the external BHSD ABI and BM/BN unchanged. This is deliberately scoped
+// to the split-D fixture, not a general shape-substitution compiler pass.
+LogicalResult coarsenSplitDAttention(ModuleOp module) {
+  auto kernel = module.lookupSymbol<deepgengraph::KernelOp>("Attn_p2");
+  if (!kernel) return module.emitError("useKPack requires the split-D Attn_p2 fixture");
+  auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, module.getContext());
+  const auto *dma = hw->dataCopyInfo.getMaxDMATransfer();
+  int64_t fragmentBytes = 0;
+  for (const auto &mma : hw->gemmInfo.validInsts)
+    if (mma.asm_str.find("16x16x16_f16") != std::string::npos)
+      fragmentBytes = mma.desc_a.thread_creg[0] * mma.desc_a.thread_creg[1] * 2;
+  if (!dma || !fragmentBytes || dma->bytesPerLane % fragmentBytes)
+    return kernel.emitError("no full-width FP16 DMA/MMAC kpack ratio");
+  int64_t factor = dma->bytesPerLane / fragmentBytes;
+  int64_t oldBK = 32, newBK = oldBK * factor;
+  SmallVector<affine::AffineForOp> outputLoops;
+  SmallVector<scf::ForOp> reductionLoops;
+  kernel.walk([&](affine::AffineForOp loop) {
+    if (loop.hasConstantLowerBound() && loop.hasConstantUpperBound() &&
+        loop.getConstantLowerBound() == 0 && loop.getConstantUpperBound() == 128 &&
+        loop.getStepAsInt() == oldBK) outputLoops.push_back(loop);
+  });
+  kernel.walk([&](scf::ForOp loop) {
+    auto step = loop.getStep().getDefiningOp<arith::ConstantIndexOp>();
+    auto upper = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
+    auto lower = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
+    if (step && step.value() == oldBK && upper && upper.value() == 128 &&
+        lower && lower.value() == 0) reductionLoops.push_back(loop);
+  });
+  if (outputLoops.size() != 1 || reductionLoops.size() != 1 || 128 % newBK)
+    return kernel.emitError("useKPack expects one output-D and one QK reduction loop, 0:128:32");
+  unsigned rowTiles = 0, columnTiles = 0;
+  bool unsupported = false;
+  kernel.walk([&](deepgengraph::triton::BlockPointerOfOp pointer) {
+    auto tile = cast<deepgengraph::triton::BlockPointerType>(pointer.getType()).getPointeeType();
+    if (!tile.getElementType().isF16()) unsupported = true;
+    auto dims = tile.getShape();
+    if (dims == ArrayRef<int64_t>({128, oldBK})) ++rowTiles;
+    else if (dims == ArrayRef<int64_t>({oldBK, 128})) ++columnTiles;
+    else unsupported = true;
+  });
+  if (unsupported || rowTiles != 3 || columnTiles != 1 ||
+      !outputLoops.front()->isAncestor(reductionLoops.front()))
+    return kernel.emitError("useKPack expects FP16 Q/V/O tiles 128x32 and K tile 32x128");
+  auto shape = [&](ArrayRef<int64_t> old) {
+    SmallVector<int64_t> result(old);
+    if (result == SmallVector<int64_t>{128, oldBK}) result[1] = newBK;
+    else if (result == SmallVector<int64_t>{oldBK, 128}) result[0] = newBK;
+    return result;
+  };
+  auto tensor = [&](RankedTensorType type) {
+    return RankedTensorType::get(shape(type.getShape()), type.getElementType(), type.getEncoding());
+  };
+  auto changeType = [&](Value value) {
+    if (auto type = dyn_cast<RankedTensorType>(value.getType()))
+      value.setType(tensor(type));
+    else if (auto type = dyn_cast<deepgengraph::triton::BlockPointerType>(value.getType()))
+      value.setType(deepgengraph::triton::BlockPointerType::get(tensor(type.getPointeeType())));
+  };
+  kernel.walk([&](Operation *op) {
+    for (Value value : op->getResults()) changeType(value);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments()) changeType(arg);
+    if (auto pointer = dyn_cast<deepgengraph::triton::BlockPointerOfOp>(op))
+      pointer.setBlockShape(shape(pointer.getBlockShape()));
+    if (auto zero = dyn_cast<deepgengraph::ZeroOp>(op))
+      zero.setShape(shape(zero.getShape()));
+  });
+  outputLoops.front().setStep(newBK);
+  OpBuilder b(reductionLoops.front());
+  reductionLoops.front().getStepMutable().assign(
+      b.create<arith::ConstantIndexOp>(kernel.getLoc(), newBK));
+  llvm::errs() << "useKPack: DMA=" << dma->bytesPerLane << "B, MMAC input="
+               << fragmentBytes << "B, kpack=" << factor << ", BK=" << oldBK
+               << " -> " << newBK << "\n";
+  return verify(module);
+}
+
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
   StringRef copyMode = copyModeEnv ? copyModeEnv : "legacy";
+  StringRef dmaPackMode = argc > 16 ? argv[16] : "legacy";
+  StringRef dmaExport = argc > 17 ? argv[17] : "split32";
+  if (dmaExport != "split32" && dmaExport != "hcu128" && dmaExport != "asm128") {
+    llvm::errs() << "DMA export must be split32, hcu128, or asm128\n";
+    return 1;
+  }
+  if (dmaExport == "asm128" && dmaPackMode == "legacy") {
+    llvm::errs() << "asm128 requires an explicit packed DMA layout\n";
+    return 1;
+  }
+  if (dmaPackMode != "legacy" && dmaPackMode != "useKPack" && dmaPackMode != "noKPack") {
+    llvm::errs() << "DMA pack mode must be legacy, useKPack, or noKPack\n";
+    return 1;
+  }
+  if (dmaPackMode != "legacy" && copyMode != "async") {
+    llvm::errs() << "DMA pack modes require FRISK_GM_TO_SHM_MODE=async\n";
+    return 1;
+  }
   if (copyMode != "legacy" && copyMode != "async" && copyMode != "sync" &&
       copyMode != "hybrid") {
     llvm::errs() << "FRISK_GM_TO_SHM_MODE must be legacy, async, sync, or hybrid\n";
@@ -522,6 +627,23 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   attachSourceLocationsFromText(*src, argv[1]);
+  unsigned asmSourceBytes = 0;
+  if (dmaExport == "asm128") {
+    auto function = src->lookupSymbol<func::FuncOp>("Attn");
+    if (!function || function.getNumArguments() != 3) return 1;
+    for (Type arg : function.getArgumentTypes()) {
+      auto tensor = dyn_cast<RankedTensorType>(arg);
+      if (!tensor || !tensor.hasStaticShape() || !tensor.getElementType().isF16()) return 1;
+      uint64_t bytes = uint64_t(tensor.getNumElements()) * 2;
+      if (!bytes || bytes > UINT32_MAX || (asmSourceBytes && asmSourceBytes != bytes)) {
+        llvm::errs() << "asm128 requires equal-size FP16 inputs smaller than 4GiB\n";
+        return 1;
+      }
+      asmSourceBytes = bytes;
+    }
+  }
+  if (dmaPackMode == "useKPack" && failed(coarsenSplitDAttention(*src)))
+    return 1;
   // 简单的输出，在 debug 的时候常用
   analyze::PointerTracer::getPointerInfo(*src);
   src->dump();
@@ -630,6 +752,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
   tilingOptions += std::string(" fuse-mask-add=") + (fuseMaskAdd ? "true" : "false");
   tilingOptions += std::string(" async-direct-only=") + (copyMode == "hybrid" ? "true" : "false");
+  tilingOptions += " dma-pack-mode=" + dmaPackMode.str();
   if (failed(tiling->initializeOptions(
           tilingOptions,
           [&](const llvm::Twine &message) {
@@ -755,7 +878,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
                  << ec.message() << "\n";
     return 1;
   }
-  printLLVM22CompatibleIR(*llvmModule, os);
+  // Both packed modes of this fixed fixture issue complete wave64 packets.
+  // Keep arbitrary legacy/partial-wave copies outside the splitting contract.
+  printLLVM22CompatibleIR(*llvmModule, os,
+      dmaPackMode != "legacy" && dmaExport == "split32", asmSourceBytes);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
@@ -1040,8 +1166,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 16) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0]\n";
+  if (argc < 2 || argc > 18) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

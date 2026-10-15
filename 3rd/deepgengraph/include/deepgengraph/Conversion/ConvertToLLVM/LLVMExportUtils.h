@@ -26,6 +26,23 @@ void prepareRegisterMMAForLLVM(llvm::Module &module);
 /// Retains DMA and synchronization; safe to call repeatedly.
 void protectAsyncDMASourceAddresses(llvm::Module &module);
 
+/// Final DTK export: 16-byte GM->LDS packets use the HCU dwordx4 intrinsic.
+/// Its last operands are offset, aux, bps (not byte count, offset, aux).
+/// Run after LLVM optimizations; upstream LLVM does not know HCU intrinsics.
+void lowerWideAsyncDMAToHCU(llvm::Module &module);
+
+/// Compatibility export for the packed attention fixture: replace each 16B
+/// packet with four 4B async instructions, preserving the physical LDS layout.
+/// REQUIRES complete active wave64 waves and a wave-uniform LDS base. Do not
+/// use on partial-wave tails. Only source addresses cross lanes; data stays DMA.
+void splitFullWaveAsyncDMAToDwords(llvm::Module &module);
+
+/// Experimental gfx9 buffer DMA export, following example.cpp's offen asm.
+/// Sources must resolve to uniform kernel pointer arguments, and every source
+/// tensor has sourceBytes bytes (<4GiB). Retains per-lane physical addresses.
+/// Replaces wait.asyncmark(0) with an explicit VMEM wait for opaque asm loads.
+void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
+
 /// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
 void fuseMMACAccumulators(llvm::Module &module);

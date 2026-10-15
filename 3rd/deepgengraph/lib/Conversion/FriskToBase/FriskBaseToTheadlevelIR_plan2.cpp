@@ -3473,7 +3473,62 @@ public:
       });
     if (packSharedOperands)
       planSharedOperandPacking(kernel, *s_info);
-    if (asyncDirectOnly) {
+    if (dmaPackMode != "legacy") {
+      if (dmaPackMode != "useKPack" && dmaPackMode != "noKPack") {
+        kernel.emitError("dma-pack-mode must be legacy, useKPack, or noKPack");
+        return signalPassFailure();
+      }
+      const auto *dma = s_hw->dataCopyInfo.getMaxDMATransfer();
+      bool invalid = false;
+      kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
+        auto type = cast<MemRefType>(issue.getSrc().getType());
+        auto axis = getPhysicalMinorCopyAxis(issue.getSrc());
+        auto *storage = getViewBuffer(issue.getDst()).getDefiningOp();
+        auto consumer = storage ? storage->getAttrOfType<IntegerAttr>("frisk.shared_pack") : IntegerAttr{};
+        int64_t bits = type.getElementTypeBitWidth();
+        if (!dma || !axis || !storage || !consumer || bits % 8 ||
+            type.getRank() != 2 || issue.getAlignment() % dma->alignmentBytes ||
+            dma->bytesPerLane % (consumer.getInt() * bits / 8) ||
+            type.getDimSize(*axis) % (dma->bytesPerLane * 8 / bits)) {
+          issue.emitError("cannot plan maximum-width DMA for this owned tile/alignment");
+          invalid = true;
+          return;
+        }
+        int64_t kpack = dma->bytesPerLane / (consumer.getInt() * bits / 8);
+        if (type.getNumElements() % (s_hw->getWarpsize() * dma->bytesPerLane * 8 / bits)) {
+          issue.emitError("packed DMA export requires complete wave packets (no partial-wave tail)");
+          invalid = true;
+          return;
+        }
+        int64_t copying = kernel->getAttrOfType<IntegerAttr>("thread_num").getInt();
+        if (dmaPackMode == "noKPack") {
+          if (!kpack || copying % (kpack * s_hw->getWarpsize())) {
+            issue.emitError("noKPack requires complete copy waves after division by kpack");
+            invalid = true;
+            return;
+          }
+          copying /= kpack;
+        }
+        OpBuilder b(issue);
+        // Transfer ownership follows the physical contiguous GM axis. The
+        // consumer keeps its original MMAC layout; the common ShmDataIODesc
+        // remaps all loads and provides the inverse DMA source coordinates.
+        storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(*axis));
+        storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(dma->bytesPerLane * 8 / bits));
+        for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride", "frisk.shared_store_pair"})
+          storage->removeAttr(name);
+        issue->setAttr("frisk.dma_bytes", b.getI64IntegerAttr(dma->bytesPerLane));
+        issue->setAttr("frisk.kpack", b.getI64IntegerAttr(kpack));
+        if (dmaPackMode == "noKPack")
+          issue->setAttr("frisk.copy_threads", b.getI64IntegerAttr(copying));
+        llvm::errs() << "DMA plan: " << dmaPackMode.getValue() << " shape="
+                     << type.getDimSize(0) << "x" << type.getDimSize(1)
+                     << " bytes=" << dma->bytesPerLane << " kpack=" << kpack
+                     << " copy_threads=" << copying << "\n";
+      });
+      if (invalid) return signalPassFailure();
+    }
+    if (asyncDirectOnly && dmaPackMode == "legacy") {
       // Select before thread tiling: late scalar fallback loses the ordinary
       // copy path's coalesced global packets and bank-safe packed LDS stores.
       // A sub-dword packet along a noncontiguous source axis cannot use direct

@@ -1,4 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -27,16 +28,22 @@ SmallVector<Value> coordinates(OpBuilder &b, Location loc, Value linear,
   return result;
 }
 
-// gfx936's direct-to-LDS dword operation adds lane_id * 4 to a
+// gfx936's direct-to-LDS operation adds lane_id * packetBytes to a
 // wave-uniform destination base. Never pass the per-thread destination.
 // Restrict DMA to layouts for which that mapping is exactly the logical copy.
-bool canUseDwordDMA(frisk::AsyncCopyGmToShmOp op, AffineMap sourceMap = {}) {
+bool canUseDMA(frisk::AsyncCopyGmToShmOp op, unsigned bytes,
+               AffineMap sourceMap = {}) {
   auto src = cast<MemRefType>(op.getSrc().getType());
   auto dst = cast<MemRefType>(op.getDst().getType());
   unsigned bits = src.getElementTypeBitWidth();
-  if ((bits != 8 && bits != 16 && bits != 32) || op.getAlignment() < 4)
+  auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000,
+                                       op.getContext());
+  auto *transfer = hw->dataCopyInfo.getDMATransfer(bytes);
+  if (!transfer || transfer->ldsLaneStrideBytes != bytes ||
+      (bits != 8 && bits != 16 && bits != 32) ||
+      op.getAlignment() % transfer->alignmentBytes)
     return false;
-  int64_t elements = 32 / bits;
+  int64_t elements = bytes * 8 / bits;
   if (dst.getNumElements() % elements)
     return false;
   SmallVector<int64_t> srcStrides, dstStrides;
@@ -50,7 +57,7 @@ bool canUseDwordDMA(frisk::AsyncCopyGmToShmOp op, AffineMap sourceMap = {}) {
       return false;
     stride *= dst.getDimSize(dim);
   }
-  // Check actual source addresses for each physical destination dword. The
+  // Check actual source addresses for each physical destination packet. The
   // physically contiguous source axis need not be the last logical axis.
   auto mapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
   if (!sourceMap && mapAttr) sourceMap = mapAttr.getValue();
@@ -128,8 +135,9 @@ struct GatherToGfx936 : ConvertOpToLLVMPattern<amdgpu::GatherToLDSOp> {
     Value address = r.create<LLVM::PtrToIntOp>(loc, i32, dst);
     address = r.create<ROCDL::ReadfirstlaneOp>(loc, i32, address);
     dst = r.create<LLVM::IntToPtrOp>(loc, dst.getType(), address);
+    auto bytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
     r.replaceOpWithNewOp<ROCDL::GlobalLoadAsyncLDSOp>(op, src, dst,
-        r.getI32IntegerAttr(4), r.getI32IntegerAttr(0), r.getI32IntegerAttr(0),
+        r.getI32IntegerAttr(bytes.getInt()), r.getI32IntegerAttr(0), r.getI32IntegerAttr(0),
         ArrayAttr{}, ArrayAttr{}, ArrayAttr{});
     return success();
   }
@@ -188,7 +196,20 @@ struct LowerFriskAsyncCopyPass
       auto dstType = cast<MemRefType>(op.getDst().getType());
       int64_t threads = op->getParentOfType<func::FuncOp>()
                             ->getAttrOfType<IntegerAttr>("thread_num").getInt();
-      bool dma = useAsyncCopy && !op->hasAttr("frisk.force_sync") && canUseDwordDMA(op);
+      auto requestedBytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
+      unsigned dmaBytes = requestedBytes ? requestedBytes.getInt() : 4;
+      bool dma = useAsyncCopy && !op->hasAttr("frisk.force_sync") && canUseDMA(op, dmaBytes);
+      if (requestedBytes && !dma) {
+        op.emitError("requested full-width DMA is not legal for this copy");
+        return signalPassFailure();
+      }
+      if (auto copying = op->getAttrOfType<IntegerAttr>("frisk.copy_threads")) {
+        if (copying.getInt() <= 0 || copying.getInt() > threads || copying.getInt() % 64) {
+          op.emitError("copy_threads must select complete waves within the block");
+          return signalPassFailure();
+        }
+        threads = copying.getInt();
+      }
       auto sourceMapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
       AffineMap sourceMap = sourceMapAttr ? sourceMapAttr.getValue() : AffineMap{};
       Value destination = op.getDst();
@@ -201,7 +222,7 @@ struct LowerFriskAsyncCopyPass
               copy && copy.getDst() == op.getDst()) break;
         }
         auto storageMap = sourceStorageOrder(op);
-        if (ready && storageMap && canUseDwordDMA(op, storageMap)) {
+        if (ready && storageMap && canUseDMA(op, dmaBytes, storageMap)) {
           auto stageType = MemRefType::get({srcType.getNumElements()}, srcType.getElementType(),
                                          AffineMap{}, dstType.getMemorySpace());
           Value staging;
@@ -251,9 +272,18 @@ struct LowerFriskAsyncCopyPass
       }
       if (dma && destination == op.getDst()) ++directCount;
       if (!dma) ++fallbackCount;
-      int64_t width = dma ? 32 / srcType.getElementTypeBitWidth() : 1;
+      int64_t width = dma ? dmaBytes * 8 / srcType.getElementTypeBitWidth() : 1;
       int64_t packets = srcType.getNumElements() / width;
       Value tid = b.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
+      // Disable complete waves, preserving hardware lane IDs within every DMA
+      // packet. Completion/publication below remains block collective.
+      scf::IfOp participants;
+      if (op->hasAttr("frisk.copy_threads")) {
+        Value active = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+            tid, indexConstant(b, loc, threads));
+        participants = b.create<scf::IfOp>(loc, active, false);
+        b.setInsertionPointToStart(participants.thenBlock());
+      }
       auto emitPacket = [&](Value linear) {
         Value flat = b.create<arith::MulIOp>(loc, linear,
                                             indexConstant(b, loc, width));
@@ -269,6 +299,7 @@ struct LowerFriskAsyncCopyPass
           auto gather = b.create<amdgpu::GatherToLDSOp>(loc, op.getSrc(), srcIndices,
               destination, dstIndices, b.getI32Type(), true);
           gather->setAttr("frisk.gfx936_dma", b.getUnitAttr());
+          gather->setAttr("frisk.dma_bytes", b.getI64IntegerAttr(dmaBytes));
         } else {
           Value value = b.create<memref::LoadOp>(loc, op.getSrc(), srcIndices);
           b.create<memref::StoreOp>(loc, value, op.getDst(),
@@ -293,6 +324,7 @@ struct LowerFriskAsyncCopyPass
         emitPacket(loop.getInductionVar());
         b.setInsertionPointAfter(loop);
       }
+      if (participants) b.setInsertionPointAfter(participants);
       if (dma) b.create<ROCDL::AsyncmarkOp>(loc);
       op.erase();
     }

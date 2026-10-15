@@ -278,6 +278,7 @@ struct DataCopyInfo {
     std::vector<DMATransferInfo> dmaTransfers;
 
     const DMATransferInfo *getDMATransfer(unsigned bytesPerLane) const;
+    const DMATransferInfo *getMaxDMATransfer() const;
 };
 
 // 同步原语的描述. 支持什么级别的sync （block内的sync，或是 warp级别的sync）

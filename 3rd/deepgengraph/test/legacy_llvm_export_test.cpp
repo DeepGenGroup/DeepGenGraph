@@ -31,8 +31,11 @@ int main(int argc, char **argv) {
   bool prefetch = argc == 3 && llvm::StringRef(argv[1]) == "--prefetch-global-packets";
   bool ldsReuse = argc == 3 && llvm::StringRef(argv[1]) == "--reuse-lds-fragments";
   bool guardDMA = argc == 3 && llvm::StringRef(argv[1]) == "--guard-dma-addresses";
-  if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses] <input.ll or ->\n";
+  bool hcuDMA = argc == 3 && llvm::StringRef(argv[1]) == "--hcu-wide-dma";
+  bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
+  bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
+  if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
+    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -57,6 +60,14 @@ int main(int argc, char **argv) {
     mlir::frisk::reuseLDSFragments(*module);
   else if (guardDMA)
     mlir::frisk::protectAsyncDMASourceAddresses(*module);
+  else if (splitDMA)
+    mlir::frisk::splitFullWaveAsyncDMAToDwords(*module);
+  else if (asmDMA)
+    mlir::frisk::lowerWideAsyncDMAToBufferAsm(*module, 33554432);
+  else if (hcuDMA) {
+    mlir::frisk::protectAsyncDMASourceAddresses(*module);
+    mlir::frisk::lowerWideAsyncDMAToHCU(*module);
+  }
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(*module);
   if (llvm::verifyModule(*module, &llvm::errs()))
     return 1;

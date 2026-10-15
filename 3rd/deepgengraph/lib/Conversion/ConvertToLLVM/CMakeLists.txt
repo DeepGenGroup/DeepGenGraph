@@ -17,6 +17,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
 
 
   LINK_LIBS PUBLIC
+  DeepgengraphAnalysis
   MLIRIR
   MLIRPass
   MLIRTransforms

@@ -24,10 +24,14 @@ class LLVMWorkgroupModel:
         self.block = block
         self.values = {}
         self.mem = {}
+        self.active = np.ones(threads, dtype=bool)
         for i, x in enumerate([q, k, v, np.full_like(q, np.nan)]):
             self.mem[i + 1 << 32] = x.ravel()
             self.values['%' + str(i)] = np.full(threads, i + 1 << 32, dtype=np.int64)
-        self.mem[0] = np.full(16384 // 2, np.nan, dtype=np.float16)
+        storage = re.search(r'^@shm_0 = .*global \[(\d+) x (i8|half|float)\]', text, re.M)
+        assert storage, 'expected explicit shared storage'
+        shared_bytes = int(storage[1]) * {'i8': 1, 'half': 2, 'float': 4}[storage[2]]
+        self.mem[0] = np.full(shared_bytes // 2, np.nan, dtype=np.float16)
         self.blocks = {}
         current = '4'
         self.blocks[current] = []
@@ -112,18 +116,40 @@ class LLVMWorkgroupModel:
         count = int(np.prod(self.shape(ty))) if self.shape(ty) else 1
         addresses = ptr[:, None] + np.arange(count)[None, :] * 2
         bases = addresses // (1 << 32) * (1 << 32)
-        assert np.all(bases == bases.flat[0])
+        base = bases[self.active].flat[0]
+        assert np.all(bases[self.active] == base)
         idx = (addresses - bases) // 2
-        mem = self.mem[int(bases.flat[0])]
-        assert idx.min() >= 0 and idx.max() < len(mem), (idx.min(), idx.max(), len(mem))
+        mem = self.mem[int(base)]
+        live = idx[self.active]
+        assert live.min() >= 0 and live.max() < len(mem), (live.min(), live.max(), len(mem))
         if write is not None:
-            mem[idx] = write.reshape(self.t, count)
+            mem[live] = write.reshape(self.t, count)[self.active]
             return
-        return mem[idx].reshape((self.t,) + self.shape(ty)).copy()
+        result = np.zeros((self.t, count), dtype=mem.dtype)
+        result[self.active] = mem[live]
+        return result.reshape((self.t,) + self.shape(ty))
 
     def call(self, body):
         if 'asm sideeffect' in body:
-            args = [self.typed(x) for x in split_args(re.search('"\\((.*)\\)', body)[1])]
+            operands = re.search('"\\((.*)\\)', body)[1]
+            args = [self.typed(x) for x in split_args(operands)] if operands else []
+            if 'buffer_load_dwordx4' in body:
+                assert '"={m0},s,v,s,~{memory}"' in body
+                lds, offset, resource = args
+                assert np.all(resource[:, 3] == 0x20000), 'unexpected buffer format'
+                assert np.all(offset[self.active] >= 0)
+                assert np.all(offset[self.active] + 16 <= resource[self.active, 2]), 'buffer OOB'
+                for wave in range(self.t // 64):
+                    lanes = slice(wave * 64, (wave + 1) * 64)
+                    assert np.all(resource[lanes] == resource[wave * 64])
+                    assert np.all(lds[lanes] == lds[wave * 64])
+                source = resource[:, 0] + (resource[:, 1] << 32) + offset
+                self.memory(lds + np.arange(self.t) % 64 * 16, '<8 x half>',
+                            self.memory(source, '<8 x half>'))
+                return lds
+            if 's_waitcnt vmcnt(0)' in body:
+                assert not args and '"~{memory}"' in body
+                return
             if 'v_mmac_' not in body:
                 assert 'asm sideeffect "", "=v,0"' in body, body
                 assert len(args) == 1
@@ -156,8 +182,16 @@ class LLVMWorkgroupModel:
             return args[1][np.arange(self.t) // 64 * 64 + args[0] // 4]
         if 'exp2' in name:
             return np.exp2(args[0])
-        if name.endswith('global.load.async.lds'):
-            self.memory(args[1] + np.arange(self.t) % 64 * 4, '<2 x half>', self.memory(args[0], '<2 x half>'))
+        if name in ('llvm.amdgcn.global.load.async.lds', 'llvm.hcu.global.load.dwordx4.lds'):
+            if name.startswith('llvm.hcu.'):
+                size = 16
+                # HCU encodes width in its name; arguments are offset/aux/bps.
+                assert all(np.all(arg == 0) for arg in args[2:])
+            else:
+                size = int(args[2][0])
+                assert size in (4, 16) and np.all(args[3] == 0) and np.all(args[4] == 0)
+            packet = f'<{size // 2} x half>'
+            self.memory(args[1] + np.arange(self.t) % 64 * size, packet, self.memory(args[0], packet))
             return
         assert name in ['llvm.amdgcn.asyncmark', 'llvm.amdgcn.wait.asyncmark', 'llvm.amdgcn.s.barrier'], name
 
@@ -258,7 +292,11 @@ class LLVMWorkgroupModel:
         current = '4'
         previous = None
         steps = 0
+        reconverge = []
         while True:
+            if reconverge and current == reconverge[-1][0]:
+                _, self.active = reconverge.pop()
+                assert not any(' = phi ' in line for line in self.blocks[current]), 'unsupported divergent PHI'
             pending = {}
             for line in self.blocks[current]:
                 m = re.match(r'(%[\w.-]+) = (.*)', line)
@@ -279,8 +317,24 @@ class LLVMWorkgroupModel:
                             target = args[0].split('%')[1]
                         else:
                             cond = self.typed(args[0])
-                            assert np.all(cond == cond[0]), 'nonuniform control flow'
-                            target = args[1 if cond[0] else 2].split('%')[1]
+                            live = cond[self.active]
+                            if np.all(live == live[0]):
+                                target = args[1 if live[0] else 2].split('%')[1]
+                            else:
+                                # Full-width noKPack uses a result-free if over
+                                # complete waves. Accept only a single straight
+                                # arm with an explicit reconvergence successor.
+                                yes, no = [arg.split('%')[1] for arg in args[1:]]
+                                if self.blocks[yes][-1] == 'br label %' + no:
+                                    arm, join, mask = yes, no, cond
+                                elif self.blocks[no][-1] == 'br label %' + yes:
+                                    arm, join, mask = no, yes, ~cond
+                                else:
+                                    raise AssertionError('unsupported divergent control flow')
+                                assert np.all(mask.reshape(-1, 64) == mask.reshape(-1, 64)[:, :1]), 'partial DMA wave'
+                                reconverge.append((join, self.active.copy()))
+                                self.active &= mask
+                                target = arm
                         previous, current = (current, target)
                         break
                     if expr == 'ret void':

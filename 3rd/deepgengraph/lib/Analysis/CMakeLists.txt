@@ -20,5 +20,6 @@ add_deepgengraph_library(DeepgengraphAnalysis
   MLIRVectorDialect
   MLIRViewLikeInterface
   FriskIR
+  DeepgengraphTritonIR
   DeepgengraphIR 
 )

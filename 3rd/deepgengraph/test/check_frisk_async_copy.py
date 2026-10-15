@@ -56,21 +56,22 @@ SHIM = r'''
 #include <pthread.h>
 #include <stdlib.h>
 static __thread unsigned tid, pending, errors;
-static __thread struct { const void *src; void *dst; } queue[1024];
+static __thread struct { const void *src; void *dst; unsigned size; } queue[1024];
 static int collective;
 static pthread_barrier_t barrier;
 void test_set_tid(unsigned v) { if (pending) ++errors; tid = v; }
 unsigned test_tid(void) { return tid; }
 unsigned test_first(unsigned v) { return v; }
 void test_dma(const void *src, void *base, unsigned size, unsigned offset, unsigned aux) {
-  if (size != 4 || offset || aux || pending == 1024) { ++errors; return; }
+  if ((size != 4 && size != 16) || offset || aux || pending == 1024) { ++errors; return; }
   queue[pending].src = src;
-  queue[pending++].dst = (char *)base + (tid % 64) * 4;
+  queue[pending].size = size;
+  queue[pending++].dst = (char *)base + (tid % 64) * size;
 }
 void test_mark(void) {}
 void test_wait(unsigned count) {
   if (count) ++errors;
-  for (unsigned i = 0; i < pending; ++i) memcpy(queue[i].dst, queue[i].src, 4);
+  for (unsigned i = 0; i < pending; ++i) memcpy(queue[i].dst, queue[i].src, queue[i].size);
   pending = 0;
 }
 void test_barrier(void) { if (collective) pthread_barrier_wait(&barrier); }

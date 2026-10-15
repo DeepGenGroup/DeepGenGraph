@@ -7,6 +7,10 @@ set -euo pipefail
 # Examples:
 #   ./GenHsaco.sh ./final.ll 0 ./kernel.hsaco
 #   ./GenHsaco.sh ./final.ll 3 ./kernel.hsaco
+# GPU_FEATURES is an explicit target capability override; use only features
+# supported by the target hardware. It is forwarded to opt and both llc runs.
+# The supplied gfx936 DTK still rejects HCU global DMA with
+# +glb2lds-dword-x2x4; split32 exports need no feature override.
 #
 # opt_level:
 #   0 -> opt default<O0> + llc -O0
@@ -20,6 +24,11 @@ KERNEL_FILE=${3:-kernel.hsaco}
 
 ROCM_BC=${ROCM_BC:-/opt/dtk/amdgcn/bitcode}
 GPU_ARCH=${GPU_ARCH:-gfx936}
+GPU_FEATURES=${GPU_FEATURES:-}
+GPU_FEATURE_ARGS=()
+if [[ -n "${GPU_FEATURES}" ]]; then
+    GPU_FEATURE_ARGS=("-mattr=${GPU_FEATURES}")
+fi
 DWARF_VERSION=${DWARF_VERSION:-4}
 LLVM_DIR=${LLVM_DIR:-/workspace/deepgengraph/dtk/aillvm/bin}
 # ------------------------------------------------------------
@@ -51,8 +60,12 @@ echo " Optimization : O${OPT_LEVEL}"
 echo " IR pipeline  : ${IR_OPT_PIPELINE}"
 echo " LLC opt      : ${LLVM_CODEGEN_OPT}"
 echo " GPU arch     : ${GPU_ARCH}"
+echo " GPU features : ${GPU_FEATURES:-CPU defaults}"
 echo " Output       : ${KERNEL_FILE}"
+echo " Input SHA256 : $(sha256sum -- "${LL_FILE}" | cut -d ' ' -f 1)"
+echo " LLVM tools   : ${LLVM_DIR}"
 echo "========================================"
+"${LLVM_DIR}/llc" --version
 
 # ------------------------------------------------------------
 # 1. Link LLVM IR + ROCm device bitcode
@@ -80,6 +93,7 @@ ${LLVM_DIR}/llvm-link "${LL_FILE}" \
 ${LLVM_DIR}/opt \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
+    "${GPU_FEATURE_ARGS[@]}" \
     -passes="${IR_OPT_PIPELINE}" \
     -debugger-tune=gdb \
     merged.bc \
@@ -96,6 +110,7 @@ ${LLVM_DIR}/opt \
 ${LLVM_DIR}/llc \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
+    "${GPU_FEATURE_ARGS[@]}" \
     "${LLVM_CODEGEN_OPT}" \
     -debugger-tune=gdb \
     -dwarf-version="${DWARF_VERSION}" \
@@ -121,10 +136,13 @@ ${LLVM_DIR}/ld.lld \
 # llvm-objdump -d --line-numbers "${KERNEL_FILE}" | less
 
 ${LLVM_DIR}/llc -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
+    "${GPU_FEATURE_ARGS[@]}" \
     "${LLVM_CODEGEN_OPT}" -debugger-tune=gdb \
     -dwarf-version="${DWARF_VERSION}" -filetype=asm \
+    -print-after-all -filter-print-funcs=Attn_p2 \
     -amdhsa-code-object-version=4 \
-    opt.bc -o "${KERNEL_FILE}.amdgcn"
+    opt.bc -o "${KERNEL_FILE}.amdgcn" 2> passes.log
     
 echo
 echo "---- Generated ${KERNEL_FILE} and ${KERNEL_FILE}.amdgcn from ${LL_FILE}, Opt=O${OPT_LEVEL} ----"
+sha256sum -- "${KERNEL_FILE}" "${KERNEL_FILE}.amdgcn"
