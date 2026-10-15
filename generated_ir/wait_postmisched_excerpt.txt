@@ -1,0 +1,60 @@
+
+321662:# *** IR Dump After Machine Instruction Scheduler (machine-scheduler) ***:
+322171:10080B	  ASYNCMARK debug-location !23; test_input_spidD.mlir:67:22
+322179:10208B	  %6418:vreg_128 = DS_READ2ST64_B64_gfx9 %651:vgpr_32, 0, 1, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local601, addrspace 3), (load (s64) from %ir.address.local605, addrspace 3); test_input_spidD.mlir:68:24
+322180:10256B	  %6419:vreg_128 = DS_READ2ST64_B64_gfx9 %651:vgpr_32, 8, 9, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local603, addrspace 3), (load (s64) from %ir.address.local607, addrspace 3); test_input_spidD.mlir:68:24
+322181:10304B	  undef %5793.sub1:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6418.sub1:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322182:10320B	  %5793.sub0:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6418.sub0:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322183:10368B	  undef %5792.sub1:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6419.sub1:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322184:10384B	  %5792.sub0:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6419.sub0:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322185:10432B	  undef %5791.sub1:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6418.sub3:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322186:10448B	  %5791.sub0:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6418.sub2:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322187:10496B	  undef %5790.sub1:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6419.sub3:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322188:10512B	  %5790.sub0:vreg_64 = nofpexcept V_PK_MUL_F16 8, %6419.sub2:vreg_128, 8, %657:sreg_32, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+322189:10560B	  WAIT_ASYNCMARK 0, debug-location !23; test_input_spidD.mlir:67:22
+322191:10592B	  S_BARRIER debug-location !23; test_input_spidD.mlir:67:22
+
+412495:# *** IR Dump After SI post-RA bundler (si-post-ra-bundler) ***:
+413576:  ASYNCMARK debug-location !23; test_input_spidD.mlir:67:22
+413585:    renamable $vgpr65_vgpr66_vgpr67_vgpr68 = DS_READ2ST64_B64_gfx9 renamable $vgpr69, 0, 1, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local601, addrspace 3), (load (s64) from %ir.address.local605, addrspace 3); test_input_spidD.mlir:68:24
+413586:    renamable $vgpr69_vgpr70_vgpr71_vgpr72 = DS_READ2ST64_B64_gfx9 killed renamable $vgpr69, 8, 9, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local603, addrspace 3), (load (s64) from %ir.address.local607, addrspace 3); test_input_spidD.mlir:68:24
+413588:  renamable $vgpr98 = nofpexcept V_PK_MUL_F16 8, $vgpr66, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413589:  renamable $vgpr97 = nofpexcept V_PK_MUL_F16 8, $vgpr65, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413590:  renamable $vgpr100 = nofpexcept V_PK_MUL_F16 8, $vgpr70, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413591:  renamable $vgpr99 = nofpexcept V_PK_MUL_F16 8, $vgpr69, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413592:  renamable $vgpr102 = nofpexcept V_PK_MUL_F16 8, $vgpr68, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413593:  renamable $vgpr101 = nofpexcept V_PK_MUL_F16 8, killed $vgpr67, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413594:  renamable $vgpr104 = nofpexcept V_PK_MUL_F16 8, $vgpr72, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413595:  renamable $vgpr103 = nofpexcept V_PK_MUL_F16 8, killed $vgpr71, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+413596:  WAIT_ASYNCMARK 0, debug-location !23; test_input_spidD.mlir:67:22
+413598:  S_BARRIER debug-location !23; test_input_spidD.mlir:67:22
+
+415189:# *** IR Dump After PostRA Machine Instruction Scheduler (postmisched) ***:
+416277:  ASYNCMARK debug-location !23; test_input_spidD.mlir:67:22
+416279:    renamable $vgpr65_vgpr66_vgpr67_vgpr68 = DS_READ2ST64_B64_gfx9 renamable $vgpr69, 0, 1, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local601, addrspace 3), (load (s64) from %ir.address.local605, addrspace 3); test_input_spidD.mlir:68:24
+416280:    renamable $vgpr69_vgpr70_vgpr71_vgpr72 = DS_READ2ST64_B64_gfx9 killed renamable $vgpr69, 8, 9, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local603, addrspace 3), (load (s64) from %ir.address.local607, addrspace 3); test_input_spidD.mlir:68:24
+416282:  WAIT_ASYNCMARK 0, debug-location !23; test_input_spidD.mlir:67:22
+416284:  S_BARRIER debug-location !23; test_input_spidD.mlir:67:22
+416285:  renamable $vgpr98 = nofpexcept V_PK_MUL_F16 8, killed $vgpr66, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416286:  renamable $vgpr97 = nofpexcept V_PK_MUL_F16 8, killed $vgpr65, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416287:  renamable $vgpr100 = nofpexcept V_PK_MUL_F16 8, killed $vgpr70, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416288:  renamable $vgpr99 = nofpexcept V_PK_MUL_F16 8, killed $vgpr69, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416289:  renamable $vgpr102 = nofpexcept V_PK_MUL_F16 8, killed $vgpr68, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416290:  renamable $vgpr101 = nofpexcept V_PK_MUL_F16 8, killed $vgpr67, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416291:  renamable $vgpr104 = nofpexcept V_PK_MUL_F16 8, killed $vgpr72, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+416292:  renamable $vgpr103 = nofpexcept V_PK_MUL_F16 8, killed $vgpr71, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+
+433947:# *** IR Dump After SI insert wait instructions (si-insert-waitcnts) ***:
+434455:  ASYNCMARK debug-location !23; test_input_spidD.mlir:67:22
+434456:  renamable $vgpr65_vgpr66_vgpr67_vgpr68 = DS_READ2ST64_B64_gfx9 renamable $vgpr69, 0, 1, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local601, addrspace 3), (load (s64) from %ir.address.local605, addrspace 3); test_input_spidD.mlir:68:24
+434457:  renamable $vgpr69_vgpr70_vgpr71_vgpr72 = DS_READ2ST64_B64_gfx9 killed renamable $vgpr69, 8, 9, 0, implicit $exec, debug-location !16 :: (load (s64) from %ir.address.local603, addrspace 3), (load (s64) from %ir.address.local607, addrspace 3); test_input_spidD.mlir:68:24
+434458:  WAIT_ASYNCMARK 0, debug-location !23; test_input_spidD.mlir:67:22
+434460:  S_BARRIER debug-location !23; test_input_spidD.mlir:67:22
+434461:  renamable $vgpr98 = nofpexcept V_PK_MUL_F16 8, killed $vgpr66, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434462:  renamable $vgpr97 = nofpexcept V_PK_MUL_F16 8, killed $vgpr65, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434463:  renamable $vgpr100 = nofpexcept V_PK_MUL_F16 8, killed $vgpr70, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434464:  renamable $vgpr99 = nofpexcept V_PK_MUL_F16 8, killed $vgpr69, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434465:  renamable $vgpr102 = nofpexcept V_PK_MUL_F16 8, killed $vgpr68, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434466:  renamable $vgpr101 = nofpexcept V_PK_MUL_F16 8, killed $vgpr67, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434467:  renamable $vgpr104 = nofpexcept V_PK_MUL_F16 8, killed $vgpr72, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24
+434468:  renamable $vgpr103 = nofpexcept V_PK_MUL_F16 8, killed $vgpr71, 8, $sgpr35, 0, 0, 0, 0, 0, implicit $mode, implicit $exec, debug-location !16; test_input_spidD.mlir:68:24

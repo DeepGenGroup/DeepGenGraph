@@ -94,6 +94,17 @@ def LowerFriskAsyncToSync: Pass<"frisk-lower-async-to-sync", "::mlir::func::Func
   let constructor = "mlir::frisk::createLowerFriskAsyncToSyncPass()";
 }
 
+def SinkWaitBufferReady: Pass<"frisk-sink-wait-buffer-ready", "::mlir::func::FuncOp"> {
+  let summary = "Sink buffer readiness to the first dependent access or synchronization boundary";
+  let description = [{
+    Move same-block waits past independent work, tracking logical Frisk views
+    and physical memref aliases. Preserve source lifetime, destination accesses,
+    explicit synchronization, DMA ordering and existing pipeline schedules.
+    Thread tiling invokes this after layout planning and async/sync selection.
+  }];
+  let constructor = "mlir::frisk::createSinkWaitBufferReadyPass()";
+}
+
 def FinalizeThreadTiling: Pass<"finalize-thread-tiling", "::mlir::func::FuncOp"> {
   let summary = "基于thread级别的实现 将其转为 mlir built-in IR 表达的形式。完全去除 to_threadtile 和 from_threadtile";
   let description = [{}];

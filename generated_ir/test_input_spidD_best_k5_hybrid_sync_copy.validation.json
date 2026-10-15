@@ -1,0 +1,74 @@
+{
+  "status": "byte_identical_to_local_sync_copy_variant_with_user_reported_gpu_pass",
+  "output": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid_sync_copy.ll",
+  "sha256": "8fae5c3d39df40a847dcf56d427fb88287afb9ed03a92d7e80295660004d021b",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/correctness_diagnostics/sync_copy.ll",
+  "byte_identical_to_reference": true,
+  "input_ir_sha256": "5084574216865f949ff7891a971e4c201fd322c2beb67a5899b83cc0ebd6c440",
+  "transformation": "Replace 16 four-byte DMA calls with ordinary GM load and LDS store; explicit lane*4 destination offset; retain mark/wait/barriers and original MMAC spacing.",
+  "launch_configuration": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "k_layout": "bhsd",
+    "input_shape_bhsd": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "query_tile_rows": 128,
+    "note": "Specific to this export. Compile the corresponding IR to HSACO; launch dimensions are not interchangeable across exports."
+  },
+  "static_lds_bytes": 16384,
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "hybrid",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4",
+    "FRISK_SYNC_DMA_PACKETS": "1"
+  },
+  "command": [
+    "bash",
+    "RunFriskSHell.sh",
+    "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+    "generated_ir/test_input_spidD_best_k5_hybrid_sync_copy.ll",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0"
+  ],
+  "checks_passed": [
+    "MyTest build and full MLIR-to-LLVM shell export",
+    "Exact bytes and SHA256 equal local sync_copy diagnostic variant",
+    "LLVM 22 verifier before and after default<O3>",
+    "CPU LLVM numerical model heads/blocks (0,0), (0,1), (1,7), (1,31)",
+    "In-place sync export and unsupported DMA rejection without overwriting input"
+  ],
+  "user_reported_hardware_results": {
+    "provenance": "User-supplied summary.tsv; no local GPU execution",
+    "statuses": {
+      "reference": "EXIT_1",
+      "sync_copy": "PASS",
+      "mmac_wait": "EXIT_1",
+      "sync_copy_mmac_wait": "PASS"
+    },
+    "interpretation": "Synchronous packet substitution passes reported original-input check; longer MMAC padding alone does not. Focus investigation on async transfer path.",
+    "limits": "Detailed run/build logs, remote hashes, per-probe verdicts and performance measurements not provided."
+  },
+  "local_gpu_executed": false,
+  "local_hsaco_built": false,
+  "remote_artifact_hash_verified": false,
+  "performance_measured": false
+}

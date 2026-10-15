@@ -50,6 +50,24 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    waits and readers together. It records `frisk.source_map`, an inverse affine
    permutation from flat physical destination elements to logical source
    coordinates. The op verifier checks the permutation is bounded and bijective.
+   After layout insertion and hybrid async/sync selection, it invokes
+   `frisk-sink-wait-buffer-ready`. This standalone function pass delays waits
+   past independent arithmetic and descriptor construction to the first
+   dependent access. It understands logical Frisk views/allocations and
+   memref views/casts/selects, protects source writes/frees and destination
+   reads/writes/frees, and leaves explicit pipeline schedules alone. Motion
+   stays within the original block and stops at regions, unknown effects,
+   synchronization or another DMA issue/wait. In the split-D hybrid example,
+   K readiness moves after Q scaling and immediately before GEMM. Q readiness
+   remains before the K DMA because separate DMA completion is still the
+   backend policy; this pass does not enable grouped DMA or remove waits.
+
+   To run it independently on logical or physical tile IR:
+
+   ```bash
+   build/test/ThreadTilingTest input.mlir --frisk-sink-wait-buffer-ready \
+     --verify-each -o scheduled.mlir
+   ```
 5. After fragment inlining, `frisk-schedule-async-copies` moves issues earlier
    and waits toward consumers within the same block. Pure descriptor setup and
    static owned LDS allocations move with the issue. Alias checks protect source writes and destination
@@ -71,6 +89,31 @@ The normal backend now expands strided metadata before final memref-to-LLVM
 conversion, including dynamic origins introduced by async tile views.
 
 ## gfx936 implementation
+
+`HWSpecification::dataCopyInfo.dmaTransfers` describes the target-confirmed
+4-byte and 16-byte per-lane DMA capabilities, including lane stride and
+alignment. This is separate from the widths currently emitted below.
+`getBankConflictPhases(bytes, Read/Write)` models ordinary LDS b32/b64/b128
+instructions as explicit wave-local lane groups; b128 read and write groups
+differ. Unknown instruction widths/targets return no model. For read2/write2,
+query each address component's width, not the combined instruction width.
+
+`LowerInfo::shmIO` holds an optional `ShmDataIODesc` after allocation-wide
+packing negotiation. Its consumer layout snapshot is owned by value, and a
+coordinate transpose invalidates the plan. Packing attributes preserve the
+parameters across lowering; `PackSharedMemory` reconstructs the descriptor
+and uses it for both consumer addresses and the inverse `frisk.source_map`.
+Logical/physical maps use element offsets; bank analysis uses byte addresses.
+
+`getShmAccessMap()` composes the full consumer layout with physical packing.
+`getGlobalSourceMap()` combines inverse packing with actual source strides and
+the view origin. `selectDMATransferBytes()` checks every physical packet for
+source contiguity and alignment before choosing a hardware-supported width.
+For row-major Q, four-f16 packets usually permit only 4-byte direct DMA;
+eight-f16 packets can permit 16 bytes. This query does not change packing or
+enable wider emission automatically. `getBankConflictWays()` evaluates actual
+per-lane addresses with the target phase groups, including inactive lanes and
+read broadcasts; it does not infer conflict freedom from packet size alone.
 
 The asynchronous path requires a one-dimensional block of 64, 128, …, 1024
 threads (`thread_num`) and wave64 execution. It issues 4-byte DMA packets:
@@ -213,6 +256,7 @@ runtime alignment checks. `FRISK_GM_TO_SHM_MODE=legacy` bypasses promotion.
 cmake --build build --target ThreadTilingTest MyTest -j4
 python3 test/check_frisk_async_copy.py
 python3 test/check_async_layout_integration.py
+python3 test/check_sink_wait_buffer_ready.py
 python3 test/check_async_attention_export.py output.ll output.log
 # For the mixed candidate:
 python3 test/check_async_attention_export.py output.ll output.log /path/to/llvm/bin hybrid

@@ -346,6 +346,26 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     }
     if (pairStride && (type.getNumElements() / threads.getInt()) % (2 * width) == 0)
       set("frisk.shared_pair_stride", pairStride);
+    // Publish the agreed physical plan to every participating LowerInfo.
+    // Allocation attributes carry the same parameters across thread lowering;
+    // PackSharedMemory reconstructs ShmDataIODesc to rewrite ALL accesses and
+    // derive the inverse source map for the GM->LDS copy.
+    auto parameter = [&](StringRef name) -> int64_t {
+      auto attr = alloc->getAttrOfType<IntegerAttr>(name);
+      return attr ? attr.getInt() : 0;
+    };
+    auto io = ShmDataIODesc::getPacked(
+        {type.getDimSize(0), type.getDimSize(1)},
+        type.getElementTypeBitWidth() / 8, axis, width,
+        parameter("frisk.shared_pair_stride"),
+        parameter("frisk.shared_store_stride"),
+        parameter("frisk.shared_store_pair"));
+    if (io && type.getElementTypeBitWidth() % 8 == 0)
+      for (OpOperand *use : aliases.accesses)
+        if (auto *info = layouts.getLowerInfo(use->get(), use->getOwner())) {
+          info->shmIO = *io;
+          info->shmIO->baseLayout = info->base_layout;
+        }
   });
 }
 
@@ -2474,7 +2494,10 @@ static LogicalResult lowerGlobalToSharedCopy(
     // This is a bijection of transfer ownership; source packets and the
     // consumer's physical layout are unchanged.
     int64_t rowThreads = shape[1] / perThread;
-    int64_t phase = 1024 / (packing.getInt() * dstType.getElementTypeBitWidth());
+    auto phases = s_hw->getBankConflictPhases(
+        packing.getInt() * dstType.getElementTypeBitWidth() / 8,
+        ShmAccessKind::Write);
+    int64_t phase = phases ? phases->front().size() : 0;
     int64_t group = rowThreads * phase;
     if (rowThreads > 1 && phase > 0 && threadsAttr.getInt() % group == 0) {
       auto t = rewriter.getAffineDimExpr(0);
@@ -3482,6 +3505,9 @@ public:
       llvm::errs() << "Async direct-only: " << synchronous.size()
                    << " packed copies selected for vectorized synchronous lowering\n";
     }
+    // Select synchronous copies first: hybrid selection needs adjacent pairs.
+    // Then delay readiness while logical tile consumers are still explicit.
+    sinkWaitBufferReady(kernel);
     llvm::outs() << "----- after insertConvertLayoutOps:\n" << kernel << "\n"; llvm::outs().flush();
 
     // 未 tiled 的目标 Frisk op 必须被转换；其他 op 动态合法。

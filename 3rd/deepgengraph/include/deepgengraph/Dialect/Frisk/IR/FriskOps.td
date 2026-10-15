@@ -556,6 +556,58 @@ def Frisk_WaitBufferReadyOp : Frisk_Op<"wait_buffer_ready", [
   let hasVerifier = 1;
 }
 
+def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
+    MemoryEffects<[MemRead]>
+]> {
+  let summary = "Collective HCU matrix read from shared memory into registers";
+  let description = [{
+    Wraps the fixed-shape HCUDsReadMatrixIntrinsic instructions listed in
+    IntrinsicsHCU.log. (m, n, element_bit_width, transpose, alt) selects an
+    exact instruction; alt=1 denotes the _alt suffix, not _alt1. The dimensions
+    and element bit width describe the instruction, not the per-lane result.
+
+    src[indices] supplies the calling lane's LDS pointer using the memref's
+    actual offset and strides. offset is the intrinsic's i32 immediate byte
+    offset. The source must be byte-addressable shared storage (space 3);
+    packed b4 data may use an i8 backing memref. The returned fixed 1-D vector
+    is explicitly typed, matching the intrinsic's overloaded anyvector ABI.
+    No implicit cast, scalar-load expansion or lane permutation is performed.
+    The source storage type need not match the instruction or result type.
+
+    This is a convergent collective read, not speculatable. Callers must supply
+    the instruction's required active lanes, address layout and ready LDS data.
+    It neither waits for pending DMA nor inserts a block barrier. The intrinsic
+    list alone does not specify lane ownership or a bank-conflict-free layout.
+
+    Supported variants:
+      m32x64_b4; m32x32_b8; m32x16_b16; m32x16_b16_alt;
+      m32x8_b32; m32x32_b8_alt2; m64x16_b8_alt4; m16x16_b32;
+      mt16x16_b32; mt16x32_b16_alt2.
+    The separate matrix_format/trans_format/padbyte intrinsics have different
+    control operands and are not represented by this fixed-shape operation.
+
+    Example:
+      %r = frisk.read_matrix_from_shm %sm[%i] {
+        m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
+      } : memref<4096xi8, 3> -> vector<4xi32>
+  }];
+  let arguments = (ins AnyMemRef:$src, Variadic<Index>:$indices,
+      I64Attr:$m, I64Attr:$n, I64Attr:$element_bit_width,
+      DefaultValuedAttr<BoolAttr, "false">:$transpose,
+      DefaultValuedAttr<I64Attr, "0">:$alt,
+      DefaultValuedAttr<I32Attr, "0">:$offset);
+  let results = (outs AnyVectorOfNonZeroRank:$result);
+  let assemblyFormat = [{
+    $src `[` $indices `]` attr-dict `:` type($src) `->` type($result)
+  }];
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    // Base LLVM intrinsic name, without overloaded result/pointer suffixes.
+    // Empty for an unsupported combination (also rejected by verify()).
+    ::llvm::StringRef getIntrinsicName();
+  }];
+}
+
 def Frisk_CopyToRegOp : Frisk_Op<"copy_to_reg", [
     MemoryEffects<[MemRead, MemWrite]>,
     DeclareOpInterfaceMethods<OpAsmOpInterface>

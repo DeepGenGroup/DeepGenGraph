@@ -2,6 +2,7 @@
 // A complete owned allocation is permuted together with all its accesses;
 // no global tensor layout or kernel ABI is changed.
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "deepgengraph/Analysis/LowerInfo.h"
 #include "SharedBufferAliases.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -199,6 +200,12 @@ static void packAllocation(memref::AllocOp alloc,
       type.getDimSize(0) % (2 * pairStride) ||
       2 * pack * type.getElementTypeBitWidth() > 128))
     return;
+  auto io = ShmDataIODesc::getPacked(
+      {type.getDimSize(0), type.getDimSize(1)},
+      type.getElementTypeBitWidth() / 8, axis, pack, pairStride,
+      storeStride, storePair);
+  if (type.getElementTypeBitWidth() % 8 || !io)
+    return;
   SmallVector<Access> accesses;
   SmallVector<memref::DeallocOp> deallocs;
   if (!collect(aliases, accesses, deallocs))
@@ -232,110 +239,18 @@ static void packAllocation(memref::AllocOp alloc,
     buffers[old.getResult()] = storage;
     old.getResult().replaceAllUsesWith(storage);
   }
-  auto row = b.getAffineDimExpr(0), col = b.getAffineDimExpr(1);
-  auto layout = AffineMap::get(2, 0,
-      (row.floorDiv(pack) * type.getDimSize(1) + col) * pack + row % pack);
-  if (axis == 1)
-    // A bijection for any positive M and N divisible by pack: transpose the
-    // grid of row packets, preserving each lane's contiguous register packet.
-    // No padding, bank-count assumption, or logical ownership change.
-    layout = AffineMap::get(2, 0,
-        (col.floorDiv(pack) * type.getDimSize(0) + row) * pack + col % pack);
-  if (storeStride) {
-    // A bijection: column = laneResidue + storeStride * registerIndex.
-    // Transpose the lane-residue and row axes, then interleave two instruction
-    // groups within registerIndex. No padding or cross-thread shuffle is used.
-    auto reg = col.floorDiv(storeStride);
-    int64_t group = storePair / storeStride;
-    auto paired = reg.floorDiv(2 * group) * (2 * group) +
-                  (reg % group) * 2 + (reg.floorDiv(group) % 2);
-    layout = AffineMap::get(2, 0,
-        (col % storeStride * type.getDimSize(0) + row) *
-            (type.getDimSize(1) / storeStride) + paired);
-  }
-  // Async copies traverse PHYSICAL destination packets. Record the inverse
-  // permutation so the source lookup retains logical coordinates (including
-  // transposed source descriptors). Never feed a swizzled per-lane LDS address
-  // to hardware that implicitly adds lane_id * 4.
-  auto p = b.getAffineDimExpr(0);
-  auto inverseRow = p.floorDiv(pack * type.getDimSize(1)) * pack + p % pack;
-  auto inverseCol = p.floorDiv(pack) % type.getDimSize(1);
-  if (axis == 1) {
-    inverseRow = p.floorDiv(pack) % type.getDimSize(0);
-    inverseCol = p.floorDiv(pack * type.getDimSize(0)) * pack + p % pack;
-  }
-  if (storeStride) {
-    int64_t rowSize = type.getDimSize(1) / storeStride;
-    int64_t groups = storePair / storeStride;
-    auto paired = p % rowSize;
-    auto reg = paired.floorDiv(2 * groups) * (2 * groups) +
-               (paired % 2) * groups + paired.floorDiv(2) % groups;
-    inverseRow = p.floorDiv(rowSize) % type.getDimSize(0);
-    inverseCol = p.floorDiv(rowSize * type.getDimSize(0)) + storeStride * reg;
-  }
-  if (pairStride) {
-    int64_t groups = pairStride / pack;
-    auto group = p.floorDiv(2 * pack * type.getDimSize(1));
-    auto column = p.floorDiv(2 * pack) % type.getDimSize(1);
-    inverseRow = (group.floorDiv(groups) * (2 * groups) +
-                  (p.floorDiv(pack) % 2) * groups + group % groups) * pack + p % pack;
-    inverseCol = column;
-    if (2 * pack * type.getElementTypeBitWidth() == 128 && type.getDimSize(1) % 8 == 0) {
-      auto columnGroup = column.floorDiv(8);
-      inverseCol = columnGroup * 8 +
-          ((column.floorDiv(4) - columnGroup.floorDiv(4) -
-            group.floorDiv(groups == 1 ? 1 : 2)) % 2) * 4 +
-          (column - columnGroup) % 4;
-    }
-  }
-  auto inverse = AffineMap::get(1, 0, {inverseRow, inverseCol}, b.getContext());
+  // The same descriptor maps consumers to physical LDS and inverts that
+  // placement for GM producers. Preserve source strides in the copy's memref.
+  auto inverse = io->getPhysicalToLogicalMap(b.getContext());
   for (OpOperand *use : aliases.accesses)
     if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
       copy->setAttr("frisk.source_map", AffineMapAttr::get(inverse));
   llvm::SetVector<std::pair<Block *, Value>> blocks;
   for (auto &access : accesses) {
     b.setInsertionPoint(access.op);
-    AffineMap map;
-    if (pairStride) {
-      // Simplify the fragment number before introducing the outer pairing
-      // permutation. Otherwise (base*4 + register) floordiv 32 obscures that
-      // all four registers have the same fragment number, defeating exact
-      // adjacent-address proofs in coalesce().
-      auto logical = compose(access.map ? access.map :
-          b.getMultiDimIdentityMap(2), access.indices);
-      auto simplify = [&](AffineExpr expr) {
-        return simplifyAffineExpr(expr, logical.getNumDims(), logical.getNumSymbols());
-      };
-      auto fragment = simplify(logical.getResult(0).floorDiv(pack));
-      auto element = simplify(logical.getResult(0) % pack);
-      int64_t groups = pairStride / pack;
-      auto group = fragment.floorDiv(2 * groups) * groups + fragment % groups;
-      auto column = logical.getResult(1);
-      if (2 * pack * type.getElementTypeBitWidth() == 128 &&
-          type.getDimSize(1) % 8 == 0) {
-        // Permute whole 16-byte packets within each eight-column group.
-        // Pairing K alone puts the copy lanes' 64-bit stores at the same bank
-        // offset. Fold the producer column group into the packet's low bits.
-        // Keep columns 0:3 and 4:7 separate for the paired LDS read phases;
-        // With adjacent K-fragment pairing (groups=1), the low group bit
-        // distinguishes the two read phases; the ordinary strided pairing
-        // uses the next bit. Using group/2 for both leaves a 2-way conflict
-        // in the producer-permuted B layout.
-        // This is a bijection, requires no padding, and leaves both halves of
-        // a K packet adjacent. Express it in affine arithmetic so adjacency
-        // remains provable after fragment unrolling.
-        auto columnGroup = column.floorDiv(8);
-        column = columnGroup * 8 +
-            ((column.floorDiv(4) + columnGroup.floorDiv(4) +
-              group.floorDiv(groups == 1 ? 1 : 2)) % 2) * 4 +
-            (column + columnGroup) % 4;
-      }
-      auto physicalIndex = (group * type.getDimSize(1) + column) * (2 * pack) +
-                           (fragment.floorDiv(groups) % 2) * pack + element;
-      map = simplifyAffineMap(AffineMap::get(logical.getNumDims(), logical.getNumSymbols(), physicalIndex));
-    } else {
-      map = compose(access.map ? layout.compose(access.map) : layout, access.indices);
-    }
+    auto logical = compose(access.map ? access.map :
+        b.getMultiDimIdentityMap(2), access.indices);
+    auto map = io->mapLogicalToPhysical(logical);
     Value index = b.create<affine::AffineApplyOp>(access.op->getLoc(), map, access.indices);
     Value storage = buffers.lookup(access.buffer);
     blocks.insert({access.op->getBlock(), storage});

@@ -1,0 +1,23 @@
+{
+  "status": "compiler_integrated_local_checks_passed",
+  "output": "generated_ir/test_input_spidD_best_k5_hybrid_dma_guard_integrated.ll",
+  "sha256": "096d820fdabe38c923fe1f104129392f4054b6063b14df5d3173a32baa399982",
+  "counts": {
+    "dma": 16,
+    "marks": 2,
+    "waits": 2,
+    "barriers": 11,
+    "mmac": 160,
+    "guards": 16
+  },
+  "checks_passed": [
+    "MyTest and LegacyLLVMExportTest build",
+    "Repeated protection idempotence",
+    "Import already guarded diagnostic without duplicate guards",
+    "Integrated minimal reproducer gfx900 O3 zero immediates",
+    "Full regenerated attention LLVM verify/O3 and gfx900 16 zero-immediate DMA",
+    "Full regenerated attention CPU LLVM numerical checks at four head/block pairs"
+  ],
+  "gpu_executed": false,
+  "note": "Same guard operation as user-tested candidate; this separately regenerated IR has not been GPU-tested. Retain the known-passing HSACO for benchmarking."
+}

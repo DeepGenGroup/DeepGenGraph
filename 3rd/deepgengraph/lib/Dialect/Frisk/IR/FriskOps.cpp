@@ -42,6 +42,59 @@ namespace frisk {
 namespace mlir {
 namespace frisk {
 
+llvm::StringRef ReadMatrixFromShmOp::getIntrinsicName() {
+  struct Instruction {
+    int64_t m, n, bits;
+    bool transpose;
+    int64_t alt;
+    const char *name;
+  };
+  // Exact fixed-shape HCUDsReadMatrixIntrinsic entries in IntrinsicsHCU.log.
+  static constexpr Instruction instructions[] = {
+      {32,64,4,false,0,"llvm.hcu.ds.read.m32x64.b4"},
+      {32,32,8,false,0,"llvm.hcu.ds.read.m32x32.b8"},
+      {32,16,16,false,0,"llvm.hcu.ds.read.m32x16.b16"},
+      {32,16,16,false,1,"llvm.hcu.ds.read.m32x16.b16.alt"},
+      {32,8,32,false,0,"llvm.hcu.ds.read.m32x8.b32"},
+      {32,32,8,false,2,"llvm.hcu.ds.read.m32x32.b8.alt2"},
+      {64,16,8,false,4,"llvm.hcu.ds.read.m64x16.b8.alt4"},
+      {16,16,32,false,0,"llvm.hcu.ds.read.m16x16.b32"},
+      {16,16,32,true,0,"llvm.hcu.ds.read.mt16x16.b32"},
+      {16,32,16,true,2,"llvm.hcu.ds.read.mt16x32.b16.alt2"}};
+  for (const auto &inst : instructions)
+    if (getM() == inst.m && getN() == inst.n &&
+        getElementBitWidth() == inst.bits && getTranspose() == inst.transpose &&
+        getAlt() == inst.alt)
+      return inst.name;
+  return {};
+}
+
+LogicalResult ReadMatrixFromShmOp::verify() {
+  if (getIntrinsicName().empty())
+    return emitOpError("unsupported HCU matrix-read combination of m, n, "
+                       "element_bit_width, transpose and alt");
+  auto src = cast<MemRefType>(getSrc().getType());
+  auto space = dyn_cast_or_null<IntegerAttr>(src.getMemorySpace());
+  if (!space || space.getInt() != 3)
+    return emitOpError("requires shared memory (address space 3)");
+  if (getIndices().size() != unsigned(src.getRank()))
+    return emitOpError("requires one source index per memref dimension");
+  if (!src.getElementType().isIntOrFloat() ||
+      src.getElementTypeBitWidth() % 8 != 0)
+    return emitOpError("requires byte-addressable integer or floating-point "
+                       "source storage; use i8 storage for packed b4 data");
+  SmallVector<int64_t> strides;
+  int64_t offset;
+  if (failed(src.getStridesAndOffset(strides, offset)))
+    return emitOpError("requires a strided source memref");
+  auto result = cast<VectorType>(getResult().getType());
+  if (result.getRank() != 1 || result.isScalable() ||
+      !result.getElementType().isIntOrFloat())
+    return emitOpError("requires a fixed one-dimensional integer or "
+                       "floating-point result vector");
+  return success();
+}
+
 LogicalResult FragmentOp::verify() {
   if (getKind() != "load" && getKind() != "store" &&
       getKind() != "compute" && getKind() != "gather")

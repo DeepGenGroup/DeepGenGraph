@@ -25,7 +25,7 @@ def run(args, source=None):
 def fixture(rows, cols, pack, axis=0):
     ty = f'memref<{rows}x{cols}xf32, 3>'
     text = f'''func.func @read_group(%group: index, %col: index) -> f32 {{
-  %a = memref.alloc() {{alignment = 16 : i64, frisk.shared_pack = {pack} : i64}} : {ty}
+  %a = memref.alloc() alignment = 16 {{frisk.shared_pack = {pack} : i64}} : {ty}
   affine.for %r = 0 to {rows} {{
     affine.for %c = 0 to {cols} {{
       %idx = affine.apply affine_map<(d0,d1) -> (d0 * 37 + d1 * 3)>(%r, %c)
@@ -159,7 +159,7 @@ def main():
         source = fixture(16,11,4)
         for name, text in [
             ('nondivisible', source.replace('16x11', '15x11')),
-            ('unmarked', source.replace(', frisk.shared_pack = 4 : i64', '')),
+            ('unmarked', source.replace('frisk.shared_pack = 4 : i64', '')),
             ('global', source.replace(', 3>', ', 1>')),
             ('escaped', 'func.func private @escape(memref<16x11xf32, 3>)\n' + source.replace(
                 '  %z =', '  func.call @escape(%a) : (memref<16x11xf32, 3>) -> ()\n  %z =')),

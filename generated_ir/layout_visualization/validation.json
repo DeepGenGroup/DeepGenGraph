@@ -1,0 +1,18 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid_dma_guard.ll",
+  "ir_sha256": "8d17063f3908efa65d35b67dfbba04c417d50cc51a44cfc46a019eb74645a0c0",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5.ll",
+  "reference_sha256": "fe9ac437269303d23d76f94c4bb2e87b5bff9ef41ed523dfe2b97faba5eb64ac",
+  "copy_elements_checked": 24576,
+  "all_copy_destinations_match_reference": true,
+  "Q_K_V_formulas_checked": true,
+  "mmac_operand_elements_traced": 1536,
+  "context": {
+    "head": 0,
+    "query_block": 0,
+    "key_tile": 0,
+    "QK_D_chunk": 0,
+    "wave": 0
+  },
+  "gpu_executed": false
+}

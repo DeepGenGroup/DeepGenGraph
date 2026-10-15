@@ -18,6 +18,8 @@ std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
 std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();
 std::unique_ptr<mlir::Pass> createLowerFriskAsyncToSyncPass();
 std::unique_ptr<mlir::Pass> createScheduleAsyncCopiesPass();
+std::unique_ptr<mlir::Pass> createSinkWaitBufferReadyPass();
+void sinkWaitBufferReady(mlir::func::FuncOp kernel);
 void packSharedMemory(mlir::func::FuncOp kernel);
 
 #define GEN_PASS_DECL_CONVERTFRISKBASETOTHREADLEVELIR

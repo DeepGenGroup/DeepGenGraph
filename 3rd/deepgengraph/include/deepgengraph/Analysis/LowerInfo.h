@@ -43,6 +43,46 @@ enum class BufferAxisReuse : int32_t {
 };
 
 class LowerInfoAnalysis ;
+
+// 物理 LDS 组织独立于计算线程和搬运线程的分工。所有 map 均以元素为单位，
+// 只有 bank 检查使用字节地址。由整个 allocation 的生产者/消费者协商后创建。
+struct ShmDataIODesc {
+  // Snapshot by value: copying LowerInfo must not leave a pointer to its old
+  // base_layout. The full consumer map also includes repeats/logicalTransform.
+  std::optional<LinearLayout2DDesc> baseLayout;
+  coordXY_t shape = {0, 0};
+  int64_t elementBytes = 0;
+  int64_t packAxis = 0, packElements = 1;
+  int64_t pairStride = 0, storeStride = 0, storePair = 0;
+  int plannedVectorAccessBytes = 0; // LDS read/write width, NOT DMA width.
+  bool isSupportChunkRead = false; // Reserved for target-specific matrix loads.
+
+  // Reject unsupported/malformed layouts rather than inventing a mapping.
+  static std::optional<ShmDataIODesc> getPacked(
+      coordXY_t shape, int64_t elementBytes, int64_t axis, int64_t pack,
+      int64_t pairStride = 0, int64_t storeStride = 0, int64_t storePair = 0);
+  AffineMap getLogicalToPhysicalMap(MLIRContext *ctx) const;
+  AffineMap getPhysicalToLogicalMap(MLIRContext *ctx) const;
+  // Compose the whole consumer's (tid, repeats, registers) -> (row,col) map.
+  // Simplify logical fragments before introducing the packing permutation.
+  AffineMap mapLogicalToPhysical(AffineMap logical) const;
+  // Physical LDS element -> source element offset, including real GM strides.
+  AffineMap getGlobalSourceMap(MLIRContext *ctx, coordXY_t sourceStrides,
+                               int64_t sourceOffset = 0) const;
+  // Largest dense direct-DMA width legal for EVERY packet of this allocation.
+  // sourceAlignmentBytes describes the source view origin, not its parent.
+  // 0 means no direct plan. This plans hardware capability, not code emission.
+  unsigned selectDMATransferBytes(const HWSpecification &hw, MLIRContext *ctx,
+                                  coordXY_t sourceStrides,
+                                  unsigned sourceAlignmentBytes) const;
+  // One wave's per-lane byte addresses; -1 denotes an inactive lane.
+  // Read broadcasts count once. Writes to the same word are not broadcasts.
+  // nullopt means unknown/invalid width, target or addresses; 0 = no accesses.
+  std::optional<unsigned> getBankConflictWays(
+      const HWSpecification &hw, ArrayRef<int64_t> laneByteAddresses,
+      ShmAccessKind kind = ShmAccessKind::Read) const;
+};
+
 /**
  * @brief LowerInfo
  * 其表示了 在block层面的一块buffer，在降低到线程层面后，线程如何从 block-level的buffer里 根据自己的tid 去RW 该buffer里的数据（即索引[x,y]）
@@ -95,12 +135,52 @@ public:
 */
 
   LinearLayout2DDesc base_layout;  // fragment的Layout。除了基础frag，还包括了 warp内thread的排列要求
+  // Filled after shared-layout negotiation, not propagated as an MMA layout.
+  std::optional<ShmDataIODesc> shmIO;
+  AffineMap getShmAccessMap() {
+    return shmIO ? shmIO->mapLogicalToPhysical(getAffineMap()) : AffineMap{};
+  }
 
   std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
   std::array<int64_t, 2> block_layout_order = {0, 1};  // block内warp布局的行列优先顺序 上例中为[1,0] 行优先（列优先也可）
   std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2] or [4,1]. 其中行列优先顺序无所谓，不影响结果
 
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
+
+  // 将 creg 转为行优先，必要时转置整个布局（包括覆盖区域）。
+  // 仅修改布局元数据：调用方负责匹配转置后的 buffer/view 和实际数据。
+  // buffer/op/convertFrom 保留原关联，mmaInst 仍指向原硬件指令，不能
+  // 将转置后的布局直接当作该指令的原生 fragment。返回是否交换了轴。
+  bool convert_to_row_major() {
+    if (!base_layout.convert_to_row_major())
+      return false;
+
+    // The stored plan describes a physical allocation in the old coordinates.
+    // Re-plan it once the transposed buffer's complete access set is known.
+    shmIO.reset();
+
+    swap_xy(block_layout);
+    swap_xy(block_layout_order);
+    swap_xy(block_repeat);
+    swap_xy(warpInstUnroll);
+    swap_xy(thread_own_data_size);
+    std::swap(reuseable[0], reuseable[1]);
+    if (ignoreDim == 0 || ignoreDim == 1)
+      ignoreDim = 1 - ignoreDim;
+
+    if (logicalTransform) {
+      // 旧映射为 L(F)，基础布局转置后为 T(F)，新逻辑映射须为 T*L*T。
+      auto transpose = AffineMap::getPermutationMap(
+          ArrayRef<unsigned>{1, 0}, logicalTransform.getContext());
+      logicalTransform = transpose.compose(logicalTransform).compose(transpose);
+    }
+
+    // 线程编号及 warpIdDivisor 不变；旧循环标签和上界不能继续缓存。
+    mapOperandsLabel.clear();
+    iterVarLabels.clear();
+    ivUpperBounds.clear();
+    return true;
+  }
 
   coordXY_t get_warp_layout() const {
     return base_layout.warp_layout;

@@ -8,6 +8,14 @@ target_link_libraries(MyTestAsync PRIVATE
   MLIRROCDLToLLVMIRTranslation)
 add_executable(FragmentOptTest fragment_opt_test.cpp)
 add_executable(ThreadTilingTest thread_tiling_test.cpp)
+add_executable(LowerInfoLayoutTest lower_info_layout_test.cpp)
+add_executable(ShmDataIOTest shm_data_io_test.cpp)
+llvm_update_compile_flags(ShmDataIOTest)
+target_link_libraries(ShmDataIOTest PRIVATE
+  DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect)
+llvm_update_compile_flags(LowerInfoLayoutTest)
+target_link_libraries(LowerInfoLayoutTest PRIVATE
+  DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect)
 add_executable(LegacyLLVMExportTest legacy_llvm_export_test.cpp)
 llvm_update_compile_flags(ThreadTilingTest)
 llvm_update_compile_flags(LegacyLLVMExportTest)

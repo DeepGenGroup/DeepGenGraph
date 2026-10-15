@@ -9,6 +9,7 @@ add_deepgengraph_library(FriskToBase
   FriskFragIRReorder.cpp
   PackSharedMemory.cpp
   PromoteGlobalToSharedAsync.cpp
+  SinkWaitBufferReady.cpp
   
   DEPENDS
   FriskToBaseConversionPassIncGen

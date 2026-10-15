@@ -1,0 +1,47 @@
+{
+  "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+  "output": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_async_fixed.ll",
+  "sha256": "4f661320f01035b67a329f498ffd6266f18ad009719c9b737b42067dcadba3f9",
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "async",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4"
+  },
+  "mytest_parameters": [
+    "test_input_spidD.mlir",
+    "0",
+    "test_input_spidD_best_k5_async_fixed.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0"
+  ],
+  "static_lds_bytes": 24576,
+  "consumer_pool_bytes": 16384,
+  "staging_bytes": 8192,
+  "direct_dma_tiles": 2,
+  "staged_dma_tiles": 4,
+  "synchronous_fallback_tiles": 0,
+  "checks": [
+    "MyTest and ThreadTilingTest build",
+    "original async regression suite",
+    "packed DMA and synchronous mapping CPU execution",
+    "concurrent staged DMA/repack CPU execution and guards",
+    "issue/wait motion including descriptor setup, aliases, nested writes and barriers",
+    "completion-aware reuse and idempotence",
+    "malformed permutation rejection",
+    "all 128 PV A operands retain register-only P provenance",
+    "LLVM parse and verifier",
+    "all four V overlap windows retained after LLVM O3",
+    "legacy IR SHA256 identical to pre-change export"
+  ],
+  "gpu_executed": false,
+  "performance_measured": false,
+  "tradeoff": "Preserves original consumer packing and P registers; adds one reused 8 KiB staging tile and LDS repacking for V."
+}

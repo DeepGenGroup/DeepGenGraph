@@ -1,0 +1,37 @@
+当前 k5_hybrid_dma_guard 的 Q/K/V 布局图
+
+阅读顺序：
+01_overview.png：整体链路。Q/K 用 DMA，V 经 VGPR 重排写入。前 8 KiB 先存 Q，后复用为 V；P 保持在寄存器。
+02_q_copy.png：同一行 Q 的 16 个 half 如何从连续 GM 地址分成四组，写到间隔 1024 字节的 LDS 地址。
+  上半部分是旧 k5 的 VGPR 路径，下半部分是当前 DMA 的搬运线程。thread 是 block 内编号，lane=thread%64。
+03_packed_qkv.png：K/V 每个连续 16 字节包中的实际逻辑坐标，以及 V 从“行”到“列”的寄存器重排。
+04_mmac_lanes.png：格子内数字为计算时的 lane ID，坐标轴是真实逻辑坐标。颜色按 lane//16 分组。
+  三张矩阵均描述某一条指令的输入集合。K 的 token 坐标不连续，是当前 producer layout 的列置换，不是绘图省略。
+  下方表格对比同一 lane 在前两条指令使用的坐标和地址，解释为何 K/V 要做配对存储。
+
+图中约定：Q[m,d]、K[n,d]、V[n,c]；0:4 表示 0,1,2,3。地址单位均为字节；每个 half 占 2 B。
+选择 head=0、query block=0、key tile=0、QK D chunk=0、V output chunk=0。GM 公共基址视为 0。
+GM 的 Q/K/V 使用当前运行器的 BHSD ABI，每行 D=128，因此下一行相差 256 字节。
+图中的寄存器只描述元素分组，不声称某个具体 vN 寄存器编号。
+指令实际为 v_mmac_f32_16x16x16_f16；图中 MMAC 对应提问中的 WMMA。
+Q 的 scaling 保留地址来源，但会改变数值。所有图展示地址/数据来源，不展示性能或执行时序。
+
+验证：
+从当前 .ll 提取 256 线程的 24576 个 global->LDS half 元素映射，与旧同步 k5 对照。
+Q/K 各 4096，四个 V 输出段各 4096；V 输出段依次复用相同地址，不能将四段视为同时驻留。
+再逐元素验证 Q/K/V 公式。提取首两条 QK/PV 指令的 Q/K/V 操作数（wave 0）。
+未模拟真实 DMA 时序、MMAC hazards 或硬件性能。
+
+精确字节地址公式（tile 内坐标；// 为整除，% 为非负取模）：
+Q: 1024*(d//4) + 8*m + 2*(d%4)
+K: g=(d%16)//4; cg=n//8
+   np=cg*8 + ((n//4 + cg//4 + g//2)%2)*4 + (n+cg)%4
+   addr=8192 + 2*((g*128+np)*8 + (d//16)*4 + d%4)
+V: g=n//8; cg=c//8
+   cp=cg*8 + ((c//4 + cg//4 + g)%2)*4 + (c+cg)%4
+   addr=2*((g*32+cp)*8 + ((n//4)%2)*4 + n%4)
+
+复现：python3 script/plot_attention_lds.py
+依赖：numpy、matplotlib，以及仓库 3rd/deepgengraph/test 中的符号地址解析器。
+可选参数：--ir、--reference、--output-dir。脚本专用于当前 128/128/32、256 线程布局；不匹配时验证报错。
+PDF 为四页矢量输出；PNG 用于直接查看；CSV 可用于搜索具体逻辑坐标/线程。

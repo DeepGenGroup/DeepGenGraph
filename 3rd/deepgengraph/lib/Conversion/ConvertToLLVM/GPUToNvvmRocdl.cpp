@@ -1,6 +1,8 @@
 #include "deepgengraph/Common.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -493,6 +495,66 @@ struct GPUBarrierToNVVMLowering : public OpRewritePattern<gpu::BarrierOp> {
   }
 };
 
+// HCU intrinsics are vendor extensions not known to upstream ROCDL/LLVM.
+// Emit their exact overloaded declarations and calls instead of asking the
+// host LLVM intrinsic registry to recognize a target it does not support.
+struct ReadMatrixFromShmLowering
+    : ConvertOpToLLVMPattern<frisk::ReadMatrixFromShmOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(frisk::ReadMatrixFromShmOp op,
+      OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = dyn_cast_or_null<VectorType>(
+        getTypeConverter()->convertType(op.getResult().getType()));
+    if (!resultType || !LLVM::isCompatibleType(resultType))
+      return rewriter.notifyMatchFailure(op, "result vector is not LLVM-compatible");
+    auto module = op->getParentOfType<ModuleOp>();
+    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+    auto functionType = LLVM::LLVMFunctionType::get(
+        resultType, {ptrType, rewriter.getI32Type()}, false);
+
+    // HCUDsReadMatrixIntrinsic overloads both anyvector and anyptr, in that
+    // order: llvm.hcu.ds.read.<variant>.v<N><element>.p3.
+    std::string name = op.getIntrinsicName().str() + ".v" +
+                       std::to_string(resultType.getNumElements());
+    llvm::raw_string_ostream suffix(name);
+    resultType.getElementType().print(suffix);
+    suffix << ".p3";
+    suffix.flush();
+    auto symbol = module.lookupSymbol(name);
+    auto function = dyn_cast_or_null<LLVM::LLVMFuncOp>(symbol);
+    if (symbol && (!function || function.getFunctionType() != functionType ||
+                   !function.isExternal()))
+      return op.emitOpError("conflicting declaration for ") << name;
+
+    auto readOnly = LLVM::MemoryEffectsAttr::get(rewriter.getContext(),
+        {LLVM::ModRefInfo::Ref, LLVM::ModRefInfo::Ref,
+         LLVM::ModRefInfo::Ref, LLVM::ModRefInfo::Ref,
+         LLVM::ModRefInfo::Ref, LLVM::ModRefInfo::Ref});
+    if (!function) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(module.getBody());
+      function = rewriter.create<LLVM::LLVMFuncOp>(loc, name, functionType);
+      function.setConvergent(true);
+      function.setWillReturn(true);
+      function.setMemoryEffectsAttr(readOnly);
+    }
+    Value pointer = getStridedElementPtr(rewriter, loc,
+        cast<MemRefType>(op.getSrc().getType()), adaptor.getSrc(),
+        adaptor.getIndices());
+    Value offset = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI32Type(), op.getOffsetAttr());
+    auto call = rewriter.create<LLVM::CallOp>(
+        loc, function, ValueRange{pointer, offset});
+    call.setConvergent(true);
+    call.setWillReturn(true);
+    call.setMemoryEffectsAttr(readOnly);
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 // 将上述 3 个重写加到这个pass中
 struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(GPUToROCDLOrNVVMPass)
@@ -524,10 +586,13 @@ struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, Operation
     LLVMTypeConverter typeConverter(&getContext(), options);
 
     Codetarget.addIllegalDialect<gpu::GPUDialect>();
+    // No CUDA fallback: this collective's lane semantics are HCU-specific.
+    Codetarget.addIllegalOp<frisk::ReadMatrixFromShmOp>();
     Codetarget.addLegalDialect<LLVM::LLVMDialect, ROCDL::ROCDLDialect, NVVM::NVVMDialect>();
 
     if (target == Target::ROCm) {
       Codetarget.addLegalDialect<arith::ArithDialect>();
+      patterns.add<ReadMatrixFromShmLowering>(typeConverter);
       // populateGpuToROCDLConversionPatterns(typeConverter, patterns, gpu::amd::Runtime::HIP);
       patterns.add<GPUIndexIntrinsicOpLowering<gpu::BlockIdOp, ROCDL::BlockIdXOp, 
                                                ROCDL::BlockIdYOp, ROCDL::BlockIdZOp>>(typeConverter, &getContext(), "range");

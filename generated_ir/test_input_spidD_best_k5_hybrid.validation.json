@@ -1,0 +1,69 @@
+{
+  "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+  "output": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid.ll",
+  "sha256": "5084574216865f949ff7891a971e4c201fd322c2beb67a5899b83cc0ebd6c440",
+  "baseline_async_sha256": "4f661320f01035b67a329f498ffd6266f18ad009719c9b737b42067dcadba3f9",
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "hybrid",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4"
+  },
+  "mytest_parameters": [
+    "test_input_spidD.mlir",
+    "0",
+    "test_input_spidD_best_k5_hybrid.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0"
+  ],
+  "static_lds_bytes": 16384,
+  "staging_bytes": 0,
+  "direct_dma_tiles": 2,
+  "direct_dma_instructions": 16,
+  "vectorized_synchronous_tiles": 4,
+  "staged_dma_tiles": 0,
+  "scalar_fallback_tiles": 0,
+  "global_vector_load_bits": 64,
+  "global_vector_load_instructions": 16,
+  "baseline_measured": {
+    "acc": 0.219687652634,
+    "kernel_time_ms": 5.105,
+    "vgpr": 256,
+    "vgpr_spill_count": 25,
+    "scratch_bytes": 96,
+    "lds_bytes": 24576,
+    "bank_conflict_percent": 4.2229843942
+  },
+  "checks_passed": [
+    "MyTest, ThreadTilingTest and LegacyLLVMExportTest build",
+    "check_frisk_async_copy.py including full 16-round expansion, larger-loop fallback, tail and hybrid selection",
+    "check_async_layout_integration.py: packed/staged/sync CPU execution, guards, concurrent repack and scheduling/reuse checks",
+    "check_async_attention_export.py hybrid: 16 KiB LDS, no staging, P register provenance, LLVM verifier and O3",
+    "check_hybrid_copy_equivalence.py: all Q/K/V producer mappings and consumer addresses equal stored k5; 256 lanes and three contexts",
+    "check_attention_lds_banks.py: vector loads/stores have multiplicity 1 in 32-bank model; DMA packet wave bases validated separately",
+    "check_async_address_lifetimes.py: local DMA source/wave-base through O3, convergence/order and idempotence",
+    "original async_fixed export checks and original k5 bank checks"
+  ],
+  "gpu_executed": false,
+  "performance_measured": false,
+  "gfx936_codegen_performed": false,
+  "new_vgpr_count": null,
+  "new_spill_count": null,
+  "new_scratch_bytes": null,
+  "new_acc": null,
+  "new_bank_conflict_percent": null,
+  "limitations": [
+    "No /dev/kfd or /dev/dri and no gfx936 DTK backend in this environment; hardware numerical/performance checks remain required.",
+    "check_register_lifetimes.py passes transformation/O3/idempotence checks but its optional LLVM-15 parser/codegen stage fails on LLVM-24 range return attributes. The DMA-specific verifier/O3 regression passes.",
+    "The bank model covers explicit vector LDS accesses and cannot predict the measured whole-kernel conflict percentage."
+  ],
+  "status": "unresolved_gpu_correctness_failure",
+  "correctness_correction": "User withdrew the claim that original hybrid passes; byte-identical syncfix also fails. Wait grouping is not established as the cause."
+}

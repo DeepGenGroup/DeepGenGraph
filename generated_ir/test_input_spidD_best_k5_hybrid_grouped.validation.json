@@ -1,0 +1,98 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD.mlir",
+  "output": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid_grouped.ll",
+  "sha256": "71f82653dd9de84a217606efab208cd2a67fb7292ecc8dc24188e43b0f10949a",
+  "reference_sha256": "5084574216865f949ff7891a971e4c201fd322c2beb67a5899b83cc0ebd6c440",
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "hybrid",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4"
+  },
+  "command": [
+    "3rd/deepgengraph/build/test/MyTest",
+    "3rd/deepgengraph/test/test_input_spidD.mlir",
+    "0",
+    "generated_ir/test_input_spidD_best_k5_hybrid_grouped.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0",
+    "0"
+  ],
+  "static_lds_bytes": 16384,
+  "staging_bytes": 0,
+  "lds_reuse_words": 0,
+  "static_counts": {
+    "dma_instructions": 16,
+    "marks": 2,
+    "waits": 1,
+    "barriers": 10,
+    "lds_vector_loads": 84,
+    "mmac": 160
+  },
+  "o3_lds_vector_loads": 44,
+  "checks_passed": [
+    "MyTest/ThreadTilingTest/LegacyLLVMExportTest build",
+    "check_frisk_async_copy.py",
+    "check_async_layout_integration.py including independent copy grouping, alias/write/region/barrier guards, delayed CPU DMA and tails",
+    "check_async_attention_export.py hybrid-grouped: P register provenance, no staging, bank model, LLVM verifier and O3",
+    "check_async_address_lifetimes.py",
+    "check_lds_fragment_reuse.py: widths, interval budget, effects/CFG boundaries, idempotence and randomized CPU equivalence",
+    "check_hybrid_copy_equivalence.py: exact Q/K/V producer and consumer address equality, 256 lanes x 3 contexts"
+  ],
+  "gpu_executed": false,
+  "performance_measured": false,
+  "gfx936_codegen_performed": false,
+  "new_kernel_time_ms": null,
+  "new_vgpr_count": null,
+  "new_scratch_bytes": null,
+  "new_bank_conflict_percent": null,
+  "limitations": [
+    "No /dev/kfd or /dev/dri and no gfx936 backend available. GPU correctness, timing, register allocation and hardware bank counters must be measured.",
+    "The register-word reuse budget applies only to this transformation, not subsequent O3 or backend allocation.",
+    "Reference, grouped and reuse8 all have 44 static vector LDS loads after LLVM O3; source-level deduplication is not demonstrated incremental machine-code improvement."
+  ],
+  "launch_configuration": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "k_layout": "bhsd",
+    "input_shape_bhsd": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "query_tile_rows": 128,
+    "note": "Specific to this export. Compile the corresponding IR to HSACO; launch dimensions are not interchangeable across exports."
+  },
+  "status": "unresolved_gpu_correctness_failure",
+  "user_reported_gpu_result": {
+    "launch_configuration_corrected": true,
+    "allclose": false,
+    "max_abs_error": 3.04052734375,
+    "mean_abs_error": 0.03967156261205673,
+    "mismatch_count": 13304317,
+    "elements": 16777216,
+    "hsaco_median_ms": 3.904952049255371,
+    "sdpa_median_ms": 1.1168780326843262,
+    "original_hybrid_passed_same_launch": false,
+    "provenance": "User report; no local GPU execution or HSACO verification",
+    "original_pass_claim_retracted": true
+  },
+  "correctness_correction": "User withdrew the claim that original hybrid passes; byte-identical syncfix also fails. Wait grouping is not established as the cause."
+}

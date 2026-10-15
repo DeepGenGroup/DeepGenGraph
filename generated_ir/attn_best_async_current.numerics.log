@@ -1,0 +1,23 @@
+FAILED BLOCK 279 INSTRUCTION %address.local824 = getelementptr [2 x i8], ptr addrspace(3) @async_lds_staging_0, i64 %address.local823
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 351, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 339, in main
+    actual = model.run().reshape(q.shape)[head, block * 128:(block + 1) * 128]
+             ~~~~~~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 288, in run
+    value = self.operation(expr)
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 171, in operation
+    return self.gep(body)
+           ~~~~~~~~^^^^^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 109, in gep
+    return self.typed(p) + self.typed(idx[0]) * self.size(ty)
+           ~~~~~~~~~~^^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 70, in typed
+    return self.value(val, ty)
+           ~~~~~~~~~~^^^^^^^^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 96, in value
+    val = float(s) if dt in (np.float32, np.float16) else int(s)
+                                                          ~~~^^^
+ValueError: invalid literal for int() with base 10: '@async_lds_staging_0'

@@ -1,0 +1,202 @@
+{
+  "status": "unresolved_gpu_correctness_failure",
+  "output": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid_syncfix.ll",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_best_k5_hybrid.ll",
+  "sha256": "5084574216865f949ff7891a971e4c201fd322c2beb67a5899b83cc0ebd6c440",
+  "byte_identical_to_reference": true,
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "hybrid",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4"
+  },
+  "command": [
+    "3rd/deepgengraph/build/test/MyTest",
+    "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+    "0",
+    "generated_ir/test_input_spidD_best_k5_hybrid_syncfix.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0",
+    "0"
+  ],
+  "launch_configuration": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "k_layout": "bhsd",
+    "input_shape_bhsd": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "query_tile_rows": 128,
+    "note": "Specific to this export. Compile the corresponding IR to HSACO; launch dimensions are not interchangeable across exports."
+  },
+  "static_lds_bytes": 16384,
+  "lds_reuse_words": 0,
+  "static_counts": {
+    "dma_instructions": 16,
+    "marks": 2,
+    "waits": 2,
+    "barriers": 11,
+    "lds_vector_loads": 84,
+    "mmac": 160
+  },
+  "checks_passed": [
+    "MyTest and ThreadTilingTest build",
+    "Exact byte comparison and SHA-256 equality with original hybrid",
+    "check_frisk_async_copy.py",
+    "check_async_layout_integration.py: separate completion regression, sizes and thread counts, CPU copies and guards",
+    "check_async_attention_export.py hybrid: LLVM verifier/O3, completion ordering, provenance and LDS bank address model"
+  ],
+  "gpu_executed": false,
+  "gfx936_codegen_performed": false,
+  "performance_measured": false,
+  "limitations": [
+    "No local GPU device or gfx936 backend; new HSACO not built or tested.",
+    "Restores only the original IR bytes/synchronization, not proven numerical correctness."
+  ],
+  "correctness_correction": "User withdrew the claim that original hybrid passes; byte-identical syncfix also fails. Wait grouping is not established as the cause.",
+  "user_reported_gpu_result": {
+    "allclose": false,
+    "max_abs_error": 3.04052734375,
+    "mean_abs_error": 0.0396723598241806,
+    "mismatch_count": 13304242,
+    "elements": 16777216,
+    "first_mismatch": [
+      0,
+      0,
+      1,
+      0
+    ],
+    "actual": -0.52099609375,
+    "baseline": -1.0537109375,
+    "provenance": "User report; no local GPU execution",
+    "hsaco_sha256": "98821f473199a3edea06af7902e76e3a8b755c5666470844cd5f3c8f95a7d811",
+    "gpu": "BW1000 64G",
+    "pytorch": "2.5.1",
+    "hip": "6.3.25405",
+    "warmup": 0,
+    "repeat": 1,
+    "diagnostics_status": "Four-way hardware A/B summary received; sync_copy and combined variants PASS",
+    "prefix_diagnostics": {
+      "elements": 32768,
+      "hsaco_vs_dense": {
+        "allclose": false,
+        "max_abs": 2.051908,
+        "mean_abs": 0.17464168,
+        "mismatch": 30907
+      },
+      "sdpa_vs_dense": {
+        "allclose": true,
+        "max_abs": 0.00089895725,
+        "mean_abs": 6.8002133e-05,
+        "mismatch": 0
+      },
+      "row_one": {
+        "inferred_p_v0": 0.21094081,
+        "expected_p_v0": 0.59050679,
+        "mixture_fit_max_abs": 0.00075912476,
+        "uniform_mean_max_abs": 1.2749023
+      },
+      "probes": {
+        "zero_q": {
+          "allclose": false,
+          "mismatch": 782,
+          "aggregate_error_contains_nan": true
+        },
+        "q_dim_0": {
+          "allclose": false,
+          "mismatch": 1171,
+          "aggregate_error_contains_nan": true
+        },
+        "q_dim_32": {
+          "allclose": false,
+          "mismatch": 1306,
+          "aggregate_error_contains_nan": true
+        },
+        "q_dim_64": {
+          "allclose": false,
+          "mismatch": 1306,
+          "aggregate_error_contains_nan": true
+        },
+        "q_dim_96": {
+          "allclose": false,
+          "mismatch": 1367,
+          "aggregate_error_contains_nan": true
+        }
+      },
+      "alternate_k_layout_allclose": false,
+      "nonfinite_counts_and_positions": "Not reported by previous diagnostic version"
+    }
+  },
+  "latest_local_probe_checks": {
+    "ir": "original syncfix LLVM",
+    "head": 0,
+    "block": 0,
+    "seed": 37,
+    "cases": [
+      "zero_q",
+      "q_dim_0",
+      "q_dim_32",
+      "q_dim_64",
+      "q_dim_96"
+    ],
+    "allclose": true,
+    "all_outputs_finite": true,
+    "limitation": "CPU LLVM model only; assumes immediate DMA and repository MMAC mapping"
+  },
+  "user_reported_controlled_variants": {
+    "provenance": "User-supplied summary.tsv; no local GPU execution",
+    "statuses": {
+      "reference": "EXIT_1",
+      "sync_copy": "PASS",
+      "mmac_wait": "EXIT_1",
+      "sync_copy_mmac_wait": "PASS"
+    },
+    "interpretation": "Synchronous packet substitution passes reported original-input check; longer MMAC padding alone does not. Focus investigation on async transfer path.",
+    "limits": "Detailed run/build logs, remote hashes, per-probe verdicts and performance measurements not provided."
+  },
+  "recommended_followup_baseline": "test_input_spidD_best_k5_hybrid_sync_copy.ll",
+  "assembly_address_evidence": {
+    "source": "k_test.gcn.log",
+    "sha256": "ef7eed7cc7905320bb3236a73681fa34585cb4684c31bc4405442dd37b48d380",
+    "audit": "generated_ir/correctness_diagnostics/dma_address_audit.json",
+    "q_dma_immediates": [
+      0,
+      -48,
+      -40,
+      -32,
+      -24,
+      -16,
+      -8,
+      0
+    ],
+    "lds_m0_compensated": false,
+    "reference": "https://reviews.llvm.org/D125279"
+  },
+  "dma_preserving_candidate": "generated_ir/test_input_spidD_best_k5_hybrid_dma_guard.ll",
+  "resolution": {
+    "cause": "Uncompensated DMA immediate shifts LDS destination when backend folds global source offsets",
+    "fix": "Guard complete DMA source addresses with tied 64-bit VGPR identity",
+    "user_reported_passed_artifact": "test_input_spidD_best_k5_hybrid_dma_guard.ll",
+    "hsaco_sha256": "7d023046e41d06f5a65350c07f970817382647d27b132d132ac4f49390710c02",
+    "original_artifact_still_fails": true
+  }
+}

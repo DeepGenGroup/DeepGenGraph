@@ -96,6 +96,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createPromoteGlobalToSharedAsyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncToSyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createScheduleAsyncCopiesPass(); });
+  mlir::registerPass([] { return mlir::frisk::createSinkWaitBufferReadyPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));
 }

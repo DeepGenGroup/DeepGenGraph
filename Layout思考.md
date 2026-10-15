@@ -284,6 +284,74 @@ friskIR-fragment 阶段 ： friskIR-thread阶段细化为 fragment粒度， 更�
 2.根据数据链路设计，得到 friskIR-block阶段 memref的具体memspace
 
 
+## Layout的其他关联
+
+Layout：本质为索引关系。表达一个 buffer的数据由block中的thread以F规律持有。
+    F = thread排列+ thread_creg 
+    thread的排布按照 warp_layout + 行列优先 + warp_repeat 
+    连续元素用 thread_creg 表达
+
+buffer的数据来源 ：上一个op的输出
+    上一op：Layout沿着op调用链条 上下游进行传播
+    来自shm or global 怎么办？还需要考虑别的因素：
+        shm/gm 一般尺寸大于buffer shape —— 新增 buffer_repeat 描述？
+        shm : 还需考虑 thread 从当中read / write时的性能 —— vecLoad / bank冲突布局。此时可能要调Layout
+        gm ：考虑数据read的效率 —— vecLoad，指令尽可能宽 
+    
+如何描述一个shm buffer的数据排列（访问模式）
+    假定已知：
+    bankline_size=32*4B=128B
+    thread_copy_bytes=8bytes (4xf16)
+    此时能计算： threads_per_bankline = 128 / 8 = 16 threads, 每bankline 16 threads
+    又因为：thread_copy_bytes 决定phase数（参与bankconflict计量的lane数目） -> phase=16 
+    threads_per_bankline <= phase，故没有冲突
+    还需要得知其元素的逻辑坐标（在GM里的位置）—— thread_creg + warp_layout + major 可共同算出
+    元素的逻辑坐标（在GM里的位置）决定了怎么从GM把数据写进 shm —— 
+        thread_creg 的形状 + major 能得知 数据在GM中在行方向连续的宽度。
+    
+    假定读取指令=vecLoad_64b 一条可读4个f16.此时 bankconflictphase = 16
+    
+    图a:
+    [t0,0 - t0,3][t1,0 - t1,3][t2,0 - t2,3] ... [t15,0 - t15,3]    // 一个bank行，能放下16thread*（4*f16）
+    [t16,0 - t16,3] ... ...                     [t31,0 - t31,3]
+    [t32,0 - t32,3] ... ...
+    [t48,0 - t48,3] ... ...                     [t63,0 - t64,3]
+    此布局下，由于一个bank行的threads刚好等于phase，所以没bank冲突
+
+    设 x,y 表示 GM中的元素在x行y列，元素在GM中的逻辑坐标为固定的。据上述布局，能得到 shm里的元素的逻辑坐标 ：
+    图b:
+    [0,0 - 0,3][1,0 - 1,3] ... ... [15,0 - 15,3]  // 各个小块负责的tid见图a。即：连续的两个lane读取的GM元素在不同行
+    [0,4 - 0,7][1,4 - 1,7] ... ... [15,4 - 15,7]
+    [0,8 - 0,11][1,8 - 1,11] ...   
+    [0,12 - 0,15] ... ...          [15,12-15,15]
+
+    若DMA能从GM中按照图b方式读取数据，再按照图a方式写入shm。则可实现GM的 向量化读，也能保证shm无 bank conflict
+    amdgpu的DMA为 GM可离散读取，但写只能按lane连续写。所以a形式写入可行。只需要改一下GM读取的addr计算 
+    根据图b 能求出per-lane的地址计算公式。
+    各个小块负责的tid见图a。即：连续的两个lane读取的GM元素在不同行
+    放到GM视角，应该为：
+    图c：
+    [t0:0-3][t16:4-7] ... ... [t48:12-15]
+    [t1:0-3][t17:4-7]  ...
+    [t2:0-3][t18:4-7]  ... 
+    ...
+    [t15:0-3][t31:4-7] ...    [t63:12-15]
+
+    per-lane的地址：行=lane // 16, 列=lane% 16*4 (按元素。如果要字节，还需乘元素宽度)
+    好处：thread_creg 和 GM 拷贝的宽度联系起来了。  坏处：没打满GM 搬运指令的宽度。最大能达到4*f32，这才用了一半，不够高效率
+    改进：可尝试拉满DMA宽度到 4*f32 即 8*f16，此时由于一个wmma只能吃4*f16，意味着一次DMA搬了两次wmma所需的数
+    但需要注意：对于连续的两次wmma，在GM上其数据为离散的两个4*f16， 而不i是一个连续的 8*f16.一旦这样DMA了，则shm中的布局：
+    [0,0 - 0,3 0,4- 0,7][1,0 - 1,3 1,4 - 1,7] ... ... [15,0 - 15,3 15,4 - 15,7]
+    [0,12 - 0,15 0,16-0,19] ... ...          
+    本质 ： f16*8 写shm，f16*4 消费shm。
+    
+    但对于wmma来说，其还是读4个data。读shm的方式还是不变的。又因为DMA不用 vgpr中转，所以只考虑最后的shm就行 坏处：shm翻倍了（只让一半的线程干活呢？是否就不用翻倍shm了。读shm时还按照wmma需要的 f16*4 读）
+    
+    师兄的做法：DMA宽度打满128bit，shm翻倍（取决于creg和DMA宽度的比值，得到 kpack=2，即当前shm的数据供两次wmma用）
+    我们的做法：可将 kpack 作为一个可选参数 . 先通过HWSpecification 查看硬件能力，选择最大DMA宽度。然后
+
+
+
 ## attention 
 定义：Q=Q0*scale, P0=gemm(QK), P1=P0+mask, P=softmax(P1), O=gemm(PV)
 应作优化： 

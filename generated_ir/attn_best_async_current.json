@@ -1,0 +1,70 @@
+{
+  "file": "/data2/xsl/DeepGenGraph/generated_ir/attn_best_async_current.ll",
+  "sha256": "cf14d62249f4375c91f4c54060155f481b33051a413e3dded111e62ef5c7a600",
+  "input_sha256": "fc53ff6597fddcebd05cba0f812746fcdfeb98128a70e7def06035d3b0912c9a",
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "async",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "4"
+  },
+  "mytest_command": [
+    "3rd/deepgengraph/build/test/MyTest",
+    "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+    "0",
+    "generated_ir/attn_best_async_current.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "0"
+  ],
+  "parameter_reference": {
+    "variant": "step6_mask_math_prefetch",
+    "recorded_time_ms": 2.372,
+    "source": "pmc_test.log and 3rd/deepgengraph/build/attention_opt/mask_fusion_candidates.json",
+    "note": "Reuse tuning flags; copy mode changed to async by user request. Current artifact performance not measured."
+  },
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "dynamic_shared_memory_bytes": 0,
+    "static_lds_bytes": 24576,
+    "argument_order": [
+      "Q",
+      "K",
+      "V",
+      "Out"
+    ],
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "dtype": "float16",
+    "layout": "contiguous BHSD"
+  },
+  "dma_calls_static": 48,
+  "dma_source_guards": true,
+  "validation": {
+    "llvm_verify": true,
+    "llvm_o3_verify": true,
+    "gpu_tested": false,
+    "cpu_numerics": "Not completed: existing model cannot resolve @async_lds_staging_0"
+  }
+}

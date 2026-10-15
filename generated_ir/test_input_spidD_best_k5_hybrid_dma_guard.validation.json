@@ -1,0 +1,138 @@
+{
+  "status": "user_reported_gfx936_full_output_and_all_prefix_probes_pass",
+  "input": "generated_ir/test_input_spidD_best_k5_hybrid_syncfix.ll",
+  "input_sha256": "5084574216865f949ff7891a971e4c201fd322c2beb67a5899b83cc0ebd6c440",
+  "output": "generated_ir/test_input_spidD_best_k5_hybrid_dma_guard.ll",
+  "sha256": "8d17063f3908efa65d35b67dfbba04c417d50cc51a44cfc46a019eb74645a0c0",
+  "change": "Guard each complete DMA source pointer with a tied 64-bit VGPR identity; retain all original DMA/synchronization/MMAC instructions",
+  "counts": {
+    "dma_calls": 16,
+    "marks": 2,
+    "waits": 2,
+    "barriers": 11,
+    "mmac": 160,
+    "guard_calls": 16
+  },
+  "assembly_evidence": {
+    "source": "k_test.gcn.log",
+    "sha256": "ef7eed7cc7905320bb3236a73681fa34585cb4684c31bc4405442dd37b48d380",
+    "audit": "generated_ir/correctness_diagnostics/dma_address_audit.json",
+    "q_dma_immediates": [
+      0,
+      -48,
+      -40,
+      -32,
+      -24,
+      -16,
+      -8,
+      0
+    ],
+    "lds_m0_compensated": false,
+    "reference": "https://reviews.llvm.org/D125279"
+  },
+  "checks_passed": [
+    "LLVM 24 verify/O3/verify",
+    "Minimal gfx900 reproducer: original 6 negative immediates, guarded 8 zero immediates",
+    "Complete attention local gfx900 assembly: 16 DMA with zero immediates",
+    "CPU LLVM model at head/block (0,0),(0,1),(1,7),(1,31)",
+    "Guard reversibility/instruction preservation and unsupported-input rejection",
+    "Wrapper mocked integration: invalid assembly blocks launch"
+  ],
+  "launch_configuration": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "k_layout": "bhsd"
+  },
+  "limitations": [
+    "No gfx936 backend/GPU locally; local gfx900 assembly check is not hardware validation",
+    "No user input snapshot or original HSACO available; not claiming exact mismatch-count reproduction",
+    "Original sidecar says code object 6, current GenHsaco.sh requests 4 for both object and assembly"
+  ],
+  "performance_measured": false,
+  "user_reported_gpu_result": {
+    "provenance": "User-supplied run output; not a local GPU execution",
+    "hsaco_sha256": "7d023046e41d06f5a65350c07f970817382647d27b132d132ac4f49390710c02",
+    "allclose": true,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "elements": 16777216,
+    "mismatch_count": 0,
+    "max_abs_error": 0.00390625,
+    "mean_abs_error": 3.0495710234390572e-05,
+    "prefix_vs_independent_reference": {
+      "allclose": true,
+      "elements": 32768,
+      "mismatch_count": 0,
+      "max_abs_error": 0.0014343262,
+      "mean_abs_error": 8.340535e-05
+    },
+    "row_one": {
+      "inferred_p_v0": 0.59050906,
+      "expected_p_v0": 0.59050679,
+      "mixture_fit_max_abs": 0.00052464008,
+      "inferred_score_delta": 0.36607015,
+      "expected_score_delta": 0.36606079
+    },
+    "prefix_probes": {
+      "zero_q": {
+        "allclose": true,
+        "mismatch_count": 0,
+        "elements": 32768,
+        "max_abs_error": 0.0009765625
+      },
+      "q_dim_0": {
+        "allclose": true,
+        "mismatch_count": 0,
+        "elements": 32768,
+        "max_abs_error": 0.001953125
+      },
+      "q_dim_32": {
+        "allclose": true,
+        "mismatch_count": 0,
+        "elements": 32768,
+        "max_abs_error": 0.0012872219
+      },
+      "q_dim_64": {
+        "allclose": true,
+        "mismatch_count": 0,
+        "elements": 32768,
+        "max_abs_error": 0.00072526932
+      },
+      "q_dim_96": {
+        "allclose": true,
+        "mismatch_count": 0,
+        "elements": 32768,
+        "max_abs_error": 0.0009765625
+      }
+    },
+    "performance_measured": false,
+    "scope": "Reported configuration and inputs; performance not measured"
+  },
+  "local_gpu_executed": false,
+  "local_gfx936_codegen_performed": false,
+  "compiler_integration": {
+    "enabled": true,
+    "function": "protectAsyncDMASourceAddresses",
+    "paths": [
+      "MyTest final LLVM export",
+      "translateMLIRToLLVMIR final LLVM export"
+    ],
+    "checks_passed": [
+      "MyTest and LegacyLLVMExportTest build",
+      "Repeated protection idempotence",
+      "Import already guarded diagnostic without duplicate guards",
+      "Integrated minimal reproducer gfx900 O3 zero immediates",
+      "Full regenerated attention LLVM verify/O3 and gfx900 16 zero-immediate DMA",
+      "Full regenerated attention CPU LLVM numerical checks at four head/block pairs"
+    ]
+  }
+}

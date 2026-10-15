@@ -1,0 +1,371 @@
+{
+  "input": "k_test.gcn.log",
+  "input_sha256": "ef7eed7cc7905320bb3236a73681fa34585cb4684c31bc4405442dd37b48d380",
+  "decoded": "generated_ir/correctness_diagnostics/reference_from_gpu.amdgcn",
+  "dma_packets": [
+    {
+      "m0": [
+        0,
+        256,
+        512,
+        768
+      ],
+      "immediate": 0,
+      "packet": 0,
+      "expected_m0": [
+        0,
+        256,
+        512,
+        768
+      ],
+      "actual_lds_wave_bases": [
+        0,
+        256,
+        512,
+        768
+      ]
+    },
+    {
+      "m0": [
+        1024,
+        1280,
+        1536,
+        1792
+      ],
+      "immediate": -48,
+      "packet": 1,
+      "expected_m0": [
+        1024,
+        1280,
+        1536,
+        1792
+      ],
+      "actual_lds_wave_bases": [
+        976,
+        1232,
+        1488,
+        1744
+      ]
+    },
+    {
+      "m0": [
+        2048,
+        2304,
+        2560,
+        2816
+      ],
+      "immediate": -40,
+      "packet": 2,
+      "expected_m0": [
+        2048,
+        2304,
+        2560,
+        2816
+      ],
+      "actual_lds_wave_bases": [
+        2008,
+        2264,
+        2520,
+        2776
+      ]
+    },
+    {
+      "m0": [
+        3072,
+        3328,
+        3584,
+        3840
+      ],
+      "immediate": -32,
+      "packet": 3,
+      "expected_m0": [
+        3072,
+        3328,
+        3584,
+        3840
+      ],
+      "actual_lds_wave_bases": [
+        3040,
+        3296,
+        3552,
+        3808
+      ]
+    },
+    {
+      "m0": [
+        4096,
+        4352,
+        4608,
+        4864
+      ],
+      "immediate": -24,
+      "packet": 4,
+      "expected_m0": [
+        4096,
+        4352,
+        4608,
+        4864
+      ],
+      "actual_lds_wave_bases": [
+        4072,
+        4328,
+        4584,
+        4840
+      ]
+    },
+    {
+      "m0": [
+        5120,
+        5376,
+        5632,
+        5888
+      ],
+      "immediate": -16,
+      "packet": 5,
+      "expected_m0": [
+        5120,
+        5376,
+        5632,
+        5888
+      ],
+      "actual_lds_wave_bases": [
+        5104,
+        5360,
+        5616,
+        5872
+      ]
+    },
+    {
+      "m0": [
+        6144,
+        6400,
+        6656,
+        6912
+      ],
+      "immediate": -8,
+      "packet": 6,
+      "expected_m0": [
+        6144,
+        6400,
+        6656,
+        6912
+      ],
+      "actual_lds_wave_bases": [
+        6136,
+        6392,
+        6648,
+        6904
+      ]
+    },
+    {
+      "m0": [
+        7168,
+        7424,
+        7680,
+        7936
+      ],
+      "immediate": 0,
+      "packet": 7,
+      "expected_m0": [
+        7168,
+        7424,
+        7680,
+        7936
+      ],
+      "actual_lds_wave_bases": [
+        7168,
+        7424,
+        7680,
+        7936
+      ]
+    },
+    {
+      "m0": [
+        8192,
+        8448,
+        8704,
+        8960
+      ],
+      "immediate": 0,
+      "packet": 8,
+      "expected_m0": [
+        8192,
+        8448,
+        8704,
+        8960
+      ],
+      "actual_lds_wave_bases": [
+        8192,
+        8448,
+        8704,
+        8960
+      ]
+    },
+    {
+      "m0": [
+        9216,
+        9472,
+        9728,
+        9984
+      ],
+      "immediate": 0,
+      "packet": 9,
+      "expected_m0": [
+        9216,
+        9472,
+        9728,
+        9984
+      ],
+      "actual_lds_wave_bases": [
+        9216,
+        9472,
+        9728,
+        9984
+      ]
+    },
+    {
+      "m0": [
+        10240,
+        10496,
+        10752,
+        11008
+      ],
+      "immediate": 0,
+      "packet": 10,
+      "expected_m0": [
+        10240,
+        10496,
+        10752,
+        11008
+      ],
+      "actual_lds_wave_bases": [
+        10240,
+        10496,
+        10752,
+        11008
+      ]
+    },
+    {
+      "m0": [
+        11264,
+        11520,
+        11776,
+        12032
+      ],
+      "immediate": 0,
+      "packet": 11,
+      "expected_m0": [
+        11264,
+        11520,
+        11776,
+        12032
+      ],
+      "actual_lds_wave_bases": [
+        11264,
+        11520,
+        11776,
+        12032
+      ]
+    },
+    {
+      "m0": [
+        12288,
+        12544,
+        12800,
+        13056
+      ],
+      "immediate": 0,
+      "packet": 12,
+      "expected_m0": [
+        12288,
+        12544,
+        12800,
+        13056
+      ],
+      "actual_lds_wave_bases": [
+        12288,
+        12544,
+        12800,
+        13056
+      ]
+    },
+    {
+      "m0": [
+        13312,
+        13568,
+        13824,
+        14080
+      ],
+      "immediate": 0,
+      "packet": 13,
+      "expected_m0": [
+        13312,
+        13568,
+        13824,
+        14080
+      ],
+      "actual_lds_wave_bases": [
+        13312,
+        13568,
+        13824,
+        14080
+      ]
+    },
+    {
+      "m0": [
+        14336,
+        14592,
+        14848,
+        15104
+      ],
+      "immediate": 0,
+      "packet": 14,
+      "expected_m0": [
+        14336,
+        14592,
+        14848,
+        15104
+      ],
+      "actual_lds_wave_bases": [
+        14336,
+        14592,
+        14848,
+        15104
+      ]
+    },
+    {
+      "m0": [
+        15360,
+        15616,
+        15872,
+        16128
+      ],
+      "immediate": 0,
+      "packet": 15,
+      "expected_m0": [
+        15360,
+        15616,
+        15872,
+        16128
+      ],
+      "actual_lds_wave_bases": [
+        15360,
+        15616,
+        15872,
+        16128
+      ]
+    }
+  ],
+  "q_missing_half_elements": 24,
+  "q_missing_logical_rows": [
+    122,
+    123,
+    124,
+    125,
+    126,
+    127
+  ],
+  "q_wrong_or_missing_half_elements": 3096,
+  "scope": "Static address semantics assuming LLVM global-to-LDS immediate applies to both source and destination. M0 tracked across four waves; not a hardware execution.",
+  "reference": "https://reviews.llvm.org/D125279"
+}

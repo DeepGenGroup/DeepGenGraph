@@ -7,6 +7,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -98,15 +100,54 @@ std::vector<mlir::affine::AffineForOp> createNestedAffineFor(
 
 }
 
+const DMATransferInfo *DataCopyInfo::getDMATransfer(unsigned bytesPerLane) const {
+    for (const auto &transfer : dmaTransfers)
+        if (transfer.bytesPerLane == bytesPerLane)
+            return &transfer;
+    return nullptr;
+}
+
+std::optional<BankConflictPhases> HWSpecification::getBankConflictPhases(
+    unsigned bytesPerLane, ShmAccessKind kind) const {
+    // BW1000's existing 32-bank wave64 address model. Do not extrapolate this
+    // table to other targets, DMA, read2's combined width, or matrix loads.
+    if (hwKind != HW_KIND_DCU || hwVersion != HW_VERSION_DCU_BW1000 ||
+        (bytesPerLane != 4 && bytesPerLane != 8 && bytesPerLane != 16))
+        return std::nullopt;
+    BankConflictPhases phases;
+    if (bytesPerLane == 16 && kind == ShmAccessKind::Read) {
+        // DS_READ_B128 has nonconsecutive eight-lane phases.
+        for (unsigned half : {0u, 32u})
+            for (auto starts : {std::array<unsigned, 2>{0, 20}, {4, 16},
+                                {8, 28}, {12, 24}}) {
+                std::vector<unsigned> lanes;
+                for (unsigned start : starts)
+                    for (unsigned i = 0; i < 4; ++i)
+                        lanes.push_back(half + start + i);
+                phases.push_back(std::move(lanes));
+            }
+    } else {
+        unsigned lanesPerPhase = 128 / bytesPerLane;
+        for (unsigned start = 0; start < 64; start += lanesPerPhase) {
+            std::vector<unsigned> lanes;
+            for (unsigned i = 0; i < lanesPerPhase; ++i)
+                lanes.push_back(start + i);
+            phases.push_back(std::move(lanes));
+        }
+    }
+    return phases;
+}
+
 HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mlir::MLIRContext* ctx){
     using mlir::frisk::friskMs;
-    static HWSpecification* s = nullptr;
-    if(s == nullptr){
-        s = new HWSpecification{hwKind,version};
-    }
-    else{
-        return s;
-    }
+    // Capabilities are target-specific; the first queried target must not win
+    // for every later query in the same process.
+    static std::map<std::pair<std::string, std::string>,
+                    std::unique_ptr<HWSpecification>> specifications;
+    auto &entry = specifications[{hwKind, version}];
+    if (entry) return entry.get();
+    entry = std::make_unique<HWSpecification>(hwKind, version);
+    auto *s = entry.get();
     if(hwKind == HW_KIND_NVIDIA){
         s->dataCopyInfo.bankcount = 32;
         s->dataCopyInfo.singleBankBytes = 4;
@@ -125,7 +166,11 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
         s->dataCopyInfo.bankcount = 32;
         s->dataCopyInfo.singleBankBytes = 4;
         if(version == HW_VERSION_DCU_BW1000){
-            s->dataCopyInfo.supportAsyncCopy = false;
+            s->dataCopyInfo.supportAsyncCopy = true;
+            // Target-confirmed direct GM->LDS widths. 16B support does not
+            // imply an 8B instruction. Lowering may use a narrower legal set.
+            s->dataCopyInfo.dmaTransfers = {{4, 4, 4}, {16, 16, 16}};
+            s->dataCopyInfo.asyncCopyAlignBytesNonSwizzle = 4;
             s->syncGranularity.innerBlockLevelSync = true;
             s->syncGranularity.innerWarpgroupSync = false;
             s->syncGranularity.innerWarpLevelSync = false;
@@ -140,7 +185,7 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
             LinearLayout2DDesc& _c = info.desc_c;
             // BW 1000
             auto get_inst = [](int m, int n, int k, mlir::frisk::FriskDType abTy, mlir::frisk::FriskDType cTy)-> MMAInstInfo {
-              MMAInstInfo info;
+              MMAInstInfo info{};
               // info.name = "__builtin_amdgcn_mmac_f32_16x16x4f32"
               info.asm_str = "v_mmac_";
               info.constraints = "=v,v,v,0";  // 表示最后一个operand的寄存器 必须和输出D的寄存器分配相同
@@ -162,7 +207,11 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
               LinearLayout2DDesc& _a = info.desc_a;
               LinearLayout2DDesc& _b = info.desc_b;
               LinearLayout2DDesc& _c = info.desc_c;
-              _a.memspace = friskMs::Local;_b.memspace = friskMs::Local;_b.memspace = friskMs::Local;
+              for (auto *desc : {&_a, &_b, &_c}) {
+                desc->memspace = friskMs::Local;
+                desc->wg_layout = {1, 1};
+                desc->wg_layout_order = {0, 1};
+              }
               _a.warp_layout = {16,4}; _a.warp_layout_order = {0,1}; _a.warp_repeat = {1,1}; _a.warp_repeat_order = {0,1};
               _b.warp_layout = {4,16}; _b.warp_layout_order = {1,0}; _b.warp_repeat = {1,1}; _b.warp_repeat_order = {0,1};
               _c.warp_layout = {16,4}; _c.warp_layout_order = {0,1}; _c.warp_repeat = {1, n / 4};_c.warp_repeat_order = {0,1};

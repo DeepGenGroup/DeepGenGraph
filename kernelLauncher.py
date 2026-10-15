@@ -1,12 +1,16 @@
 import argparse
 import ctypes
+import hashlib
 import math
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import torch
 
-# python kernelLauncher.py --hsaco kernel.hsaco --kernel Attn_p2 --grid 32,64,1 --block 128,1,1 --k-layout bhsd
+# Launch example for test_input_spidD_best_k5_hybrid*.ll (BM=128, 256 threads):
+# python kernelLauncher.py --hsaco kernel.hsaco --kernel Attn_p2 --grid 32,32,1 --block 256,1,1 --k-layout bhsd
+# Other exports require their own grid and compiled workgroup dimensions.
 # ============================================================
 # HIP Runtime
 # ============================================================
@@ -538,6 +542,10 @@ def main():
         "--k-layout", choices=("bhsd", "bhds"), default="bhsd",
         help="K storage layout; use bhds for kernels built without K normalization"
     )
+    parser.add_argument(
+        "--diagnose-attention", action="store_true",
+        help="Outside timing, save an input/output prefix and run zero/one-dimension Q probes"
+    )
 
     # --------------------------------------------------------
     # launch configuration
@@ -585,6 +593,21 @@ def main():
         parser.error("--warmup must be non-negative")
     if args.repeat <= 0:
         parser.error("--repeat must be positive")
+
+    # Check the optional companion before allocating GPU inputs or benchmarking.
+    if args.diagnose_attention:
+        try:
+            from attentionDiagnostics import diagnose_attention
+        except ModuleNotFoundError as exc:
+            if exc.name != "attentionDiagnostics":
+                raise
+            parser.error(
+                "--diagnose-attention requires attentionDiagnostics.py. "
+                "Copy it from the same repository version into the launcher "
+                f"directory: {Path(__file__).resolve().parent}. "
+                "Renaming kernelLauncher.py to launchKernel.py does not include "
+                "this companion file."
+            )
 
     # ========================================================
     # Device
@@ -665,6 +688,7 @@ def main():
         args.warmup, args.repeat
     ))
     print("K layout    : {}".format(args.k_layout))
+    print("HSACO SHA256: {}".format(hashlib.sha256(Path(args.hsaco).read_bytes()).hexdigest()))
     if args.k_layout == "bhds":
         print("SDPA timing excludes legacy K transpose/contiguous conversion.")
 
@@ -716,6 +740,20 @@ def main():
     # ========================================================
 
     passed = compare_results(out,baseline)
+
+    if args.diagnose_attention:
+        def launch_probe(probe_q, probe_k, probe_v):
+            physical_k = (probe_k if args.k_layout == "bhsd" else
+                          probe_k.transpose(-2, -1).contiguous())
+            probe_out = torch.full_like(probe_q, float("nan"))
+            with loaded_hsaco(args.hsaco, args.kernel,
+                              [probe_q, physical_k, probe_v, probe_out],
+                              args.grid, args.block, args.shared_mem) as launch:
+                launch()
+            return probe_out
+
+        diagnose_attention(q, k_sdpa, v, out, baseline, launch_probe,
+                           args.hsaco, args.grid, args.block)
 
     # Return non-zero so shell scripts can detect failure
     if not passed:

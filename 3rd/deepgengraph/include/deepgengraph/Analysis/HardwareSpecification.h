@@ -7,6 +7,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -170,6 +171,13 @@ using mlir::frisk::operator*;
 
 
 // 用于wmma的 linear fragment 表示（ABC）
+
+inline void swap_xy(coordXY_t& arr){
+    auto temp = arr[0];
+    arr[0] = arr[1];
+    arr[1] = temp;
+}
+
 struct LinearLayout2DDesc {
     mlir::frisk::friskMs memspace;  // 位于shm还是reg
     mlir::frisk::FriskDType  elementType;  // 数据类型
@@ -190,6 +198,28 @@ struct LinearLayout2DDesc {
     }
     inline coordXY_t get_wg_widths() const {  // warpgroup计算的连续区域大小
         return get_warp_widths_total() * wg_layout;
+    }
+
+    // 必要时交换整个布局的两个轴，而非保持原 tensor shape 的数据重排。
+    // 单列 creg 转成单行；真正二维的 creg 根据 order 判断；标量不转置。
+    // 返回是否交换了轴，供外层布局同步其轴相关成员。
+    bool convert_to_row_major() {
+        bool transpose = thread_creg[0] > 1 &&
+            (thread_creg[1] == 1 || thread_creg_order[0] == 0);
+        if (!transpose) {
+            // 单行/标量的 order 不影响索引，统一成行优先表示。
+            thread_creg_order = {1, 0};
+            return false;
+        }
+        swap_xy(warp_layout);
+        swap_xy(warp_layout_order);
+        swap_xy(thread_creg);
+        thread_creg_order = {1, 0};
+        swap_xy(warp_repeat);
+        swap_xy(warp_repeat_order);
+        swap_xy(wg_layout);
+        swap_xy(wg_layout_order);
+        return true;
     }
 };
 
@@ -226,20 +256,35 @@ va vb 表示输入的第几个数。  简单而言，tid确定了AB中该取哪�
 同理，已知tid，也能知道该线程持有的全部 (m*n/th) 个 C元素的逻辑索引
  */ 
 
-// 数据传输特性的描述
+enum class ShmAccessKind { Read, Write };
+
+// One entry per actual LDS conflict-check phase, containing wave-local lane IDs.
+// Width is bytes PER LANE, not the total width of a read2/write2 instruction.
+using BankConflictPhases = std::vector<std::vector<unsigned>>;
+
+struct DMATransferInfo {
+    unsigned bytesPerLane;
+    unsigned ldsLaneStrideBytes;
+    unsigned alignmentBytes;
+};
+
+// 数据传输特性的描述；硬件能力不等于 lowering 已启用的指令集合。
 struct DataCopyInfo {
-    bool supportAsyncCopy;  // 是否支持 异步拷贝
-    bool bankcount;  // shm中物理内存按照 bank=? 组织。（=32）
-    int  singleBankBytes;  // 单个bank的字节数 (一般=4)
-    int  asyncCopyAlignBytesNonSwizzle;  // 异步拷贝时, 开启swizzle时的 起始地址对齐字节数要求
-    int  asyncCopyAlignBytesWithSwizzle;  // 异步拷贝时 不开启swizzle时的 起始地址对齐字节数要求
+    bool supportAsyncCopy = false;
+    int bankcount = 0;
+    int singleBankBytes = 0;
+    int asyncCopyAlignBytesNonSwizzle = 0;
+    int asyncCopyAlignBytesWithSwizzle = 0;
+    std::vector<DMATransferInfo> dmaTransfers;
+
+    const DMATransferInfo *getDMATransfer(unsigned bytesPerLane) const;
 };
 
 // 同步原语的描述. 支持什么级别的sync （block内的sync，或是 warp级别的sync）
 struct SyncGranularityInfo {
-    bool innerBlockLevelSync;  // 是否支持 block内 thread间的同步 __sync_threads()
-    bool innerWarpLevelSync;  // 是否支持 warp内的同步 __syncwarp()
-    bool innerWarpgroupSync;  // __sync_warpgroup()
+    bool innerBlockLevelSync = false;  // 是否支持 block内 thread间的同步 __sync_threads()
+    bool innerWarpLevelSync = false;  // 是否支持 warp内的同步 __syncwarp()
+    bool innerWarpgroupSync = false;  // __sync_warpgroup()
 };
 
 #define HW_KIND_DCU    "dcu"
@@ -266,11 +311,15 @@ public:
     }
     inline const std::string getKind() {return hwKind;}
     inline const std::string getVersion() {return hwVersion;}
-    inline int getWarpsize() {return warpSize;}
+    inline int getWarpsize() const {return warpSize;}
+    // nullopt means this target/instruction width has no modeled phase rule.
+    // Models ordinary DS b32/b64/b128 accesses, not DMA or matrix/chunk loads.
+    std::optional<BankConflictPhases>
+    getBankConflictPhases(unsigned bytesPerLane, ShmAccessKind kind) const;
 private:
     std::string hwKind;
     std::string hwVersion;
-    int  warpSize;      // warp 大小（调度单元有几个线程）
+    int  warpSize = 0;      // warp 大小（调度单元有几个线程）
 };
 
 HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mlir::MLIRContext* ctx);
