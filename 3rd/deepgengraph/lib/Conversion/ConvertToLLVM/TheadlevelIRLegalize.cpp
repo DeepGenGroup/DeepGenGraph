@@ -147,12 +147,115 @@ struct FriskSyncOpConversion : public OpConversionPattern<frisk::SyncThreadsInBl
   }
 };
 
+// Exact, unmodified templates selected by HardwareSpecification.cpp. Do not
+// translate arbitrary assembly/modifiers by replacing underscores with dots:
+// the f32 instruction names and the scalar x4 ABI are special cases.
+static StringRef getHCUMMACName(StringRef assembly) {
+  if (assembly == "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3")
+    return "llvm.hcu.mmac.f32.16x16x16.f16";
+  if (assembly == "v_mmac_f32_16x16x8_f32 $0, $1, $2, $3" ||
+      assembly == "v_mmac_16x16x8_f32 $0, $1, $2, $3")
+    return "llvm.hcu.mmac.16x16x8.f32";
+  if (assembly == "v_mmac_f32_16x16x4_f32 $0, $1, $2, $3" ||
+      assembly == "v_mmac_16x16x4_f32 $0, $1, $2, $3")
+    return "llvm.hcu.mmac.16x16x4.f32";
+  return {};
+}
+
+static LogicalResult lowerHCUMMAC(frisk::WarpMmaRROp op,
+                                 ValueRange operands, StringRef name,
+                                 ConversionPatternRewriter &rewriter) {
+  auto loc = op.getLoc();
+  auto module = op->getParentOfType<ModuleOp>();
+  bool scalarAB = name == "llvm.hcu.mmac.16x16x4.f32";
+  bool halfAB = name == "llvm.hcu.mmac.f32.16x16x16.f16";
+  Type element = halfAB ? rewriter.getF16Type() : rewriter.getF32Type();
+  int64_t count = halfAB ? 4 : (scalarAB ? 1 : 2);
+  auto abVector = VectorType::get({count}, element);
+  auto cdVector = VectorType::get({4}, rewriter.getF32Type());
+  auto matches = [](Type type, VectorType expected) {
+    auto vector = dyn_cast<VectorType>(type);
+    return vector && !vector.isScalable() &&
+           vector.getNumElements() == expected.getNumElements() &&
+           vector.getElementType() == expected.getElementType();
+  };
+  if (!matches(operands[0].getType(), abVector) ||
+      !matches(operands[1].getType(), abVector) ||
+      !matches(operands[2].getType(), cdVector) ||
+      !matches(op.getResult().getType(), cdVector))
+    return op.emitOpError("fragment types do not match HCU MMAC ABI for ") << name;
+
+  // IntrinsicsHCU.td: HCUMMopIntrinsic(A, B, C, lit, lts), or
+  // HCUMMopVstepIntrinsic(A, B, C, vstep, lts). No modifiers => all zero.
+  Type abType = scalarAB ? element : Type(abVector);
+  Type controlType = scalarAB ? rewriter.getI32Type() : rewriter.getI1Type();
+  auto functionType = LLVM::LLVMFunctionType::get(
+      cdVector, {abType, abType, cdVector, controlType, rewriter.getI1Type()}, false);
+  auto symbol = module.lookupSymbol(name);
+  auto function = dyn_cast_or_null<LLVM::LLVMFuncOp>(symbol);
+  if (symbol && (!function || !function.isExternal() ||
+                 function.getFunctionType() != functionType))
+    return op.emitOpError("conflicting declaration for ") << name;
+
+  // The build-host LLVM may not register these DTK names. As for HCU matrix
+  // loads, emit a typed declaration/call, leaving intrinsic recognition to DTK.
+  // Explicit effects keep host optimization correct even without that registry.
+  auto noMemory = LLVM::MemoryEffectsAttr::get(rewriter.getContext(),
+      {LLVM::ModRefInfo::NoModRef, LLVM::ModRefInfo::NoModRef,
+       LLVM::ModRefInfo::NoModRef, LLVM::ModRefInfo::NoModRef,
+       LLVM::ModRefInfo::NoModRef, LLVM::ModRefInfo::NoModRef});
+  if (!function) {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    function = rewriter.create<LLVM::LLVMFuncOp>(loc, name, functionType);
+    function.setConvergent(true);
+    function.setWillReturn(true);
+    function.setMemoryEffectsAttr(noMemory);
+  }
+  auto flatten = [&](Value value, VectorType type) -> Value {
+    if (value.getType() == type)
+      return value;
+    return rewriter.create<vector::ShapeCastOp>(loc, type, value);
+  };
+  Value a = flatten(operands[0], abVector);
+  Value b = flatten(operands[1], abVector);
+  Value c = flatten(operands[2], cdVector);
+  if (scalarAB) {
+    a = rewriter.create<vector::ExtractOp>(loc, a, ArrayRef<int64_t>{0});
+    b = rewriter.create<vector::ExtractOp>(loc, b, ArrayRef<int64_t>{0});
+  }
+  Value control = rewriter.create<LLVM::ConstantOp>(
+      loc, controlType, rewriter.getIntegerAttr(controlType, 0));
+  Value lts = rewriter.create<LLVM::ConstantOp>(
+      loc, rewriter.getI1Type(), rewriter.getBoolAttr(false));
+  auto call = rewriter.create<LLVM::CallOp>(
+      loc, function, ValueRange{a, b, c, control, lts});
+  call.setConvergent(true);
+  call.setWillReturn(true);
+  call.setMemoryEffectsAttr(noMemory);
+  Value result = call.getResult();
+  if (result.getType() != op.getResult().getType())
+    result = rewriter.create<vector::ShapeCastOp>(
+        loc, op.getResult().getType(), result);
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
 // warp mma op conversion
 struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(frisk::WarpMmaRROp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
-    // static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, /*optional*/::mlir::Type res, ::mlir::ValueRange operands, ::llvm::StringRef asm_string, ::llvm::StringRef constraints, /*optional*/bool has_side_effects, /*optional*/bool is_align_stack, /*optional*/::mlir::LLVM::AsmDialectAttr asm_dialect, /*optional*/::mlir::ArrayAttr operand_attrs);
-    auto instName = op->getAttrOfType<StringAttr>("inst_name").getValue();
+    auto nameAttr = op->getAttrOfType<StringAttr>("inst_name");
+    auto constraintsAttr = op->getAttrOfType<StringAttr>("inst_constraints");
+    if (!nameAttr || !constraintsAttr)
+      return op.emitOpError("requires string inst_name and inst_constraints attributes");
+    auto instName = nameAttr.getValue();
+    auto useIntrinsic = op->getParentOfType<ModuleOp>()
+                            ->getAttrOfType<BoolAttr>("frisk.use_hcu_mmac");
+    StringRef intrinsic = getHCUMMACName(instName);
+    if (useIntrinsic && useIntrinsic.getValue() && !intrinsic.empty() &&
+        constraintsAttr.getValue() == "=v,v,v,0")
+      return lowerHCUMMAC(op, adaptor.getOperands(), intrinsic, rewriter);
     std::string asm_string = instName.str();
     if (instName.starts_with("v_mmac_f32_16x16x16_f16 ")) {
       // The DTK backend does not schedule the MMAC hidden in this inline asm.
@@ -167,7 +270,7 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
       padding += "s_nop 1\n\t"; // 经过测试，1个 s_nop 1 已经能够满足正确性。但不能不加
       asm_string = padding + asm_string + "\n\t" + padding;
     }
-    auto constraints = op->getAttrOfType<StringAttr>("inst_constraints").data();
+    auto constraints = constraintsAttr.getValue();
     
     auto getCollapsed = [&](mlir::Value oldValue){
       auto typeA = mlir::cast<ShapedType>(oldValue.getType());
@@ -272,6 +375,11 @@ public:
   void runOnOperation(){
     // ----- step 1 : module中收集所有function。检查是否为kernel，不是的话去掉. 之后加上 gridDIm 属性
     auto module = getOperation();
+    if (module->hasAttr("frisk.use_hcu_mmac") &&
+        !module->getAttrOfType<BoolAttr>("frisk.use_hcu_mmac")) {
+      module.emitError("frisk.use_hcu_mmac must be a boolean");
+      return signalPassFailure();
+    }
     std::vector<mlir::func::FuncOp> funcToRemove{};
     std::vector<mlir::func::FuncOp> validKernels{};
     module->walk([&funcToRemove, &validKernels](mlir::func::FuncOp f){

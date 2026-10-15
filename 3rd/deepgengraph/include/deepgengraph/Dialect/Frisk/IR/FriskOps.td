@@ -1137,6 +1137,13 @@ def Frisk_WarpMmaRROp : Frisk_Op<"warp_mma_rr", [
     Computes a new SSA register fragment C = A * B + C. A, B, and C are
     vectors; the instruction shape and layout are selected by lowerinfo.
     This collective instruction has no memory effects and is not speculatable.
+
+    The enclosing module may set `frisk.use_hcu_mmac = true` to lower the
+    supported, unmodified DCU MMAC templates to the DTK HCU intrinsic ABI.
+    Other instructions retain inline assembly. The default remains the
+    hardware-tested inline assembly path until the intrinsic path is validated
+    with the deployment DTK and GPU. Setting the attribute to false explicitly
+    selects that fallback, including its MMAC hazard padding.
   }];
 
   let arguments = (ins

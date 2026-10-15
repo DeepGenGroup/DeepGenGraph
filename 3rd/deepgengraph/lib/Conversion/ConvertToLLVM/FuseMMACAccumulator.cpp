@@ -12,17 +12,30 @@ namespace mlir::frisk {
 namespace {
 llvm::CallInst *getMMAC(llvm::Value *value) {
   auto *call = llvm::dyn_cast<llvm::CallInst>(value);
-  if (!call || call->arg_size() != 3 || call->getNumOperandBundles())
+  if (!call || (call->arg_size() != 3 && call->arg_size() != 5) ||
+      call->getNumOperandBundles())
     return nullptr;
   auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
   auto *half4 = llvm::FixedVectorType::get(llvm::Type::getHalfTy(call->getContext()), 4);
   auto *float4 = llvm::FixedVectorType::get(llvm::Type::getFloatTy(call->getContext()), 4);
-  if (!assembly || !assembly->hasSideEffects() ||
-      !isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
-      call->getType() != float4 || call->getArgOperand(2)->getType() != float4 ||
+  if (call->getType() != float4 || call->getArgOperand(2)->getType() != float4 ||
       call->getArgOperand(0)->getType() != half4 ||
       call->getArgOperand(1)->getType() != half4)
     return nullptr;
+  if (assembly && call->arg_size() == 3 && assembly->hasSideEffects() &&
+      isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()))
+    return call;
+  auto *callee = call->getCalledFunction();
+  if (!callee || !callee->isDeclaration() || call->arg_size() != 5 ||
+      callee->getName() != "llvm.hcu.mmac.f32.16x16x16.f16")
+    return nullptr;
+  // Only the unmodified form emitted by the Frisk lowering is covered by
+  // accumulator reassociation. Keep both controls and the C input intact.
+  for (unsigned i : {3u, 4u}) {
+    auto *control = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(i));
+    if (!control || !control->getType()->isIntegerTy(1) || !control->isZero())
+      return nullptr;
+  }
   return call;
 }
 

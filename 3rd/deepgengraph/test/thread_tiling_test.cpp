@@ -73,6 +73,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();
+  mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });
   mlir::PassRegistration<TestShmLoopSyncPass>();
