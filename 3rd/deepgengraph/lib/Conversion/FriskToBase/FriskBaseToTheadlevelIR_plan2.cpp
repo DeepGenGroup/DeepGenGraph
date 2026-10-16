@@ -277,6 +277,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
       visited.insert(storage);
     int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
     int64_t matrixPacket = 0;
+    int64_t matrixPacketRows = 0;
     SmallVector<Operation *> writers;
     for (OpOperand *use : aliases.accesses) {
       Operation *user = use->getOwner();
@@ -352,7 +353,10 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
         if (width && width != candidate) return;
         width = candidate;
         axis = 1;
+        int64_t rows = selectMatrixPacketRows(*inst, type, *info, *s_hw);
+        if (matrixPacket && matrixPacketRows != rows) return;
         matrixPacket = inst->inShmLayout.thread_creg[1];
+        matrixPacketRows = rows;
       } else if (auto copy = dyn_cast<frisk::CopyOp>(user)) {
         // Offset/sliced and escaping copy aliases conservatively keep their
         // original layout. Buffer-view origins on the source are supported.
@@ -401,6 +405,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     if (matrixPacket) {
       set("frisk.matrix_load_packet", matrixPacket);
       set("frisk.matrix_load_consumer_width", width);
+      if (matrixPacketRows) set("frisk.shared_packet_rows", matrixPacketRows);
       for (Operation *storage : aliases.allocations)
         for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride",
                                "frisk.shared_store_pair"})
@@ -760,14 +765,24 @@ static void adaptGemmReductionLayouts(func::FuncOp kernel, LowerInfoMap &infos) 
     if (!source || !source->logicalTransform || !a || !b ||
         a->logicalTransform || !a->mmaInst || !b->mmaInst)
       return;
+    auto matrixRead = gemm.getB().getDefiningOp<frisk::ReadMatrixFromShmOp>();
+    // A selected block read still obtains its distribution from physical LDS.
+    // Reanalysis must adapt that read together with the GEMM, otherwise the
+    // register-valued result hides the storage and forces P through LDS.
+    // Shared reads with multiple consumers keep their existing contract.
+    if (matrixRead && (!matrixRead.isBlockForm() || !matrixRead.getResult().hasOneUse() ||
+        !infos.getLowerInfo(matrixRead.getSrc(), matrixRead) ||
+        !infos.getLowerInfo(matrixRead.getResult(), matrixRead)))
+      return;
+    Value bStorage = matrixRead ? matrixRead.getSrc() : gemm.getB();
     auto aType = dyn_cast<MemRefType>(gemm.getA().getType());
-    auto bType = dyn_cast<MemRefType>(gemm.getB().getType());
+    auto bType = dyn_cast<MemRefType>(bStorage.getType());
     if (!aType || !bType || aType.getRank() != 2 || bType.getRank() != 2 ||
         !aType.hasStaticShape() || !bType.hasStaticShape() ||
         aType.getDimSize(1) != bType.getDimSize(0) ||
         bType.getMemorySpaceAsInt() != int(friskMs::Shared))
       return;
-    Value root = getViewBuffer(gemm.getB());
+    Value root = getViewBuffer(bStorage);
     auto argument = dyn_cast<BlockArgument>(root);
     bool external = argument && isa<func::FuncOp>(argument.getOwner()->getParentOp());
     if (!external && !isSharedCopyStorage(root))
@@ -803,10 +818,30 @@ static void adaptGemmReductionLayouts(func::FuncOp kernel, LowerInfoMap &infos) 
                  bMap.getNumResults() != 2 || bMap.getResult(0) != row ||
                  bMap.getResult(1).isFunctionOfDim(0)))
       return;
-    target.convertFrom = nullptr;
-    *a = target;
-    b->logicalTransform = AffineMap::get(
+    LowerInfo adaptedB = *b;
+    adaptedB.logicalTransform = AffineMap::get(
         2, 0, {permute(row), bMap ? bMap.getResult(1) : col}, ctx);
+    if (matrixRead) {
+      auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, ctx);
+      const auto *inst = getMatrixLoadInstruction(matrixRead, *hw);
+      if (!inst || !matchesMatrixLoad(*inst, bType, adaptedB)) return;
+    }
+    target.convertFrom = nullptr;
+    adaptedB.convertFrom = nullptr;
+    *a = target;
+    *b = adaptedB;
+    if (matrixRead) {
+      // Update the resolved entries, not the candidate collection: inference
+      // has already finished. Packing and fragment lowering must see exactly
+      // the same distribution as this single-use read's GEMM consumer.
+      adaptedB.buffer = matrixRead.getSrc();
+      adaptedB.pos = LowerInfo::BufPos::In;
+      adaptedB.op = matrixRead;
+      *infos.getLowerInfo(matrixRead.getSrc(), matrixRead) = adaptedB;
+      adaptedB.buffer = matrixRead.getResult();
+      adaptedB.pos = LowerInfo::BufPos::Out;
+      *infos.getLowerInfo(matrixRead.getResult(), matrixRead) = adaptedB;
+    }
   });
 }
 
@@ -1952,7 +1987,8 @@ public:
         alloc->setAttr("frisk.shared_pack_axis", axis);
       if (auto stride = op->getAttr("frisk.shared_pair_stride"))
         alloc->setAttr("frisk.shared_pair_stride", stride);
-      for (StringRef name : {"frisk.shared_store_stride", "frisk.shared_store_pair"})
+      for (StringRef name : {"frisk.shared_store_stride", "frisk.shared_store_pair",
+                             "frisk.shared_packet_rows"})
         if (auto attr = op->getAttr(name)) alloc->setAttr(name, attr);
       markTiled(alloc, rewriter);
       rewriter.replaceOp(op, alloc.getResult());
@@ -3298,11 +3334,16 @@ public:
     auto flatType = VectorType::get({elements}, type->getElementType());
     Value initial = rewriter.create<arith::ConstantOp>(loc, *type,
                                                      rewriter.getZeroAttr(*type));
+    // ISA lane/register coordinates precede the logical permutation. Apply
+    // that permutation to each input packet address, not to its matrix-tile
+    // origin: row packets may move independently across instruction tiles.
+    LowerInfo physical = *info;
+    physical.logicalTransform = {};
     Value result = FragmentTileLoopNest(rewriter, loc, type->getShape(),
         {"tiled", "matrix_load"}, fragment).emitFragments(initial,
         [&](ArrayRef<Value> origins, Value current) {
       Value loaded = buildFragment(rewriter, loc, fragmentType, "load", [&]() {
-        auto base = buildMappedAccessIndices(rewriter, loc, *info, waveBase, origins, 2);
+        auto base = buildMappedAccessIndices(rewriter, loc, physical, waveBase, origins, 2);
         auto inputLane = UnflattenIndexToXY(d, inst->inShmLayout.warp_layout_order,
                                             inst->inShmLayout.warp_layout);
         SmallVector<Value> indices;
@@ -3312,6 +3353,13 @@ public:
               inputLane[dim].replaceDimsAndSymbols({rewriter.getAffineDimExpr(1)}, {}) *
                   inst->inShmLayout.thread_creg[dim], rewriter.getContext());
           indices.push_back(composeAccessIndex(rewriter, loc, map, {base[dim], lane}));
+        }
+        if (info->logicalTransform) {
+          SmallVector<Value> transformed;
+          for (unsigned dim = 0; dim < 2; ++dim)
+            transformed.push_back(composeAccessIndex(rewriter, loc,
+                info->logicalTransform.getSubMap({dim}), indices));
+          indices = std::move(transformed);
         }
         auto read = rewriter.create<frisk::ReadMatrixFromShmOp>(loc, rawType,
             adaptor.getSrc(), indices, op.getM(), op.getN(), op.getElementBitWidth(),
@@ -3326,7 +3374,7 @@ public:
             SmallVector<Value> tileIndices{
                 composeAccessIndex(rewriter, loc, d + row, origins[0]),
                 composeAccessIndex(rewriter, loc, d + col, origins[1])};
-            auto logical = buildMappedAccessIndices(rewriter, loc, *info, tid, tileIndices, 2);
+            auto logical = buildMappedAccessIndices(rewriter, loc, physical, tid, tileIndices, 2);
             std::array<AffineExpr, 2> regs, repeats;
             for (unsigned dim = 0; dim < 2; ++dim) {
               auto coordinate = rewriter.getAffineDimExpr(dim) % inst->shape[dim];

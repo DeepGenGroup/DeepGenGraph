@@ -1,4 +1,4 @@
-add_compile_options(-g)
+# add_compile_options(-g)
 add_executable(MyTest test_src.cpp)
 add_executable(MyTestAsync test_src_async.cpp)
 llvm_update_compile_flags(MyTestAsync)

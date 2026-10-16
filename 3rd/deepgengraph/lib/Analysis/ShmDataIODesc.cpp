@@ -9,14 +9,17 @@ namespace mlir::frisk {
 
 std::optional<ShmDataIODesc> ShmDataIODesc::getPacked(
     coordXY_t shape, int64_t elementBytes, int64_t axis, int64_t pack,
-    int64_t pairStride, int64_t storeStride, int64_t storePair) {
+    int64_t pairStride, int64_t storeStride, int64_t storePair, int64_t packetRows) {
   if ((axis != 0 && axis != 1) || shape[0] <= 0 || shape[1] <= 0 ||
       shape[0] > std::numeric_limits<int64_t>::max() / shape[1] ||
       shape[0] > std::numeric_limits<int64_t>::max() / 32 ||
       shape[1] > std::numeric_limits<int64_t>::max() / 32 ||
       elementBytes <= 0 || elementBytes > 16 || pack < 1 ||
       !llvm::isPowerOf2_64(pack) || pack > 16 / elementBytes ||
-      shape[axis] % pack || pairStride < 0 || storeStride < 0 || storePair < 0)
+      shape[axis] % pack || pairStride < 0 || storeStride < 0 || storePair < 0 || packetRows < 0)
+    return std::nullopt;
+  if (packetRows && (axis != 1 || pairStride || storeStride || storePair ||
+      packetRows > shape[0] || !llvm::isPowerOf2_64(packetRows) || shape[0] % packetRows))
     return std::nullopt;
   if (pairStride && (axis != 0 || pairStride < pack ||
       pairStride > shape[0] / 2 || pairStride % pack ||
@@ -35,6 +38,7 @@ std::optional<ShmDataIODesc> ShmDataIODesc::getPacked(
   desc.pairStride = pairStride;
   desc.storeStride = storeStride;
   desc.storePair = storePair;
+  desc.packetRows = packetRows;
   desc.plannedVectorAccessBytes = pack * elementBytes;
   return desc;
 }
@@ -74,6 +78,9 @@ AffineMap ShmDataIODesc::mapLogicalToPhysical(AffineMap logical) const {
                   (reg % group) * 2 + (reg.floorDiv(group) % 2);
     physical = (col % storeStride * shape[0] + row) *
                (shape[1] / storeStride) + paired;
+  } else if (packetRows) {
+    physical = ((row.floorDiv(packetRows) * (shape[1] / pack) + col.floorDiv(pack)) *
+                packetRows + row % packetRows) * pack + col % pack;
   } else if (packAxis == 1) {
     physical = (col.floorDiv(pack) * shape[0] + row) * pack + col % pack;
   } else {
@@ -91,6 +98,10 @@ AffineMap ShmDataIODesc::getPhysicalToLogicalMap(MLIRContext *ctx) const {
   if (packAxis == 1) {
     row = p.floorDiv(pack) % shape[0];
     col = p.floorDiv(pack * shape[0]) * pack + p % pack;
+  }
+  if (packetRows) {
+    row = p.floorDiv(packetRows * shape[1]) * packetRows + p.floorDiv(pack) % packetRows;
+    col = (p.floorDiv(pack * packetRows) % (shape[1] / pack)) * pack + p % pack;
   }
   if (storeStride) {
     int64_t rowSize = shape[1] / storeStride;

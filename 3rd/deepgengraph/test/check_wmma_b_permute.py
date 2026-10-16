@@ -20,8 +20,11 @@ TOOL = Path(sys.argv[1]).resolve()
 def run(directory, name, source, mode, *extra):
     src, dst = directory / (name + '.mlir'), directory / (name + '.out.mlir')
     src.write_text(source)
+    # This interpreter consumes explicit to_threadTile operand maps. Collective
+    # matrix reads replace that boundary and are executed by the matrix-load
+    # and exported LLVM numerical tests; retain the ordinary-read control here.
     p = subprocess.run([str(TOOL), str(src),
-                        '--convert-friskbase-to-thread=wmma-layout=' + mode,
+                        '--convert-friskbase-to-thread=matrix-loads=false wmma-layout=' + mode,
                         *extra, '--verify-each', '-o', str(dst)],
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, name + '\n' + p.stderr[-6000:]

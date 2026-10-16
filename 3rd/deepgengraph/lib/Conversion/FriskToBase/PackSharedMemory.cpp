@@ -181,7 +181,7 @@ static void packAllocation(memref::AllocOp alloc,
       return;
     for (StringRef name : {"frisk.shared_pack", "frisk.shared_pack_axis",
                            "frisk.shared_pair_stride", "frisk.shared_store_stride",
-                           "frisk.shared_store_pair"})
+                           "frisk.shared_store_pair", "frisk.shared_packet_rows"})
       if (storage->getAttr(name) != alloc->getAttr(name))
         return;
   }
@@ -207,6 +207,8 @@ static void packAllocation(memref::AllocOp alloc,
   auto storePairAttr = alloc->getAttrOfType<IntegerAttr>("frisk.shared_store_pair");
   int64_t storeStride = storeAttr ? storeAttr.getInt() : 0;
   int64_t storePair = storePairAttr ? storePairAttr.getInt() : 0;
+  auto packetRowsAttr = alloc->getAttrOfType<IntegerAttr>("frisk.shared_packet_rows");
+  int64_t packetRows = packetRowsAttr ? packetRowsAttr.getInt() : 0;
   if ((storeAttr || storePairAttr) &&
       (axis != 1 || !storeAttr || !storePairAttr || storeStride < 2 ||
        !llvm::isPowerOf2_64(storeStride) || storePair < storeStride ||
@@ -220,7 +222,7 @@ static void packAllocation(memref::AllocOp alloc,
   auto io = ShmDataIODesc::getPacked(
       {type.getDimSize(0), type.getDimSize(1)},
       type.getElementTypeBitWidth() / 8, axis, pack, pairStride,
-      storeStride, storePair);
+      storeStride, storePair, packetRows);
   if (type.getElementTypeBitWidth() % 8 || !io)
     return;
   SmallVector<Access> accesses;
@@ -262,6 +264,8 @@ static void packAllocation(memref::AllocOp alloc,
     storage->setAttr("frisk.packed_shape", b.getDenseI64ArrayAttr(type.getShape()));
     storage->setAttr("frisk.packed_axis", b.getI64IntegerAttr(axis));
     storage->setAttr("frisk.packed_width", b.getI64IntegerAttr(pack));
+    if (packetRows)
+      storage->setAttr("frisk.packed_packet_rows", b.getI64IntegerAttr(packetRows));
     if (pairStride)
       storage->setAttr("frisk.packed_pair_stride", b.getI64IntegerAttr(pairStride));
     if (storeStride) {

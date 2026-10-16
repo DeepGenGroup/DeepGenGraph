@@ -68,6 +68,15 @@ int main() {
   auto wide = *ShmDataIODesc::getPacked({128,32}, 2, 1, 8);
   checkBijection(q, ctx);
   checkBijection(wide, ctx);
+  for (int64_t bytes : {2, 4}) {
+    auto packets = *ShmDataIODesc::getPacked({128,64}, bytes, 1, 16 / bytes, 0, 0, 0, 2);
+    checkBijection(packets, ctx);
+    check(packets.selectDMATransferBytes(*hw, &ctx, {128,1}, 16) == 16,
+          "interleaved row packets retain direct 16B DMA");
+  }
+  check(!ShmDataIODesc::getPacked({128,64}, 2, 0, 8, 0, 0, 0, 2) &&
+        !ShmDataIODesc::getPacked({128,64}, 2, 1, 8, 0, 0, 0, 3),
+        "invalid packet row groups rejected");
   checkBijection(*ShmDataIODesc::getPacked({32,128}, 2, 0, 4), ctx);
   checkBijection(*ShmDataIODesc::getPacked({32,128}, 2, 0, 4, 16), ctx);
   checkBijection(*ShmDataIODesc::getPacked({128,32}, 2, 0, 4, 4), ctx);
@@ -91,6 +100,21 @@ int main() {
         "transposed source supports physical-minor-axis DMA");
 
   std::vector<int64_t> addresses(64);
+  for (int64_t rows : {0, 2}) {
+    auto io = *ShmDataIODesc::getPacked({128,64}, 2, 1, 8, 0, 0, 0, rows);
+    auto physical = io.getLogicalToPhysicalMap(&ctx);
+    for (int64_t r = 0; r < 128; r += 16)
+      for (int64_t c = 0; c < 64; c += 32) {
+        for (int64_t lane = 0; lane < 64; ++lane) {
+          int64_t row = r + lane / 4;
+          row = row / 64 * 64 + (row / 4 % 4) * 16 + (row / 16 % 4) * 4 + row % 4;
+          addresses[lane] = physical.compose({row, c + lane % 4 * 8})[0] * 2;
+        }
+        for (auto kind : {ShmAccessKind::Read, ShmAccessKind::Write})
+          check(io.getBankConflictWays(*hw, addresses, kind) == (rows ? 1 : 4),
+                "matrix lane packet address model improves four-way to one-way");
+      }
+  }
   for (int64_t lane = 0; lane < 64; ++lane) addresses[lane] = 8 * lane;
   check(q.getBankConflictWays(*hw, addresses) == 1, "contiguous b64 reads");
   for (int64_t lane = 0; lane < 64; ++lane) addresses[lane] = 16 * lane;

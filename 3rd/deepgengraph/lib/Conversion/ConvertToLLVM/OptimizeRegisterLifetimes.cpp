@@ -413,12 +413,23 @@ public:
         auto *type = llvm::cast<llvm::PointerType>(inst.getOperand(operand)->getType());
         if (type->getAddressSpace() == 1 || type->getAddressSpace() == 3)
           accesses.push_back({&inst, operand});
-      } else if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&inst)) {
+      } else if (auto *call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
         // DMA source addresses are memory operands too. Its LDS wave base is
         // passed through readfirstlane: rebuild that call's integer input in
         // place, never clone/move the convergent call or the DMA itself.
-        if (intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_global_load_async_lds ||
-            intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_readfirstlane)
+        if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(call))
+          if (intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_global_load_async_lds ||
+              intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_readfirstlane)
+            accesses.push_back({&inst, 0});
+        // HCU matrix reads have no upstream intrinsic ID, even though their
+        // reserved LLVM names can still satisfy isa<IntrinsicInst>. Match the
+        // ABI independently. Only rebuild the pointer, never the collective.
+        auto *callee = call->getCalledFunction();
+        if (callee && call->arg_size() == 2 &&
+            (callee->getName() == "llvm.hcu.ds.read.m32x16.b16.v4i32.p3" ||
+             callee->getName() == "llvm.hcu.ds.read.m32x8.b32.v4i32.p3") &&
+            call->getArgOperand(0)->getType()->isPointerTy() &&
+            call->getArgOperand(0)->getType()->getPointerAddressSpace() == 3)
           accesses.push_back({&inst, 0});
       }
     }

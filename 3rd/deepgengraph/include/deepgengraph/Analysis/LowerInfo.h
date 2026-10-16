@@ -54,13 +54,15 @@ struct ShmDataIODesc {
   int64_t elementBytes = 0;
   int64_t packAxis = 0, packElements = 1;
   int64_t pairStride = 0, storeStride = 0, storePair = 0;
+  int64_t packetRows = 0; // Row groups interleave intact column packets; 0 is legacy.
   int plannedVectorAccessBytes = 0; // LDS read/write width, NOT DMA width.
   bool isSupportChunkRead = false; // Reserved for target-specific matrix loads.
 
   // Reject unsupported/malformed layouts rather than inventing a mapping.
   static std::optional<ShmDataIODesc> getPacked(
       coordXY_t shape, int64_t elementBytes, int64_t axis, int64_t pack,
-      int64_t pairStride = 0, int64_t storeStride = 0, int64_t storePair = 0);
+      int64_t pairStride = 0, int64_t storeStride = 0, int64_t storePair = 0,
+      int64_t packetRows = 0);
   AffineMap getLogicalToPhysicalMap(MLIRContext *ctx) const;
   AffineMap getPhysicalToLogicalMap(MLIRContext *ctx) const;
   // Compose the whole consumer's (tid, repeats, registers) -> (row,col) map.

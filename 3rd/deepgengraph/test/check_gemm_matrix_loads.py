@@ -64,6 +64,10 @@ def execute_loaded_b(element, threads, packed):
         f'memref<{k}x{n}x{element}>, {outtype}\n    return')
     finished = finalize(selected, 'useKPack' if packed else 'legacy')
     assert 'warp_mma' not in finished, finished
+    rows_attr = re.search(r'frisk.packed_packet_rows = (\d+)', finished)
+    packet_rows = int(rows_attr[1]) if rows_attr else 0
+    if packed and element == 'f16':
+        assert packet_rows == 2, 'matrix packet bank plan lost during allocation lowering'
     if packed:
         # Observe reads from the packed allocation with externally initialized
         # storage. DMA itself is covered by the async-copy address regressions.
@@ -84,6 +88,12 @@ def execute_loaded_b(element, threads, packed):
     ir = re.sub(r' addrspace\([13]\)', '', ir)
     assert '@llvm.hcu.' not in ir and '@llvm.amdgcn.' not in ir, ir
     packet, creg = 128 // bits, 128 // bits // 2
+    physical_expr = f'r * {n} + c'
+    if packed:
+        physical_expr = f'(c / {packet} * {k} + r) * {packet} + c % {packet}'
+        if packet_rows:
+            physical_expr = (f'((r / {packet_rows} * {n // packet} + c / {packet}) * '
+                             f'{packet_rows} + r % {packet_rows}) * {packet} + c % {packet}')
     shim = f'''
       #include <stdint.h>
       #include <string.h>
@@ -93,7 +103,7 @@ def execute_loaded_b(element, threads, packed):
       void test_barrier(void) {{}}
       typedef uint32_t words __attribute__((vector_size(16)));
       static int physical(int r, int c) {{
-        return {f'(c / {packet} * {k} + r) * {packet} + c % {packet}' if packed else f'r * {n} + c'};
+        return {physical_expr};
       }}
       words test_matrix(void *ptr, int offset) {{
         uint{bits}_t *p = (uint{bits}_t *)((char *)ptr + offset);
@@ -123,6 +133,8 @@ def execute_loaded_b(element, threads, packed):
             for c in range(n):
                 value = (r * n + c) * 19 % 65535 + 1
                 index = (c // packet * k + r) * packet + c % packet if packed else r * n + c
+                if packed and packet_rows:
+                    index = ((r // packet_rows * (n // packet) + c // packet) * packet_rows + r % packet_rows) * packet + c % packet
                 values[index] = value
                 expected.append(value)
         lib.gemm.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p]
@@ -163,6 +175,37 @@ def main():
         selected = lower(source, '--frisk-promote-gemm-matrix-loads')
         assert 'frisk.read_matrix_from_shm' not in selected
     print('PASS unsupported shape, instruction K and transposed-B fallbacks')
+
+    # Selection follows the complete consumer layout, not attention roles.
+    # B-permute breaks the producer B's column packets; the consumer B only
+    # permutes rows of those packets and can still use matrix reads. With
+    # shuffle both B layouts match, including the operand playing K's role.
+    from check_wmma_b_permute import gemm
+    for threads in (64, 256):
+        source = gemm(128, 128, 64, threads).replace('@gemm', '@unrelated_chain')
+        # Close the computed tiles with global stores. Returning memref-typed
+        # computed values is intentionally unsupported by finalization.
+        source = source.replace(') -> (memref<128x128xf32>, memref<128x64xf32>)',
+            ', %out0: memref<128x128xf32, 1>, %out1: memref<128x64xf32, 1>)')
+        source = source.replace('return %c, %o : memref<128x128xf32>, memref<128x64xf32>',
+            'frisk.copy %c to %out0 [affine_map<() -> (2)>] : memref<128x128xf32>, memref<128x128xf32, 1>\n'
+            '      frisk.copy %o to %out1 [affine_map<() -> (2)>] : memref<128x64xf32>, memref<128x64xf32, 1>\n'
+            '      return')
+        source = source.replace(f'thread_num = {threads} : i32',
+            f'thread_num = {threads} : i32, frisk.block_warps = array<i64: {threads // 64}, 1>')
+        for mode, expected in (('b-permute', [False, True]), ('shuffle', [True, True])):
+            selected = lower(source, '--frisk-promote-gemm-matrix-loads=wmma-layout=' + mode)
+            reads = set(re.findall(r'(%\w+) = frisk.read_matrix_from_shm', selected))
+            operands = re.findall(r'frisk.gemm\(%\w+, (%\w+)\)', selected)
+            assert [operand in reads for operand in operands] == expected, selected
+            assert lower(selected, '--frisk-promote-gemm-matrix-loads=wmma-layout=' + mode) == selected
+            tiled = lower(selected, '--convert-friskbase-to-thread=wmma-layout=' + mode)
+            assert 'frisk.read_matrix_from_shm' in tiled
+            if mode == 'b-permute':
+                finished = lower(tiled, '--finalize-thread-tiling', '--lower-frisk-fragments',
+                                 '--canonicalize', '--cse')
+                assert 'memref.alloc' not in finished, 'GEMM chain unexpectedly stages register tiles through LDS'
+    print('PASS layout-based selection: row-permuted B retained, incompatible column packets rejected, compatible producer B retained')
 
     selected = lower(fixture(), '--frisk-promote-gemm-matrix-loads')
     # The alternate instruction has the same input shape/type but different
