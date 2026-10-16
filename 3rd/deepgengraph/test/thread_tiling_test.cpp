@@ -3,6 +3,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "mlir/Transforms/Passes.h"
 
 namespace {
 struct TestAsyncToLLVMPass
@@ -73,6 +74,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();
+  mlir::registerPass([] { return mlir::createCanonicalizerPass(); });
+  mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });
@@ -95,6 +98,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
   mlir::registerPass([] { return mlir::frisk::createPromoteGlobalToSharedAsyncPass(); });
+  mlir::registerPass([] { return mlir::frisk::createPromoteGemmMatrixLoadsPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncToSyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createScheduleAsyncCopiesPass(); });
   mlir::registerPass([] { return mlir::frisk::createSinkWaitBufferReadyPass(); });

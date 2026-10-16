@@ -29,6 +29,78 @@ ConvertLayout 及 bridge 最终物化均使用该组织方式。Reduce 的输出
 发生在完整线程内归约之后。GEMM 使用显式的 MN 片段循环与内层 K 累加循环。A/B 在 K 片段使用处
 装载，不先物化整个 thread tile。
 
+### GEMM B 的 warp matrix read
+
+`frisk-promote-gemm-matrix-loads` 可放在 `frisk-promote-gm-to-shm-async`
+之后、软件流水之前；thread tiling 也自动执行选择。对于静态二维 shm B，
+按 `HWSpecification::matrixLoadInsts` 检查元素类型、形状能否整除为指令 tile，
+以及 WMMA B 扩展到该 tile 后的 lane/register 排布。f16 使用 `[16,32]`，
+f32 使用 `[8,32]`；同形状的 ALT 排布不等价时不选用。转置 B、不完整 tile、
+带逻辑置换的 B 保留原来的 fragment load 路径。
+独立 pass 的 `wmma-layout` 应与 thread tiling 一致（例如 `b-permute`）；
+主 pipeline 已传入同一选项。仅需对照旧自动加载路径时，可省略独立 pass 并使用
+`--convert-friskbase-to-thread=matrix-loads=false`；这不会撤销手写的显式 read。
+
+选择后的 block IR 为：
+
+```mlir
+%r = frisk.read_matrix_from_shm %b[] {
+  m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
+} : memref<64x128xf16, 3> -> memref<64x128xf16>
+```
+
+结果是不可变的分布式寄存器 tile，不是 shm 别名或新分配；GEMM 消费 `%r`。
+Layout 推断保持输入/输出的逻辑分布一致，硬件 `inShmLayout` 仅用于求 lane
+指针。thread tiling 生成 matrix-load fragment 循环，每次直接得到 intrinsic
+返回的 `vector<4xi32>`，bitcast 后取出该线程的 WMMA B 寄存器。一个 wave
+持有连续 N tile 时，一次 read 同时提供两个 WMMA B fragment；N 被分给
+不同 wave 时，各 wave 取自己对应的部分。该路径先构造完整 B thread tile，
+寄存器活跃区间与普通按需 fragment load 不同，需要通过实际 kernel 评估。
+
+kpack 的 DMA/consumer 比值仍使用 WMMA B 的寄存器宽度。共享内存物理排布
+保留 matrix read 每 lane 的连续 16 字节输入段；`pack-shared-memory` 同时
+重写 copy 的 source map 和 matrix read 的 lane 指针，且在改写前证明段内
+连续性。既有 wait 保留在 read 前；插入 block read 时更新流水 stage/order。
+若 GM 的连续轴与这些 shm 行内段不同，沿用 DMA staging：先按 GM 顺序
+执行 16 字节 DMA，在 wait 处重排到目标 shm；这会增加 staging 空间及搬运。
+线程级 matrix read 在该操作处结束对源 shm 的读取，结果寄存器的后续使用
+不延长 shm 生命周期。共享内存复用和循环同步分析显式识别它，并在复用
+交接处保留 block barrier。统计 LDS 时还需计入后端额外分配的 staging。
+最底层使用 `IntrinsicsHCU.log` 中的 HCU intrinsic，保持 convergent/read-only
+属性。`check_gemm_matrix_loads.py` 验证选择、回退、kpack 和 LLVM 导出；GPU
+数值及性能验证需要支持该 HCU 指令的设备和工具链。测试也在 CPU 上执行导出的
+地址和寄存器抽取代码，以 wave64 指令模拟函数替换 intrinsic，逐元素比较普通/
+packed B tile；这不能代替目标设备对指令本身的验证。
+
+gfx936 的当前 DTK 拒绝 `llvm.hcu.global.load.dwordx4.lds`，因此 16 字节
+DMA 在 MyTest 的 `useKPack`/`noKPack` 模式下默认导出为 `asm128`，也可
+通过最后一个参数显式选择：`lowerWideAsyncDMAToBufferAsm` 使用
+`buffer_load_dwordx4 ... offen lds`，显式定义 M0 并声明 memory clobber，
+将 drain-all async wait 转成 `s_waitcnt vmcnt(0)`，保留原 block barrier。
+matrix read 仍使用已经单独通过设备验证的 HCU DS intrinsic。可在仓库根目录
+生成包含 matrix read 的 attention IR：
+
+```bash
+FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
+  3rd/deepgengraph/build/test/MyTest \
+  3rd/deepgengraph/test/test_input_spidD.mlir 0 /tmp/matrix-attention-asm.ll \
+  1 1 3.2 34816 approx 256 4,1 1 1 1 0 0 useKPack asm128 \
+  > /tmp/matrix-attention-asm.log 2>&1
+```
+
+`check_buffer_asm_dma_export.py` 检查资源描述符、搬运地址、显式 wait 与
+本地支持目标的指令编码；`check_attention_llvm_numerics.py` 检查完整数值。
+这些检查不替代 gfx936 上的编译和执行验证。
+
+2026-10-16 设备验证：上述 `useKPack`、layout 3.2、256 线程、block-warps
+4,1 配置的 inline asm DMA + matrix read attention 已由用户确认正确性 PASS。
+该 IR 含 16 个 16B DMA 调用、48 个 matrix read，LDS 共 48 KiB（32 KiB
+复用池和 16 KiB staging）。原 split32 版本在同一用例中数值失败，不能将
+其 CPU 地址模型通过视为设备正确。单独的 matrix read plain/K64/K128 测试
+也均通过。批量生成相同 layout 的命令为
+`WMMA_LAYOUT=3.2 bash script/generate_attention_dma_pack.sh <output-dir>`；
+该脚本默认使用 `asm128`，生成的 noKPack 版本仍需单独设备验证。
+
 Global→Shared Copy 使用连续传输 packet 作为搬运 fragment，其宽度为
 `gcd(perThread, rowWidth)`，继续保证不跨行及尾部 guard；这个物理搬运布局
 不套用 MMA 计算布局。没有 LowerInfo 的显式线程切片视为一个 fragment。

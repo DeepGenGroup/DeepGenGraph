@@ -61,6 +61,12 @@ Operation *getTopLevelUser(Operation *op, Block *entry) {
 bool isSynchronousAccess(Operation *op) {
   // MemoryEffectOpInterface alone is insufficient: async copies also report
   // reads/writes, but their last operand use is not their completion point.
+  // A lowered matrix read completes its shared-memory access at this op and
+  // returns registers. It does not make the source escape or stay live while
+  // those registers are consumed. Keep block-form reads conservative until
+  // thread tiling has made their accesses explicit.
+  if (auto read = dyn_cast<ReadMatrixFromShmOp>(op))
+    return !read.isBlockForm();
   return isa<memref::LoadOp, memref::StoreOp, memref::CopyOp,
              memref::DimOp, memref::AssumeAlignmentOp,
              affine::AffineLoadOp, affine::AffineStoreOp,

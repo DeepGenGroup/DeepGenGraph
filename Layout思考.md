@@ -348,7 +348,14 @@ buffer的数据来源 ：上一个op的输出
     但对于wmma来说，其还是读4个data。读shm的方式还是不变的。又因为DMA不用 vgpr中转，所以只考虑最后的shm就行 坏处：shm翻倍了（只让一半的线程干活呢？是否就不用翻倍shm了。读shm时还按照wmma需要的 f16*4 读）
     
     师兄的做法：DMA宽度打满128bit，shm翻倍（取决于creg和DMA宽度的比值，得到 kpack=2，即当前shm的数据供两次wmma用）
-    我们的做法：可将 kpack 作为一个可选参数 . 先通过HWSpecification 查看硬件能力，选择最大DMA宽度。然后
+    我们的做法： 可将 kpack 作为一个可选参数 . 先通过HWSpecification 查看硬件能力，选择最大DMA宽度。
+        之后选最大宽度的DMA，将gm数据拷贝到shm。数据排布根据 shmio 定（每个lane从global的哪里读数据，一次读多少。根据lane*宽度写入到shm指定位置）
+        如果DMA宽度大于 wmma thread所用数据宽度, 则：kpack=DMA width / wmma 输入的元素宽。之后
+        策略1 useKPack :. shm据 kpack 尺寸在行方向翻倍。shape修改体现在IR上
+        2. noKPack : 不采用翻倍策略。将 GM-shm async DMA搬运线程数减少
+        根据输入参数选择策略
+
+
 
 
 

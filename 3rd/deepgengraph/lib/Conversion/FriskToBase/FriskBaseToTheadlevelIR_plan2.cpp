@@ -61,6 +61,7 @@
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/MatrixLoad.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "SharedBufferAliases.h"
@@ -173,6 +174,76 @@ static std::optional<unsigned> getPhysicalMinorCopyAxis(Value source) {
   return std::nullopt;
 }
 
+// Run after instruction/layout selection and before thread tiling. A separate
+// pass exposes the same block IR boundary immediately after async promotion.
+static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
+                                   HWSpecification &hw) {
+  kernel.walk([&](frisk::GemmOp gemm) {
+    if (isTiled(gemm) || gemm.getTransB()) return;
+    auto type = dyn_cast<MemRefType>(gemm.getB().getType());
+    auto *layout = layouts.getLowerInfo(gemm.getB(), gemm);
+    if (!type || !layout || getPhysicalMinorCopyAxis(gemm.getB()) != 1)
+      return;
+    if (auto *producer = getViewBuffer(gemm.getB()).getDefiningOp();
+        producer && producer->hasTrait<frisk::ComputedTile>())
+      return; // A computed memref tile is not physical shared storage.
+    const WarpMatrtixCopyShmToRegInfo *selected = nullptr;
+    for (const auto &inst : hw.matrixLoadInsts)
+      if (matchesMatrixLoad(inst, type, *layout)) {
+        selected = &inst;
+        break;
+      }
+    if (!selected) return;
+    // Existing physical contracts cannot be discarded. Plain input and the
+    // row-packet packing used by matrix reads are both supported.
+    SharedBufferAliases aliases;
+    if (aliases.collect(getViewBuffer(gemm.getB())))
+      for (Operation *storage : aliases.allocations) {
+        auto width = storage->getAttrOfType<IntegerAttr>("frisk.shared_pack");
+        auto axis = storage->getAttrOfType<IntegerAttr>("frisk.shared_pack_axis");
+        if (width && (!axis || axis.getInt() != 1 ||
+            width.getInt() != selected->inShmLayout.thread_creg[1] ||
+            storage->hasAttr("frisk.shared_pair_stride") ||
+            storage->hasAttr("frisk.shared_store_stride"))) return;
+      }
+    LowerInfo info = *layout;
+    OpBuilder b(gemm);
+    // Preserve an explicit software-pipeline schedule: the read belongs to
+    // the consumer stage, after the existing wait, immediately before GEMM.
+    auto loop = dyn_cast<affine::AffineForOp>(gemm->getParentOp());
+    if (loop) {
+      auto stages = loop->getAttrOfType<DenseI64ArrayAttr>("pipeline.stage");
+      auto orders = loop->getAttrOfType<DenseI64ArrayAttr>("pipeline.order");
+      if (stages && orders && stages.size() == orders.size() &&
+          stages.size() == std::distance(loop.getBody()->begin(),
+                                        std::prev(loop.getBody()->end()))) {
+        auto index = std::distance(loop.getBody()->begin(), gemm->getIterator());
+        SmallVector<int64_t> s(stages.asArrayRef()), o(orders.asArrayRef());
+        s.insert(s.begin() + index, stages[index]);
+        // Consecutive operations with the same (stage, order) are one
+        // scheduled statement. Keep the read in GEMM's statement; splitting
+        // it would break schemes that group wait/read/compute together.
+        o.insert(o.begin() + index, orders[index]);
+        loop->setAttr("pipeline.stage", b.getDenseI64ArrayAttr(s));
+        loop->setAttr("pipeline.order", b.getDenseI64ArrayAttr(o));
+      }
+    }
+    auto resultType = MemRefType::get(type.getShape(), type.getElementType());
+    auto read = b.create<frisk::ReadMatrixFromShmOp>(gemm.getLoc(), resultType,
+        gemm.getB(), ValueRange{}, selected->m, selected->n,
+        type.getElementTypeBitWidth(), selected->transpose, selected->alt, 0);
+    info.convertFrom = nullptr;
+    info.buffer = read.getSrc();
+    info.pos = LowerInfo::BufPos::In;
+    layouts.addLowerInfo(read, info);
+    info.buffer = read.getResult();
+    layouts.addLowerInfo(gemm, info);
+    info.pos = LowerInfo::BufPos::Out;
+    layouts.addLowerInfo(read, info);
+    gemm.getBMutable().assign(read.getResult());
+  });
+}
+
 // 识别 global -> shared 搬运的特殊路径；忽略外层 view 后检查两端内存空间。
 // 该路径按连续区间分工，不使用 MMA 的 LowerInfo 分布。
 static bool isGlobalToSharedCopy(frisk::CopyOp op) {
@@ -205,6 +276,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
     for (Operation *storage : aliases.allocations)
       visited.insert(storage);
     int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
+    int64_t matrixPacket = 0;
     SmallVector<Operation *> writers;
     for (OpOperand *use : aliases.accesses) {
       Operation *user = use->getOwner();
@@ -270,6 +342,17 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
         if (instructionStride && instructionStride != stride)
           return;
         instructionStride = stride;
+      } else if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(user)) {
+        const auto *inst = getMatrixLoadInstruction(read, *s_hw);
+        auto *info = layouts.getLowerInfo(buffer, user);
+        if (!read.isBlockForm() || !inst || !info || !info->mmaInst) return;
+        // Retain the MMA consumer width for kpack's DMA/consumer ratio. The
+        // physical layout itself must keep each matrix-read row packet intact.
+        int64_t candidate = flat_size(info->get_thread_widths());
+        if (width && width != candidate) return;
+        width = candidate;
+        axis = 1;
+        matrixPacket = inst->inShmLayout.thread_creg[1];
       } else if (auto copy = dyn_cast<frisk::CopyOp>(user)) {
         // Offset/sliced and escaping copy aliases conservatively keep their
         // original layout. Buffer-view origins on the source are supported.
@@ -314,7 +397,16 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
             IntegerType::get(kernel.getContext(), 64), value));
     };
     set("frisk.shared_pack_axis", axis);
-    set("frisk.shared_pack", width);
+    set("frisk.shared_pack", matrixPacket ? matrixPacket : width);
+    if (matrixPacket) {
+      set("frisk.matrix_load_packet", matrixPacket);
+      set("frisk.matrix_load_consumer_width", width);
+      for (Operation *storage : aliases.allocations)
+        for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride",
+                               "frisk.shared_store_pair"})
+          storage->removeAttr(name);
+      return;
+    }
     // A computed producer can own strided columns even though the consumer
     // reads contiguous register fragments. Put the producer's lane residue
     // outside the row dimension and pair the consumer's successive K packets.
@@ -1325,10 +1417,17 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
   if (!local) {
     // A/B layouts may be replicated across warps that compute different C
     // fragments. Only the first instance of that layout writes shared memory.
-    Value warp = floorDivBy(builder, loc, tid, info.warp_threads);
+    Value physicalWarp = floorDivBy(builder, loc, tid, info.warp_threads);
+    Value warp = floorDivBy(builder, loc, physicalWarp, info.warpIdDivisor);
     Value warpCount = createIndexConstant(builder, loc, flat_size(info.get_block_layout()));
     Value isLeader = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
                                                    warp, warpCount);
+    if (info.warpIdDivisor != 1) {
+      Value replica = modBy(builder, loc, physicalWarp, info.warpIdDivisor);
+      Value first = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+          replica, createIndexConstant(builder, loc, 0));
+      isLeader = builder.create<arith::AndIOp>(loc, isLeader, first);
+    }
     SmallVector<unsigned, 2> replicatedAxes;
     if (info.ignoreDim >= 0)
       replicatedAxes.push_back(info.ignoreDim);
@@ -3164,6 +3263,100 @@ public:
   }
 };
 
+class ReadMatrixFromShmOpTiling
+    : public OpConversionPattern<frisk::ReadMatrixFromShmOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(frisk::ReadMatrixFromShmOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (!op.isBlockForm() || !s_info || !s_hw) return failure();
+    auto *info = s_info->getLowerInfo(op.getResult(), op);
+    const auto *inst = getMatrixLoadInstruction(op, *s_hw);
+    if (!info || !inst ||
+        !matchesMatrixLoad(*inst, cast<MemRefType>(op.getSrc().getType()), *info))
+      return op.emitOpError("block matrix read no longer matches its WMMA B layout");
+    auto type = getFullThreadTileType(op.getResult(), *info);
+    if (failed(type)) return failure();
+    auto loc = op.getLoc();
+    Value tid = findThreadIdxOp(op, rewriter);
+    auto d = rewriter.getAffineDimExpr(0);
+    Value lane = composeAccessIndex(rewriter, loc, d % 64, tid);
+    Value waveBase = composeAccessIndex(rewriter, loc, d.floorDiv(64) * 64, tid);
+    auto fragment = info->get_thread_widths() * info->get_warp_repeat();
+    // When one wave owns consecutive N tiles, consume the two MMA B
+    // fragments produced by one read together. With N distributed over waves,
+    // each wave reads the complete instruction tile and selects its own half.
+    int64_t group = inst->shape[1] / info->get_warpInst_widths()[1];
+    if (info->get_block_layout()[1] != 1 ||
+        type->getDimSize(1) % (fragment[1] * group)) group = 1;
+    fragment[1] *= group;
+    auto fragmentType = VectorType::get(fragment, type->getElementType());
+    int64_t elements = flat_size(inst->outRegLayout.thread_creg *
+                                inst->outRegLayout.warp_repeat);
+    auto rawType = VectorType::get({elements * op.getElementBitWidth() / 32},
+                                   rewriter.getI32Type());
+    auto flatType = VectorType::get({elements}, type->getElementType());
+    Value initial = rewriter.create<arith::ConstantOp>(loc, *type,
+                                                     rewriter.getZeroAttr(*type));
+    Value result = FragmentTileLoopNest(rewriter, loc, type->getShape(),
+        {"tiled", "matrix_load"}, fragment).emitFragments(initial,
+        [&](ArrayRef<Value> origins, Value current) {
+      Value loaded = buildFragment(rewriter, loc, fragmentType, "load", [&]() {
+        auto base = buildMappedAccessIndices(rewriter, loc, *info, waveBase, origins, 2);
+        auto inputLane = UnflattenIndexToXY(d, inst->inShmLayout.warp_layout_order,
+                                            inst->inShmLayout.warp_layout);
+        SmallVector<Value> indices;
+        for (unsigned dim = 0; dim < 2; ++dim) {
+          auto map = AffineMap::get(2, 0,
+              d.floorDiv(inst->shape[dim]) * inst->shape[dim] +
+              inputLane[dim].replaceDimsAndSymbols({rewriter.getAffineDimExpr(1)}, {}) *
+                  inst->inShmLayout.thread_creg[dim], rewriter.getContext());
+          indices.push_back(composeAccessIndex(rewriter, loc, map, {base[dim], lane}));
+        }
+        auto read = rewriter.create<frisk::ReadMatrixFromShmOp>(loc, rawType,
+            adaptor.getSrc(), indices, op.getM(), op.getN(), op.getElementBitWidth(),
+            op.getTranspose(), op.getAlt(), 0);
+        markTiled(read, rewriter);
+        Value flat = rewriter.create<vector::BitCastOp>(loc, flatType, read.getResult());
+        Value packed = rewriter.create<arith::ConstantOp>(loc, fragmentType,
+                                                        rewriter.getZeroAttr(fragmentType));
+        const auto &out = inst->outRegLayout;
+        for (int64_t row = 0; row < fragment[0]; ++row)
+          for (int64_t col = 0; col < fragment[1]; ++col) {
+            SmallVector<Value> tileIndices{
+                composeAccessIndex(rewriter, loc, d + row, origins[0]),
+                composeAccessIndex(rewriter, loc, d + col, origins[1])};
+            auto logical = buildMappedAccessIndices(rewriter, loc, *info, tid, tileIndices, 2);
+            std::array<AffineExpr, 2> regs, repeats;
+            for (unsigned dim = 0; dim < 2; ++dim) {
+              auto coordinate = rewriter.getAffineDimExpr(dim) % inst->shape[dim];
+              regs[dim] = coordinate % out.thread_creg[dim];
+              repeats[dim] = coordinate.floorDiv(out.get_warp_widths()[dim]);
+            }
+            auto flatten = [](const std::array<AffineExpr, 2> &xy,
+                              coordXY_t shape, coordXY_t order) {
+              return xy[order[0]] + xy[order[1]] * shape[order[0]];
+            };
+            auto reg = flatten(regs, out.thread_creg, out.thread_creg_order) +
+                flatten(repeats, out.warp_repeat, out.warp_repeat_order) *
+                    flat_size(out.thread_creg);
+            Value index = composeAccessIndex(rewriter, loc,
+                AffineMap::get(2, 0, reg, rewriter.getContext()), logical);
+            Value element = rewriter.create<vector::ExtractOp>(loc, flat,
+                ArrayRef<OpFoldResult>{index});
+            packed = rewriter.create<vector::InsertOp>(loc, element, packed,
+                ArrayRef<OpFoldResult>{rewriter.getIndexAttr(row), rewriter.getIndexAttr(col)});
+          }
+        return packed;
+      });
+      return transferFragment(rewriter, loc, current, fragmentType, origins, loaded);
+    });
+    rewriter.replaceOp(op, fromThreadTile(result, op.getResult().getType(), *info,
+                                         rewriter, loc));
+    return success();
+  }
+};
+
 /// 只替换 block-tile SSA 值，thread-tile 的数据流完全由 IR 显式表达。
 // 将一个 block GEMM 改写为每线程寄存器片段参与的 WarpMmaRROp。
 // 要求 DCU、二维 memref A/B/C、三者 LowerInfo 绑定相同 MMA 指令。
@@ -3300,6 +3493,8 @@ public:
 // 列举本阶段需要处理的 block 级 op，供预扫描和 ConversionTarget 共用。
 // 普通控制流和已生成的线程计算不属于这份待转换列表。
 static bool isBlockTileOperation(Operation *op) {
+  if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(op))
+    return read.isBlockForm();
   return isa<frisk::GemmOp, frisk::MaskOp, frisk::AddOp, frisk::SubOp,
       frisk::MulOp, frisk::DivOp, frisk::Exp2Op, frisk::CastOp, frisk::CopyOp,
       frisk::CopyToRegOp, frisk::FillOp, frisk::ZeroOp, frisk::ReduceOp,
@@ -3462,6 +3657,8 @@ public:
       kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, info.get_block_layout_order()));
     }
     adaptGemmReductionLayouts(kernel, *s_info);
+    if (matrixLoads)
+      promoteGemmMatrixLoads(kernel, *s_info, *s_hw);
     insertConvertLayoutOps(*s_info);
     insertWmmaCLayoutOps(kernel, *s_info);
     sinkLoopLayoutConversions(kernel, *s_info);
@@ -3485,6 +3682,9 @@ public:
         auto axis = getPhysicalMinorCopyAxis(issue.getSrc());
         auto *storage = getViewBuffer(issue.getDst()).getDefiningOp();
         auto consumer = storage ? storage->getAttrOfType<IntegerAttr>("frisk.shared_pack") : IntegerAttr{};
+        auto matrixPacket = storage ? storage->getAttrOfType<IntegerAttr>("frisk.matrix_load_packet") : IntegerAttr{};
+        if (matrixPacket)
+          consumer = storage->getAttrOfType<IntegerAttr>("frisk.matrix_load_consumer_width");
         int64_t bits = type.getElementTypeBitWidth();
         if (!dma || !axis || !storage || !consumer || bits % 8 ||
             type.getRank() != 2 || issue.getAlignment() % dma->alignmentBytes ||
@@ -3513,8 +3713,8 @@ public:
         // Transfer ownership follows the physical contiguous GM axis. The
         // consumer keeps its original MMAC layout; the common ShmDataIODesc
         // remaps all loads and provides the inverse DMA source coordinates.
-        storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(*axis));
-        storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(dma->bytesPerLane * 8 / bits));
+        storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(matrixPacket ? 1 : *axis));
+        storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(matrixPacket ? matrixPacket.getInt() : dma->bytesPerLane * 8 / bits));
         for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride", "frisk.shared_store_pair"})
           storage->removeAttr(name);
         issue->setAttr("frisk.dma_bytes", b.getI64IntegerAttr(dma->bytesPerLane));
@@ -3574,7 +3774,7 @@ public:
     });
     RewritePatternSet patterns(context);
     patterns.add<MaskOpTiling>(context, uniformMasks, fuseMaskAdd);
-    patterns.add<GemmOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
+    patterns.add<ReadMatrixFromShmOpTiling, GemmOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
         ZeroOpTiling, AllocBufferOpTiling, CopyOpTiling, CopyToRegOpTiling,
         ReduceOpTiling, BlockOpTiling, ConvertLayoutOpTiling>(context);
     patterns.add<FriskBinaryOpTiling<frisk::AddOp, arith::AddFOp>,
@@ -3605,6 +3805,54 @@ public:
 // 第一阶段的工厂入口，对应命令行 --convert-friskbase-to-thread。
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass() {
   return std::make_unique<ConvertFriskBaseToThreadLevelIR>();
+}
+
+namespace {
+class PromoteGemmMatrixLoadsPass
+    : public PassWrapper<PromoteGemmMatrixLoadsPass, OperationPass<func::FuncOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PromoteGemmMatrixLoadsPass)
+  explicit PromoteGemmMatrixLoadsPass(std::string method = "auto") {
+    wmmaLayout = method;
+  }
+  PromoteGemmMatrixLoadsPass(const PromoteGemmMatrixLoadsPass &other)
+      : PassWrapper(other) {}
+  Option<std::string> wmmaLayout{*this, "wmma-layout",
+      llvm::cl::desc("Match the thread tiling WMMA layout method"),
+      llvm::cl::init("auto")};
+  StringRef getArgument() const final { return "frisk-promote-gemm-matrix-loads"; }
+  StringRef getDescription() const final {
+    return "Select collective shared-to-register matrix reads for GEMM B";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<frisk::FriskDialect>();
+  }
+  void runOnOperation() override {
+    auto kernel = getOperation();
+    bool hasGemm = false;
+    kernel.walk([&](frisk::GemmOp op) { hasGemm |= !isTiled(op); });
+    if (!kernel->hasAttr("thread_num") || !hasGemm) return;
+    StringRef method = wmmaLayout;
+    if (method != "auto" && method != "shared" && method != "shuffle" &&
+        method != "b-permute") {
+      kernel.emitError("wmma-layout must be auto, shared, shuffle, or b-permute");
+      return signalPassFailure();
+    }
+    if (method != "auto") {
+      selectGemmAInputLayoutMethod(kernel, method);
+      planWmmaLayoutConversions(kernel, /*contiguousOutputs=*/true);
+    }
+    auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, &getContext());
+    auto *layouts = LowerInfoAnalysis::run(kernel);
+    if (!layouts) return signalPassFailure();
+    adaptGemmReductionLayouts(kernel, *layouts);
+    promoteGemmMatrixLoads(kernel, *layouts, *hw);
+  }
+};
+} // namespace
+
+std::unique_ptr<Pass> createPromoteGemmMatrixLoadsPass(std::string wmmaLayout) {
+  return std::make_unique<PromoteGemmMatrixLoadsPass>(wmmaLayout);
 }
 
 namespace{
@@ -3735,6 +3983,9 @@ public:
         stored = store.getValueToStore();
         map = store.getAffineMap();
         indices.assign(store.getMapOperands().begin(), store.getMapOperands().end());
+      } else if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(user)) {
+        if (read.isBlockForm() || read.getSrc() != buffer) continue;
+        indices.assign(read.getIndices().begin(), read.getIndices().end());
       } else {
         continue;
       }
@@ -3747,7 +3998,11 @@ public:
         indices = std::move(coordinates);
       }
       resolveViewAccess(rewriter, user->getLoc(), buffer, indices);
-      if (stored) {
+      if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(user)) {
+        rewriter.replaceOpWithNewOp<frisk::ReadMatrixFromShmOp>(read,
+            read.getResult().getType(), buffer, indices, read.getM(), read.getN(),
+            read.getElementBitWidth(), read.getTranspose(), read.getAlt(), read.getOffset());
+      } else if (stored) {
         if (map)
           rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(
               user, stored, buffer, indices);

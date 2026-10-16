@@ -192,7 +192,9 @@ def main():
             cpu(packed, work, f'swizzled-packed-{cols}')
         print('PASS CPU packet column permutation, every coordinate including group boundaries')
 
-        passes = ['--convert-friskbase-to-thread', '--finalize-thread-tiling',
+        # Exercise scalar/vector LDS packing separately from matrix reads,
+        # whose packet contract is covered by check_gemm_matrix_loads.py.
+        passes = ['--convert-friskbase-to-thread=matrix-loads=false', '--finalize-thread-tiling',
                   '--pack-shared-memory', '--verify-each']
         for m,n,k,threads in [(32,32,16,64), (64,48,32,128), (32,128,32,64)]:
             source = gemm(m,n,k,threads)
@@ -208,7 +210,7 @@ def main():
             global_widths = [int(w) for w in re.findall(
                 r'vector.load[^\n]*memref<[^\n]*, 1>, vector<(\d+)xf16>', text)]
             assert global_widths and all(w <= 8 for w in global_widths), global_widths
-            run([TOOL, path, '--convert-friskbase-to-thread=pack-shared-operands=false',
+            run([TOOL, path, '--convert-friskbase-to-thread=pack-shared-operands=false matrix-loads=false',
                  *passes[1:], '-o', out])
             assert 'frisk.packed_width' not in out.read_text()
             print(f'PASS standalone GEMM {m}x{n}x{k}, {threads} threads, wide reads/writes and disable option')
@@ -264,7 +266,7 @@ def main():
                 # A's global loads remain 128-bit even though LDS packets are 64-bit.
                 if space == 1:
                     assert re.search(r'vector.load[^\n]*, 1>, vector<8xf16>', text)
-                run([TOOL, path, '--convert-friskbase-to-thread=pack-shared-operands=false',
+                run([TOOL, path, '--convert-friskbase-to-thread=pack-shared-operands=false matrix-loads=false',
                      *passes[1:], '-o', out])
                 assert 'frisk.packed_axis' not in out.read_text()
                 # An unknown consumer must prevent any change to A's storage.

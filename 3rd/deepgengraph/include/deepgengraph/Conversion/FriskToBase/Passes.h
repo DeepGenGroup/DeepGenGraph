@@ -2,6 +2,7 @@
 #define FRISK_CONVERSION_FRISKTOBASE_FRISKTOBASE_PASS_H
 
 #include "mlir/Pass/Pass.h"
+#include <string>
 namespace mlir::func { class FuncOp; }
 
 namespace mlir::frisk {
@@ -16,6 +17,7 @@ std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();
 std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
 std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();
+std::unique_ptr<mlir::Pass> createPromoteGemmMatrixLoadsPass(std::string wmmaLayout = "auto");
 std::unique_ptr<mlir::Pass> createLowerFriskAsyncToSyncPass();
 std::unique_ptr<mlir::Pass> createScheduleAsyncCopiesPass();
 std::unique_ptr<mlir::Pass> createSinkWaitBufferReadyPass();

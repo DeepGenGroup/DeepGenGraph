@@ -199,10 +199,6 @@ struct LowerFriskAsyncCopyPass
       auto requestedBytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
       unsigned dmaBytes = requestedBytes ? requestedBytes.getInt() : 4;
       bool dma = useAsyncCopy && !op->hasAttr("frisk.force_sync") && canUseDMA(op, dmaBytes);
-      if (requestedBytes && !dma) {
-        op.emitError("requested full-width DMA is not legal for this copy");
-        return signalPassFailure();
-      }
       if (auto copying = op->getAttrOfType<IntegerAttr>("frisk.copy_threads")) {
         if (copying.getInt() <= 0 || copying.getInt() > threads || copying.getInt() % 64) {
           op.emitError("copy_threads must select complete waves within the block");
@@ -269,6 +265,13 @@ struct LowerFriskAsyncCopyPass
           dma = true;
           ++stagedCount;
         }
+      }
+      // A matrix-read packet may run across the global storage order. Keep
+      // the requested width when staging can satisfy it, and reject only
+      // after both direct and staged DMA have been considered.
+      if (requestedBytes && !dma) {
+        op.emitError("requested full-width DMA is not legal for this copy");
+        return signalPassFailure();
       }
       if (dma && destination == op.getDst()) ++directCount;
       if (!dma) ++fallbackCount;

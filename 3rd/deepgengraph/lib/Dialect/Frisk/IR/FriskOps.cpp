@@ -77,7 +77,7 @@ LogicalResult ReadMatrixFromShmOp::verify() {
   auto space = dyn_cast_or_null<IntegerAttr>(src.getMemorySpace());
   if (!space || space.getInt() != 3)
     return emitOpError("requires shared memory (address space 3)");
-  if (getIndices().size() != unsigned(src.getRank()))
+  if (!isBlockForm() && getIndices().size() != unsigned(src.getRank()))
     return emitOpError("requires one source index per memref dimension");
   if (!src.getElementType().isIntOrFloat() ||
       src.getElementTypeBitWidth() % 8 != 0)
@@ -87,6 +87,21 @@ LogicalResult ReadMatrixFromShmOp::verify() {
   int64_t offset;
   if (failed(src.getStridesAndOffset(strides, offset)))
     return emitOpError("requires a strided source memref");
+  if (isBlockForm()) {
+    auto result = cast<MemRefType>(getResult().getType());
+    if (!getIndices().empty() || getOffset() != 0)
+      return emitOpError("block form requires no lane indices and offset=0");
+    if (src.getRank() != 2 || !src.hasStaticShape() ||
+        result.getShape() != src.getShape() ||
+        result.getElementType() != src.getElementType() ||
+        !result.getLayout().isIdentity() ||
+        (result.getMemorySpaceAsInt() != 0 && result.getMemorySpaceAsInt() != 5))
+      return emitOpError("block form requires equal static rank-two source/result "
+                         "tiles and a register-space result");
+    if (src.getElementTypeBitWidth() != getElementBitWidth())
+      return emitOpError("block form element type must match element_bit_width");
+    return success();
+  }
   auto result = cast<VectorType>(getResult().getType());
   if (result.getRank() != 1 || result.isScalable() ||
       !result.getElementType().isIntOrFloat())

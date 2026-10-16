@@ -101,10 +101,10 @@ using friskMs = ::mlir::frisk::attr::MemorySpace;
 
 enum class FriskDType : int {
   unknown = 0,
-  f32,
-  f16,
-  i32,
-  i16
+  f32 = 1,
+  f16 = 1 << 1,
+  i32 = 1 << 2,
+  i16 = 1 << 3
 };
 
 inline std::string FriskDTypeToString(FriskDType d){

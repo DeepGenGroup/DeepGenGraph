@@ -161,7 +161,8 @@ def main():
                         "--convert-friskbase-to-thread")
             assert ir.count("gpu.shuffle") == 4 and "memref.alloc" not in ir
             twice, _ = run(directory, f"twice-{threads}", ir, "--convert-friskbase-to-thread")
-            assert ir == twice
+            normalized, _ = run(directory, f"normalized-{threads}", ir)
+            assert normalized == twice
         print("PASS shared fallback, multiple tile shapes/waves and repeated tiling")
 
         attention, _ = run(directory, "attention", (HERE / "test_friskBaseDebug.mlir").read_text(),

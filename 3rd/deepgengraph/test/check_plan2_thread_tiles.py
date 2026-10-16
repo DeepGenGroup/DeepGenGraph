@@ -326,7 +326,13 @@ def check_computed_tile_stores(directory):
         reads = [line for line in shared.splitlines()
                  if "frisk.to_threadTile " + allocation + " " in line]
         assert any("thread_widths = array<i64: 1, 4>" in line for line in reads)
-        assert any("thread_widths = array<i64: 4, 1>" in line for line in reads)
+        scalar_b = any("thread_widths = array<i64: 4, 1>" in line for line in reads)
+        matrix_b = "frisk.read_matrix_from_shm " + allocation + "[" in shared
+        assert scalar_b or matrix_b
+        if matrix_b:
+            assert any("frisk.warp_mma_rr" in line and
+                       "vector<4x1xf16>" in line
+                       for line in shared.splitlines())
         # Finish lowering with an explicit output store (block-value function
         # returns are intentionally outside the finalization pass's ABI).
         global_out = f"memref<{m}x{out}xf32, 1>"

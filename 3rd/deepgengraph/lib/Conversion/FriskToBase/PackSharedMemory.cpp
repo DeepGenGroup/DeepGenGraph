@@ -57,6 +57,23 @@ static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> 
       accesses.push_back({user, buffer, llvm::to_vector(load.getMapOperands()), load.getAffineMap(), {}});
     else if (auto store = dyn_cast<affine::AffineStoreOp>(user))
       accesses.push_back({user, buffer, llvm::to_vector(store.getMapOperands()), store.getAffineMap(), store.getValue()});
+    else if (auto read = dyn_cast<ReadMatrixFromShmOp>(user)) {
+      // Matrix reads use one contiguous 16-byte input packet per lane. Only
+      // move its base when the packing contract preserves the whole packet.
+      auto axis = aliases.commonAttribute("frisk.shared_pack_axis");
+      auto width = dyn_cast_or_null<IntegerAttr>(aliases.commonAttribute("frisk.shared_pack"));
+      auto axisInt = dyn_cast_or_null<IntegerAttr>(axis);
+      auto type = cast<MemRefType>(buffer.getType());
+      if (read.isBlockForm() || !axisInt || axisInt.getInt() != 1 || !width ||
+          width.getInt() * type.getElementTypeBitWidth() != 128 ||
+          (read.getM() != 32 || (read.getN() != 16 && read.getN() != 8)) ||
+          read.getTranspose() || read.getAlt() != 0 || read.getOffset() != 0)
+        return false;
+      for (Operation *storage : aliases.allocations)
+        if (storage->hasAttr("frisk.shared_pair_stride") ||
+            storage->hasAttr("frisk.shared_store_stride")) return false;
+      accesses.push_back({user, buffer, llvm::to_vector(read.getIndices()), {}, {}});
+    }
     else if (auto free = dyn_cast<memref::DeallocOp>(user))
       deallocs.push_back(free);
     else if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(user)) {
@@ -211,6 +228,22 @@ static void packAllocation(memref::AllocOp alloc,
   if (!collect(aliases, accesses, deallocs))
     return;
 
+  for (auto &access : accesses)
+    if (isa<ReadMatrixFromShmOp>(access.op)) {
+      // Moving just the lane pointer is correct only if every element read
+      // implicitly by the instruction stays consecutive in physical storage.
+      auto logical = AffineMap::getMultiDimIdentityMap(2, alloc.getContext());
+      auto last = AffineMap::get(2, 0,
+          {logical.getResult(0), logical.getResult(1) + pack - 1}, alloc.getContext());
+      auto delta = AffineMap::get(2, 0,
+          io->mapLogicalToPhysical(last).getResult(0) -
+          io->mapLogicalToPhysical(logical).getResult(0), alloc.getContext());
+      SmallVector<Value> operands(access.indices);
+      auto proven = compose(delta, operands).getResult(0);
+      auto constant = dyn_cast<AffineConstantExpr>(proven);
+      if (!constant || constant.getValue() != pack - 1) return;
+    }
+
   IRRewriter b(alloc.getContext());
   auto physical = MemRefType::get({type.getNumElements()}, type.getElementType(),
                                  AffineMap{}, type.getMemorySpace());
@@ -254,7 +287,11 @@ static void packAllocation(memref::AllocOp alloc,
     Value index = b.create<affine::AffineApplyOp>(access.op->getLoc(), map, access.indices);
     Value storage = buffers.lookup(access.buffer);
     blocks.insert({access.op->getBlock(), storage});
-    if (access.stored)
+    if (auto read = dyn_cast<ReadMatrixFromShmOp>(access.op)) {
+      b.replaceOpWithNewOp<ReadMatrixFromShmOp>(read, read.getResult().getType(),
+          storage, ValueRange{index}, read.getM(), read.getN(),
+          read.getElementBitWidth(), read.getTranspose(), read.getAlt(), read.getOffset());
+    } else if (access.stored)
       b.replaceOpWithNewOp<memref::StoreOp>(access.op, access.stored, storage, ValueRange{index});
     else
       b.replaceOpWithNewOp<memref::LoadOp>(access.op, storage, ValueRange{index});

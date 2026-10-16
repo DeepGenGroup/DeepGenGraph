@@ -19,6 +19,10 @@ def fixtures():
                  'affine.for %i = 0 to 4'):
         for name, body, expected in [
             ('publication_only', f'{write} gpu.barrier {read}', 2),
+            ('matrix_read', f'''{write} gpu.barrier
+              %v = frisk.read_matrix_from_shm %a[%c0] {{
+                m = 32 : i64, n = 8 : i64, element_bit_width = 32 : i64
+              }} : memref<128xf32, 3> -> vector<4xi32>''', 2),
             ('existing_tail', f'{write} gpu.barrier {read} gpu.barrier', 2),
             ('existing_prefix', f'gpu.barrier {write} gpu.barrier {read}', 2),
             ('read_only', read, 0), ('write_only', write, 0),

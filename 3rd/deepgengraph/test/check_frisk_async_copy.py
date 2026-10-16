@@ -238,7 +238,7 @@ def main():
     dynamic_final = lower(dynamic_view, '--finalize-thread-tiling', '--test-async-to-llvm')
     assert 'unrealized_conversion_cast' not in dynamic_final and 'memref.subview' not in dynamic_final
     pipeline = (HERE / 'test_frisk_async_pipeline.mlir').read_text()
-    hybrid = lower(pipeline, '--convert-friskbase-to-thread=async-direct-only=true')
+    hybrid = lower(pipeline, '--convert-friskbase-to-thread=async-direct-only=true matrix-loads=false')
     # A's contiguous packed packets stay DMA; B's transposed halfword
     # packing uses the ordinary vector copy and publishes it with a barrier.
     assert hybrid.count('frisk.async_copy_gm_to_shm') == 1

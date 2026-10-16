@@ -62,6 +62,8 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
   let constructor = "mlir::frisk::createConvertFriskBaseToThreadLevelIRPass()";
   let options = [Option<"packSharedOperands", "pack-shared-operands", "bool", "true",
       "Plan packed LDS layouts for owned GEMM operands">,
+    Option<"matrixLoads", "matrix-loads", "bool", "true",
+      "Prefer compatible warp matrix reads for shared GEMM B operands">,
     Option<"asyncDirectOnly", "async-direct-only", "bool", "false",
       "Use vectorized synchronous copies when packed halfword packets require LDS staging">,
     Option<"dmaPackMode", "dma-pack-mode", "std::string", "\"legacy\"",
@@ -89,6 +91,11 @@ def PackSharedMemory: Pass<"pack-shared-memory", "::mlir::func::FuncOp"> {
 def PromoteGlobalToSharedAsync: Pass<"frisk-promote-gm-to-shm-async", "::mlir::func::FuncOp"> {
   let summary = "Represent global/shared copies with explicit buffer readiness";
   let constructor = "mlir::frisk::createPromoteGlobalToSharedAsyncPass()";
+}
+
+def PromoteGemmMatrixLoads: Pass<"frisk-promote-gemm-matrix-loads", "::mlir::func::FuncOp"> {
+  let summary = "Select collective shared-to-register matrix reads for GEMM B";
+  let constructor = "mlir::frisk::createPromoteGemmMatrixLoadsPass()";
 }
 
 def LowerFriskAsyncToSync: Pass<"frisk-lower-async-to-sync", "::mlir::func::FuncOp"> {

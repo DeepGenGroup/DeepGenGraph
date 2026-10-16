@@ -492,7 +492,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
   StringRef copyMode = copyModeEnv ? copyModeEnv : "legacy";
   StringRef dmaPackMode = argc > 16 ? argv[16] : "legacy";
-  StringRef dmaExport = argc > 17 ? argv[17] : "split32";
+  // gfx936's DTK rejects the wide HCU global-load intrinsic. Packed DMA
+  // uses the hardware-validated buffer inline asm unless explicitly overridden.
+  StringRef dmaExport = argc > 17 ? argv[17]
+                                : (dmaPackMode == "legacy" ? "split32" : "asm128");
   if (dmaExport != "split32" && dmaExport != "hcu128" && dmaExport != "asm128") {
     llvm::errs() << "DMA export must be split32, hcu128, or asm128\n";
     return 1;
@@ -734,6 +737,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---------- after promote-gm-to-shm-async ---------\n";
     llvm::outs().flush(); src->dump();
   }
+
+  AddFuncPass(frisk::createPromoteGemmMatrixLoadsPass(wmmaLayout.str()));
+  llvm::outs() << "\n---------- after promote-gemm-matrix-loads ---------\n";
+  llvm::outs().flush(); src->dump();
 
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。

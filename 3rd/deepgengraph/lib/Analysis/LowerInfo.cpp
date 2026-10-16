@@ -465,6 +465,10 @@ static LowerInfo *getNearestInferedInfoEither(LowerInfoMap &infoMap,
 }
 
 static bool isFriskArithmeticOp(Operation *op) {
+  // Matrix reads change physical lane addressing, but preserve the logical
+  // WMMA distribution already proven by the selection pass.
+  if (auto read = dyn_cast<ReadMatrixFromShmOp>(op))
+    return read.isBlockForm();
   // The scheduler's whole-tile memref -> vector materialisation preserves
   // layout. Explicit copy_to_reg slices already describe per-thread values.
   if (auto copy = dyn_cast<CopyToRegOp>(op)) {
@@ -1280,7 +1284,11 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
   collectArithmeticMemrefs(op, memrefs);
 
   LowerInfo *sourceInfo = nullptr;
+  if (auto read = dyn_cast<ReadMatrixFromShmOp>(op))
+    sourceInfo = getNearestInferedInfoEither(buf_info_maps, read.getResult(),
+                                            op, preferBefore);
   for (const auto &[memref, pos] : memrefs) {
+    if (sourceInfo) break;
     (void)pos;
     sourceInfo = getNearestInferedInfoEither(buf_info_maps, memref, op,
                                              preferBefore);

@@ -28,9 +28,13 @@ class LLVMWorkgroupModel:
         for i, x in enumerate([q, k, v, np.full_like(q, np.nan)]):
             self.mem[i + 1 << 32] = x.ravel()
             self.values['%' + str(i)] = np.full(threads, i + 1 << 32, dtype=np.int64)
-        storage = re.search(r'^@shm_0 = .*global \[(\d+) x (i8|half|float)\]', text, re.M)
-        assert storage, 'expected explicit shared storage'
-        shared_bytes = int(storage[1]) * {'i8': 1, 'half': 2, 'float': 4}[storage[2]]
+        storages = re.findall(r'^(@[\w.]+) = .*addrspace\(3\) global \[(\d+) x (i8|half|float)\]', text, re.M)
+        assert storages, 'expected explicit shared storage'
+        shared_bytes = 0
+        for name, count, element in storages:
+            shared_bytes = (shared_bytes + 15) // 16 * 16
+            self.values[name] = np.full(threads, shared_bytes, dtype=np.int64)
+            shared_bytes += int(count) * {'i8': 1, 'half': 2, 'float': 4}[element]
         self.mem[0] = np.full(shared_bytes // 2, np.nan, dtype=np.float16)
         self.blocks = {}
         current = '4'
@@ -182,6 +186,21 @@ class LLVMWorkgroupModel:
             return args[1][np.arange(self.t) // 64 * 64 + args[0] // 4]
         if 'exp2' in name:
             return np.exp2(args[0])
+        if name == 'llvm.hcu.ds.read.m32x16.b16.v4i32.p3':
+            # Read the actual 16-byte packet at each lane's pointer, then
+            # exchange elements across the wave. Do not infer other lanes'
+            # addresses from the current lane or assume one common tile base.
+            assert np.all(self.active.reshape(-1, 64) ==
+                          self.active.reshape(-1, 64)[:, :1]), 'partial matrix-read wave'
+            packets = self.memory(args[0] + args[1], '<8 x half>')
+            lane = np.arange(self.t) % 64
+            wave = np.arange(self.t) // 64 * 64
+            regs = np.empty((self.t, 8), dtype=np.float16)
+            for reg in range(8):
+                row = lane // 16 * 4 + reg % 4
+                col = lane % 16 + reg // 4 * 16
+                regs[:, reg] = packets[wave + row * 4 + col // 8, col % 8]
+            return regs.view(np.uint32).astype(np.int64)
         if name in ('llvm.amdgcn.global.load.async.lds', 'llvm.hcu.global.load.dwordx4.lds'):
             if name.startswith('llvm.hcu.'):
                 size = 16

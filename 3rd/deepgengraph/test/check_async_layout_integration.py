@@ -9,19 +9,21 @@ from check_frisk_async_copy import lower, llvm_ir, execute_copy
 
 
 def packed_case(rows, cols, axis, pack, pair=0, store=0, store_pair=0,
-                threads=128, alignment=4, source_transposed=None):
+                threads=128, alignment=4, source_transposed=None, dma_bytes=0):
     transposed = axis == 0 if source_transposed is None else source_transposed
-    strides = (1, rows + 4) if transposed else (cols + 4, 1)
-    src = f'memref<{rows}x{cols}xi16, strided<[{strides[0]}, {strides[1]}], offset: 4>, 1>'
+    padding = max(4, dma_bytes // 2)
+    strides = (1, rows + padding) if transposed else (cols + padding, 1)
+    src = f'memref<{rows}x{cols}xi16, strided<[{strides[0]}, {strides[1]}], offset: {padding}>, 1>'
     dst = f'memref<{rows}x{cols}xi16, 3>'
     attrs = f'frisk.shared_pack = {pack} : i64, frisk.shared_pack_axis = {axis} : i64'
     if pair:
         attrs += f', frisk.shared_pair_stride = {pair} : i64'
     if store:
         attrs += f', frisk.shared_store_stride = {store} : i64, frisk.shared_store_pair = {store_pair} : i64'
+    dma_attrs = f', frisk.dma_bytes = {dma_bytes} : i64' if dma_bytes else ''
     source = f'''func.func @copy_kernel(%src: {src}) attributes {{thread_num = {threads} : i32}} {{
       %tile = memref.alloc() {{{attrs}}} : {dst}
-      frisk.async_copy_gm_to_shm %src to %tile {{alignment = {alignment} : i64}} : {src}, {dst}
+      frisk.async_copy_gm_to_shm %src to %tile {{alignment = {alignment} : i64{dma_attrs}}} : {src}, {dst}
       frisk.wait_buffer_ready %tile : {dst}
       %c0 = arith.constant 0 : index
       %v = memref.load %tile[%c0, %c0] : {dst}
@@ -63,17 +65,17 @@ def packed_case(rows, cols, axis, pack, pair=0, store=0, store_pair=0,
     assert len(inverse) == rows * cols
     dma = alignment >= 4 and all(inverse[i] % 2 == 0 and inverse[i+1] == inverse[i]+1
                                 for i in range(0, rows * cols, 2))
-    for asynchronous in (True, False):
+    for asynchronous in ((True,) if dma_bytes else (True, False)):
         ir = llvm_ir(packed, asynchronous)
         # Noncontiguous packed dwords use an aligned source-order staging tile.
         assert ('call void @llvm.amdgcn.global.load.async.lds' in ir) == (asynchronous and alignment >= 4)
         assert ('addrspace(3) global' in ir) == (asynchronous and alignment >= 4 and not dma)
-        execute_copy(ir, rows, cols, 16, strides, 4, threads, physical)
+        execute_copy(ir, rows, cols, 16, strides, padding, threads, physical)
     if axis == 0 and not pair:
         selected = lower(packed, '--frisk-lower-async-to-sync')
         ir = llvm_ir(selected)
         assert 'call void @llvm.amdgcn.global.load.async.lds' not in ir
-        execute_copy(ir, rows, cols, 16, strides, 4, threads, physical)
+        execute_copy(ir, rows, cols, 16, strides, padding, threads, physical)
     print(f'PASS physical copy {rows}x{cols}, axis={axis}, pair={pair}, store={store}, direct_DMA={dma}')
 
 

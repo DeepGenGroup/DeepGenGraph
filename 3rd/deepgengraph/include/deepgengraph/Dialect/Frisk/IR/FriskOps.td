@@ -561,7 +561,7 @@ def Frisk_WaitBufferReadyOp : Frisk_Op<"wait_buffer_ready", [
 }
 
 def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
-    MemoryEffects<[MemRead]>
+    Frisk_ComputedTile, MemoryEffects<[MemRead]>
 ]> {
   let summary = "Collective HCU matrix read from shared memory into registers";
   let description = [{
@@ -583,6 +583,15 @@ def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
     It neither waits for pending DMA nor inserts a block barrier. The intrinsic
     list alone does not specify lane ownership or a bank-conflict-free layout.
 
+    The block form returns a register-space memref with the source's logical
+    shape and element type, and has no indices. This is an immutable distributed
+    tile (not an allocation or an alias of src). Each complete instruction tile
+    is read collectively; thread tiling derives lane addresses from the selected
+    HWSpecification entry and produces register fragments in the consumer's
+    proven WMMA B layout. The block form has offset=0. Layout inference preserves
+    the logical distribution between src and result; inShmLayout describes the
+    instruction's lane pointers, not a second logical value layout.
+
     Supported variants:
       m32x64_b4; m32x32_b8; m32x16_b16; m32x16_b16_alt;
       m32x8_b32; m32x32_b8_alt2; m64x16_b8_alt4; m16x16_b32;
@@ -595,12 +604,13 @@ def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
         m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
       } : memref<4096xi8, 3> -> vector<4xi32>
   }];
-  let arguments = (ins AnyMemRef:$src, Variadic<Index>:$indices,
+  let arguments = (ins Arg<AnyMemRef, "shared storage read by the wave", [MemRead]>:$src,
+      Variadic<Index>:$indices,
       I64Attr:$m, I64Attr:$n, I64Attr:$element_bit_width,
       DefaultValuedAttr<BoolAttr, "false">:$transpose,
       DefaultValuedAttr<I64Attr, "0">:$alt,
       DefaultValuedAttr<I32Attr, "0">:$offset);
-  let results = (outs AnyVectorOfNonZeroRank:$result);
+  let results = (outs Frisk_MemRefOrVector:$result);
   let assemblyFormat = [{
     $src `[` $indices `]` attr-dict `:` type($src) `->` type($result)
   }];
@@ -609,6 +619,7 @@ def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
     // Base LLVM intrinsic name, without overloaded result/pointer suffixes.
     // Empty for an unsupported combination (also rejected by verify()).
     ::llvm::StringRef getIntrinsicName();
+    bool isBlockForm() { return ::mlir::isa<::mlir::MemRefType>(getResult().getType()); }
   }];
 }
 

@@ -50,8 +50,8 @@ def module_after(log, marker):
 
 
 ALLOCS = """
-  %a = memref.alloc() {alignment = 16 : i64} : memref<16xf32, 3>
-  %b = memref.alloc() {alignment = 16 : i64} : memref<8xf32, 3>
+  %a = memref.alloc() alignment = 16 : memref<16xf32, 3>
+  %b = memref.alloc() alignment = 16 : memref<8xf32, 3>
 """
 A = """
   memref.store %x, %a[%c0] : memref<16xf32, 3>
@@ -82,6 +82,32 @@ def check(name, source, before, after, barriers):
 
 
 def main():
+    matrix_allocs = '''
+      %a = memref.alloc() : memref<512xf16, 3>
+      %b = memref.alloc() : memref<512xf16, 3>
+    '''
+    matrix_reads = '''
+      %av = frisk.read_matrix_from_shm %a[%c0] {
+        m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
+      } : memref<512xf16, 3> -> vector<4xi32>
+      %bv = frisk.read_matrix_from_shm %b[%c0] {
+        m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
+      } : memref<512xf16, 3> -> vector<4xi32>
+      %sum = arith.addi %av, %bv : vector<4xi32>
+      return %sum : vector<4xi32>
+    '''
+    # Registers survive storage reuse; every wave must finish the earlier
+    # shared read before the same bytes are assigned to another allocation.
+    check("matrix_register_results", kernel(matrix_allocs + matrix_reads,
+          result="vector<4xi32>"), 2048, 1024, 1)
+    # A later read of a keeps a and b simultaneously live.
+    overlapping = matrix_reads.replace('%sum = arith.addi %av, %bv', '''
+      %again = frisk.read_matrix_from_shm %a[%c0] {
+        m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64
+      } : memref<512xf16, 3> -> vector<4xi32>
+      %sum = arith.addi %again, %bv''')
+    check("matrix_overlapping_reads", kernel(matrix_allocs + overlapping,
+          result="vector<4xi32>"), 2048, 2048, 0)
     ir, _ = check("different_sizes", kernel(ALLOCS + A + B + RETURN), 96, 64, 1)
     assert ir.index("gpu.barrier") < ir.index("memref.store", ir.index("gpu.barrier"))
     check("existing_gpu_barrier", kernel(ALLOCS + A + "gpu.barrier\n" + B + RETURN), 96, 64, 0)
@@ -278,9 +304,9 @@ def main():
         check(name, kernel(body), 32, 32, 0)
 
     ir, report = check("mixed_types_alignment", kernel("""
-      %a = memref.alloc() {alignment = 16 : i64} : memref<128xi8, 3>
-      %b = memref.alloc() {alignment = 64 : i64} : memref<4xf32, 3>
-      %c = memref.alloc() {alignment = 32 : i64} : memref<4xf32, 3>
+      %a = memref.alloc() alignment = 16 : memref<128xi8, 3>
+      %b = memref.alloc() alignment = 64 : memref<4xf32, 3>
+      %c = memref.alloc() alignment = 32 : memref<4xf32, 3>
       %byte = arith.constant 1 : i8
       memref.store %byte, %a[%c0] : memref<128xi8, 3>
       memref.store %x, %b[%c0] : memref<4xf32, 3>

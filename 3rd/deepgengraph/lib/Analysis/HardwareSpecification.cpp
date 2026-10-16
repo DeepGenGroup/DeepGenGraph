@@ -6,6 +6,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -248,6 +249,73 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
             s->gemmInfo.validInsts.push_back(get_inst(16, 16, 4, mlir::frisk::FriskDType::f32, mlir::frisk::FriskDType::f32));
             // v_mmac_16x16x4_f32
             // v_mfma_f32_16x16x4f32
+
+            // --------- ldMatrix 相关指令
+            // DS_READ_M32x8_B32
+            {
+                WarpMatrtixCopyShmToRegInfo DS_READ_M32x8_B32{mlir::frisk::FriskDType::f32};
+                DS_READ_M32x8_B32.shape = {8,32};
+                DS_READ_M32x8_B32.m = 32;
+                DS_READ_M32x8_B32.n = 8;
+                DS_READ_M32x8_B32.inShmLayout.warp_layout = {8,8};
+                DS_READ_M32x8_B32.inShmLayout.warp_layout_order = {1,0};
+                DS_READ_M32x8_B32.inShmLayout.thread_creg = {1,4};
+                DS_READ_M32x8_B32.inShmLayout.thread_creg_order = {1,0};
+                DS_READ_M32x8_B32.inShmLayout.warp_repeat = {1,1};
+                DS_READ_M32x8_B32.inShmLayout.warp_repeat_order = {1,0};
+                
+                DS_READ_M32x8_B32.outRegLayout.warp_layout = {4,16};
+                DS_READ_M32x8_B32.outRegLayout.warp_layout_order = {1,0};
+                DS_READ_M32x8_B32.outRegLayout.thread_creg = {2,1};
+                DS_READ_M32x8_B32.outRegLayout.thread_creg_order = {0,1};
+                DS_READ_M32x8_B32.outRegLayout.warp_repeat = {1,2};
+                DS_READ_M32x8_B32.outRegLayout.warp_repeat_order = {1,0};
+                s->matrixLoadInsts.push_back(DS_READ_M32x8_B32);
+            }
+            //  DS_READ_M32x16_B16
+            {
+                WarpMatrtixCopyShmToRegInfo DS_READ_M32x16_B16{mlir::frisk::FriskDType::f16};
+                DS_READ_M32x16_B16.shape = {16,32};
+                DS_READ_M32x16_B16.m = 32;
+                DS_READ_M32x16_B16.n = 16;
+                DS_READ_M32x16_B16.inShmLayout.warp_layout = {16,4};
+                DS_READ_M32x16_B16.inShmLayout.warp_layout_order = {1,0};
+                DS_READ_M32x16_B16.inShmLayout.thread_creg = {1,8};
+                DS_READ_M32x16_B16.inShmLayout.thread_creg_order = {1,0};
+                DS_READ_M32x16_B16.inShmLayout.warp_repeat = {1,1};
+                DS_READ_M32x16_B16.inShmLayout.warp_repeat_order = {1,0};
+
+                DS_READ_M32x16_B16.outRegLayout.warp_layout = {4,16};
+                DS_READ_M32x16_B16.outRegLayout.warp_layout_order = {1,0};
+                DS_READ_M32x16_B16.outRegLayout.thread_creg = {4,1};
+                DS_READ_M32x16_B16.outRegLayout.thread_creg_order = {0,1};
+                DS_READ_M32x16_B16.outRegLayout.warp_repeat = {1,2};
+                DS_READ_M32x16_B16.outRegLayout.warp_repeat_order = {1,0};
+                s->matrixLoadInsts.push_back(DS_READ_M32x16_B16);
+            }
+            //  DS_READ_M32x16_B16_ALT
+            {
+                WarpMatrtixCopyShmToRegInfo DS_READ_M32x16_B16_ALT{mlir::frisk::FriskDType::f16};
+                DS_READ_M32x16_B16_ALT.shape = {16,32};
+                DS_READ_M32x16_B16_ALT.m = 32;
+                DS_READ_M32x16_B16_ALT.n = 16;
+                DS_READ_M32x16_B16_ALT.alt = 1;
+                DS_READ_M32x16_B16_ALT.inShmLayout.warp_layout = {16,4};
+                DS_READ_M32x16_B16_ALT.inShmLayout.warp_layout_order = {1,0};
+                DS_READ_M32x16_B16_ALT.inShmLayout.thread_creg = {1,8};
+                DS_READ_M32x16_B16_ALT.inShmLayout.thread_creg_order = {1,0};
+                DS_READ_M32x16_B16_ALT.inShmLayout.warp_repeat = {1,1};
+                DS_READ_M32x16_B16_ALT.inShmLayout.warp_repeat_order = {1,0};
+
+                DS_READ_M32x16_B16_ALT.outRegLayout.warp_layout = {4,16};
+                DS_READ_M32x16_B16_ALT.outRegLayout.warp_layout_order = {1,0};
+                DS_READ_M32x16_B16_ALT.outRegLayout.thread_creg = {4,2};
+                DS_READ_M32x16_B16_ALT.outRegLayout.thread_creg_order = {0,1};
+                DS_READ_M32x16_B16_ALT.outRegLayout.warp_repeat = {1,1};
+                DS_READ_M32x16_B16_ALT.outRegLayout.warp_repeat_order = {1,0};
+
+                s->matrixLoadInsts.push_back(DS_READ_M32x16_B16_ALT);
+            }
         }
     }
     return s;

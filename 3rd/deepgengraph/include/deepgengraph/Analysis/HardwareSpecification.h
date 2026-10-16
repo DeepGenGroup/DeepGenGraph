@@ -247,6 +247,27 @@ struct TiledGEMMInfo {
     bool isAsync;      // 矩阵乘加指令是否异步
     std::vector<MMAInstInfo> validInsts;
 };
+
+// WarpCopyMatrixFromShmToReg : warp 级别的matrix数据拷贝指令,能在0 bank冲突的情况下达到reg中的数据按layout排布
+struct WarpMatrtixCopyShmToRegInfo {
+    coordXY_t shape{}; // logical [K,N], independent of the ISA's m/n naming
+    int64_t m = 0, n = 0, alt = 0;
+    bool transpose = false;
+    mlir::frisk::FriskDType elementType;
+    LinearLayout2DDesc inShmLayout{};
+    LinearLayout2DDesc outRegLayout{};
+
+    WarpMatrtixCopyShmToRegInfo(mlir::frisk::FriskDType dtype){
+        inShmLayout.memspace = mlir::frisk::friskMs::Shared;
+        outRegLayout.memspace = mlir::frisk::friskMs::Local;
+        elementType = dtype;
+        inShmLayout.elementType = dtype;
+        outRegLayout.elementType = dtype;
+        inShmLayout.wg_layout = outRegLayout.wg_layout = {1, 1};
+        inShmLayout.wg_layout_order = outRegLayout.wg_layout_order = {0, 1};
+    }
+};
+
 // 
 /*
 总结其过程 ：C[m,n] += A[m,k] @ B[k,n]
@@ -301,6 +322,8 @@ public:
     TiledGEMMInfo gemmInfo;  // 是否支持tile级别的gemm
     DataCopyInfo dataCopyInfo;  // 是否支持 GM<->shm 之间的异步拷贝
     SyncGranularityInfo syncGranularity;   // 同步语句的控制粒度
+
+    std::vector<WarpMatrtixCopyShmToRegInfo> matrixLoadInsts;   // loadMatrix 相关指令的描述
 
     HWSpecification(std::string kind, std::string version) : hwKind(kind), hwVersion(version) {
         if(kind == HW_KIND_NVIDIA){
