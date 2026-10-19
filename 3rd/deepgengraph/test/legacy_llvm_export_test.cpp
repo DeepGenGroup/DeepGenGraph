@@ -1,4 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -8,6 +9,31 @@
 #include "llvm/Support/raw_ostream.h"
 
 int main(int argc, char **argv) {
+  bool fragPrefetch = false;
+  unsigned fragPrefetchWords = 8;
+  llvm::SmallVector<char *> positional{argv[0]};
+  for (int i = 1; i < argc; ++i) {
+    llvm::StringRef option(argv[i]);
+    if (option.consume_front("--frag-prefetch=")) {
+      if (option != "0" && option != "1") {
+        llvm::errs() << "frag-prefetch must be 0 or 1\n";
+        return 1;
+      }
+      fragPrefetch = option == "1";
+    } else if (option.consume_front("--frag-prefetch-words=")) {
+      if (option.getAsInteger(10, fragPrefetchWords) || !fragPrefetchWords) {
+        llvm::errs() << "frag-prefetch-words must be a positive integer\n";
+        return 1;
+      }
+    } else if (option.starts_with("--frag-prefetch")) {
+      llvm::errs() << "use --frag-prefetch=0|1 and --frag-prefetch-words=N\n";
+      return 1;
+    } else {
+      positional.push_back(argv[i]);
+    }
+  }
+  argc = positional.size();
+  argv = positional.data();
   if (argc == 3 && (llvm::StringRef(argv[1]) == "--legalize-text" ||
                     llvm::StringRef(argv[1]) == "--llvm22-text")) {
     auto buffer = llvm::MemoryBuffer::getFileOrSTDIN(argv[2]);
@@ -35,7 +61,7 @@ int main(int argc, char **argv) {
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
   if (argc != 2 && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] <input.ll or ->\n";
+    llvm::errs() << "usage: LegacyLLVMExportTest [--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -68,6 +94,8 @@ int main(int argc, char **argv) {
     mlir::frisk::protectAsyncDMASourceAddresses(*module);
     mlir::frisk::lowerWideAsyncDMAToHCU(*module);
   }
+  if (fragPrefetch)
+    mlir::frisk::prefetchMMACFragments(*module, fragPrefetchWords);
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(*module);
   if (llvm::verifyModule(*module, &llvm::errs()))
     return 1;

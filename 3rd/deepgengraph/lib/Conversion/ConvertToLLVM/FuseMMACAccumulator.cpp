@@ -24,7 +24,7 @@ llvm::CallInst *getMMAC(llvm::Value *value) {
     return nullptr;
   if (assembly && call->arg_size() == 3 && !assembly->isAlignStack() &&
       !assembly->canThrow() &&
-      isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()))
+      isRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()))
     return call;
   auto *callee = call->getCalledFunction();
   if (!callee || !callee->isDeclaration() || call->arg_size() != 5 ||

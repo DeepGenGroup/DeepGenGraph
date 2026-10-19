@@ -130,7 +130,7 @@ void prepareRegisterMMAForLLVM(llvm::Module &module) {
           continue;
         auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
         if (!assembly || assembly->isAlignStack() || assembly->canThrow() ||
-            !isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
+            !isRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
             call->getType() != float4 || call->getArgOperand(0)->getType() != half4 ||
             call->getArgOperand(1)->getType() != half4 ||
             call->getArgOperand(2)->getType() != float4)

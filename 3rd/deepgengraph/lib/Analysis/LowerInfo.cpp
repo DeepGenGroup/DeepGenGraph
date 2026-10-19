@@ -117,7 +117,7 @@ static bool isSameLayout(const LowerInfo &lhs, const LowerInfo &rhs) {
 }
 
 // 比较info的 tod_sz. 如果参数中 ignoreDim有效，则忽略对应维度（此时 ignoreDim 必为 0 或 1）
-static int getMaxThreadOwnDatasz(const LowerInfo& lhs, coordXY_t& tod_sz, int ignoreDim){
+static void getMaxThreadOwnDatasz(const LowerInfo& lhs, coordXY_t& tod_sz, int ignoreDim){
   auto x = lhs.thread_own_data_size[0] * lhs.thread_own_data_size[1];
   auto y = tod_sz[0] * tod_sz[1];
   if(ignoreDim < 0){

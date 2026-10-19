@@ -66,6 +66,14 @@ void prefetchGlobalPackets(llvm::Module &module, unsigned maxWords = 8);
 /// Budget overlapping retained packets; do not move loads, calls or barriers.
 void reuseLDSFragments(llvm::Module &module, unsigned maxWords = 8);
 
+/// Opt-in one-MMAC lookahead for complete A/B LDS operand packets. Run after
+/// lifetime/reuse optimization. Preserve SSA reuse, arithmetic, MMAC order and
+/// synchronization. Bound raw packet words and the local SSA peak increase
+/// (including address temporaries); this is not a physical VGPR allocation cap.
+/// Scheduling barriers are compiler hints, never waits. Machine wait insertion
+/// remains responsible for dependencies after instruction selection/allocation.
+void prefetchMMACFragments(llvm::Module &module, unsigned maxExtraWords = 8);
+
 /// LLVM 15 LDS lowering can miss shared pointers hidden inside constant memref
 /// descriptors. Split aggregate selects/PHIs into scalar joins, then expose
 /// constant LDS references as instructions. Scalar joins prevent downstream

@@ -23,6 +23,7 @@ def main():
     mma = r'v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09'
     tuned = r's_nop 1\0A\09' + mma + r's_nop 1\0A\09'
     variants = {
+        'bare': mma,
         'exact': asm,
         'tuned': tuned,
         'asymmetric': r's_nop 0\0A\09' * 2 + mma + r's_nop 15\0A\09',
@@ -44,7 +45,7 @@ def main():
         fixture('extra', assembly=asm+'s_waitcnt lgkmcnt(0)'),
         fixture('clobber', constraints='=v,v,v,0,~{memory}'),
         fixture('wrong_type', half='float'),
-        fixture('missing_padding', assembly='v_mmac_f32_16x16x16_f16 $0, $1, $2, $3'),
+        fixture('one_sided_padding', assembly=mma + r's_nop 1\0A\09'),
         fixture('duplicate_mma', assembly=tuned + mma + r's_nop 1\0A\09'),
         fixture('bad_delay', assembly=tuned.replace('s_nop 1', 's_nop 16')),
         fixture('missing_delay', assembly=tuned.replace('s_nop 1', 's_nop')),

@@ -10,6 +10,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   OptimizeRegisterLifetimes.cpp
   OptimizeRegisterMath.cpp
   PrefetchGlobalPackets.cpp
+  PrefetchMMACFragments.cpp
   ReuseLDSFragments.cpp
 
   DEPENDS

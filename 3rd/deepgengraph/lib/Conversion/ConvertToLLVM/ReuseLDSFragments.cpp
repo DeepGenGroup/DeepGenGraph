@@ -24,7 +24,7 @@ bool endsPhase(llvm::Instruction &inst) {
       if (assembly->getAsmString().empty() &&
           assembly->getConstraintString() == "=v,0") return false;
       return !call->doesNotAccessMemory() ||
-          !isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString());
+          !isRegisterMMA(assembly->getAsmString(), assembly->getConstraintString());
     }
     if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(call)) {
       if (intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_ds_bpermute)

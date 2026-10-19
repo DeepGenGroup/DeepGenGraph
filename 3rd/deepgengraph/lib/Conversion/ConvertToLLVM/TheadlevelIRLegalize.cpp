@@ -266,8 +266,8 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
       // This is the conservative spacing validated on hardware, not a claim
       // about the instruction's minimum latency. Shorten only after measuring,
       // or replace the opaque asm with a target intrinsic with hazard handling.
-      std::string padding;
-      padding += "s_nop 1\n\t"; // 经过测试，1个 s_nop 1 已经能够满足正确性。但不能不加
+      std::string padding = "";
+      // padding += "s_nop 1\n\t"; // 经过测试，1个 s_nop 1 已经能够满足正确性。但不能不加   2026/10/19 通过添加llvm inlineasm属性，已修复。目前不需要s_nop
       asm_string = padding + asm_string + "\n\t" + padding;
     }
     auto constraints = constraintsAttr.getValue();

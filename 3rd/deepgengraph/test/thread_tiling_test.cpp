@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
@@ -74,7 +75,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();
-  mlir::registerPass([] { return mlir::createCanonicalizerPass(); });
+  mlir::registerPass([] { return mlir::frisk::createVectorSafeCanonicalizerPass(); });
   mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });

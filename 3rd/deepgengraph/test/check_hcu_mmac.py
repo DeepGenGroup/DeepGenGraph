@@ -111,14 +111,14 @@ def main():
         if enabled is None:
             source = source.replace(' attributes {frisk.use_hcu_mmac = false}', '')
         ir = verify(source)
-        assert 'v_mmac_f32_16x16x16_f16' in ir and 's_nop 1' in ir
+        assert 'v_mmac_f32_16x16x16_f16' in ir and 's_nop' not in ir
         assert '@' + HALF not in ir
     for old, new in [('$0, $1, $2, $3', '$0, $2, $1, $3'),
                      ('=v,v,v,0', '=v,v,v,v'),
                      ('v_mmac_f32_16x16x16_f16', 'v_custom_mma')]:
         ir = verify(fixture().replace(old, new))
         assert 'asm sideeffect' in ir and '@' + HALF not in ir
-    print('PASS default/explicit inline asm, hazard padding and conservative fallback')
+    print('PASS default/explicit no-padding inline asm and conservative fallback')
 
     for source, message in [
         (fixture(ab='2xf16'), 'fragment types do not match HCU MMAC ABI'),

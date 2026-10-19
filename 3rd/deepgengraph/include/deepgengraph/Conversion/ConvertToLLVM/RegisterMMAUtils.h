@@ -40,5 +40,14 @@ inline bool isPaddedRegisterMMA(llvm::StringRef assembly,
   }
   return foundMMA;
 }
+
+// The validated no-padding form has the same register-only effects. Keep the
+// padded recognizer strict: accepting a bare instruction must not accidentally
+// accept one-sided padding, extra instructions or a memory clobber.
+inline bool isRegisterMMA(llvm::StringRef assembly, llvm::StringRef constraints) {
+  return (constraints == "=v,v,v,0" &&
+          assembly.trim() == "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3") ||
+         isPaddedRegisterMMA(assembly, constraints);
+}
 } // namespace mlir::frisk
 #endif

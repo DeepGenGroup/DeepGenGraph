@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -246,7 +247,7 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createLowerAffinePass());                     // affine -> scf/vector
   // pm.addPass(mlir::createParallelLoopToGpuPass());               // scf.parallelOp -> gpu...
-  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
   if (mlir::failed(pm.run(mod)))
@@ -270,7 +271,7 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createConvertVectorToSCFPass());
   pm.addPass(mlir::createLowerAffinePass());
-  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
   pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
@@ -312,7 +313,7 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
 
   // 6. 清理多余的类型转换 Cast 及优化
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
 

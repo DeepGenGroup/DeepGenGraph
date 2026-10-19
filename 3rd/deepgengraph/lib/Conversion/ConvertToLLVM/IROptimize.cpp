@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
@@ -93,7 +94,8 @@ class VectorOpLoopUnrollPass
     RewritePatternSet patterns(&getContext());
     for (auto op : getContext().getRegisteredOperations())
       op.getCanonicalizationPatterns(patterns, &getContext());
-    FrozenRewritePatternSet frozen(std::move(patterns));
+    FrozenRewritePatternSet frozen(std::move(patterns),
+                                   unsafeVectorCanonicalizations());
     // Bound cumulative code growth, not just individual loop trip counts.
     constexpr uint64_t maxExtraOperations = 65536;
     uint64_t extraOperations = 0;
@@ -276,7 +278,7 @@ static bool isSchedulableRegisterMMA(Operation *op) {
       op->getOperand(2).getType() != float4 ||
       op->getResult(0).getType() != float4)
     return false;
-  return isPaddedRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
+  return isRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
 }
 
 static IssueNode classifyIssue(Operation *op) {

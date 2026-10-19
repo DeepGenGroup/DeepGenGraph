@@ -299,3 +299,122 @@ power-of-two vector load/store。任何中间访存、控制流、同步或不�
 验证入口：`test/check_shared_packing.py`（普通 IR 的 CPU 数值对照、回退及
 不同尺寸独立 GEMM）、`test/check_packed_attention_copy.py`（K/V 完整搬运地址）、
 `test/check_attention_codegen.py`（全部 MMAC 操作数、P、rowsum、LLVM 15/O3）。
+
+
+## Dynamic vector extraction canonicalization compatibility
+
+The current LLVM 24 `FromElementsToShapeCast` pattern loses dynamic prefix
+operands when replacing scalar extracts plus `vector.from_elements` with a
+single subvector extract. For example, packing `source[row, 0..3]` produces an
+extract with a `kDynamic` marker but no `row` operand. Comparing only the static
+position arrays can also confuse different dynamic row values.
+
+`Conversion/VectorCanonicalization.h` provides the project-local workaround:
+filter only that pattern in the canonicalizer and in `ir-deep-optimize`'s
+collected canonicalization patterns. Other folds, loop unrolling, CSE and IR
+verification remain enabled. No attention dimensions, index values or kernel
+names are special-cased, and the installed LLVM is not modified. This disables
+the static form of this one optimization too; subsequent vector/LLVM lowering
+and O3 remain available. Revisit the filter when upgrading to an SDK with the
+upstream pattern fixed.
+
+Regression (includes mixed prefixes, different dynamic rows, insertion chains,
+static rows, and CPU execution of the original and transformed expressions):
+
+```bash
+python3 3rd/deepgengraph/test/check_vector_canonicalization.py
+```
+
+## LLVM MMAC operand prefetch tuning
+
+`--frag-prefetch=0|1` selects an additional, late LLVM scheduling strategy
+(default **0**). `--frag-prefetch-words=N` sets a positive per-thread budget
+(default **8** 32-bit SSA words). These named options can be appended to any
+existing `MyTest` or `RunFriskSHell.sh` command without shifting positional
+arguments. Disabling this strategy retains the existing fragment-loop and
+post-unroll optimizations; it does not undo a previously scheduled output.
+
+`PrefetchMMACFragments.cpp` runs after register lifetime optimization and optional
+LDS reuse. It examines consecutive register MMACs in a straight-line read-only
+phase, traces both next A/B operands, and advances the complete set of new LDS
+reads with their pure address dependencies ahead of the current MMAC. Already
+available SSA operands are reused without another load or another budget charge.
+Vector loads and the exact `llvm.hcu.ds.read.m32x16.b16.v4i32.p3` matrix-load ABI
+are supported; a matrix packet is charged at its full width even when only one
+half is used immediately. It does not split or duplicate that packet.
+
+The next operand's FP preparation stays after the current MMAC, avoiding an
+immediate wait on the new load. MMAC order, accumulator association, operand
+values, and existing NOP text are unchanged. Exact bare MMAC assembly and the
+existing fully padded form both receive the register-only memory attributes.
+Opaque assembly, calls, barriers, writes, volatile/atomic operations, global
+loads and control flow end a phase. Accumulator-dependent or indirect load
+addresses, unsupported operations and over-budget packets fall back as a whole.
+If the interval also contains LDS reads outside the next operand packet, leave
+that pair unchanged: pulling only part of an existing read group across an MMAC
+can break `ds_read2` combining. Pulling the whole group would deepen the window.
+This conservative guard also applies to matrix reads, without hard-coded offsets.
+The strategy never specializes attention shapes, kernel names, lane IDs or LDS
+offsets, and does not add cross-tile LDS buffering.
+
+Two budget checks apply: the total raw words in the newly advanced packet and
+the increase in peak live SSA words in the affected interval must each fit N.
+The latter includes pointer/index/packing temporaries and live-out values.
+Existing operands are retained, not cloned. The pass advances only the immediate
+next MMAC's operands, not a deeper prefetch queue; pre-existing early reads are
+not sunk. This budget is a conservative IR estimate, **not a physical VGPR cap**:
+register allocation, merging/splitting of loads, and occupancy must still be
+checked on the target backend. Start with a small budget for a high-VGPR kernel.
+
+Two compiler-only `llvm.amdgcn.sched.barrier(0)` hints bracket the current MMAC
+after the next packet is advanced. There is no boundary between the current and
+next reads, allowing DS combining. These hints are not workgroup barriers or
+hardware waits. Each generated call has `memory(inaccessiblemem: readwrite)`:
+this retains its scheduling side effect while allowing CSE of program-memory
+reads across it. The intrinsic's default broad effects blocked LDS reuse;
+`memory(none)` or `memory(read)` instead lets O3 delete the hints. Only the
+new calls receive this attribute; existing workgroup barriers, waits, DMA and
+opaque calls retain their original effects. The pass emits no `s_waitcnt`,
+hard-coded outstanding count, memory clobber, or dependence on the next packet's
+loaded values. The
+backend computes readiness after instruction selection and register allocation.
+This handles, for example, one merged LDS instruction versus two unmerged loads
+without confusing their wait counts. If current/next reads combine, their common
+completion may require a zero wait count; preserving the reduced instruction
+count takes priority over forcing a partial wait. See the scheduler contract:
+https://llvm.org/docs/AMDGPUUsage.html#llvm-amdgcn-sched-barrier
+
+To apply it directly to an existing best LLVM baseline (preserve that baseline):
+
+```bash
+3rd/deepgengraph/build/test/LegacyLLVMExportTest \
+  --frag-prefetch=1 --frag-prefetch-words=4 temp.ll > /tmp/frag-on.llvm.ll
+3rd/deepgengraph/build/test/LegacyLLVMExportTest \
+  --llvm22-text /tmp/frag-on.llvm.ll > /tmp/frag-on.ll
+```
+
+For an off/on comparison, run both exports from the same original input. The
+`LegacyLLVMExportTest` printer uses the build LLVM version; the second command
+adapts its text for LLVM 22/DTK without changing the schedule.
+
+Validation:
+
+```bash
+cmake --build 3rd/deepgengraph/build --target MyTest LegacyLLVMExportTest -j 2
+python3 3rd/deepgengraph/test/check_frag_prefetch.py
+python3 3rd/deepgengraph/test/check_register_mma_export.py
+python3 3rd/deepgengraph/test/check_frag_prefetch_export.py baseline.ll prefetched.ll
+```
+
+The new regression covers complete A/B scheduling, reuse, packet/pressure
+budgets, matrix reads, address dependencies, effects/control-flow boundaries,
+HCU/bare/padded MMAC recognition, idempotence, option validation, LLVM verification
+and randomized CPU differential execution with a common MMAC arithmetic shim.
+A gfx90a MFMA code-generation probe verifies that merged and split LDS packets
+produce `lgkmcnt(1)` and `lgkmcnt(2)` respectively after O3, with the third packet
+issued only after the first MMAC. This is an upstream backend scheduling check,
+not gfx936 numerical or performance validation.
+
+The end-to-end fixtures also exposed an existing undefined return in
+`getMaxThreadOwnDatasz`: the helper only updates its reference argument, so its
+return type is now `void`. This is independent of the prefetch switch.

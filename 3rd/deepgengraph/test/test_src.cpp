@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "SplitDAttentionTiles.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
@@ -410,6 +411,36 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+  // Named tuning options do not shift the historical positional interface.
+  bool fragPrefetch = false;
+  unsigned fragPrefetchWords = 8;
+  SmallVector<char *> positional{argv[0]};
+  for (int i = 1; i < argc; ++i) {
+    StringRef option(argv[i]);
+    if (option.consume_front("--frag-prefetch=")) {
+      if (option != "0" && option != "1") {
+        llvm::errs() << "frag-prefetch must be 0 or 1\n";
+        return 1;
+      }
+      fragPrefetch = option == "1";
+    } else if (option.consume_front("--frag-prefetch-words=")) {
+      if (option.getAsInteger(10, fragPrefetchWords) || !fragPrefetchWords) {
+        llvm::errs() << "frag-prefetch-words must be a positive integer\n";
+        return 1;
+      }
+    } else if (option.starts_with("--frag-prefetch")) {
+      llvm::errs() << "use --frag-prefetch=0|1 and --frag-prefetch-words=N\n";
+      return 1;
+    } else {
+      positional.push_back(argv[i]);
+    }
+  }
+  argc = positional.size();
+  argv = positional.data();
+  if (argc < 2 || argc > 20) {
+    llvm::errs() << "expected an input and at most 18 positional tuning arguments\n";
+    return 1;
+  }
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
   StringRef copyMode = copyModeEnv ? copyModeEnv : "legacy";
   StringRef dmaPackMode = argc > 16 ? argv[16] : "legacy";
@@ -709,7 +740,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     PassManager fragmentPM(ctx.get());
     // Loop-carrier normalization can leave identity extraction loops around O.
     // Fold those first so the original accumulator dominates every fragment.
-    fragmentPM.addPass(mlir::createCanonicalizerPass());
+    fragmentPM.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
     // Resolve bridges and simplify indices before proving fragment dependences.
     fragmentPM.addNestedPass<func::FuncOp>(frisk::createFriskFragIRReorderPass());
     // Preserve fragment regions in the scheduling dump. Lower them separately.
@@ -727,7 +758,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
   AddFuncPass(mlir::affine::createAffineLoopInvariantCodeMotionPass());
   AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));
-  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after lower-frisk-fragments -----\n";
   llvm::outs().flush(); src->dump();
@@ -744,16 +775,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
   AddFuncPass(mlir::bufferization::createBufferHoistingPass());
   AddPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
-  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
   // AddFuncPass(mlir::affine::createAffineVectorize(opt));
   
   AddFuncPass( mlir::affine::createLoopFusionPass());
   AddPass(mlir::createCSEPass());
-  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   
   AddPass(mlir::createCSEPass());
-  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   AddFuncPass(mlir::affine::createAffineScalarReplacementPass());
   auto optimize = frisk::createIRDeepOptimizePass();
   if (failed(optimize->initializeOptions(
@@ -766,7 +797,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));
   AddFuncPass(mlir::createMem2Reg());
-  AddPass(mlir::createCanonicalizerPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
 
   // mlir::affine::loopUnrollByFactor
@@ -806,6 +837,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::optimizeRegisterLifetimes(*llvmModule);
   if (ldsReuseWords)
     frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
+  if (fragPrefetch)
+    frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -1105,8 +1138,8 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2 || argc > 20) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto]\n";
+  if (argc < 2) {
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

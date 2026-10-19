@@ -217,7 +217,10 @@ class LLVMWorkgroupModel:
             packet = f'<{size // 2} x half>'
             self.memory(args[1] + np.arange(self.t) % 64 * size, packet, self.memory(args[0], packet))
             return
-        assert name in ['llvm.amdgcn.asyncmark', 'llvm.amdgcn.wait.asyncmark', 'llvm.amdgcn.s.barrier'], name
+        # Scheduling hints constrain code generation, but have no numerical
+        # effect in this synchronous workgroup model.
+        assert name in ['llvm.amdgcn.asyncmark', 'llvm.amdgcn.wait.asyncmark',
+                        'llvm.amdgcn.s.barrier', 'llvm.amdgcn.sched.barrier'], name
 
     def operation(self, expr):
         expr = re.sub(r'^(?:tail|musttail|notail) ', '', expr)

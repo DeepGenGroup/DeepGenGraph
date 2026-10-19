@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -217,7 +218,7 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
     bool changed;
     do {
       PassManager passes(module.getContext());
-      passes.addPass(createCanonicalizerPass());
+      passes.addPass(createVectorSafeCanonicalizerPass());
       passes.addPass(createCSEPass());
       if (failed(module == getOperation() ? runPipeline(passes, module)
                                          : passes.run(module))) return failure();
