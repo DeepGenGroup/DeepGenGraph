@@ -144,7 +144,7 @@ define i32 @main() {
         # Execute the transformed seed wiring on CPU with an elementwise
         # MMAC stand-in. This checks SSA/data flow, not DCU rounding behavior.
         cpu = fused_body('fuse')
-        cpu = re.sub(r'asm sideeffect "[^"\n]*", "[^"\n]*"', '@mock_mmac', cpu)
+        cpu = re.sub(r'asm(?: sideeffect)? "[^"\n]*", "[^"\n]*"', '@mock_mmac', cpu)
         cpu = re.sub(r' #\d+', '', cpu)
         cpu += '''
 define <4 x float> @mock_mmac(<4 x half> %a, <4 x half> %b, <4 x float> %c) {

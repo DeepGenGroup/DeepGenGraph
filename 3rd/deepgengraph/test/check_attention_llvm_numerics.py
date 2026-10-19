@@ -134,7 +134,7 @@ class LLVMWorkgroupModel:
         return result.reshape((self.t,) + self.shape(ty))
 
     def call(self, body):
-        if 'asm sideeffect' in body:
+        if re.search(r'\basm(?: sideeffect)? "', body):
             operands = re.search('"\\((.*)\\)', body)[1]
             args = [self.typed(x) for x in split_args(operands)] if operands else []
             if 'buffer_load_dwordx4' in body:
@@ -155,6 +155,11 @@ class LLVMWorkgroupModel:
                 assert not args and '"~{memory}"' in body
                 return
             if 'v_mmac_' not in body:
+                if 'asm sideeffect "", "=v,0,i"' in body:
+                    # Empty register identity with an unused immediate that
+                    # distinguishes lifetime boundaries from one another.
+                    assert len(args) == 2 and np.all(args[1] == args[1][0]), body
+                    return args[0]
                 assert 'asm sideeffect "", "=v,0"' in body, body
                 assert len(args) == 1
                 return args[0]

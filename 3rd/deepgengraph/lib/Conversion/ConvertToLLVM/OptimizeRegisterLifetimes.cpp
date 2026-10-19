@@ -7,6 +7,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include <map>
+#include <tuple>
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
@@ -235,12 +236,18 @@ bool canMaterialize(llvm::Type *type, const llvm::DataLayout &layout) {
 }
 
 llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
-                            llvm::StringRef name) {
-  auto *type = llvm::FunctionType::get(value->getType(), {value->getType()}, false);
-  auto *assembly = llvm::InlineAsm::get(type, "", "=v,0", true);
+                            llvm::StringRef name, unsigned discriminator = 0) {
   llvm::IRBuilder<> b(before);
   b.SetCurrentDebugLocation(before->getDebugLoc());
-  auto *call = b.CreateCall(type, assembly, {value}, name);
+  llvm::SmallVector<llvm::Type *> types{value->getType()};
+  llvm::SmallVector<llvm::Value *> args{value};
+  if (discriminator) {
+    types.push_back(b.getInt32Ty());
+    args.push_back(b.getInt32(discriminator));
+  }
+  auto *type = llvm::FunctionType::get(value->getType(), types, false);
+  auto *assembly = llvm::InlineAsm::get(type, "", discriminator ? "=v,0,i" : "=v,0", true);
+  auto *call = b.CreateCall(type, assembly, args, name);
   call->setDoesNotAccessMemory();
   call->setDoesNotThrow();
   call->addFnAttr(llvm::Attribute::WillReturn);
@@ -266,6 +273,141 @@ llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
           llvm::MDBuilder(before->getContext()).createRange(range.getLower(), range.getUpper()));
   }
   return call;
+}
+
+// Strip only operations that provably leave the upper word unchanged. Unlike
+// add/sub, low-word OR/XOR cannot carry into it. This is independent of tensor
+// shapes, launch dimensions, and the interpretation of the comparison.
+llvm::Value *upperWordRoot(llvm::Value *value) {
+  for (unsigned depth = 0; depth < 8; ++depth) {
+    auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value);
+    if (!binary || (binary->getOpcode() != llvm::Instruction::Or &&
+                    binary->getOpcode() != llvm::Instruction::Xor)) break;
+    auto *constant = llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(1));
+    if (!constant || constant->getValue().getActiveBits() > 32) break;
+    value = binary->getOperand(0);
+  }
+  return value;
+}
+
+bool hasVectorInput(llvm::Value *value, llvm::SmallPtrSetImpl<llvm::Value *> &seen) {
+  if (!seen.insert(value).second) return false;
+  if (isThreadID(value)) return true;
+  // Device-function arguments use the vector ABI unless explicitly inreg;
+  // kernel arguments and workgroup IDs are uniform. Do not force scalar-only
+  // index predicates into VGPRs. Unknown calls/loads conservatively opt out.
+  if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
+    return arg->getParent()->getCallingConv() != llvm::CallingConv::AMDGPU_KERNEL &&
+           !arg->hasAttribute(llvm::Attribute::InReg);
+  auto *inst = llvm::dyn_cast<llvm::Instruction>(value);
+  if (!inst || !llvm::isa<llvm::BinaryOperator, llvm::CastInst,
+                          llvm::SelectInst, llvm::PHINode>(inst)) return false;
+  if (seen.size() > 96) return false;
+  for (auto *operand : inst->operand_values())
+    if (hasVectorInput(operand, seen)) return true;
+  return false;
+}
+
+// Integer predicates often compare a collection of low-word offsets against
+// the same bounds. Keeping all their i64 operands alive costs two VGPRs per
+// element. Compare the shared upper words once, and construct each low word
+// next to its comparison. The lexicographic decomposition is exact even for
+// negative values, index wraparound and inputs larger than 2^32; no truncation
+// of a pointer/index range is assumed. Signed predicates use SIGNED high-word
+// and UNSIGNED low-word comparisons.
+unsigned compactIntegerComparisons(llvm::Function &function) {
+  constexpr llvm::StringLiteral comparisonMarker = "frisk.register_comparisons";
+  if (function.hasFnAttribute(comparisonMarker)) return 0;
+  unsigned changed = 0, materializationID = 0;
+  for (llvm::BasicBlock &block : function) {
+    using Key = std::tuple<unsigned, llvm::Value *, llvm::Value *>;
+    std::map<Key, llvm::SmallVector<llvm::ICmpInst *>> groups;
+    llvm::SmallVector<Key> order;
+    for (llvm::Instruction &inst : block) {
+      auto *compare = llvm::dyn_cast<llvm::ICmpInst>(&inst);
+      if (!compare || !compare->getOperand(0)->getType()->isIntegerTy(64)) continue;
+      auto *lhs = upperWordRoot(compare->getOperand(0));
+      auto *rhs = upperWordRoot(compare->getOperand(1));
+      Key key{compare->getPredicate(), lhs, rhs};
+      auto [entry, inserted] = groups.try_emplace(key);
+      if (inserted) order.push_back(key);
+      entry->second.push_back(compare);
+    }
+    // Keep emitted names/discriminators independent of Value* allocation order.
+    for (auto &key : order) {
+      auto &comparisons = groups.at(key);
+      // Amortize the high-word predicates. A single comparison or repeated
+      // comparisons of identical values do not justify decomposition.
+      llvm::SmallPtrSet<llvm::Value *, 32> variants;
+      auto [predicate, lhs, rhs] = key;
+      for (auto *compare : comparisons)
+        for (auto *operand : compare->operand_values())
+          if (operand != lhs && operand != rhs) variants.insert(operand);
+      if (comparisons.size() < 4 || variants.size() < 3) continue;
+      llvm::SmallPtrSet<llvm::Value *, 32> seen;
+      if (!llvm::any_of(variants, [&](llvm::Value *value) {
+            seen.clear();
+            return hasVectorInput(value, seen);
+          })) continue;
+      auto pred = static_cast<llvm::CmpInst::Predicate>(predicate);
+      llvm::IRBuilder<> b(comparisons.front());
+      b.SetCurrentDebugLocation(comparisons.front()->getDebugLoc());
+      auto high = [&](llvm::Value *value) {
+        return b.CreateTrunc(b.CreateLShr(value, 32), b.getInt32Ty(), "compare.high");
+      };
+      llvm::Value *highL = high(lhs), *highR = high(rhs);
+      llvm::Value *equal = b.CreateICmpEQ(highL, highR, "compare.high.equal");
+      llvm::Value *different = nullptr;
+      if (!llvm::CmpInst::isEquality(pred))
+        different = b.CreateICmp(llvm::CmpInst::getStrictPredicate(pred),
+                                highL, highR, "compare.high.order");
+      llvm::Value *lowL = b.CreateTrunc(lhs, b.getInt32Ty(), "compare.low.base");
+      llvm::Value *lowR = b.CreateTrunc(rhs, b.getInt32Ty(), "compare.low.base");
+      for (auto *compare : comparisons) {
+        b.SetInsertPoint(compare);
+        b.SetCurrentDebugLocation(compare->getDebugLoc());
+        auto low = [&](llvm::Value *value, llvm::Value *root, llvm::Value *base) {
+          llvm::SmallVector<llvm::BinaryOperator *> path;
+          while (value != root) {
+            auto *binary = llvm::cast<llvm::BinaryOperator>(value);
+            path.push_back(binary);
+            value = binary->getOperand(0);
+          }
+          if (path.empty()) return base;
+          // Identical memory(none) inline asms can be CSE'd even with
+          // sideeffect. The unused immediate distinguishes these boundaries
+          // without emitting an instruction or using an extra register.
+          llvm::Value *result = materialize(base, compare, "compare.local.base",
+                                             ++materializationID);
+          for (auto *binary : llvm::reverse(path)) {
+            auto *constant = llvm::cast<llvm::ConstantInt>(binary->getOperand(1));
+            result = b.CreateBinOp(binary->getOpcode(), result,
+                b.getInt32(constant->getValue().getZExtValue()), "compare.local");
+          }
+          return result;
+        };
+        auto *left = low(compare->getOperand(0), lhs, lowL);
+        auto *right = low(compare->getOperand(1), rhs, lowR);
+        auto lowPred = llvm::ICmpInst::getUnsignedPredicate(pred);
+        auto *lower = b.CreateICmp(lowPred, left, right, "compare.low");
+        llvm::Value *result;
+        if (pred == llvm::CmpInst::ICMP_EQ)
+          result = b.CreateAnd(equal, lower, "compare.result");
+        else if (pred == llvm::CmpInst::ICMP_NE)
+          result = b.CreateOr(b.CreateNot(equal), lower, "compare.result");
+        else
+          result = b.CreateSelect(equal, lower, different, "compare.result");
+        compare->replaceAllUsesWith(result);
+        compare->eraseFromParent();
+        ++changed;
+      }
+    }
+  }
+  function.addFnAttr(comparisonMarker, "1");
+  if (changed)
+    llvm::errs() << "Compact integer comparisons: " << function.getName()
+                 << ": " << changed << " shared-high-word predicates\n";
+  return changed;
 }
 
 unsigned scheduleMathConsumers(llvm::Function &function) {
@@ -474,13 +616,19 @@ void optimizeRegisterLifetimes(llvm::Module &module) {
   pipeline.addPass(OptimizeRegisterLifetimesPass());
   pipeline.addPass(llvm::DCEPass());
   for (llvm::Function &function : module) {
-    if (function.isDeclaration() || function.hasFnAttribute(marker) ||
+    if (function.isDeclaration() ||
         function.hasFnAttribute(llvm::Attribute::StrictFP) ||
         function.hasFnAttribute(llvm::Attribute::OptimizeNone) || !isAMDGPU(function)) continue;
-    exposeThreadBounds(function);
-    unsigned simplified = simplifyThreadExpressions(function);
-    llvm::errs() << "Compact thread indices: " << simplified << " proven replacements\n";
-    pipeline.run(function, analyses);
+    if (!function.hasFnAttribute(marker)) {
+      exposeThreadBounds(function);
+      unsigned simplified = simplifyThreadExpressions(function);
+      llvm::errs() << "Compact thread indices: " << simplified << " proven replacements\n";
+      pipeline.run(function, analyses);
+    }
+    if (compactIntegerComparisons(function)) {
+      analyses.invalidate(function, llvm::PreservedAnalyses::none());
+      llvm::DCEPass().run(function, analyses);
+    }
   }
 }
 } // namespace mlir::frisk

@@ -17,7 +17,7 @@ from check_gemm_pv_addresses import split_args
 def describe(text):
     defs = dict(re.findall(r'^  (%[\w.]+) = (.*?)(?:, !dbg !\d+)?$', text, re.M))
     calls = {n: split_args(re.search(r'"\((.*)\)', e)[1])
-             for n, e in defs.items() if 'asm sideeffect ' in e and 'v_mmac_' in e}
+             for n, e in defs.items() if 'asm ' in e and 'v_mmac_' in e}
     tid = next(n for n, e in defs.items() if '@llvm.amdgcn.workitem.id.x()' in e)
     context = {tid: 0}
     shapes = []

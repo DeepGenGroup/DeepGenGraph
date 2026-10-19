@@ -129,14 +129,25 @@ void prepareRegisterMMAForLLVM(llvm::Module &module) {
         if (!call || call->getNumOperandBundles() || call->arg_size() != 3)
           continue;
         auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
-        if (!assembly || !assembly->hasSideEffects() || assembly->isAlignStack() ||
+        if (!assembly || assembly->isAlignStack() || assembly->canThrow() ||
             !isPaddedRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
             call->getType() != float4 || call->getArgOperand(0)->getType() != half4 ||
             call->getArgOperand(1)->getType() != half4 ||
             call->getArgOperand(2)->getType() != float4)
           continue;
+        // The complete register result is represented by the output and tied
+        // accumulator constraints. NOP padding does not add an observable
+        // effect. Match HCU's IntrConvergent/IntrNoMem/IntrWillReturn contract,
+        // while keeping the hardware spacing inside the same asm expression.
+        if (assembly->hasSideEffects())
+          call->setCalledOperand(llvm::InlineAsm::get(
+              assembly->getFunctionType(), assembly->getAsmString(),
+              assembly->getConstraintString(), /*hasSideEffects=*/false,
+              /*isAlignStack=*/false, assembly->getDialect(), /*canThrow=*/false));
         call->setMemoryEffects(llvm::MemoryEffects::none());
-        // All lanes participate; no speculative motion across control flow.
+        call->setDoesNotThrow();
+        call->addFnAttr(llvm::Attribute::WillReturn);
+        // Preserve cross-lane convergence; do not add speculatable/nosync.
         call->addFnAttr(llvm::Attribute::Convergent);
       }
 }

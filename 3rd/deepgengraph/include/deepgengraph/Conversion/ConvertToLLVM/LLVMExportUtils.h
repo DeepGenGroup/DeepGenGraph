@@ -17,7 +17,8 @@ void legalizeLLVMTextForLLVM22(std::string &text);
 void legalizeLLVMTextForLegacyLLVM(std::string &text);
 
 /// Restore precise effects for the exact register MMA emitted by Frisk.
-/// Keep sideeffect, convergence, operands and hardware padding intact. Run
+/// Remove sideeffect; set convergent, memory(none), nounwind and willreturn.
+/// Preserve operands, constraints and hardware padding. Run
 /// immediately after MLIR translation, before LLVM optimizations or printing.
 void prepareRegisterMMAForLLVM(llvm::Module &module);
 
@@ -47,8 +48,10 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
 void fuseMMACAccumulators(llvm::Module &module);
 
-/// Shorten divergent address and math/narrowing live ranges on AMDGPU.
-/// Does not reassociate arithmetic or replace the math library implementation.
+/// Shorten address, integer-predicate and math/narrowing live ranges on AMDGPU.
+/// Repeated i64 predicates with common upper words share those tests and use
+/// local i32 low-word operands, preserving the complete signed/unsigned range.
+/// Does not reassociate FP arithmetic or replace the math implementation.
 void optimizeRegisterLifetimes(llvm::Module &module);
 
 /// Explicit approximate mode: reassociate single-use MMA accumulator chains,

@@ -39,6 +39,8 @@ def main():
 '''
     source = '\n'.join([
         *(fixture(name, assembly) for name, assembly in variants.items()),
+        fixture('already_pure', assembly=tuned).replace('asm sideeffect', 'asm'),
+        fixture('unused', assembly=tuned).replace('ret <4 x float> %out', 'ret <4 x float> %c'),
         fixture('extra', assembly=asm+'s_waitcnt lgkmcnt(0)'),
         fixture('clobber', constraints='=v,v,v,0,~{memory}'),
         fixture('wrong_type', half='float'),
@@ -48,7 +50,16 @@ def main():
         fixture('missing_delay', assembly=tuned.replace('s_nop 1', 's_nop')),
         fixture('extra_memory', assembly=tuned + 'ds_read_b32 v0, v1'),
         fixture('semicolon', assembly=tuned.replace('s_nop 1', 's_nop 1; ds_read_b32 v0, v1')),
+        fixture('aligned', assembly=tuned).replace('asm sideeffect', 'asm sideeffect alignstack'),
+        fixture('unwinding', assembly=tuned).replace('asm sideeffect', 'asm sideeffect unwind'),
     ])
+    source += f'''define <4 x float> @chain(<4 x half> %a, <4 x half> %b, <4 x float> %c) {{
+  %x = call <4 x float> asm sideeffect "{tuned}", "=v,v,v,0"(<4 x half> %a, <4 x half> %b, <4 x float> %c)
+  %y = call <4 x float> asm sideeffect "{tuned}", "=v,v,v,0"(<4 x half> %a, <4 x half> %b, <4 x float> %x)
+  ret <4 x float> %y
+}}
+'''
+    recognized = set(variants) | {'already_pure', 'unused', 'chain'}
     patched = run([TOOL, '-'], source)
     groups = dict(re.findall(r'attributes #(\d+) = \{([^}]*)\}', patched))
     functions = re.split(r'(?=define )', patched)
@@ -57,15 +68,20 @@ def main():
         if not match:
             continue
         name = match[1]
-        call = next(x for x in function.splitlines() if 'asm sideeffect ' in x)
+        call = next(x for x in function.splitlines() if ' asm ' in x)
         attr = re.search(r'\) #(\d+)', call)
         effects = groups[attr[1]] if attr else ''
-        assert ('memory(none)' in effects) == (name in variants), (name, effects)
-        assert ('convergent' in effects) == (name in variants), (name, effects)
-    assert re.findall(r'asm sideeffect "([^"]*)"', patched) == re.findall(
-        r'asm sideeffect "([^"]*)"', source), 'all instruction text must remain intact'
+        for effect in ('memory(none)', 'convergent', 'willreturn'):
+            assert (effect in effects) == (name in recognized), (name, effects)
+        assert ('asm sideeffect' not in call) == (name in recognized), (name, call)
+        if name in recognized:
+            assert 'nounwind' in effects and 'speculatable' not in effects
+    template = r'asm(?: sideeffect)?(?: alignstack)?(?: unwind)? "([^"]*)"'
+    assert re.findall(template, patched) == re.findall(
+        template, source), 'all instruction text must remain intact'
     assert run([TOOL, '-'], patched) == patched, 'effect restoration must be idempotent'
-    print('PASS exact register-only recognition; unknown asm and padding unchanged')
+    print('PASS pure register-only MMAC: convergent/nounwind/willreturn/memory(none); '
+          'idempotence, unknown asm and padding unchanged')
     with tempfile.TemporaryDirectory(prefix='register-mma-') as tmp:
         work = Path(tmp)
         for name, text, loads in [('baseline', fixture('exact'), 2), ('fixed', patched, 1)]:
@@ -80,6 +96,14 @@ def main():
                     body = optimized.split('@' + variant + '(', 1)[1].split('\n}', 1)[0]
                     assert body.count('load float') == 1, variant
                 print('PASS O3 load reuse for tuned and asymmetric padding')
+                dead = optimized.split('@unused(', 1)[1].split('\n}', 1)[0]
+                assert ' asm ' not in dead, 'unused pure MMAC must be removable'
+                chain = optimized.split('@chain(', 1)[1].split('\n}', 1)[0]
+                calls = [line for line in chain.splitlines() if ' asm ' in line]
+                assert len(calls) == 2 and 'sideeffect' not in chain, chain
+                first = calls[0].strip().split(' = ')[0]
+                assert f'<4 x float> {first})' in calls[1], chain
+                print('PASS O3 unused-MMAC elimination and dependent accumulator chain')
         # This is the spelling sent to the DTK/LLVM 15 parser, not deletion of
         # the memory effect. New LLVM upgrades readnone back to memory(none).
         legacy = patched.replace('memory(none)', 'readnone')
