@@ -447,13 +447,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // gfx936's DTK rejects the wide HCU global-load intrinsic. Packed DMA
   // uses the hardware-validated buffer inline asm unless explicitly overridden.
   StringRef dmaExport = argc > 17 ? argv[17]
-                                : (dmaPackMode == "legacy" ? "split32" : "asm128");
+                                : (copyMode == "async" || copyMode == "hybrid" ? "asm128" : "split32");
   if (dmaExport != "split32" && dmaExport != "hcu128" && dmaExport != "asm128") {
     llvm::errs() << "DMA export must be split32, hcu128, or asm128\n";
-    return 1;
-  }
-  if (dmaExport == "asm128" && dmaPackMode == "legacy") {
-    llvm::errs() << "asm128 requires an explicit packed DMA layout\n";
     return 1;
   }
   if (dmaPackMode != "legacy" && dmaPackMode != "useKPack" && dmaPackMode != "noKPack") {
@@ -592,10 +588,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   unsigned asmSourceBytes = 0;
   if (dmaExport == "asm128") {
     auto function = src->lookupSymbol<func::FuncOp>("Attn");
-    if (!function || function.getNumArguments() != 3) return 1;
-    for (Type arg : function.getArgumentTypes()) {
-      auto tensor = dyn_cast<RankedTensorType>(arg);
+    if (!function) function = src->lookupSymbol<func::FuncOp>("Attn_p2");
+    if (!function || function.getNumArguments() < 3) {
+      llvm::errs() << "asm128 requires statically bounded attention inputs\n";
+      return 1;
+    }
+    for (Type arg : function.getArgumentTypes().take_front(3)) {
+      auto tensor = dyn_cast<ShapedType>(arg);
       if (!tensor || !tensor.hasStaticShape() || !tensor.getElementType().isF16()) return 1;
+      if (auto memref = dyn_cast<MemRefType>(arg); memref && !memref.getLayout().isIdentity()) {
+        llvm::errs() << "asm128 requires dense input allocation bounds\n";
+        return 1;
+      }
       uint64_t bytes = uint64_t(tensor.getNumElements()) * 2;
       if (!bytes || bytes > UINT32_MAX || (asmSourceBytes && asmSourceBytes != bytes)) {
         llvm::errs() << "asm128 requires equal-size FP16 inputs smaller than 4GiB\n";
@@ -850,10 +854,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
                  << ec.message() << "\n";
     return 1;
   }
-  // Both packed modes of this fixed fixture issue complete wave64 packets.
-  // Keep arbitrary legacy/partial-wave copies outside the splitting contract.
+  // Automatically widened packets and explicit packed modes both preserve
+  // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaPackMode != "legacy" && dmaExport == "split32", asmSourceBytes);
+      dmaExport == "split32", asmSourceBytes);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

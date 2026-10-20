@@ -235,6 +235,10 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes) {
   SmallVector<llvm::Function *> functions;
   for (auto *call : copies) {
     auto *width = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+    // Automatic selection may mix direct dword and dwordx4 packets. Keep
+    // narrow calls on the supported intrinsic path; a function containing
+    // wide asm uses drain-all VM waits for both kinds of transfer below.
+    if (width && width->equalsInt(4)) continue;
     auto *offset = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(3));
     auto *aux = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(4));
     auto *source = call->getArgOperand(0);

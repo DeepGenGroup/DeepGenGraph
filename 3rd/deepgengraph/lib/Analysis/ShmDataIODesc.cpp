@@ -154,9 +154,23 @@ unsigned ShmDataIODesc::selectDMATransferBytes(const HWSpecification &hw,
       sourceStrides[0] * shape[0] > limit - sourceStrides[1] * shape[1])
     return 0;
   auto source = getGlobalSourceMap(ctx, sourceStrides);
+  return selectDMATransferBytes(hw, source, total, elementBytes,
+                                sourceAlignmentBytes);
+}
+
+unsigned ShmDataIODesc::selectDMATransferBytes(
+    const HWSpecification &hw, AffineMap source, int64_t total,
+    int64_t elementBytes, unsigned sourceAlignmentBytes,
+    unsigned requestedBytes) {
+  if (!hw.dataCopyInfo.supportAsyncCopy || !source ||
+      source.getNumDims() != 1 || source.getNumSymbols() ||
+      source.getNumResults() != 1 || total <= 0 || total > (1 << 20) ||
+      elementBytes <= 0 || elementBytes > 16 || !sourceAlignmentBytes)
+    return 0;
   unsigned best = 0;
   for (const auto &dma : hw.dataCopyInfo.dmaTransfers) {
-    if (dma.bytesPerLane <= best || dma.alignmentBytes == 0 ||
+    if ((requestedBytes && dma.bytesPerLane != requestedBytes) ||
+        dma.bytesPerLane <= best || dma.alignmentBytes == 0 ||
         dma.ldsLaneStrideBytes != dma.bytesPerLane ||
         dma.bytesPerLane % elementBytes ||
         sourceAlignmentBytes % dma.alignmentBytes)
@@ -167,11 +181,16 @@ unsigned ShmDataIODesc::selectDMATransferBytes(const HWSpecification &hw,
     int64_t base = 0;
     for (int64_t p = 0; p < total; ++p) {
       int64_t address = source.compose({p})[0];
+      if (address < 0 ||
+          address > std::numeric_limits<int64_t>::max() / elementBytes) {
+        legal = false;
+        break;
+      }
       if (p % elements == 0) {
         base = address;
         legal = (address * elementBytes) % dma.alignmentBytes == 0;
       } else {
-        legal = address == base + p % elements;
+        legal = address >= base && address - base == p % elements;
       }
       if (!legal) break;
     }

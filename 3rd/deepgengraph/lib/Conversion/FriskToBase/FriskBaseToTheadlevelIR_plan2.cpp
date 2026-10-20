@@ -174,6 +174,59 @@ static std::optional<unsigned> getPhysicalMinorCopyAxis(Value source) {
   return std::nullopt;
 }
 
+// BufferView's two-dimensional type does not carry its parent's real strides.
+// Follow the same trailing-axis/transpose composition as resolveViewAccess,
+// without creating IR. Origins affect alignment, but not these local strides.
+static std::optional<coordXY_t> getGlobalCopyStrides(Value source) {
+  auto type = dyn_cast<MemRefType>(source.getType());
+  if (!type || type.getRank() != 2) return std::nullopt;
+  std::array<unsigned, 2> axes{0, 1};
+  while (true) {
+    if (auto view = source.getDefiningOp<frisk::BufferViewOp>()) {
+      unsigned leading = view.getSourceType().getRank() - view.getViewType().getRank();
+      for (auto &axis : axes) axis += leading;
+      source = view.getSource();
+    } else if (auto transpose = source.getDefiningOp<memref::TransposeOp>()) {
+      for (auto &axis : axes)
+        axis = cast<AffineDimExpr>(transpose.getPermutation().getResult(axis)).getPosition();
+      source = transpose.getIn();
+    } else {
+      break;
+    }
+  }
+  type = dyn_cast<MemRefType>(source.getType());
+  SmallVector<int64_t> strides;
+  int64_t offset;
+  if (!type || type.getMemorySpaceAsInt() != int(friskMs::Global) ||
+      failed(type.getStridesAndOffset(strides, offset))) return std::nullopt;
+  coordXY_t result{strides[axes[0]], strides[axes[1]]};
+  if (llvm::any_of(result, [](int64_t s) { return ShapedType::isDynamic(s) || s <= 0; }))
+    return std::nullopt;
+  return result;
+}
+
+// An owned B's producer participates in instruction selection. Prefer the
+// vector-fragment path when a matrix read would require transposing the GM
+// packet through staging. Unknown external LDS inputs retain matrix matching;
+// explicit ReadMatrixFromShmOps retain their requested storage contract.
+static bool matrixPacketsMatchProducers(const SharedBufferAliases &aliases) {
+  for (OpOperand *use : aliases.accesses) {
+    Value source;
+    if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(use->getOwner());
+        copy && use->getOperandNumber() == 1)
+      source = copy.getSrc();
+    else if (auto copy = dyn_cast<frisk::CopyOp>(use->getOwner());
+             copy && use->getOperandNumber() == 1)
+      source = copy.getSrc();
+    if (!source) continue;
+    auto type = cast<MemRefType>(source.getType());
+    if (type.getMemorySpaceAsInt() != int(friskMs::Global)) continue;
+    auto strides = getGlobalCopyStrides(source);
+    if (!strides || (*strides)[1] != 1) return false;
+  }
+  return true;
+}
+
 // Run after instruction/layout selection and before thread tiling. A separate
 // pass exposes the same block IR boundary immediately after async promotion.
 static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
@@ -197,7 +250,8 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
     // Existing physical contracts cannot be discarded. Plain input and the
     // row-packet packing used by matrix reads are both supported.
     SharedBufferAliases aliases;
-    if (aliases.collect(getViewBuffer(gemm.getB())))
+    if (aliases.collect(getViewBuffer(gemm.getB()))) {
+      if (!matrixPacketsMatchProducers(aliases)) return;
       for (Operation *storage : aliases.allocations) {
         auto width = storage->getAttrOfType<IntegerAttr>("frisk.shared_pack");
         auto axis = storage->getAttrOfType<IntegerAttr>("frisk.shared_pack_axis");
@@ -206,6 +260,7 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
             storage->hasAttr("frisk.shared_pair_stride") ||
             storage->hasAttr("frisk.shared_store_stride"))) return;
       }
+    }
     LowerInfo info = *layout;
     OpBuilder b(gemm);
     // Preserve an explicit software-pipeline schedule: the read belongs to

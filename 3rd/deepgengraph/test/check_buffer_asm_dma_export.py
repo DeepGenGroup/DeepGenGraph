@@ -65,6 +65,34 @@ def main():
             print(f'PASS {participants}/256 threads: noncontiguous GM, descriptor/bounds, LDS guards, explicit wait, object encoding ({args.arch}), no M0 clobber warning')
             if args.probe_output:
                 args.probe_output.write_text(result)
+        # Automatic packet selection can retain narrow Q/K while widening V.
+        # The explicit VM wait must cover both, and narrow-only functions keep
+        # their original async markers. Check actual copied LDS bytes as well.
+        mixed = fixture(256).replace('[4352 x i8]', '[5504 x i8]')
+        mixed = mixed.replace('  br label %done', '''
+  %narrow.base = mul i32 %wave, 256
+  %narrow.offset = add i32 %narrow.base, 4352
+  %narrow.dst = getelementptr i8, ptr addrspace(3) @shm_0, i32 %narrow.offset
+  call void @llvm.amdgcn.global.load.async.lds(ptr addrspace(1) %src, ptr addrspace(3) %narrow.dst, i32 4, i32 0, i32 0)
+  br label %done''')
+        result = export(mixed).stdout
+        assert result.count('buffer_load_dwordx4') == 1
+        assert len(re.findall(r'call void @llvm.amdgcn.global.load.async.lds\(', result)) == 1
+        assert not re.search(r'call void @llvm.amdgcn.(?:asyncmark|wait.asyncmark)\(', result)
+        assert result.count('s_waitcnt vmcnt(0)') == 1
+        models = [LLVMWorkgroupModel(ir, q, k, v) for ir in (mixed, result)]
+        output = [m.run() for m in models]
+        np.testing.assert_array_equal(output[0], output[1])
+        np.testing.assert_array_equal(models[0].mem[0], models[1].mem[0])
+        narrow = fixture(256).replace('i32 16, i32 0, i32 0)', 'i32 4, i32 0, i32 0)')
+        narrow_export = export(narrow).stdout
+        assert 'call void @llvm.amdgcn.wait.asyncmark(i16 0)' in narrow_export
+        assert 'buffer_load_dwordx4' not in narrow_export
+        ir.write_text(result)
+        subprocess.run([args.llvm_bin / 'opt', '-passes=verify,default<O3>,verify', '-S', ir, '-o', optimized], check=True)
+        subprocess.run([args.llvm_bin / 'llc', '-mtriple=amdgcn-amd-amdhsa', f'-mcpu={args.arch}',
+                        '-O3', '-filetype=obj', optimized, '-o', obj], check=True)
+        print('PASS mixed 4B/16B DMA bytes, common VM wait, narrow-only markers and object export')
         for bad in [fixture(256).replace('i32 16, i32 0, i32 0)', 'i32 16, i32 32, i32 0)'),
                     fixture(256).replace('wait.asyncmark(i16 0)', 'wait.asyncmark(i16 1)')]:
             rejected = export(bad, check=False)

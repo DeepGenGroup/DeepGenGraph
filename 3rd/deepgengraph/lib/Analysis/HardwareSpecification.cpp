@@ -180,7 +180,8 @@ HWSpecification* GetHWSpecification(std::string hwKind, std::string version, mli
             s->dataCopyInfo.supportAsyncCopy = true;
             // Layout candidates, not a guarantee of target compiler support.
             // The supplied gfx936 DTK selects 4B global DMA but rejects 16B;
-            // packed attention can retain a 16B layout using split32 export.
+            // wide transfers use buffer asm in the attention exporter;
+            // split32/HCU exports remain explicit toolchain diagnostics.
             s->dataCopyInfo.dmaTransfers = {{4, 4, 4}, {16, 16, 16}};
             s->dataCopyInfo.asyncCopyAlignBytesNonSwizzle = 4;
             s->syncGranularity.innerBlockLevelSync = true;

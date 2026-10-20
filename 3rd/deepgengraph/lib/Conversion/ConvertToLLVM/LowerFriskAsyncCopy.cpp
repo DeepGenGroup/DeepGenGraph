@@ -1,5 +1,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Analysis/HardwareSpecification.h"
+#include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -31,30 +32,24 @@ SmallVector<Value> coordinates(OpBuilder &b, Location loc, Value linear,
 // gfx936's direct-to-LDS operation adds lane_id * packetBytes to a
 // wave-uniform destination base. Never pass the per-thread destination.
 // Restrict DMA to layouts for which that mapping is exactly the logical copy.
-bool canUseDMA(frisk::AsyncCopyGmToShmOp op, unsigned bytes,
-               AffineMap sourceMap = {}) {
+unsigned selectDMA(frisk::AsyncCopyGmToShmOp op, unsigned requestedBytes = 0,
+                   AffineMap sourceMap = {}) {
   auto src = cast<MemRefType>(op.getSrc().getType());
   auto dst = cast<MemRefType>(op.getDst().getType());
   unsigned bits = src.getElementTypeBitWidth();
   auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000,
                                        op.getContext());
-  auto *transfer = hw->dataCopyInfo.getDMATransfer(bytes);
-  if (!transfer || transfer->ldsLaneStrideBytes != bytes ||
-      (bits != 8 && bits != 16 && bits != 32) ||
-      op.getAlignment() % transfer->alignmentBytes)
-    return false;
-  int64_t elements = bytes * 8 / bits;
-  if (dst.getNumElements() % elements)
-    return false;
+  if (bits != 8 && bits != 16 && bits != 32)
+    return 0;
   SmallVector<int64_t> srcStrides, dstStrides;
   int64_t offset;
   if (failed(src.getStridesAndOffset(srcStrides, offset)) ||
       failed(dst.getStridesAndOffset(dstStrides, offset)))
-    return false;
+    return 0;
   int64_t stride = 1;
   for (int64_t dim = dst.getRank() - 1; dim >= 0; --dim) {
     if (dst.getDimSize(dim) > 1 && dstStrides[dim] != stride)
-      return false;
+      return 0;
     stride *= dst.getDimSize(dim);
   }
   // Check actual source addresses for each physical destination packet. The
@@ -62,31 +57,33 @@ bool canUseDMA(frisk::AsyncCopyGmToShmOp op, unsigned bytes,
   auto mapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
   if (!sourceMap && mapAttr) sourceMap = mapAttr.getValue();
   if (dst.getNumElements() > (1 << 20) ||
-      llvm::any_of(srcStrides, ShapedType::isDynamic)) return false;
-  int64_t packetBase = 0;
-  for (int64_t i = 0; i < dst.getNumElements(); ++i) {
-    SmallVector<int64_t> coords(src.getRank());
-    if (sourceMap) {
-      SmallVector<Attribute> folded;
-      if (failed(sourceMap.constantFold(
-              {IntegerAttr::get(IndexType::get(op.getContext()), i)}, folded))) return false;
-      for (auto [dim, value] : llvm::enumerate(folded))
-        coords[dim] = cast<IntegerAttr>(value).getInt();
-    } else {
-      int64_t flat = i;
-      for (int64_t dim = src.getRank() - 1; dim >= 0; --dim) {
-        coords[dim] = flat % src.getDimSize(dim);
-        flat /= src.getDimSize(dim);
-      }
+      llvm::any_of(srcStrides, [](int64_t s) {
+        return ShapedType::isDynamic(s) || s <= 0;
+      })) return 0;
+  if (!sourceMap) {
+    SmallVector<AffineExpr> coords(src.getRank());
+    auto flat = getAffineDimExpr(0, op.getContext());
+    for (int64_t dim = src.getRank() - 1; dim >= 0; --dim) {
+      coords[dim] = flat % src.getDimSize(dim);
+      flat = flat.floorDiv(src.getDimSize(dim));
     }
-    int64_t address = 0;
-    for (auto [c, s] : llvm::zip(coords, srcStrides)) address += c * s;
-    if (i % elements == 0) {
-      if (address % elements) return false;
-      packetBase = address;
-    } else if (address != packetBase + i % elements) return false;
+    sourceMap = AffineMap::get(1, 0, coords, op.getContext());
   }
-  return true;
+  if (sourceMap.getNumDims() != 1 || sourceMap.getNumSymbols() ||
+      sourceMap.getNumResults() != unsigned(src.getRank())) return 0;
+  auto address = getAffineConstantExpr(0, op.getContext());
+  for (unsigned dim = 0; dim < unsigned(src.getRank()); ++dim)
+    address = address + sourceMap.getResult(dim) * srcStrides[dim];
+  auto offsets = AffineMap::get(1, 0, address);
+  unsigned bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
+      *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), requestedBytes);
+  // Automatic wide DMA uses complete waves, including the final round. This
+  // also keeps the wide export's wave-uniform LDS-base contract explicit.
+  if (!requestedBytes && bytes > 4 &&
+      dst.getNumElements() % (hw->getWarpsize() * bytes * 8 / bits))
+    bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
+        *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), 4);
+  return bytes;
 }
 
 // Walk source storage in stride order; the tile may have padded rows or a
@@ -197,8 +194,9 @@ struct LowerFriskAsyncCopyPass
       int64_t threads = op->getParentOfType<func::FuncOp>()
                             ->getAttrOfType<IntegerAttr>("thread_num").getInt();
       auto requestedBytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
-      unsigned dmaBytes = requestedBytes ? requestedBytes.getInt() : 4;
-      bool dma = useAsyncCopy && !op->hasAttr("frisk.force_sync") && canUseDMA(op, dmaBytes);
+      bool enabled = useAsyncCopy && !op->hasAttr("frisk.force_sync");
+      unsigned dmaBytes = enabled ? selectDMA(op, requestedBytes ? requestedBytes.getInt() : 0) : 0;
+      bool dma = dmaBytes != 0;
       if (auto copying = op->getAttrOfType<IntegerAttr>("frisk.copy_threads")) {
         if (copying.getInt() <= 0 || copying.getInt() > threads || copying.getInt() % 64) {
           op.emitError("copy_threads must select complete waves within the block");
@@ -218,7 +216,9 @@ struct LowerFriskAsyncCopyPass
               copy && copy.getDst() == op.getDst()) break;
         }
         auto storageMap = sourceStorageOrder(op);
-        if (ready && storageMap && canUseDMA(op, dmaBytes, storageMap)) {
+        unsigned stagedBytes = ready && storageMap
+            ? selectDMA(op, requestedBytes ? requestedBytes.getInt() : 0, storageMap) : 0;
+        if (stagedBytes) {
           auto stageType = MemRefType::get({srcType.getNumElements()}, srcType.getElementType(),
                                          AffineMap{}, dstType.getMemorySpace());
           Value staging;
@@ -263,6 +263,7 @@ struct LowerFriskAsyncCopyPass
           sourceMap = storageMap;
           dstType = stageType;
           dma = true;
+          dmaBytes = stagedBytes;
           ++stagedCount;
         }
       }

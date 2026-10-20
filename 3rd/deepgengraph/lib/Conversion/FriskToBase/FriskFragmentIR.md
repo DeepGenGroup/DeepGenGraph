@@ -36,7 +36,12 @@ ConvertLayout 及 bridge 最终物化均使用该组织方式。Reduce 的输出
 按 `HWSpecification::matrixLoadInsts` 检查元素类型、形状能否整除为指令 tile，
 以及 WMMA B 扩展到该 tile 后的 lane/register 排布。f16 使用 `[16,32]`，
 f32 使用 `[8,32]`；同形状的 ALT 排布不等价时不选用。转置 B、不完整 tile、
-带逻辑置换的 B 保留原来的 fragment load 路径。
+不保持输入 packet 的逻辑置换保留原来的 fragment load 路径。
+对于 owned SHM，还检查所有 GM 写入者经 view/transpose 合成后的真实 stride。
+matrix read 要求行内连续 packet；若 GM 的连续轴是另一轴，自动选择保留
+vector fragment load，避免为了满足 matrix read 引入转置 staging。
+这不依赖 Q/K/V 名称，也不修改原生 WMMA fragment 的 LowerInfo。
+外部 SHM 输入仍按已有布局匹配；显式书写的 matrix read 保留原要求。
 独立 pass 的 `wmma-layout` 应与 thread tiling 一致（例如 `b-permute`）；
 主 pipeline 已传入同一选项。仅需对照旧自动加载路径时，可省略独立 pass 并使用
 `--convert-friskbase-to-thread=matrix-loads=false`；这不会撤销手写的显式 read。
@@ -61,7 +66,7 @@ kpack 的 DMA/consumer 比值仍使用 WMMA B 的寄存器宽度。共享内存�
 保留 matrix read 每 lane 的连续 16 字节输入段；`pack-shared-memory` 同时
 重写 copy 的 source map 和 matrix read 的 lane 指针，且在改写前证明段内
 连续性。既有 wait 保留在 read 前；插入 block read 时更新流水 stage/order。
-若 GM 的连续轴与这些 shm 行内段不同，沿用 DMA staging：先按 GM 顺序
+显式指定 matrix read 时，若 GM 的连续轴与这些 shm 行内段不同，沿用 DMA staging：先按 GM 顺序
 执行 16 字节 DMA，在 wait 处重排到目标 shm；这会增加 staging 空间及搬运。
 线程级 matrix read 在该操作处结束对源 shm 的读取，结果寄存器的后续使用
 不延长 shm 生命周期。共享内存复用和循环同步分析显式识别它，并在复用
@@ -100,6 +105,22 @@ FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
 也均通过。批量生成相同 layout 的命令为
 `WMMA_LAYOUT=3.2 bash script/generate_attention_dma_pack.sh <output-dir>`；
 该脚本默认使用 `asm128`，生成的 noKPack 版本仍需单独设备验证。
+
+2026-10-19 物理 producer 选择更新后，同一 `test_input_spidD.mlir`、layout
+3.2、256 线程、block-warps 4,1 的 useKPack 导出改为 K vector load / V
+matrix read，16 个 16B DMA 调用、32 个 matrix read、32 KiB LDS、无 staging。
+legacy packing 不改变 BK，也能自动给 V 选择 16B DMA；Q/K 按已有物理布局
+选择合法的 4B DMA，共用显式 VM wait。更宽的 DMA 不会强制改变计算 tile
+或覆盖已有 bank packing；useKPack/noKPack 仍是显式的计算/搬运分工策略。
+这些新结果已通过编译和 CPU 地址/数值验证，尚未进行新的 gfx936 性能测试。
+
+```bash
+python3 3rd/deepgengraph/test/check_attention_physical_copy_plan.py \
+  3rd/deepgengraph/build/test/MyTest --output-dir /tmp/attention-physical-copy
+```
+
+回归覆盖 layout 3.2 的 legacy/useKPack/noKPack，以及 layout 3.3 的 useKPack，
+检查默认导出、无 staging、K/V 读指令分工，并逐组执行四个 CPU 数值用例。
 
 Global→Shared Copy 使用连续传输 packet 作为搬运 fragment，其宽度为
 `gcd(perThread, rowWidth)`，继续保证不跨行及尾部 guard；这个物理搬运布局

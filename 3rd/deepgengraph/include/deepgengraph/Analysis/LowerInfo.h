@@ -77,6 +77,13 @@ struct ShmDataIODesc {
   unsigned selectDMATransferBytes(const HWSpecification &hw, MLIRContext *ctx,
                                   coordXY_t sourceStrides,
                                   unsigned sourceAlignmentBytes) const;
+  // Shared proof for layout planning and final lowering. The map takes a
+  // physical LDS element index to a GM element offset relative to the view
+  // origin. requestedBytes=0 selects the largest legal hardware packet.
+  static unsigned selectDMATransferBytes(
+      const HWSpecification &hw, AffineMap sourceOffsets, int64_t elements,
+      int64_t elementBytes, unsigned sourceAlignmentBytes,
+      unsigned requestedBytes = 0);
   // One wave's per-lane byte addresses; -1 denotes an inactive lane.
   // Read broadcasts count once. Writes to the same word are not broadcasts.
   // nullopt means unknown/invalid width, target or addresses; 0 = no accesses.

@@ -197,6 +197,20 @@ def main():
     assert 'scf.for' not in full and full.count('rocdl.global.load.async.lds') == 16
     assert full.count('rocdl.asyncmark') == 1
     assert 'scf.for' in lower(fixture('2176'), '--frisk-lower-async-copy')
+    # Automatic width follows real packet addresses and origin alignment,
+    # without kpack or an explicitly requested DMA width.
+    for shape, layout, alignment, expected, rows, cols, strides, offset in (
+        ('64x32', '', 16, 16, 64, 32, None, 0),
+        ('64x32', ', strided<[40, 1], offset: 8>', 16, 16, 64, 32, (40, 1), 8),
+        ('64x32', ', strided<[34, 1]>', 16, 4, 64, 32, (34, 1), 0),
+        ('64x32', '', 4, 4, 64, 32, None, 0),
+        ('264', '', 16, 4, 1, 264, None, 0),
+    ):
+        ir = llvm_ir(fixture(shape, 'i16', layout, alignment))
+        widths = re.findall(r'call void @llvm.amdgcn.global.load.async.lds\([^\n]*i32 (\d+), i32 0, i32 0\)', ir)
+        assert widths and set(map(int, widths)) == {expected}, widths
+        execute_copy(ir, rows, cols, 16, strides, offset)
+    print('PASS automatic DMA width: 16B packets, padded rows/view origins, alignment and partial-wave fallback')
     for mode in (True, False):
         execute_copy(llvm_ir(fixture('3x130', 'i16'), mode), 3, 130, 16)
         execute_copy(llvm_ir(fixture('3x130', 'i16', ', strided<[134, 1], offset: 4>'), mode),

@@ -110,17 +110,22 @@ Logical/physical maps use element offsets; bank analysis uses byte addresses.
 the view origin. `selectDMATransferBytes()` checks every physical packet for
 source contiguity and alignment before choosing a hardware-supported width.
 For row-major Q, four-f16 packets usually permit only 4-byte direct DMA;
-eight-f16 packets can permit 16 bytes. This query does not change packing or
-enable wider emission automatically. `getBankConflictWays()` evaluates actual
+eight-f16 packets can permit 16 bytes. Final async lowering now uses the same
+proof on the composed source map and actual memref strides, selecting the
+largest legal direct width without changing packing or computation tiles.
+Automatic 16-byte packets require complete waves; partial waves use a legal
+4-byte width or the synchronous fallback. Explicit `frisk.dma_bytes` remains
+a requirement, including the existing staging fallback when necessary.
+`getBankConflictWays()` evaluates actual
 per-lane addresses with the target phase groups, including inactive lanes and
 read broadcasts; it does not infer conflict freedom from packet size alone.
 
 The asynchronous path requires a one-dimensional block of 64, 128, …, 1024
-threads (`thread_num`) and wave64 execution. It issues 4-byte DMA packets:
+threads (`thread_num`) and wave64 execution. It selects 4- or 16-byte DMA packets:
 
 ```text
 amdgpu.gather_to_lds async       (temporary memref representation)
-  → rocdl.global.load.async.lds  (size = 4)
+  → rocdl.global.load.async.lds  (size = selected packet bytes)
   → rocdl.asyncmark             (once after each logical tile issue)
 
 frisk.wait_buffer_ready
@@ -131,9 +136,17 @@ frisk.wait_buffer_ready
 The conversion to ROCDL uses the standard LLVM memref descriptor helpers but
 does not query upstream's chip database for `gfx936`. The LDS operand is the
 **wave base**, made uniform with `rocdl.readfirstlane`. Hardware adds
-`lane_id * 4`; passing a per-thread LDS pointer would add that offset twice.
+`lane_id * packet_bytes`; passing a per-thread LDS pointer would add that offset twice.
 Inactive tail lanes issue no load. Source row strides and descriptor offsets
 are preserved.
+
+MyTest's async/hybrid modes default to `asm128` export, also with legacy
+packing. Statically bounded dense attention input allocations supply the
+buffer descriptor range. Only 16-byte transfers become buffer inline asm;
+4-byte transfers retain their intrinsic. In functions with wide asm,
+`s_waitcnt vmcnt(0)` completes both kinds before the existing barrier.
+Narrow-only functions retain asyncmark/wait.asyncmark. Explicit `split32`
+and `hcu128` exports remain available for toolchain diagnostics.
 
 Full tiles with at most sixteen packets per thread emit constant DMA rounds.
 They retain one mark per tile, while removing the per-lane 64-bit copy loop and

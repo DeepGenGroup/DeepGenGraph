@@ -257,11 +257,47 @@ def main():
             '%transposed = memref.transpose %input (d0, d1) -> (d1, d0) : '
             'memref<64x32xf16, 1> to memref<32x64xf16, strided<[1, 32]>, 1>\n'
             '      frisk.async_copy_gm_to_shm %transposed')
+        selected = lower(source, '--frisk-promote-gemm-matrix-loads')
+        assert 'frisk.read_matrix_from_shm' not in selected
         ir = export(finalize(source, mode))
+        assert '@llvm.hcu.ds.read.m32x16.b16.v4i32.p3' not in ir
+        assert '@async_lds_staging_' not in ir
+        command([LLVM / 'opt', '-passes=verify', '-disable-output'], ir)
+        # An authored matrix read still requests row packets, even when that
+        # choice needs staging. Automatic selection must not undo this IR.
+        explicit = source.replace('      %g = frisk.gemm(%a, %b)', '''
+      %r = frisk.read_matrix_from_shm %b[] {m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64}
+        : memref<32x64xf16, 3> -> memref<32x64xf16>
+      %g = frisk.gemm(%a, %r)''').replace(
+            ': memref<32x32xf16, 3>, memref<32x64xf16, 3> ->',
+            ': memref<32x32xf16, 3>, memref<32x64xf16> ->')
+        ir = export(finalize(explicit, mode))
         assert '@llvm.hcu.ds.read.m32x16.b16.v4i32.p3' in ir
         assert '@async_lds_staging_' in ir
-        command([LLVM / 'opt', '-passes=verify', '-disable-output'], ir)
-    print('PASS column-major GM, full-width staged DMA and matrix-read packets')
+    # Physical stride wins over a view's nominal row-major type. Test a
+    # rank-reducing view of a transposed rank-four source, as in attention K.
+    nested = fixture(owned=True).replace('%input: memref<32x64xf16, 1>',
+        '%root: memref<1x2x64x32xf16, 1>').replace(
+        '      %b = frisk.alloc_buffer', '''
+      %t = memref.transpose %root (d0,d1,d2,d3) -> (d0,d1,d3,d2)
+        : memref<1x2x64x32xf16, 1> to memref<1x2x32x64xf16, strided<[4096,2048,1,32]>, 1>
+      %input = frisk.buffer_view %t[0,1,0,0], ranges = [32,64]
+        : memref<1x2x32x64xf16, strided<[4096,2048,1,32]>, 1> -> memref<32x64xf16, 1>
+      %b = frisk.alloc_buffer''')
+    assert 'frisk.read_matrix_from_shm' not in lower(nested, '--frisk-promote-gemm-matrix-loads')
+    direct_strided = fixture(owned=True).replace('memref<32x64xf16, 1>',
+        'memref<32x64xf16, strided<[1,32]>, 1>')
+    assert 'frisk.read_matrix_from_shm' not in lower(direct_strided, '--frisk-promote-gemm-matrix-loads')
+    # All writers must agree; finding one contiguous producer is insufficient.
+    mixed = fixture(owned=True).replace('%out: memref<32x64xf32, 1>',
+        '%other: memref<32x64xf16, strided<[1,32]>, 1>, %out: memref<32x64xf32, 1>')
+    mixed = mixed.replace('      %g =', '''
+      frisk.async_copy_gm_to_shm %other to %b {alignment = 16 : i64}
+        : memref<32x64xf16, strided<[1,32]>, 1>, memref<32x64xf16, 3>
+      frisk.wait_buffer_ready %b : memref<32x64xf16, 3>
+      %g =''')
+    assert 'frisk.read_matrix_from_shm' not in lower(mixed, '--frisk-promote-gemm-matrix-loads')
+    print('PASS physical GM strides, nested transpose/views, all writers, direct vector fallback and explicit staged matrix reads')
     hybrid = lower(pipeline, '--convert-friskbase-to-thread=async-direct-only=true')
     assert hybrid.count('frisk.async_copy_gm_to_shm') == 2
     assert hybrid.count('frisk.wait_buffer_ready') == 2
