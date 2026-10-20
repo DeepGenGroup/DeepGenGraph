@@ -39,9 +39,9 @@ def check_overlap(ir):
         assert mark.start() < wait.start()
         previous = mark.end()
     assert counts == ([8] * 2 if hybrid else [8] * 6) or (not hybrid and counts == [1] * 6), counts
-    if not grouped:
-        # Preserve the conservative separate-completion policy: the first
-        # tile's wait precedes the next issue, rather than merely counting waits.
+    if not grouped and not hybrid:
+        # Staged copies retain their issue/repack order. Independent direct
+        # hybrid copies may overlap while keeping both named completions.
         next_issue = next(d for d in dma if d.start() > marks[0].end())
         assert waits[0].start() < next_issue.start()
     assert dma[-1].start() < marks[-1].start()

@@ -69,7 +69,7 @@ module {
             %partialQK = deepgengraph.precise_dot_op %qScaled, %kTile, acc = f32 : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
             %nextQK = deepgengraph.add %accQK, %partialQK : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
             scf.yield %nextQK : tensor<128x128xf32>
-          }
+          }{frisk.pipeline_hint}
           %mask = deepgengraph.mask starts = [%qStart, %n], sizes = [128, 128], type = f32 {
           ^bb0(%qi: index, %ki: index):
             %nextRow = arith.addi %qi, %c1 : index

@@ -7,6 +7,7 @@
 #include "mlir/Analysis/AliasAnalysis.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
+#include "deepgengraph/Analysis/LowerInfo.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -21,6 +22,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <optional>
 #include <set>
@@ -547,12 +549,153 @@ static bool pipelineFragments(Loop loop) {
 #define GEN_PASS_DEF_LOWERFRISKFRAGMENTS
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
+// Crossing a DMA also moves a block barrier. Prove both direct packet legality
+// and that this barrier is not releasing old readers of the crossed DMA's dst.
+// Keep this separate from ordinary independence: issue hoisting must NOT gain
+// permission to cross launches or waits from the completion-only relaxation.
+class DirectDMAWaitMotion {
+public:
+  explicit DirectDMAWaitMotion(AliasAnalysis &aliases) : aliases(aliases) {}
+
+  bool canCross(WaitBufferReadyOp wait, AsyncCopyGmToShmOp issue,
+                AsyncCopyGmToShmOp next) {
+    if (!isDirect(issue) || !isDirect(next) ||
+        scheduled(wait) || scheduled(issue) || scheduled(next) ||
+        !isInBlockUniformControlFlow(wait) ||
+        !disjoint(issue.getDst(), next.getDst()) ||
+        !disjoint(issue.getDst(), next.getSrc()) ||
+        !disjoint(issue.getSrc(), next.getDst()))
+      return false;
+
+    // Walk back from the barrier being moved, not from next: descriptors and
+    // intervening independent work were already checked by the ordinary sink.
+    // Only an explicit barrier can discharge previous readers/writers. Named
+    // waits may themselves move later, so do not rely on them here.
+    Operation *cursor = wait;
+    while (!isa<func::FuncOp>(cursor)) {
+      for (Operation *prev = cursor->getPrevNode(); prev;
+           prev = prev->getPrevNode()) {
+        if (explicitBarrier(prev))
+          return true;
+        if (!safeBeforeBarrier(prev, next))
+          return false;
+      }
+      Operation *parent = cursor->getParentOp();
+      if (!isa<func::FuncOp>(parent)) {
+        // The current block's previous iteration also contains old readers.
+        // Require an existing explicit tail barrier; publication after the
+        // next iteration's DMA would be too late.
+        if (!isa<affine::AffineForOp, scf::ForOp>(parent) ||
+            !explicitBarrier(cursor->getBlock()->getTerminator()->getPrevNode()))
+          return false;
+      }
+      cursor = parent;
+    }
+    return true;
+  }
+
+private:
+  static bool explicitBarrier(Operation *op) {
+    return op && isa<gpu::BarrierOp, SyncThreadsInBlockOp>(op);
+  }
+
+  static bool scheduled(Operation *op) {
+    for (; op; op = op->getParentOp())
+      for (StringRef name : {"pipeline.stage", "pipeline.order",
+                            "pipeline.scheduled", "pipeline_slot",
+                            "frisk.pipelined", "frisk.pipeline_stage"})
+        if (op->hasAttr(name))
+          return true;
+    return false;
+  }
+
+  static Value origin(Value value) {
+    for (unsigned depth = 0; depth < 32; ++depth) {
+      Operation *def = value.getDefiningOp();
+      if (auto view = dyn_cast_or_null<ViewLikeOpInterface>(def))
+        value = view.getViewSource();
+      else if (auto cast = dyn_cast_or_null<memref::CastOp>(def))
+        value = cast.getSource();
+      else
+        return value;
+    }
+    return {};
+  }
+
+  bool disjoint(Value a, Value b) {
+    return aliases.alias(a, b).isNo();
+  }
+
+  bool isDirect(AsyncCopyGmToShmOp op) {
+    auto function = op->getParentOfType<func::FuncOp>();
+    auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
+    if (!threads || threads.getInt() <= 0 || threads.getInt() > 1024 ||
+        threads.getInt() % 64 || op->hasAttr("frisk.force_sync") ||
+        op.getSrc().getDefiningOp<BufferViewOp>() ||
+        op.getDst().getDefiningOp<BufferViewOp>())
+      return false;
+    // Do not reschedule against an already materialized storage-reuse plan,
+    // external storage, or an unresolved select/loop-carried descriptor.
+    Value root = origin(op.getDst());
+    auto alloc = root ? root.getDefiningOp<memref::AllocOp>() : memref::AllocOp{};
+    if (!alloc || alloc->hasAttr("frisk.shm_pool") ||
+        alloc->hasAttr("frisk.shared_pack"))
+      return false;
+    auto width = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
+    return selectAsyncDMATransferBytes(op, width ? width.getInt() : 0) != 0;
+  }
+
+  bool safeBeforeBarrier(Operation *op, AsyncCopyGmToShmOp next) {
+    // These earlier synchronous regions are not being moved across the wait.
+    // Inspect their accesses so an unrelated initialization/read loop does not
+    // hide either an old reader or a source write. A nested barrier is not a
+    // proof of a block-wide handoff on all paths.
+    if (isa<affine::AffineForOp, affine::AffineIfOp, scf::ForOp, scf::IfOp>(op)) {
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (Operation &nested : block)
+            if (!safeBeforeBarrier(&nested, next))
+              return false;
+      return true;
+    }
+    if (op->getNumRegions() || isa<ToThreadTileOp, FromThreadTileOp>(op))
+      return false;
+    if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(op))
+      return disjoint(copy.getDst(), next.getDst()) &&
+             disjoint(copy.getSrc(), next.getDst()) &&
+             disjoint(copy.getDst(), next.getSrc());
+    if (isa<WaitBufferReadyOp>(op))
+      return false; // May include a staged repack or protect unrelated data.
+    if (isa<memref::AllocOp, memref::AllocaOp>(op))
+      return true;
+    auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+    if (!effects)
+      return false;
+    SmallVector<MemoryEffects::EffectInstance> instances;
+    effects.getEffects(instances);
+    for (const auto &effect : instances) {
+      Value value = effect.getValue();
+      if (!value ||
+          !isa<MemoryEffects::Read, MemoryEffects::Write, MemoryEffects::Free>(
+              effect.getEffect()) ||
+          !disjoint(value, next.getDst()) ||
+          (!isa<MemoryEffects::Read>(effect.getEffect()) &&
+           !disjoint(value, next.getSrc())))
+        return false;
+    }
+    return true;
+  }
+
+  AliasAnalysis &aliases;
+};
+
 // Schedule only within a block, after physical layouts and all accesses are
 // visible, but BEFORE storage reuse. Thus an early issue extends the live range
 // that the allocator sees. Never move an issue after allocation against a stale
 // reuse plan, and never speculate across a barrier or an unknown effect.
 static void scheduleAsyncCopies(func::FuncOp kernel) {
   AliasAnalysis aliases(kernel);
+  DirectDMAWaitMotion directWaitMotion(aliases);
   auto independent = [&](Operation *op, AsyncCopyGmToShmOp issue) {
     return !op->walk([&](Operation *nested) {
       if (isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp,
@@ -629,12 +772,13 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
     }
     if (wait)
       while (Operation *next = wait->getNextNode()) {
-        // Preserve completion before another DMA issue, even for disjoint
-        // tiles. Alias independence alone does not validate grouped completion
-        // on the target backend. Keep the conservative policy while target
-        // numerics remain unresolved for both grouped and separate waits.
-        if (next->hasTrait<OpTrait::IsTerminator>() ||
-            !independent(next, issue)) break;
+        if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(next)) {
+          if (!directWaitMotion.canCross(wait, issue, copy))
+            break;
+        } else if (next->hasTrait<OpTrait::IsTerminator>() ||
+                   !independent(next, issue)) {
+          break;
+        }
         wait->moveAfter(next);
       }
   }
@@ -663,6 +807,9 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
         body.front().moveBefore(fragment);
       fragment.erase();
     }
+    // Establish old-reader protection before considering moving readiness
+    // barriers across direct launches. Recheck after the final schedule too.
+    synchronizeSharedMemoryLoopBackedges(getOperation());
     scheduleAsyncCopies(getOperation());
     // The prefetch schedule is now fixed, and all physical reads are visible.
     // Allocate shared storage only against these final operation lifetimes.

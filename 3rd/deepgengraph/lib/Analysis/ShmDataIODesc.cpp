@@ -7,6 +7,65 @@
 
 namespace mlir::frisk {
 
+// gfx936's direct-to-LDS operation adds lane_id * packetBytes to a
+// wave-uniform destination base. Never pass the per-thread destination.
+// Restrict DMA to layouts for which that mapping is exactly the logical copy.
+unsigned selectAsyncDMATransferBytes(AsyncCopyGmToShmOp op, unsigned requestedBytes,
+                                     AffineMap sourceMap) {
+  auto src = cast<MemRefType>(op.getSrc().getType());
+  auto dst = cast<MemRefType>(op.getDst().getType());
+  if (!src.hasStaticShape() || !dst.hasStaticShape())
+    return 0;
+  unsigned bits = src.getElementTypeBitWidth();
+  auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000,
+                                       op.getContext());
+  if (bits != 8 && bits != 16 && bits != 32)
+    return 0;
+  SmallVector<int64_t> srcStrides, dstStrides;
+  int64_t offset;
+  if (failed(src.getStridesAndOffset(srcStrides, offset)) ||
+      failed(dst.getStridesAndOffset(dstStrides, offset)))
+    return 0;
+  int64_t stride = 1;
+  for (int64_t dim = dst.getRank() - 1; dim >= 0; --dim) {
+    if (dst.getDimSize(dim) > 1 && dstStrides[dim] != stride)
+      return 0;
+    stride *= dst.getDimSize(dim);
+  }
+  // Check actual source addresses for each physical destination packet. The
+  // physically contiguous source axis need not be the last logical axis.
+  auto mapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
+  if (!sourceMap && mapAttr) sourceMap = mapAttr.getValue();
+  if (dst.getNumElements() > (1 << 20) ||
+      llvm::any_of(srcStrides, [](int64_t s) {
+        return ShapedType::isDynamic(s) || s <= 0;
+      })) return 0;
+  if (!sourceMap) {
+    SmallVector<AffineExpr> coords(src.getRank());
+    auto flat = getAffineDimExpr(0, op.getContext());
+    for (int64_t dim = src.getRank() - 1; dim >= 0; --dim) {
+      coords[dim] = flat % src.getDimSize(dim);
+      flat = flat.floorDiv(src.getDimSize(dim));
+    }
+    sourceMap = AffineMap::get(1, 0, coords, op.getContext());
+  }
+  if (sourceMap.getNumDims() != 1 || sourceMap.getNumSymbols() ||
+      sourceMap.getNumResults() != unsigned(src.getRank())) return 0;
+  auto address = getAffineConstantExpr(0, op.getContext());
+  for (unsigned dim = 0; dim < unsigned(src.getRank()); ++dim)
+    address = address + sourceMap.getResult(dim) * srcStrides[dim];
+  auto offsets = AffineMap::get(1, 0, address);
+  unsigned bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
+      *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), requestedBytes);
+  // Automatic wide DMA uses complete waves, including the final round. This
+  // also keeps the wide export's wave-uniform LDS-base contract explicit.
+  if (!requestedBytes && bytes > 4 &&
+      dst.getNumElements() % (hw->getWarpsize() * bytes * 8 / bits))
+    bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
+        *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), 4);
+  return bytes;
+}
+
 std::optional<ShmDataIODesc> ShmDataIODesc::getPacked(
     coordXY_t shape, int64_t elementBytes, int64_t axis, int64_t pack,
     int64_t pairStride, int64_t storeStride, int64_t storePair, int64_t packetRows) {

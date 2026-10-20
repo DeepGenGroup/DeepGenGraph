@@ -44,6 +44,13 @@ enum class BufferAxisReuse : int32_t {
 
 class LowerInfoAnalysis ;
 
+// Packet legality shared by physical scheduling and final DMA lowering.
+// A sourceMap override describes staging order; without it this checks direct
+// transfer into the op's actual destination layout. Zero means unsupported.
+unsigned selectAsyncDMATransferBytes(AsyncCopyGmToShmOp op,
+                                   unsigned requestedBytes = 0,
+                                   AffineMap sourceMap = {});
+
 // 物理 LDS 组织独立于计算线程和搬运线程的分工。所有 map 均以元素为单位，
 // 只有 bank 检查使用字节地址。由整个 allocation 的生产者/消费者协商后创建。
 struct ShmDataIODesc {

@@ -59,8 +59,8 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    stays within the original block and stops at regions, unknown effects,
    synchronization or another DMA issue/wait. In the split-D hybrid example,
    K readiness moves after Q scaling and immediately before GEMM. Q readiness
-   remains before the K DMA because separate DMA completion is still the
-   backend policy; this pass does not enable grouped DMA or remove waits.
+   remains before the K DMA at this stage: direct packet legality is not yet
+   established. This high-level pass does not cross DMA or remove waits.
 
    To run it independently on logical or physical tile IR:
 
@@ -72,7 +72,16 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    and waits toward consumers within the same block. Pure descriptor setup and
    static owned LDS allocations move with the issue. Alias checks protect source writes and destination
    reads/writes; barriers, other async operations and unknown effects bound
-   motion. This happens **before** storage reuse, so pending transfers extend
+   issue hoisting. Wait sinking may cross another issue only when both use
+   the final lowering's direct packet proof, their storage is independent and
+   owned (not an existing reuse pool), and moving the publication barrier
+   cannot expose earlier destination readers/writers or source writes.
+   Only block-uniform function/loop control flow is accepted; scheduled
+   operations, staged/fallback copies and unresolved destinations stay blocked.
+   Explicit loop-tail barriers must already protect wrapped old readers;
+   fragment lowering establishes them before scheduling and checks again after.
+   All named waits and barriers remain, with wait count zero.
+   This happens **before** storage reuse, so pending transfers extend
    the allocation lifetime. A matching same-block, exact-descriptor wait is
    required for async storage reuse; incomplete/conditional completion stays
    conservative. Collective loop backedges and storage handoffs retain barriers
@@ -163,18 +172,20 @@ groups. The named buffer determines IR dependencies and slot selection; it does
 not yet select a minimal hardware wait count. Group counts are not packet or
 byte counts. This implementation makes no claim of optimal overlap.
 
-Readiness waits do not move across another DMA issue, even when alias analysis
-proves the tiles disjoint. Lowering preserves each named wait and its block
-barrier. Both the grouped and original/separate-wait hybrid exports fail the
+Physical readiness scheduling permits the restricted direct-DMA crossing
+described above. It does not merge completions, remove publication barriers,
+introduce nonzero wait counts or relax staged-copy ordering. A drain-all wait
+after two direct issues completes both, but each named completion is retained.
+Historically, both grouped and original/separate-wait hybrid exports failed a
 reported gfx936 numerical check. The earlier report that the original passed
-was corrected by the user; grouping has NOT been established as the cause.
-Grouping remains disabled while the common numerical failure is investigated.
+was corrected by the user; grouping was NOT established as the cause.
+The new restricted scheduling still requires target GPU validation.
 The CPU DMA model verified addresses and assumed completion semantics, but did
 not validate target code generation or hardware synchronization. The precise
 cause remains unverified.
 
-Scheduling still runs **before** LDS storage reuse. Within a single completion
-interval it can overlap independent computation; barriers, other issues/waits,
+Scheduling still runs **before** LDS storage reuse. It can overlap independent
+computation and proven direct transfers; other waits, explicit barriers,
 aliasing accesses and unknown effects remain boundaries. This policy applies
 to every tile and thread count, without recognizing attention tensor names.
 
@@ -270,6 +281,7 @@ cmake --build build --target ThreadTilingTest MyTest -j4
 python3 test/check_frisk_async_copy.py
 python3 test/check_async_layout_integration.py
 python3 test/check_sink_wait_buffer_ready.py
+python3 test/check_direct_dma_wait_motion.py
 python3 test/check_async_attention_export.py output.ll output.log
 # For the mixed candidate:
 python3 test/check_async_attention_export.py output.ll output.log /path/to/llvm/bin hybrid
@@ -286,7 +298,10 @@ transposed and padded source strides, alignment fallback, and malformed maps.
 Staged repacking additionally runs concurrent CPU lanes with real block
 barriers, checking source data and destination/staging guards bit-for-bit.
 Scheduling tests cover descriptor dependencies, aliasing writes, nested writes,
-barriers and idempotence; reuse tests reject incomplete/overlapping transfers.
+barriers and idempotence. Direct-DMA crossing additionally checks prior readers,
+source writes, explicit loop-tail protection, uniform control flow, pending
+packing, existing reuse pools, staged/fallback rejection and retained zero-count
+waits/barriers; reuse tests reject incomplete/overlapping transfers.
 The attention export test checks register provenance of P, LDS sizes, all four
 V overlap windows and preservation through LLVM O3. These tests do not measure
 gfx936 performance or emulate GPU wave scheduling; device validation remains

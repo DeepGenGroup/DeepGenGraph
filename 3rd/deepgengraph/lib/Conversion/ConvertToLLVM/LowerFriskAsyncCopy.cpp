@@ -29,63 +29,6 @@ SmallVector<Value> coordinates(OpBuilder &b, Location loc, Value linear,
   return result;
 }
 
-// gfx936's direct-to-LDS operation adds lane_id * packetBytes to a
-// wave-uniform destination base. Never pass the per-thread destination.
-// Restrict DMA to layouts for which that mapping is exactly the logical copy.
-unsigned selectDMA(frisk::AsyncCopyGmToShmOp op, unsigned requestedBytes = 0,
-                   AffineMap sourceMap = {}) {
-  auto src = cast<MemRefType>(op.getSrc().getType());
-  auto dst = cast<MemRefType>(op.getDst().getType());
-  unsigned bits = src.getElementTypeBitWidth();
-  auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000,
-                                       op.getContext());
-  if (bits != 8 && bits != 16 && bits != 32)
-    return 0;
-  SmallVector<int64_t> srcStrides, dstStrides;
-  int64_t offset;
-  if (failed(src.getStridesAndOffset(srcStrides, offset)) ||
-      failed(dst.getStridesAndOffset(dstStrides, offset)))
-    return 0;
-  int64_t stride = 1;
-  for (int64_t dim = dst.getRank() - 1; dim >= 0; --dim) {
-    if (dst.getDimSize(dim) > 1 && dstStrides[dim] != stride)
-      return 0;
-    stride *= dst.getDimSize(dim);
-  }
-  // Check actual source addresses for each physical destination packet. The
-  // physically contiguous source axis need not be the last logical axis.
-  auto mapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
-  if (!sourceMap && mapAttr) sourceMap = mapAttr.getValue();
-  if (dst.getNumElements() > (1 << 20) ||
-      llvm::any_of(srcStrides, [](int64_t s) {
-        return ShapedType::isDynamic(s) || s <= 0;
-      })) return 0;
-  if (!sourceMap) {
-    SmallVector<AffineExpr> coords(src.getRank());
-    auto flat = getAffineDimExpr(0, op.getContext());
-    for (int64_t dim = src.getRank() - 1; dim >= 0; --dim) {
-      coords[dim] = flat % src.getDimSize(dim);
-      flat = flat.floorDiv(src.getDimSize(dim));
-    }
-    sourceMap = AffineMap::get(1, 0, coords, op.getContext());
-  }
-  if (sourceMap.getNumDims() != 1 || sourceMap.getNumSymbols() ||
-      sourceMap.getNumResults() != unsigned(src.getRank())) return 0;
-  auto address = getAffineConstantExpr(0, op.getContext());
-  for (unsigned dim = 0; dim < unsigned(src.getRank()); ++dim)
-    address = address + sourceMap.getResult(dim) * srcStrides[dim];
-  auto offsets = AffineMap::get(1, 0, address);
-  unsigned bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
-      *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), requestedBytes);
-  // Automatic wide DMA uses complete waves, including the final round. This
-  // also keeps the wide export's wave-uniform LDS-base contract explicit.
-  if (!requestedBytes && bytes > 4 &&
-      dst.getNumElements() % (hw->getWarpsize() * bytes * 8 / bits))
-    bytes = frisk::ShmDataIODesc::selectDMATransferBytes(
-        *hw, offsets, dst.getNumElements(), bits / 8, op.getAlignment(), 4);
-  return bytes;
-}
-
 // Walk source storage in stride order; the tile may have padded rows or a
 // logical transpose. This defines staging order without changing its ABI.
 AffineMap sourceStorageOrder(frisk::AsyncCopyGmToShmOp op) {
@@ -195,7 +138,7 @@ struct LowerFriskAsyncCopyPass
                             ->getAttrOfType<IntegerAttr>("thread_num").getInt();
       auto requestedBytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
       bool enabled = useAsyncCopy && !op->hasAttr("frisk.force_sync");
-      unsigned dmaBytes = enabled ? selectDMA(op, requestedBytes ? requestedBytes.getInt() : 0) : 0;
+      unsigned dmaBytes = enabled ? frisk::selectAsyncDMATransferBytes(op, requestedBytes ? requestedBytes.getInt() : 0) : 0;
       bool dma = dmaBytes != 0;
       if (auto copying = op->getAttrOfType<IntegerAttr>("frisk.copy_threads")) {
         if (copying.getInt() <= 0 || copying.getInt() > threads || copying.getInt() % 64) {
@@ -217,7 +160,7 @@ struct LowerFriskAsyncCopyPass
         }
         auto storageMap = sourceStorageOrder(op);
         unsigned stagedBytes = ready && storageMap
-            ? selectDMA(op, requestedBytes ? requestedBytes.getInt() : 0, storageMap) : 0;
+            ? frisk::selectAsyncDMATransferBytes(op, requestedBytes ? requestedBytes.getInt() : 0, storageMap) : 0;
         if (stagedBytes) {
           auto stageType = MemRefType::get({srcType.getNumElements()}, srcType.getElementType(),
                                          AffineMap{}, dstType.getMemorySpace());

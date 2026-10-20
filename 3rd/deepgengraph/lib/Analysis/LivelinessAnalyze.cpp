@@ -500,6 +500,14 @@ void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os) {
   }
 }
 
+bool isInBlockUniformControlFlow(Operation *op) {
+  auto kernel = op->getParentOfType<func::FuncOp>();
+  if (!kernel || !llvm::hasSingleElement(kernel.getBody()))
+    return false;
+  Block *entry = &kernel.getBody().front();
+  return op->getBlock() == entry || isCollectiveLoop(op->getParentOp(), entry);
+}
+
 unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
   if (kernel.isExternal() || !kernel->hasAttr("thread_num") ||
       !llvm::hasSingleElement(kernel.getBody()))

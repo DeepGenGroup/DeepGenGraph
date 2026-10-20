@@ -143,8 +143,8 @@ def reuse_checks():
 
 
 def separate_completion_checks():
-    # Regression: alias independence must not move completion across another
-    # issue. This is a conservative policy, not a proven fix for target errors.
+    # Independent direct issues may overlap, but BOTH named completions and
+    # publication barriers survive. No claim about target GPU performance.
     for count, threads in [(64, 64), (384, 128), (1024, 256)]:
         ty = f'memref<{count}xf32, 3>'
         src = f'memref<{count}xf32, 1>'
@@ -163,7 +163,7 @@ def separate_completion_checks():
           return
         }}'''
         result = lower(source, '--frisk-schedule-async-copies')
-        assert result.index('async_copy_gm_to_shm') < result.index('wait_buffer_ready') < result.rindex('async_copy_gm_to_shm'), result
+        assert result.rindex('async_copy_gm_to_shm') < result.index('wait_buffer_ready'), result
         assert lower(result, '--frisk-schedule-async-copies') == result
         # Both tiles remain live at the first read and cannot share storage.
         reused = lower(result, '--test-shm-reuse')
@@ -197,7 +197,7 @@ def separate_completion_checks():
         unknown = unknown[:second] + unknown[second:].replace('to %a', 'to %b', 1)
         scheduled = lower(unknown, '--frisk-schedule-async-copies')
         assert scheduled.index('wait_buffer_ready') < scheduled.rindex('async_copy_gm_to_shm')
-    print('PASS separate DMA completions, varying sizes, no storage overlap, alias/write/barrier guards')
+    print('PASS overlapping direct DMA with separate completions, varying sizes, no storage overlap, alias/write/barrier guards')
 
     # Explicitly authored overlapping issues retain BOTH named completions.
     # The CPU model checks data and guards, not hardware synchronization safety.

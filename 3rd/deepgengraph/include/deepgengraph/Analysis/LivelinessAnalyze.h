@@ -74,6 +74,10 @@ void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os);
 /// barriers only in provably block-uniform loops; returns the number inserted.
 unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel);
 
+/// True only in the function entry or provably block-uniform enclosing loops.
+/// Does not accept conditional regions or infer uniformity from a barrier.
+bool isInBlockUniformControlFlow(Operation *op);
+
 /// Recompute analysis, pack into memref<Nxi8, 3>, replace allocations with typed
 /// memref.view and insert gpu.barrier at storage handoffs as needed.
 /// Requires a function executed collectively by a thread block (thread_num attr).

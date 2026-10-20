@@ -7,6 +7,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Conversion/Passes.h"
+#include "deepgengraph/Conversion/VectorCanonicalization.h"
 
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/Deepgengraph/Transforms/Passes.h"
@@ -55,7 +56,7 @@ void init_common_passes(py::module &m) {
   ADD_PASS_WRAPPER_0("add_sccp", createSCCPPass);
   ADD_PASS_WRAPPER_0("add_symbol_dce", createSymbolDCEPass);
   ADD_PASS_WRAPPER_0("add_inliner", createInlinerPass);
-  ADD_PASS_WRAPPER_0("add_canonicalizer", createCanonicalizerPass);
+  ADD_PASS_WRAPPER_0("add_canonicalizer", frisk::createVectorSafeCanonicalizerPass);
   ADD_PASS_WRAPPER_0("add_cse", createCSEPass);
   ADD_PASS_WRAPPER_0("add_licm", createLoopInvariantCodeMotionPass);
 }
