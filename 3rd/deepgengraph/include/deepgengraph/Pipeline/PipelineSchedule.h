@@ -34,6 +34,10 @@ LogicalResult applyPipelineSchedule(
 
 std::unique_ptr<::mlir::Pass> createPipelineSchedulePass();
 
+/// Opt-in automatic tile prefetching, before thread tiling/physical packing.
+std::unique_ptr<::mlir::Pass> createAutoPipelinePass();
+std::unique_ptr<::mlir::Pass> createSimplifyLoopControlPass();
+
 #define GEN_PASS_REGISTRATION
 #include "deepgengraph/Pipeline/Passes.h.inc"
 

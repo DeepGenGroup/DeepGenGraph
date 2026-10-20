@@ -1,17 +1,23 @@
 add_deepgengraph_library(FriskPipeline
     PipelineSchedule.cpp
+    AutoPipeline.cpp
+    SimplifyLoopControl.cpp
 
     DEPENDS PipelineIncGen
 
     LINK_LIBS PUBLIC
     MLIRPass
     MLIRTransformUtils
+    MLIRTransforms
+    MLIRAffineUtils
+    MLIRSCFUtils
     MLIRAffineDialect
     MLIRArithDialect
     MLIRSCFDialect
     MLIRFuncDialect
     MLIRMemRefDialect
     FriskIR
+    DeepgengraphAnalysis
 )
 
 add_executable(FriskPipelineTest

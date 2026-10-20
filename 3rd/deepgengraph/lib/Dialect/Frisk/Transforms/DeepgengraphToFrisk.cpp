@@ -1017,6 +1017,8 @@ struct ForTypeConversionPattern : public OpConversionPattern<affine::AffineForOp
         adaptor.getUpperBoundOperands(), op.getUpperBoundMap(),
         op.getStepAsInt(),
         newIterArgs);  // ✅ 关键：传入转换后的 args
+    if (Attribute hint = op->getAttr("frisk.pipeline_hint"))
+      newForOp->setAttr("frisk.pipeline_hint", hint);
 
     // 3. 构建 SignatureConversion
     //    旧 Block 参数: [iv: index, arg1: BlockPtrType, arg2: ...]
@@ -1156,6 +1158,8 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
       }
     );
 
+    if (Attribute hint = op->getAttr("frisk.pipeline_hint"))
+      newForOp->setAttr("frisk.pipeline_hint", hint);
     // Move the body instead of cloning it. Cloning an outer loop also clones
     // nested illegal loops while dialect conversion is tracking their values,
     // preventing nested tensor accumulators from being legalized.
@@ -1235,6 +1239,8 @@ struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
     }
     
     auto affineFor = rewriter.create<affine::AffineForOp>(op->getLoc(), lbvr, lbMap, ubvr, ubMap, stepNum, op.getInitArgs());
+    if (Attribute hint = op->getAttr("frisk.pipeline_hint"))
+      affineFor->setAttr("frisk.pipeline_hint", hint);
         
     rewriter.inlineRegionBefore(op.getRegion(), affineFor.getRegion(), affineFor.getRegion().end());
     Block* contentBlock = &affineFor->getRegion(0).back();

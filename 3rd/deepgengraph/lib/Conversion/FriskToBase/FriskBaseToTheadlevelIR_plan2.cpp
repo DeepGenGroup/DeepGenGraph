@@ -3780,16 +3780,27 @@ public:
       }
       const auto *dma = s_hw->dataCopyInfo.getMaxDMATransfer();
       bool invalid = false;
+      struct DMAPlan {
+        frisk::AsyncCopyGmToShmOp issue;
+        SmallVector<Operation *> storage;
+        int64_t axis, width, kpack, copying;
+      };
+      SmallVector<DMAPlan> dmaPlans;
+      DenseMap<Operation *, std::pair<int64_t, int64_t>> storagePlans;
       kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
         auto type = cast<MemRefType>(issue.getSrc().getType());
         auto axis = getPhysicalMinorCopyAxis(issue.getSrc());
-        auto *storage = getViewBuffer(issue.getDst()).getDefiningOp();
-        auto consumer = storage ? storage->getAttrOfType<IntegerAttr>("frisk.shared_pack") : IntegerAttr{};
-        auto matrixPacket = storage ? storage->getAttrOfType<IntegerAttr>("frisk.matrix_load_packet") : IntegerAttr{};
+        SharedBufferAliases aliases;
+        bool owned = aliases.collect(getViewBuffer(issue.getDst()));
+        auto consumer = owned ? dyn_cast_or_null<IntegerAttr>(
+            aliases.commonAttribute("frisk.shared_pack")) : IntegerAttr{};
+        auto matrixPacket = owned ? dyn_cast_or_null<IntegerAttr>(
+            aliases.commonAttribute("frisk.matrix_load_packet")) : IntegerAttr{};
         if (matrixPacket)
-          consumer = storage->getAttrOfType<IntegerAttr>("frisk.matrix_load_consumer_width");
+          consumer = dyn_cast_or_null<IntegerAttr>(
+              aliases.commonAttribute("frisk.matrix_load_consumer_width"));
         int64_t bits = type.getElementTypeBitWidth();
-        if (!dma || !axis || !storage || !consumer || bits % 8 ||
+        if (!dma || !axis || !owned || !consumer || bits % 8 ||
             type.getRank() != 2 || issue.getAlignment() % dma->alignmentBytes ||
             dma->bytesPerLane % (consumer.getInt() * bits / 8) ||
             type.getDimSize(*axis) % (dma->bytesPerLane * 8 / bits)) {
@@ -3812,24 +3823,48 @@ public:
           }
           copying /= kpack;
         }
+        int64_t physicalAxis = matrixPacket ? 1 : *axis;
+        int64_t physicalWidth = matrixPacket ? matrixPacket.getInt() : dma->bytesPerLane * 8 / bits;
+        for (Operation *storage : aliases.allocations) {
+          auto [it, inserted] = storagePlans.try_emplace(
+              storage, std::make_pair(physicalAxis, physicalWidth));
+          if (!inserted && it->second != std::make_pair(physicalAxis, physicalWidth)) {
+            issue.emitError("conflicting maximum-width DMA layouts for shared aliases");
+            invalid = true;
+            return;
+          }
+        }
+        dmaPlans.push_back({issue,
+            SmallVector<Operation *>(aliases.allocations.begin(), aliases.allocations.end()),
+            physicalAxis, physicalWidth,
+            kpack, copying});
+      });
+      if (invalid) return signalPassFailure();
+      // Plan every launch against the original consumer contract first.
+      // Prologue and steady-state launches may share the same rotated group;
+      // mutating its width during analysis would change subsequent kpack.
+      for (auto &plan : dmaPlans) {
+        auto issue = plan.issue;
+        auto type = cast<MemRefType>(issue.getSrc().getType());
         OpBuilder b(issue);
         // Transfer ownership follows the physical contiguous GM axis. The
         // consumer keeps its original MMAC layout; the common ShmDataIODesc
         // remaps all loads and provides the inverse DMA source coordinates.
-        storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(matrixPacket ? 1 : *axis));
-        storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(matrixPacket ? matrixPacket.getInt() : dma->bytesPerLane * 8 / bits));
-        for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride", "frisk.shared_store_pair"})
-          storage->removeAttr(name);
+        for (Operation *storage : plan.storage) {
+          storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(plan.axis));
+          storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(plan.width));
+          for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride", "frisk.shared_store_pair"})
+            storage->removeAttr(name);
+        }
         issue->setAttr("frisk.dma_bytes", b.getI64IntegerAttr(dma->bytesPerLane));
-        issue->setAttr("frisk.kpack", b.getI64IntegerAttr(kpack));
+        issue->setAttr("frisk.kpack", b.getI64IntegerAttr(plan.kpack));
         if (dmaPackMode == "noKPack")
-          issue->setAttr("frisk.copy_threads", b.getI64IntegerAttr(copying));
+          issue->setAttr("frisk.copy_threads", b.getI64IntegerAttr(plan.copying));
         llvm::errs() << "DMA plan: " << dmaPackMode.getValue() << " shape="
                      << type.getDimSize(0) << "x" << type.getDimSize(1)
-                     << " bytes=" << dma->bytesPerLane << " kpack=" << kpack
-                     << " copy_threads=" << copying << "\n";
-      });
-      if (invalid) return signalPassFailure();
+                     << " bytes=" << dma->bytesPerLane << " kpack=" << plan.kpack
+                     << " copy_threads=" << plan.copying << "\n";
+      }
     }
     if (asyncDirectOnly && dmaPackMode == "legacy") {
       // Select before thread tiling: late scalar fallback loses the ordinary

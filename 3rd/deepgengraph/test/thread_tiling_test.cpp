@@ -80,6 +80,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });
+  mlir::registerPass([] { return mlir::pipeline::createAutoPipelinePass(); });
+  mlir::registerPass([] { return mlir::pipeline::createSimplifyLoopControlPass(); });
+  mlir::registerPass([] { return mlir::frisk::createCoalesceWaitsAndBarriersPass(); });
   mlir::PassRegistration<TestShmLoopSyncPass>();
   mlir::registerPass([] {
     return mlir::frisk::createNormalizeAttentionKLayoutPass();

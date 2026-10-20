@@ -1,5 +1,153 @@
 # Pipeline 模块（FA3 风格软件流水）
 
+## 流水线清理 Pass 与共享内存复用
+
+两个清理 Pass 独立于 attention 的尺寸、函数名和 Q/K/V 命名：
+
+* `frisk-simplify-loop-control`：对 `affine.for` / `scf.for` 的静态小循环
+  完整展开，然后折叠 IV、slot 取模、条件分支、selector 和地址表达式。
+  默认只处理带 `pipeline.scheduled` 或 `{frisk.simplify_loop}` 的循环。
+  `only-marked=false` 可用于其他小循环；默认 `max-trip-count=8`、
+  `max-expanded-ops=2048`（每个函数的展开操作总预算）。动态/unsigned
+  bounds、末次增量溢出及超预算循环不展开。保留迭代顺序与 iter_args。
+  在 MyTest 中运行于 **FinalizeThreadTiling 之后、LowerFriskFragments
+  的 physical packing 和共享内存生命周期规划之前**。过早展开会破坏旧
+  layout inference 对循环 carrier 的假设，过晚则会错过存储复用。
+* `frisk-coalesce-waits-and-barriers`：在 named readiness 已降为
+  `rocdl.wait.asyncmark 0` 和 `gpu.barrier` 后，合并同一 block 中重复的
+  wait-all/publication。可以跨越无副作用、可推测执行的普通索引/算术操作，
+  不跨越任何内存读写、调用、不透明 asm、新 async group、未知 target op、
+  partial wait、region 或 CFG 边界。不同 buffer 的 `frisk.wait_buffer_ready`
+  **不会**在 Base 层被视为等价。单独的 `barrier; wait-all; barrier` 也不会
+  错删后一个 publication barrier。它与已有基于依赖分析的
+  `barrier-optimize` 是不同 Pass，先合并冗余序列，再做原有依赖分析。
+
+MyTest 默认开启，命名参数不改变原有位置参数：
+
+```bash
+--simplify-loop-control=1 --coalesce-waits=1
+# 单独测同步合并：
+--simplify-loop-control=0 --coalesce-waits=1
+# 旧的流水线输出：
+--simplify-loop-control=0 --coalesce-waits=0
+```
+
+独立执行：
+
+```bash
+build/test/ThreadTilingTest input.mlir \
+  --frisk-simplify-loop-control='only-marked=true max-trip-count=8 max-expanded-ops=2048'
+build/test/ThreadTilingTest lowered.mlir --frisk-coalesce-waits-and-barriers
+python3 test/check_pipeline_cleanup.py build/test/ThreadTilingTest
+python3 test/check_pipeline_cleanup_attention.py --mytest build/test/MyTest
+```
+
+原有共享内存复用的限制在 `lib/Analysis/LivelinessAnalyze.cpp`：
+`hasLocalCompletion` 只接受同一 block 内、同一 descriptor 的 issue→wait；
+`findIterationLocalLoops` 对多个 alias 保留整个循环的生命周期。环形流水线的
+prologue/guard/下一轮 wait 和 selector 不满足这些证明条件，所以 Q/K 槽被
+标记为 `unsupported or escaping use: frisk.async_copy_gm_to_shm`，V 单独池化。
+这不是 `PackSharedMemory`（物理布局变换）没做地址合并，也不是只需要调整
+buffer 大小。循环展开后，固定槽位、发射、等待和最后读者可以落入同一
+顺序 block，让现有 `reuseSharedMemory` 重新证明异步完成和不重叠的生命周期。
+没有放宽动态流水线的安全条件，也没有依赖 `pipeline.scheduled` 属性直接
+假定存储可以复用。动态或超预算循环仍可能保守保留独立缓冲。
+
+`test_input_spidD.mlir`、QK32/VO32、2 stages 的导出验证结果（每个 key tile、
+每个 workgroup 的 CPU 模型动态指令次数；不是汇编静态条数或 GPU 性能）：
+
+| 配置 | 静态 LDS | wait-all | block barrier |
+|---|---:|---:|---:|
+| 原始 pipeline | 40 KiB | 12 | 20 |
+| 仅合并等待 | 40 KiB | 8 | 16 |
+| 仅简化循环 | 32 KiB | 12 | 16 |
+| 两项同时开启 | 32 KiB | 8 | 12 |
+
+CPU 延迟 DMA 模型检查所有异步写在 wait 前不可读取/覆盖，并覆盖首个、
+第二个和最后一个 query block 的数值。它不能证明独立 wave 时序或实际 GPU
+性能；用相同编译选项和 launch 参数对四份导出做上机 A/B。
+
+## 自动 tile 预取：`frisk-auto-pipeline`
+
+输入循环可写：
+
+```mlir
+%result = scf.for %dk = %c0 to %cD step %cBK
+    iter_args(%acc = %zero) -> tensor<128x128xf32> {
+  // block_load Q/K、计算并更新 acc
+  ...
+  scf.yield %next : tensor<128x128xf32>
+} {frisk.pipeline_hint = 2 : i64}
+```
+
+`frisk.pipeline_hint` 是循环上的整数属性，值是 `num_stages`。
+裸标记 `{frisk.pipeline_hint}` 兼容为 2；1 表示禁用；0、负数和非整数报错。
+没有标记时不尝试优化。当前代码生成预算最多 64 stages，超过时保留原循环并输出
+remark。SCF→affine 和 tensor→Frisk 的转换会保留该标记。
+
+新 Pass 在 **Frisk Base、thread tiling 和物理 packing 之前**运行。它从循环中
+识别完整 tile 的 global→shared `frisk.copy` 或 `frisk.async_copy_gm_to_shm`，
+分析地址依赖和内存副作用；不依赖函数名、attention 模式、矩阵尺寸或 GEMM 数量。
+`MyTest` 已自动接入，hint 本身就是开关，不受旧的命令行 `pipeline:0|1`
+控制；那个参数仍只控制手工 `pipeline.stage/order` 调度。
+
+对于 N stages，每个加载目标分配 N 份 shared buffer，预取距离为 N−1：
+
+```text
+prologue: 有效时加载 tile 0 ... N-2
+for tile i（原来的 bounds、step、iter_args）:
+    wait 当前槽 i % N
+    block barrier，确保旧读者已完成
+    若 tile i+N-1 存在:
+        async load tile i+N-1 -> (i+N-1) % N
+    用当前槽计算 tile i，按原顺序更新累加器
+```
+
+因此 N=2 是“加载 i+1、计算 i”；N=3 是“加载 i+2、计算 i”。
+所有序言/未来加载都有 guard，零次循环不加载，短循环不越界。保留原消费循环，
+尾部通过 guard 自然排空，不再单独克隆计算 epilogue。边界检查先比较剩余距离，
+再构造未来 IV，避免排空时加法溢出。等待放在未来加载**之前**，因为当前后端
+可以将 readiness 降为 wait-all；实际性能仍取决于拷贝布局和目标后端。
+
+成功后移除 hint，在消费循环上设置 `pipeline.scheduled`、`pipeline.num_stages`
+及 `pipeline.slots`，重复运行不重复变换。无法证明安全则输出
+`automatic pipeline skipped: ...`，保留原循环。当前支持范围：
+
+* Base 层的 `affine.for`，常量正步长，静态或动态 affine 上下界；
+  bounds 和外围控制流必须能证明 block-uniform。
+* 完整、同形状/元素类型、静态大小的 global tile，目标是循环内独占的
+  `frisk.alloc_buffer`；支持同步 copy 的 destination-alias 返回句柄。
+* scalar/vector 累加器和多个 iter_args，多个独立带标记的循环。
+* 预取地址不能依赖本循环累加器或内存读取。存在未知副作用、外部写入、
+  未支持的同步、目标 buffer 别名/逃逸/额外写入、memref iter_args 等情况会跳过。
+* 已有手工 pipeline scheme 不叠加自动调度；standalone Pass 不直接转换
+  tensor/SCF IR，应先运行既有前端 lowering。
+
+所选槽位沿用完整 shared alias group 的布局约束；最大宽度 DMA 对整组规划，
+统一修改所有槽位，防止 prologue/steady 两次规划改变 consumer width 或 kpack。
+
+使用和回归（仓库根目录）：
+
+```bash
+cmake --build 3rd/deepgengraph/build --target MyTest ThreadTilingTest -j2
+# 单独处理 Frisk Base IR：
+3rd/deepgengraph/build/test/ThreadTilingTest base.mlir \
+  --frisk-auto-pipeline --verify-each
+
+python 3rd/deepgengraph/test/check_auto_pipeline.py
+OPENBLAS_NUM_THREADS=1 python \
+  3rd/deepgengraph/test/check_auto_pipeline_attention.py
+```
+
+第一项执行 CPU 递推/轮换验证和拒绝路径验证，覆盖 2/3/4 stages、动态/负下界、
+非单位步长、整数边界、零次和短循环、多个累加器、无标记与幂等性。
+第二项对 split-D attention 的无标记、双/三缓冲和 BK=32/64 运行完整 LLVM 导出；
+执行模型将 DMA 延迟到 wait 才完成，检查槽位地址冲突、读前等待、MMA 执行时的
+未完成预取和数值结果。这些是编译与执行模型检查，不是 GPU 计时或独立 wave
+调度的硬件验证。
+
+## 手工 stage/order 调度
+
 独立模块，参考 tilelang 的 `T.Pipelined(..., stage = [...], order = [...])`，
 把带标注的 `affine.for` 重写成 FA3 Algorithm 2 那种 prologue / steady /
 epilogue 结构。不依赖其它 pass，也不改 IR 里的 op，只在循环上读方案、在跨级

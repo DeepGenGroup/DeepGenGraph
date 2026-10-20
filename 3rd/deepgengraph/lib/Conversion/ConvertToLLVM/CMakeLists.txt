@@ -4,6 +4,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   TranslateToLLVM.cpp
   LowerPipe.cpp
   LowerFriskAsyncCopy.cpp
+  CoalesceWaitsAndBarriers.cpp
   IROptimize.cpp
   FuseFragmentAccumulator.cpp
   FuseMMACAccumulator.cpp

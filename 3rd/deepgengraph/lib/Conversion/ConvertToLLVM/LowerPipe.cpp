@@ -256,7 +256,7 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 }
 
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
-                    Target target, bool useAsyncCopy) {
+                    Target target, bool useAsyncCopy, bool coalesceWaits) {
   mlir::PassManager pm(context);
   // Keep the tile/readiness contract through scheduling and storage planning.
   // The synchronous form is also valid for non-ROCm targets.
@@ -273,6 +273,9 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  if (coalesceWaits)
+    pm.addNestedPass<mlir::func::FuncOp>(
+        mlir::frisk::createCoalesceWaitsAndBarriersPass());
   pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
   pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
 

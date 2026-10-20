@@ -179,6 +179,10 @@ class LLVMWorkgroupModel:
             return np.full(self.t, self.head, dtype=np.int64)
         if name.endswith('workgroup.id.y'):
             return np.full(self.t, self.block, dtype=np.int64)
+        if name.endswith('workgroup.id.z'):
+            # The modeled ABI contains one batch; pipelined address expressions
+            # need not have folded away its (uniform zero) block coordinate.
+            return np.zeros(self.t, dtype=np.int64)
         if name.endswith('workitem.id.x'):
             return np.arange(self.t, dtype=np.int64)
         if name.endswith('readfirstlane.i32'):
@@ -300,6 +304,13 @@ class LLVMWorkgroupModel:
         a, b = (self.typed(a), self.value(b, ty))
         bits_match = re.search(r'i(\d+)', ty)
         bits = int(bits_match[1]) if bits_match else None
+        if op == 'urem':
+            # Non-power-of-two pipeline slot counts retain integer remainder.
+            a, b = a.astype(np.uint64), b.astype(np.uint64)
+            if bits < 64:
+                a, b = a % (1 << bits), b % (1 << bits)
+            assert np.all(b != 0)
+            return np.remainder(a, b).astype(np.int64)
         if op == 'sdiv':
             if bits < 64:
                 a, b = [np.where(x % (1 << bits) >= (1 << (bits - 1)),

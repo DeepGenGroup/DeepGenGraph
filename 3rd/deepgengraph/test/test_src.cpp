@@ -413,11 +413,22 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Named tuning options do not shift the historical positional interface.
   bool fragPrefetch = false;
+  bool simplifyLoopControl = true;
+  bool coalesceWaits = true;
   unsigned fragPrefetchWords = 8;
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
-    if (option.consume_front("--frag-prefetch=")) {
+    if (option.starts_with("--simplify-loop-control=") ||
+        option.starts_with("--coalesce-waits=")) {
+      auto pair = option.split('=');
+      if (pair.second != "0" && pair.second != "1") {
+        llvm::errs() << pair.first << " must be 0 or 1\n";
+        return 1;
+      }
+      (pair.first == "--coalesce-waits" ? coalesceWaits : simplifyLoopControl) =
+          pair.second == "1";
+    } else if (option.consume_front("--frag-prefetch=")) {
       if (option != "0" && option != "1") {
         llvm::errs() << "frag-prefetch must be 0 or 1\n";
         return 1;
@@ -705,6 +716,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // A hint is the opt-in switch, independently of the older manual schedule.
+  {
+    PassManager pipelinePM(ctx.get());
+    pipelinePM.addNestedPass<func::FuncOp>(mlir::pipeline::createAutoPipelinePass());
+    if (failed(pipelinePM.run(*src)))
+      return 1;
+  }
+  llvm::outs() << "\n---------- after frisk-auto-pipeline ---------\n";
+  llvm::outs().flush(); src->dump();
+
   AddFuncPass(frisk::createPromoteGemmMatrixLoadsPass(wmmaLayout.str()));
   llvm::outs() << "\n---------- after promote-gemm-matrix-loads ---------\n";
   llvm::outs().flush(); src->dump();
@@ -755,6 +776,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // pm.addPass(mlir::createSymbolDCEPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n"; llvm::outs().flush();src->dump();
+
+  // Layout inference needs the original loop-carried tiles. Once thread
+  // mapping is complete, specialize before physical packing and LDS reuse.
+  if (simplifyLoopControl) {
+    AddFuncPass(mlir::pipeline::createSimplifyLoopControlPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---------- after frisk-simplify-loop-control ---------\n";
+    llvm::outs().flush(); src->dump();
+  }
 
   AddFuncPass(frisk::createLowerFriskFragmentsPass());
   // Affine LICM only inspects direct operands of unknown region operations;
@@ -809,7 +839,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::ModuleOp mod = *src;
   if (!frisk::firstLowering(mod, src->getContext()) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
-                            copyMode != "sync"))
+                            copyMode != "sync", coalesceWaits))
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush(); 
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
@@ -1143,7 +1173,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--simplify-loop-control=1] [--coalesce-waits=1]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
