@@ -1,5 +1,6 @@
 add_deepgengraph_library(FriskToBase
   FriskToBasePass.cpp
+  ReorderWorkgroups.cpp
   NormalizeAttentionKLayout.cpp
   OptimizeTensorLoops.cpp
   WmmaLayoutConversion.cpp

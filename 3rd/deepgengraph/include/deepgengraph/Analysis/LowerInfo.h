@@ -62,6 +62,11 @@ struct ShmDataIODesc {
   int64_t packAxis = 0, packElements = 1;
   int64_t pairStride = 0, storeStride = 0, storePair = 0;
   int64_t packetRows = 0; // Row groups interleave intact column packets; 0 is legacy.
+  // Byte-address bit permutation, relative to the allocation (never its base).
+  // dst ^= src; -1 means identity. Low four bits stay intact for 128-bit DMA.
+  int swizzleSourceBit = -1, swizzleTargetBit = -1;
+  bool setXorSwizzle(int sourceBit, int targetBit);
+  AffineExpr swizzleElementOffset(AffineExpr offset) const;
   int plannedVectorAccessBytes = 0; // LDS read/write width, NOT DMA width.
   bool isSupportChunkRead = false; // Reserved for target-specific matrix loads.
 

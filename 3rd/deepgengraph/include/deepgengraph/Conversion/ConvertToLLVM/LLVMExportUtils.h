@@ -54,6 +54,9 @@ void fuseMMACAccumulators(llvm::Module &module);
 /// Does not reassociate FP arithmetic or replace the math implementation.
 void optimizeRegisterLifetimes(llvm::Module &module);
 
+/// Expose only proven constant LDS pointer differences; does not force read2.
+void canonicalizeLDSGEPs(llvm::Module &module);
+
 /// Explicit approximate mode: reassociate single-use MMA accumulator chains,
 /// use native f32 exp2 (flushes subnormals), and share reciprocal divisions.
 /// Never enabled by the strict export path; no nnan/ninf assumptions are made.

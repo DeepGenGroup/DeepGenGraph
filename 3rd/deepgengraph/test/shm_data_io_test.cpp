@@ -64,6 +64,34 @@ int main() {
         !nv->getBankConflictPhases(8, ShmAccessKind::Read),
         "unknown rules are not treated as conflict-free");
 
+  for (int64_t element : {1, 2, 4})
+    for (int64_t axis : {0, 1})
+      for (coordXY_t shape : {coordXY_t{32, 64}, coordXY_t{48, 128}}) {
+        auto sw = *ShmDataIODesc::getPacked(shape, element, axis, 16 / element);
+        check(sw.setXorSwizzle(8, 6), "legal packet swizzle");
+        checkBijection(sw, ctx);
+        for (int64_t p = 0; p < shape[0] * shape[1]; ++p) {
+          auto e = sw.swizzleElementOffset(getAffineDimExpr(0, &ctx));
+          auto map = AffineMap::get(1, 0, e);
+          int64_t want = (p * element) ^ (((p * element) >> 2) & 64);
+          check(map.compose({p})[0] * element == want, "byte-bit XOR semantics");
+          check(map.compose({p})[0] % (16 / element) == p % (16 / element),
+                "all intra-DMA packet elements retain their offsets");
+        }
+        check(!sw.setXorSwizzle(7, 3), "reject Q subpacket permutation");
+        check(!sw.setXorSwizzle(6, 6), "reject nonbijective equal bits");
+        check(!sw.setXorSwizzle(31, 6), "reject oversized periods");
+      }
+  auto tail = *ShmDataIODesc::getPacked({12, 8}, 2, 1, 8);
+  check(!tail.setXorSwizzle(8, 6), "reject incomplete permutation period");
+  auto configurable = *ShmDataIODesc::getPacked({32, 64}, 2, 0, 8);
+  for (int source = 4; source <= 9; ++source)
+    for (int target = 4; target <= 9; ++target) {
+      if (source == target) continue;
+      check(configurable.setXorSwizzle(source, target), "configurable byte bits");
+      checkBijection(configurable, ctx);
+    }
+
   auto q = *ShmDataIODesc::getPacked({128,32}, 2, 1, 4);
   auto wide = *ShmDataIODesc::getPacked({128,32}, 2, 1, 8);
   checkBijection(q, ctx);

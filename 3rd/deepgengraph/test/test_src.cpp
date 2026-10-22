@@ -412,6 +412,8 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Named tuning options do not shift the historical positional interface.
+  std::string swizzleOptions, workgroupOptions;
+  bool canonicalizeLDS = false;
   bool fragPrefetch = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
@@ -419,7 +421,26 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
-    if (option.starts_with("--simplify-loop-control=") ||
+    if (option.starts_with("--swizzle-")) {
+      auto pair = option.drop_front(2).split('=');
+      if (pair.second.empty() || !llvm::is_contained(
+          {StringRef("swizzle-q"), StringRef("swizzle-k"), StringRef("swizzle-v"),
+           StringRef("swizzle-q-arg"), StringRef("swizzle-k-arg"), StringRef("swizzle-v-arg")}, pair.first)) {
+        llvm::errs() << "unknown or missing swizzle option: " << option << "\n";
+        return 1;
+      }
+      if (!pair.first.ends_with("-arg") && pair.second != "off" && pair.second != "0")
+        canonicalizeLDS = true;
+      swizzleOptions += " " + pair.first.str() + "=" + pair.second.str();
+    } else if (option.consume_front("--workgroup-")) {
+      auto pair = option.split('=');
+      if (pair.second.empty() || !llvm::is_contained(
+          {StringRef("group-size"), StringRef("reverse"), StringRef("query-axis"), StringRef("head-axis")}, pair.first)) {
+        llvm::errs() << "unknown or missing workgroup option: " << option << "\n";
+        return 1;
+      }
+      workgroupOptions += " " + pair.first.str() + "=" + pair.second.str();
+    } else if (option.starts_with("--simplify-loop-control=") ||
         option.starts_with("--coalesce-waits=")) {
       auto pair = option.split('=');
       if (pair.second != "0" && pair.second != "1") {
@@ -631,7 +652,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     PassManager pm(ctx.get());
     pm.addPass(std::move(pass));
     if(failed(pm.run(src->getOperation()))) {
-      assert(false);
+      std::exit(EXIT_FAILURE); // Never continue after a rejected layout in release builds.
     }
   };
 
@@ -639,7 +660,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     PassManager pm(ctx.get());
     pm.addNestedPass<func::FuncOp>(std::move(pass));
     if(failed(pm.run(src->getOperation()))) {
-      assert(false);
+      std::exit(EXIT_FAILURE); // Never continue after a rejected layout in release builds.
     }
   };
 
@@ -647,7 +668,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     PassManager pm(ctx.get());
     pm.addNestedPass<frisk::KernelOp>(std::move(pass));
     if(failed(pm.run(src->getOperation()))) {
-      assert(false);
+      std::exit(EXIT_FAILURE); // Never continue after a rejected layout in release builds.
     }
   };
 
@@ -701,6 +722,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
 
+  if (!workgroupOptions.empty()) {
+    auto reorder = frisk::createReorderWorkgroupsPass();
+    if (failed(reorder->initializeOptions(workgroupOptions, [&](const llvm::Twine &m) {
+          llvm::errs() << m << '\n'; return failure(); }))) return 1;
+    AddFuncPass(std::move(reorder));
+  }
   AddPass(frisk::createNormalizeAttentionKLayoutPass());
   llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n"; llvm::outs().flush();src->dump();
   if (copyMode != "legacy") {
@@ -747,7 +774,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
   tilingOptions += std::string(" fuse-mask-add=") + (fuseMaskAdd ? "true" : "false");
   tilingOptions += std::string(" async-direct-only=") + (copyMode == "hybrid" ? "true" : "false");
-  tilingOptions += " dma-pack-mode=" + dmaPackMode.str();
+  tilingOptions += " dma-pack-mode=" + dmaPackMode.str() + swizzleOptions;
   if (failed(tiling->initializeOptions(
           tilingOptions,
           [&](const llvm::Twine &message) {
@@ -873,6 +900,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
   if (fragPrefetch)
     frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
+
+  if (canonicalizeLDS) frisk::canonicalizeLDSGEPs(*llvmModule);
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -1173,7 +1202,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--simplify-loop-control=1] [--coalesce-waits=1]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

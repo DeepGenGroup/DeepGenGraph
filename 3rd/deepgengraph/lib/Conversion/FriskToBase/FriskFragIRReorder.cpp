@@ -794,7 +794,7 @@ public:
 
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
-    packSharedMemory(getOperation());
+    if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
     SmallVector<frisk::FragmentOp> fragments;
     getOperation().walk<WalkOrder::PostOrder>([&](frisk::FragmentOp op) {
       fragments.push_back(op);

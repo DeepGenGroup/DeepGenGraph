@@ -11,10 +11,10 @@ from check_shared_packing import TOOL, run, cpu, gemm
 
 def fixture(rows, cols, axis):
     ty = f"memref<{rows}x{cols}xf32, 3>"
-    attrs = f"alignment = 16 : i64, frisk.shared_pack = 2 : i64, frisk.shared_pack_axis = {axis} : i64"
+    attrs = f"frisk.shared_pack = 2 : i64, frisk.shared_pack_axis = {axis} : i64"
     return f"""func.func @probe(%choose: i1, %n: index, %r: index, %c: index) -> i32 {{
-  %a = memref.alloc() {{{attrs}}} : {ty}
-  %b = memref.alloc() {{{attrs}}} : {ty}
+  %a = memref.alloc() alignment = 16 {{{attrs}}} : {ty}
+  %b = memref.alloc() alignment = 16 {{{attrs}}} : {ty}
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %offset = arith.constant 10000.0 : f32
@@ -104,13 +104,13 @@ def main():
         ty = "memref<12x7xf32, 3>"
         for name, text in [
             ("mixed-contract", source.replace("frisk.shared_pack = 2", "frisk.shared_pack = 4", 1)),
-            ("unmarked-slot", source.replace(", frisk.shared_pack = 2 : i64", "", 1)),
+            ("unmarked-slot", source.replace("frisk.shared_pack = 2 : i64, ", "", 1)),
             ("escape-selected", f"func.func private @escape({ty})\n" + source.replace(
                 "  %v = memref.load %selected", f"  func.call @escape(%selected) : ({ty}) -> ()\n  %v = memref.load %selected")),
             ("escape-other-slot", f"func.func private @escape({ty})\n" + source.replace(
                 "  %v = memref.load %selected", f"  func.call @escape(%b) : ({ty}) -> ()\n  %v = memref.load %selected")),
             ("unknown-origin", source.replace(
-                f"  %b = memref.alloc() {{alignment = 16 : i64, frisk.shared_pack = 2 : i64, frisk.shared_pack_axis = 0 : i64}} : {ty}",
+                f"  %b = memref.alloc() alignment = 16 {{frisk.shared_pack = 2 : i64, frisk.shared_pack_axis = 0 : i64}} : {ty}",
                 f"  %external = memref.alloc() : {ty}\n  %b = memref.cast %external : {ty} to {ty}")),
         ]:
             output = run([TOOL, "--pack-shared-memory", "--verify-each"], text)

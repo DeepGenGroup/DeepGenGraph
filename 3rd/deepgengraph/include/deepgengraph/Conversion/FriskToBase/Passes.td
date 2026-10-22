@@ -24,6 +24,16 @@ def ConvertFriskToBase: Pass<"convert-frisk-to-base", "::mlir::ModuleOp"> {
   ];
 }
 
+def ReorderWorkgroups: Pass<"frisk-reorder-workgroups", "::mlir::func::FuncOp"> {
+  let summary = "Bijective grouped workgroup order with optional query reversal and tail groups";
+  let constructor = "mlir::frisk::createReorderWorkgroupsPass()";
+  let options = [Option<"groupSize", "group-size", "int64_t", "0", "Query tiles per head group; 0 disables">,
+    Option<"reverse", "reverse", "bool", "false", "Reverse logical query order">,
+    Option<"queryAxis", "query-axis", "std::string", "\"y\"", "Logical query block axis: x/y/z">,
+    Option<"headAxis", "head-axis", "std::string", "\"x\"", "Logical head block axis: x/y/z">];
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::gpu::GPUDialect"];
+}
+
 def NormalizeAttentionKLayout: Pass<"normalize-attention-k-layout", "::mlir::ModuleOp"> {
   let summary = "Use a contiguous BHSD K input for the Attn_p2 example";
   let description = [{
@@ -68,6 +78,18 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
       "Use vectorized synchronous copies when packed halfword packets require LDS staging">,
     Option<"dmaPackMode", "dma-pack-mode", "std::string", "\"legacy\"",
       "legacy, useKPack (caller coarsens tiles), or noKPack (reduce copy waves); require maximum hardware DMA width">,
+    Option<"swizzleQ", "swizzle-q", "std::string", "\"off\"",
+      "LDS XOR byte bits: off, on (8:6), or source:target; preserves 16-byte packets">,
+    Option<"swizzleQArg", "swizzle-q-arg", "int", "-1",
+      "Function argument identifying Q; explicit ABI binding; -1 uses frisk.shared_role argument annotation">,
+    Option<"swizzleK", "swizzle-k", "std::string", "\"off\"",
+      "LDS XOR byte bits: off, on (8:6), or source:target; preserves 16-byte packets">,
+    Option<"swizzleKArg", "swizzle-k-arg", "int", "-1",
+      "Function argument identifying K; explicit ABI binding; -1 uses frisk.shared_role argument annotation">,
+    Option<"swizzleV", "swizzle-v", "std::string", "\"off\"",
+      "LDS XOR byte bits: off, on (8:6), or source:target; preserves 16-byte packets">,
+    Option<"swizzleVArg", "swizzle-v-arg", "int", "-1",
+      "Function argument identifying V; explicit ABI binding; -1 uses frisk.shared_role argument annotation">,
     Option<"uniformMasks", "uniform-masks", "bool", "false",
       "Skip elementwise upper-triangular masks for provably complete tiles">,
     Option<"fuseMaskAdd", "fuse-mask-add", "bool", "true",

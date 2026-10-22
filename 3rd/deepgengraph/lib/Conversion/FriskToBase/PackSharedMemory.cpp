@@ -181,7 +181,8 @@ static void packAllocation(memref::AllocOp alloc,
       return;
     for (StringRef name : {"frisk.shared_pack", "frisk.shared_pack_axis",
                            "frisk.shared_pair_stride", "frisk.shared_store_stride",
-                           "frisk.shared_store_pair", "frisk.shared_packet_rows"})
+                           "frisk.shared_store_pair", "frisk.shared_packet_rows",
+                           "frisk.shared_swizzle_src", "frisk.shared_swizzle_dst"})
       if (storage->getAttr(name) != alloc->getAttr(name))
         return;
   }
@@ -225,6 +226,11 @@ static void packAllocation(memref::AllocOp alloc,
       storeStride, storePair, packetRows);
   if (type.getElementTypeBitWidth() % 8 || !io)
     return;
+  auto swizzleSrc = alloc->getAttrOfType<IntegerAttr>("frisk.shared_swizzle_src");
+  auto swizzleDst = alloc->getAttrOfType<IntegerAttr>("frisk.shared_swizzle_dst");
+  if (swizzleSrc || swizzleDst)
+    if (!swizzleSrc || !swizzleDst ||
+        !io->setXorSwizzle(swizzleSrc.getInt(), swizzleDst.getInt())) return;
   SmallVector<Access> accesses;
   SmallVector<memref::DeallocOp> deallocs;
   if (!collect(aliases, accesses, deallocs))
@@ -234,17 +240,35 @@ static void packAllocation(memref::AllocOp alloc,
     if (isa<ReadMatrixFromShmOp>(access.op)) {
       // Moving just the lane pointer is correct only if every element read
       // implicitly by the instruction stays consecutive in physical storage.
+      auto packetIO = *io;
+      packetIO.swizzleSourceBit = packetIO.swizzleTargetBit = -1;
       auto logical = AffineMap::getMultiDimIdentityMap(2, alloc.getContext());
       auto last = AffineMap::get(2, 0,
           {logical.getResult(0), logical.getResult(1) + pack - 1}, alloc.getContext());
       auto delta = AffineMap::get(2, 0,
-          io->mapLogicalToPhysical(last).getResult(0) -
-          io->mapLogicalToPhysical(logical).getResult(0), alloc.getContext());
+          packetIO.mapLogicalToPhysical(last).getResult(0) -
+          packetIO.mapLogicalToPhysical(logical).getResult(0), alloc.getContext());
       SmallVector<Value> operands(access.indices);
       auto proven = compose(delta, operands).getResult(0);
       auto constant = dyn_cast<AffineConstantExpr>(proven);
       if (!constant || constant.getValue() != pack - 1) return;
+      if (swizzleSrc) {
+        // The XOR preserves aligned 16-byte packets, including their implicit
+        // matrix-reader elements. Prove alignment before composing the XOR.
+        auto residue = AffineMap::get(2, 0,
+            packetIO.mapLogicalToPhysical(logical).getResult(0) % pack);
+        operands.assign(access.indices.begin(), access.indices.end());
+        auto aligned = dyn_cast<AffineConstantExpr>(compose(residue, operands).getResult(0));
+        if (!aligned || aligned.getValue()) return;
+      }
     }
+
+  // Recheck the actual source type after view finalization, before mutation.
+  if (swizzleSrc)
+    for (OpOperand *use : aliases.accesses)
+      if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
+        if (selectAsyncDMATransferBytes(copy, 16,
+                io->getPhysicalToLogicalMap(alloc.getContext())) != 16) return;
 
   IRRewriter b(alloc.getContext());
   auto physical = MemRefType::get({type.getNumElements()}, type.getElementType(),
@@ -306,15 +330,25 @@ static void packAllocation(memref::AllocOp alloc,
 }
 
 class PackSharedMemory : public impl::PackSharedMemoryBase<PackSharedMemory> {
-  void runOnOperation() override { packSharedMemory(getOperation()); }
+  void runOnOperation() override {
+    if (failed(packSharedMemory(getOperation()))) signalPassFailure();
+  }
 };
 } // namespace
 
-void packSharedMemory(func::FuncOp kernel) {
+LogicalResult packSharedMemory(func::FuncOp kernel) {
   SmallVector<memref::AllocOp> allocations;
   kernel.walk([&](memref::AllocOp alloc) { allocations.push_back(alloc); });
   llvm::SmallPtrSet<Operation *, 16> visited;
   for (auto alloc : allocations) packAllocation(alloc, visited);
+  bool unhandled = false;
+  kernel.walk([&](memref::AllocOp alloc) {
+    if (alloc->hasAttr("frisk.shared_swizzle_src") || alloc->hasAttr("frisk.shared_swizzle_dst")) {
+      alloc.emitError("cannot safely apply requested shared swizzle to every access / alias while retaining 128-bit DMA");
+      unhandled = true;
+    }
+  });
+  return failure(unhandled);
 }
 
 std::unique_ptr<Pass> createPackSharedMemoryPass() {

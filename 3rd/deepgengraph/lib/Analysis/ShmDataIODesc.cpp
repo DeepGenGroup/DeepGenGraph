@@ -102,6 +102,39 @@ std::optional<ShmDataIODesc> ShmDataIODesc::getPacked(
   return desc;
 }
 
+bool ShmDataIODesc::setXorSwizzle(int sourceBit, int targetBit) {
+  if (sourceBit < 4 || targetBit < 4 || sourceBit == targetBit ||
+      sourceBit > 30 || targetBit > 30 || !llvm::isPowerOf2_64(elementBytes))
+    return false;
+  int64_t period = int64_t(1) << (std::max(sourceBit, targetBit) + 1);
+  // Complete permutation domains: no padding, out-of-bounds or tail aliases.
+  if (shape[0] <= 0 || shape[1] <= 0 ||
+      shape[0] > std::numeric_limits<int64_t>::max() / shape[1] / elementBytes ||
+      (shape[0] * shape[1] * elementBytes) % period)
+    return false;
+  swizzleSourceBit = sourceBit;
+  swizzleTargetBit = targetBit;
+  return true;
+}
+
+AffineExpr ShmDataIODesc::swizzleElementOffset(AffineExpr p) const {
+  if (swizzleSourceBit < 0) return p;
+  int64_t packet = 16 / elementBytes;
+  int64_t src = int64_t(1) << (swizzleSourceBit - 4);
+  int64_t dst = int64_t(1) << (swizzleTargetBit - 4);
+  unsigned dims = 0, symbols = 0;
+  p.walk([&](AffineExpr expr) {
+    if (auto d = dyn_cast<AffineDimExpr>(expr)) dims = std::max(dims, d.getPosition() + 1);
+    if (auto s = dyn_cast<AffineSymbolExpr>(expr)) symbols = std::max(symbols, s.getPosition() + 1);
+  });
+  auto simplify = [&](AffineExpr e) { return simplifyAffineExpr(e, dims, symbols); };
+  auto high = simplify(p.floorDiv(packet));
+  auto a = simplify(high.floorDiv(src) % 2), b = simplify(high.floorDiv(dst) % 2);
+  // Keep the within-packet element explicitly outside the nonlinear map.
+  // Scalar-to-vector coalescing can then prove adjacent element addresses.
+  return (high - b * dst + ((a + b) % 2) * dst) * packet + simplify(p % packet);
+}
+
 AffineMap ShmDataIODesc::getLogicalToPhysicalMap(MLIRContext *ctx) const {
   return mapLogicalToPhysical(AffineMap::getMultiDimIdentityMap(2, ctx));
 }
@@ -146,11 +179,12 @@ AffineMap ShmDataIODesc::mapLogicalToPhysical(AffineMap logical) const {
     physical = (row.floorDiv(pack) * shape[1] + col) * pack + row % pack;
   }
   return simplifyAffineMap(AffineMap::get(logical.getNumDims(),
-      logical.getNumSymbols(), physical));
+      logical.getNumSymbols(), swizzleElementOffset(physical)));
 }
 
 AffineMap ShmDataIODesc::getPhysicalToLogicalMap(MLIRContext *ctx) const {
-  auto p = getAffineDimExpr(0, ctx);
+  // XOR is its own inverse, before undoing the underlying packed layout.
+  auto p = swizzleElementOffset(getAffineDimExpr(0, ctx));
   int64_t pack = packElements;
   auto row = p.floorDiv(pack * shape[1]) * pack + p % pack;
   auto col = p.floorDiv(pack) % shape[1];

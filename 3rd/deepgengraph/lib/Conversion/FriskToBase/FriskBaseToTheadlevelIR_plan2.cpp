@@ -521,6 +521,123 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
   });
 }
 
+// Final physical-layout negotiation, after DMA packing has selected its width.
+// Role names are only user-facing bindings to argument indices, never inferred
+// from an MMA position (K and V can both be operand B).
+static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layouts,
+    const HWSpecification &hw, ArrayRef<StringRef> options, ArrayRef<int> configuredArguments) {
+  SmallVector<int> arguments(configuredArguments);
+  const StringRef roles[] = {"q", "k", "v"};
+  for (unsigned i = 0; i < 3; ++i) {
+    if (arguments[i] != -1) continue;
+    for (unsigned arg = 0; arg < kernel.getNumArguments(); ++arg)
+      if (auto role = kernel.getArgAttrOfType<StringAttr>(arg, "frisk.shared_role");
+          role && role.getValue() == roles[i]) {
+        if (arguments[i] != -1) return kernel.emitError("duplicate frisk.shared_role annotation");
+        arguments[i] = arg;
+      }
+  }
+  std::array<std::pair<int, int>, 3> bits;
+  bool enabled = false;
+  for (unsigned i = 0; i < 3; ++i) {
+    bits[i] = {-1, -1};
+    if (options[i] == "off" || options[i] == "0") continue;
+    enabled = true;
+    StringRef spec = options[i];
+    if (spec == "on" || spec == "1") spec = "8:6";
+    auto pair = spec.split(':');
+    if (pair.first.getAsInteger(10, bits[i].first) ||
+        pair.second.getAsInteger(10, bits[i].second) ||
+        bits[i].first < 4 || bits[i].second < 4 ||
+        bits[i].first > 30 || bits[i].second > 30 || bits[i].first == bits[i].second)
+      return kernel.emitError("swizzle must be off, on, or source:target byte bits (distinct, 4..30); sub-16-byte swizzles are forbidden");
+    if (arguments[i] < 0 || unsigned(arguments[i]) >= kernel.getNumArguments())
+      return kernel.emitError("enabled swizzle needs a valid swizzle-{q,k,v}-arg or frisk.shared_role argument annotation");
+  }
+  if (!enabled) return success();
+  for (unsigned i = 0; i < 3; ++i)
+    for (unsigned j = i + 1; j < 3; ++j)
+      if (arguments[i] >= 0 && arguments[i] == arguments[j])
+        return kernel.emitError("Q/K/V swizzle argument bindings must be distinct");
+  auto roleOf = [&](Value value) -> int {
+    while (true) {
+      if (auto view = value.getDefiningOp<BufferViewOp>()) value = view.getSource();
+      else if (auto transpose = value.getDefiningOp<memref::TransposeOp>()) value = transpose.getIn();
+      else if (auto cast = value.getDefiningOp<memref::CastOp>()) value = cast.getSource();
+      else if (auto view = value.getDefiningOp<memref::SubViewOp>()) value = view.getSource();
+      else break;
+    }
+    for (unsigned i = 0; i < 3; ++i)
+      if (arguments[i] >= 0 && unsigned(arguments[i]) < kernel.getNumArguments() &&
+          value == kernel.getArgument(arguments[i])) return i;
+    return -1;
+  };
+  bool invalid = false;
+  std::array<unsigned, 3> matched{};
+  llvm::SmallPtrSet<Operation *, 16> visited;
+  kernel.walk([&](AsyncCopyGmToShmOp issue) {
+    int role = roleOf(issue.getSrc());
+    if (role < 0 || bits[role].first < 0) return;
+    ++matched[role];
+    SharedBufferAliases aliases;
+    if (!aliases.collect(getViewBuffer(issue.getDst()))) {
+      issue.emitError("requested swizzle requires an owned shared allocation with known aliases");
+      invalid = true; return;
+    }
+    if (visited.contains(aliases.allocations.front())) return;
+    for (auto *storage : aliases.allocations) visited.insert(storage);
+    auto type = cast<MemRefType>(issue.getDst().getType());
+    auto param = [&](StringRef name) -> int64_t {
+      auto attr = dyn_cast_or_null<IntegerAttr>(aliases.commonAttribute(name));
+      return attr ? attr.getInt() : 0;
+    };
+    auto io = type.getRank() == 2 && type.hasStaticShape()
+        ? ShmDataIODesc::getPacked({type.getDimSize(0), type.getDimSize(1)},
+            type.getElementTypeBitWidth() / 8, param("frisk.shared_pack_axis"),
+            param("frisk.shared_pack"), param("frisk.shared_pair_stride"),
+            param("frisk.shared_store_stride"), param("frisk.shared_store_pair"),
+            param("frisk.shared_packet_rows")) : std::nullopt;
+    if (!io || !io->setXorSwizzle(bits[role].first, bits[role].second)) {
+      issue.emitError("requested swizzle is not a bijection of the final packed tile (incomplete period or unsupported layout)");
+      invalid = true; return;
+    }
+    for (OpOperand *use : aliases.accesses) {
+      if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner())) {
+        int other = roleOf(copy.getSrc());
+        auto strides = getGlobalCopyStrides(copy.getSrc());
+        if (use->getOperandNumber() != 1 || other < 0 || bits[other] != bits[role] ||
+            !strides || io->selectDMATransferBytes(hw, kernel.getContext(), *strides,
+                                                  copy.getAlignment()) != 16) {
+          copy.emitError("requested swizzle requires consistent producer layouts and legal 128-bit DMA for every alias");
+          invalid = true; return;
+        }
+      } else if (isa<CopyOp>(use->getOwner())) {
+        use->getOwner()->emitError("requested swizzle currently requires asynchronous DMA producers");
+        invalid = true; return;
+      }
+    }
+    OpBuilder b(kernel.getContext());
+    for (auto *storage : aliases.allocations) {
+      storage->setAttr("frisk.shared_swizzle_src", b.getI64IntegerAttr(bits[role].first));
+      storage->setAttr("frisk.shared_swizzle_dst", b.getI64IntegerAttr(bits[role].second));
+    }
+    for (OpOperand *use : aliases.accesses)
+      if (auto *info = layouts.getLowerInfo(use->get(), use->getOwner())) {
+        info->shmIO = *io;
+        info->shmIO->baseLayout = info->base_layout;
+      }
+    llvm::errs() << "Shared swizzle: argument " << arguments[role] << " byte bit "
+                 << bits[role].second << " ^= " << bits[role].first
+                 << ", DMA=16 bytes, aliases=" << aliases.allocations.size() << "\n";
+  });
+  for (unsigned i = 0; i < 3; ++i)
+    if (bits[i].first >= 0 && !matched[i]) {
+      kernel.emitError("enabled swizzle argument has no traceable asynchronous shared producer");
+      invalid = true;
+    }
+  return failure(invalid);
+}
+
 // 把 affine map 应用到 operands，并合成已有 affine.apply，返回单个索引值。
 // 用于将切片偏移与局部坐标拼成底层 buffer 的访问坐标。
 static Value composeAccessIndex(OpBuilder &b, Location loc, AffineMap map,
@@ -2043,7 +2160,8 @@ public:
       if (auto stride = op->getAttr("frisk.shared_pair_stride"))
         alloc->setAttr("frisk.shared_pair_stride", stride);
       for (StringRef name : {"frisk.shared_store_stride", "frisk.shared_store_pair",
-                             "frisk.shared_packet_rows"})
+                             "frisk.shared_packet_rows", "frisk.shared_swizzle_src",
+                             "frisk.shared_swizzle_dst"})
         if (auto attr = op->getAttr(name)) alloc->setAttr(name, attr);
       markTiled(alloc, rewriter);
       rewriter.replaceOp(op, alloc.getResult());
@@ -3866,6 +3984,10 @@ public:
                      << " copy_threads=" << plan.copying << "\n";
       }
     }
+    if (failed(planSharedSwizzles(kernel, *s_info, *s_hw,
+            {swizzleQ.getValue(), swizzleK.getValue(), swizzleV.getValue()},
+            {swizzleQArg, swizzleKArg, swizzleVArg})))
+      return signalPassFailure();
     if (asyncDirectOnly && dmaPackMode == "legacy") {
       // Select before thread tiling: late scalar fallback loses the ordinary
       // copy path's coalesced global packets and bank-safe packed LDS stores.

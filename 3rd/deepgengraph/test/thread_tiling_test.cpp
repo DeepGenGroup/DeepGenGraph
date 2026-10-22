@@ -72,6 +72,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::frisk::FriskDialect,
                   mlir::deepgengraph::triton::DeepgengraphTritonDialect,
                   mlir::deepgengraph::DeepgengraphDialect>();
+  mlir::registerPass([] { return mlir::frisk::createReorderWorkgroupsPass(); });
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();

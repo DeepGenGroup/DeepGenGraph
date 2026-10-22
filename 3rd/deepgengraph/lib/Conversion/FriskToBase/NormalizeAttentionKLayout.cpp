@@ -98,6 +98,12 @@ class NormalizeAttentionKLayout
     auto transposed = builder.create<memref::TransposeOp>(
         func.getLoc(), key, AffineMapAttr::get(permutation));
     key.replaceAllUsesExcept(transposed.getResult(), transposed);
+    // Preserve semantic role provenance through later physical-layout planning.
+    // This helper already validated the example ABI; generic passes never
+    // guess K versus V from argument order or identical BHSD tensor shapes.
+    func.setArgAttr(0, "frisk.shared_role", builder.getStringAttr("q"));
+    func.setArgAttr(index, "frisk.shared_role", builder.getStringAttr("k"));
+    func.setArgAttr(3 - index, "frisk.shared_role", builder.getStringAttr("v"));
     func->setAttr("frisk.k_layout_bhsd", builder.getUnitAttr());
   }
 };
