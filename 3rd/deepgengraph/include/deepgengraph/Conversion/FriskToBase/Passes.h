@@ -15,6 +15,7 @@ std::unique_ptr<mlir::Pass> createPlanWmmaLayoutConversionsPass();
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass();
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
+std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass();
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();
 std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
 std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();

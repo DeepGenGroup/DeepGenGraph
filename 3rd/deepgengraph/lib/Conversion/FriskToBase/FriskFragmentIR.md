@@ -137,6 +137,38 @@ SSA 值，通过 `frisk.fragment_yield` 返回寄存器 fragment；`kind` 分为
 单片段循环在本 Pass 的单次迭代提升阶段保留；后续 canonicalize
 可以按通常规则消除。属性是调度提示，不作为安全融合的依据。
 
+## 跨循环 operand 保留
+
+`frisk-retain-invariant-fragments` 在 thread tiling、fragment fusion 和小循环
+specialization 后、`lower-frisk-fragments` 的 packing / DMA 调度 / LDS 复用前
+运行。MyTest 和 RunFriskSHell.sh 的 `--retain-fragment-words=N` 启用它，默认
+为 0（关闭）；独立 Pass 使用 `max-words=N`（默认 8）。预算是每线程最终跨
+循环存活的 payload 的 32-bit 字数，不是后端 VGPR 数的保证。
+
+它从 `async_copy_gm_to_shm` 的独立 shared allocation 出发，检查 source
+地址对目标循环不变，沿其全部 LDS 读取、寄存器构造和纯计算依赖提升到循环
+之前。纯计算保留原精度，例如 FP16 缩放。最终的寄存器值供循环重复使用；
+shared allocation 的读取生命周期在循环前结束，允许后续存储复用。原 copy
+和 readiness wait 一起移动；之后的共享内存分析重新安排存储交接和循环回边
+保护，不能假定 barrier 数与原 IR 完全一致。
+
+匹配不读取 Q/K/V role、函数名、SSA 编号或固定 BM/BN/BK。第一版只处理
+函数入口的 block-uniform affine loop，要求证明至少执行一次，并跳过静态
+单次循环。候选 copy 必须直接位于目标循环体内，目的为该循环内独占的静态
+allocation；其用户只能是唯一 copy、唯一 wait 和 memref.load。读取可位于
+fragment region 或静态内层循环中，但其地址不能依赖目标循环的 IV/carrier。
+输入的 BK 分块仍嵌套时，先使用现有 loop specialization 暴露候选。旋转
+流水 buffer、未知控制流、逃逸别名、未知副作用以及可能改写源数据的操作
+保守跳过。不同 global 参数不默认 noalias。
+
+在最终线程布局上按生产链的数据依赖计算保留集合，预算统计该集合向循环
+消费者输出的最终值，不重复统计中间 vector。多个候选共享同一循环预算；
+`frisk.retained_words` 标记已处理循环，使重复运行保持幂等。第一版不跨嵌套
+目标循环做保留，避免低估重叠的活跃区间。
+
+验证入口：`test/check_invariant_fragment_retention.py`；完整 attention
+实验和复现脚本位于仓库根目录的 `generated_ir/invariant_fragment_pass/`。
+
 ## 融合 Pass
 
 工厂函数：`mlir::frisk::createFriskFragIRReorderPass()`。

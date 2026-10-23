@@ -101,6 +101,7 @@ int main(int argc, char **argv) {
     return mlir::frisk::createFriskFragIRReorderPass();
   });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
+  mlir::registerPass([] { return mlir::frisk::createRetainInvariantFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
   mlir::registerPass([] { return mlir::frisk::createPromoteGlobalToSharedAsyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createPromoteGemmMatrixLoadsPass(); });

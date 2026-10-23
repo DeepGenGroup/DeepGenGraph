@@ -155,6 +155,13 @@ def FriskFragIRReorder: Pass<"frisk-frag-ir-reorder", "::mlir::func::FuncOp"> {
   let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::frisk::FriskDialect"];
 }
 
+def RetainInvariantFragments: Pass<"frisk-retain-invariant-fragments", "::mlir::func::FuncOp"> {
+  let summary = "Retain immutable operand fragments across collective loops before shared storage planning";
+  let constructor = "mlir::frisk::createRetainInvariantFragmentsPass()";
+  let options = [Option<"maxWords", "max-words", "unsigned", "8",
+      "Maximum retained 32-bit payload words per thread; 0 disables (not a physical VGPR limit)">];
+}
+
 def LowerFriskFragments: Pass<"lower-frisk-fragments", "::mlir::func::FuncOp"> {
   let summary = "Lower scheduled fragment regions, plan storage and unroll marked loops";
   let constructor = "mlir::frisk::createLowerFriskFragmentsPass()";

@@ -418,10 +418,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
   unsigned fragPrefetchWords = 8;
+  unsigned retainFragmentWords = 0;
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
-    if (option.starts_with("--swizzle-")) {
+    if (option.consume_front("--retain-fragment-words=")) {
+      if (option.getAsInteger(10, retainFragmentWords)) {
+        llvm::errs() << "retain-fragment-words must be a nonnegative integer\n";
+        return 1;
+      }
+    } else if (option.starts_with("--retain-fragment")) {
+      llvm::errs() << "use --retain-fragment-words=N (0 disables)\n";
+      return 1;
+    } else if (option.starts_with("--swizzle-")) {
       auto pair = option.drop_front(2).split('=');
       if (pair.second.empty() || !llvm::is_contained(
           {StringRef("swizzle-q"), StringRef("swizzle-k"), StringRef("swizzle-v"),
@@ -813,6 +822,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  if (retainFragmentWords) {
+    auto retain = frisk::createRetainInvariantFragmentsPass();
+    if (failed(retain->initializeOptions(
+            "max-words=" + std::to_string(retainFragmentWords),
+            [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
+      return 1;
+    AddFuncPass(std::move(retain));
+    llvm::outs() << "\n---- after frisk-retain-invariant-fragments -----\n";
+    llvm::outs().flush(); src->dump();
+  }
   AddFuncPass(frisk::createLowerFriskFragmentsPass());
   // Affine LICM only inspects direct operands of unknown region operations;
   // run it after inlining fragment regions so their captured values are visible.
@@ -1202,7 +1221,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
