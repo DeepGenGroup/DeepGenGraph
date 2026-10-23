@@ -1,0 +1,28 @@
+{
+  "bm": [
+    128
+  ],
+  "bn": [
+    128
+  ],
+  "bk": [
+    32
+  ],
+  "cases": [],
+  "set": [
+    "workgroup-group-size=8",
+    "workgroup-reverse=1"
+  ],
+  "sweep": [
+    "swizzle-q=off;on",
+    "swizzle-k=off;on",
+    "swizzle-v=off;on"
+  ],
+  "opt_level": 3,
+  "device": 0,
+  "warmup": 10,
+  "repeat": 50,
+  "seed": 0,
+  "timeout": 300,
+  "output_dir": "results-swizzle"
+}

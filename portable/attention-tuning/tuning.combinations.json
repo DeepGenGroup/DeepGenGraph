@@ -1,0 +1,36 @@
+{
+  "bm": [
+    64,
+    128
+  ],
+  "bn": [
+    32,
+    64
+  ],
+  "bk": [
+    32
+  ],
+  "cases": [],
+  "set": [],
+  "sweep": [
+    "pipeline=0;1",
+    "reorder=0;1",
+    "pack=0;1",
+    "lifetimes=0;1",
+    "masks=0;1",
+    "prefetch=0;1",
+    "fuse=0;1",
+    "frag-prefetch=0;1",
+    "simplify-loop-control=0;1",
+    "coalesce-waits=0;1",
+    "loop-mark=0;1",
+    "pipeline-stages=none;2"
+  ],
+  "opt_level": 3,
+  "device": 0,
+  "warmup": 10,
+  "repeat": 50,
+  "seed": 0,
+  "timeout": 300,
+  "output_dir": "results-combinations"
+}
