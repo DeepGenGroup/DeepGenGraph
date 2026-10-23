@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   bool ldsGeps = argc == 3 && llvm::StringRef(argv[1]) == "--canonicalize-lds-geps";
+  bool ldsGepsOnly = argc == 3 && llvm::StringRef(argv[1]) == "--canonicalize-lds-geps-only";
   bool approximate = argc == 3 && llvm::StringRef(argv[1]) == "--approx-register-math";
   bool fuseMMAC = argc == 3 && llvm::StringRef(argv[1]) == "--fuse-mmac-accumulator";
   bool lifetimes = argc == 3 && llvm::StringRef(argv[1]) == "--optimize-register-lifetimes";
@@ -61,8 +62,8 @@ int main(int argc, char **argv) {
   bool hcuDMA = argc == 3 && llvm::StringRef(argv[1]) == "--hcu-wide-dma";
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
-  if (argc != 2 && !ldsGeps && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] <input.ll or ->\n";
+  if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
+    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -71,6 +72,18 @@ int main(int argc, char **argv) {
   if (!module) {
     diagnostic.print(argv[0], llvm::errs());
     return 1;
+  }
+  // A standalone A/B entry point: do not alter MMAC attributes, shared-memory
+  // constants or fragment scheduling as part of an LDS address experiment.
+  if (ldsGepsOnly) {
+    if (fragPrefetch) {
+      llvm::errs() << "--canonicalize-lds-geps-only cannot enable fragment prefetch\n";
+      return 1;
+    }
+    mlir::frisk::canonicalizeLDSGEPs(*module);
+    if (llvm::verifyModule(*module, &llvm::errs())) return 1;
+    module->print(llvm::outs(), nullptr);
+    return 0;
   }
   mlir::frisk::prepareRegisterMMAForLLVM(*module);
   if (ldsGeps)

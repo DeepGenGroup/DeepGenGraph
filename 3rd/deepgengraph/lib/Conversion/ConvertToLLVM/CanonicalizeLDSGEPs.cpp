@@ -1,6 +1,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/CanonicalizeLDSGEPs.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/SimplifyQuery.h"
@@ -17,6 +18,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 namespace mlir::frisk {
 namespace {
@@ -137,6 +139,7 @@ llvm::PreservedAnalyses CanonicalizeLDSGEPsPass::run(
     llvm::Function &f, llvm::FunctionAnalysisManager &am) {
   auto &se = am.getResult<llvm::ScalarEvolutionAnalysis>(f);
   auto &dt = am.getResult<llvm::DominatorTreeAnalysis>(f);
+  auto &ac = am.getResult<llvm::AssumptionAnalysis>(f);
   ThreadOffsets exact(f);
   bool changedAlignment = false;
   struct Anchor { llvm::Value *pointer; const llvm::SCEV *expr; };
@@ -150,7 +153,12 @@ llvm::PreservedAnalyses CanonicalizeLDSGEPsPass::run(
     if (!load || load->getPointerAddressSpace() != 3 || load->isVolatile() ||
         load->isAtomic()) continue;
     auto *pointer = load->getPointerOperand();
-    auto provenAlignment = exact.alignment(pointer);
+    // Also handle arbitrary LDS pointer arguments and dynamic offsets without
+    // a bounded workitem domain. LLVM proves alignment from pointer contracts,
+    // assumptions and known bits; enumeration additionally covers nonlinear
+    // thread layouts. Neither proof depends on a buffer name or attention role.
+    auto provenAlignment = std::max(exact.alignment(pointer),
+        llvm::getKnownAlignment(pointer, f.getDataLayout(), load, &ac, &dt));
     if (provenAlignment > load->getAlign()) {
       load->setAlignment(provenAlignment);
       changedAlignment = true;

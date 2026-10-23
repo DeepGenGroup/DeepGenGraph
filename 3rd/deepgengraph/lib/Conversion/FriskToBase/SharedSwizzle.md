@@ -4,6 +4,18 @@ These optimizations are opt-in. Existing callers retain the previous layout and
 launch order. The implementation does not depend on `Attn_p2`, fixed SSA names,
 32 heads, a 128-dimensional head, or a fixed number of waves.
 
+The LLVM `CanonicalizeLDSGEPsPass` can also run independently of swizzling via
+`LegacyLLVMExportTest --canonicalize-lds-geps-only input.ll`. This entry point
+does not run the MMAC/shared-memory export preparation. The pass considers
+ordinary nonvolatile, nonatomic loads from any address-space-3 buffer, including
+pointer arguments and arbitrary scalar/vector element types. It uses LLVM's
+known alignment (including argument contracts and dynamic offset known bits),
+with bounded exact thread-layout evaluation as an additional proof. Constant
+offset rebasing requires dominance; unproven cases remain unchanged. Memory
+operations are not moved or widened, and matrix-read intrinsics are not rewritten.
+`script/optimize_lds_reads.py` exports an unchanged baseline and a candidate with
+this pass, plus verifier results and optional matching launch configurations.
+
 ## Pipeline
 
 1. `convert-frisk-to-base` materializes logical `gpu.block_id` operations.
