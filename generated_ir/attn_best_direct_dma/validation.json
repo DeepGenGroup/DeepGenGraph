@@ -1,0 +1,101 @@
+{
+  "file": "generated_ir/attn_best_direct_dma/attention.ll",
+  "sha256": "c843f99bea1aa9395ca28555e6c2aa240ae89b58e568f4a8aeafde495c0bddf3",
+  "input": "3rd/deepgengraph/test/test_input_sd16.mlir",
+  "input_sha256": "068c089a68a14358090073d917d608e92bc47b1411c57acb94dee25bdcfdd590",
+  "reproduce": "bash generated_ir/attn_best_direct_dma/generate.sh",
+  "configuration": {
+    "copy": "async",
+    "alignment": 16,
+    "layout": "3.3",
+    "carrier_words": 34816,
+    "math": "approx",
+    "threads": 256,
+    "block_warps": [
+      4,
+      1
+    ],
+    "qk_tile": 32,
+    "vo_tile": 32,
+    "dma_pack": "useKPack",
+    "dma_export": "asm128",
+    "uniform_masks": true,
+    "global_prefetch": true,
+    "fuse_mask_add": false,
+    "fragment_prefetch": true,
+    "fragment_prefetch_words": 4,
+    "independent_direct_dma_overlap": true
+  },
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "argument_order": [
+      "Q",
+      "K",
+      "V",
+      "Out"
+    ],
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "dtype": "float16",
+    "layout": "contiguous BHSD",
+    "static_lds_bytes": 16384,
+    "dynamic_shared_memory_bytes": 0
+  },
+  "static_counts": {
+    "dma_calls": 12,
+    "zero_count_waits": 6,
+    "block_barriers": 12
+  },
+  "first_qk_events": [
+    [
+      96,
+      "dma"
+    ],
+    [
+      125,
+      "dma"
+    ],
+    [
+      162,
+      "dma"
+    ],
+    [
+      183,
+      "dma"
+    ],
+    [
+      184,
+      "wait"
+    ],
+    [
+      215,
+      "wait"
+    ]
+  ],
+  "validation": {
+    "llvm_o3_verify": true,
+    "numerical_model_cases_passed": 4,
+    "target_gpu_tested": false,
+    "target_gpu_time_ms": null
+  },
+  "performance_reference": {
+    "artifact": "generated_ir/frag_prefetch_v2/temp.frag-prefetch.ll",
+    "source": "pmc_test.log",
+    "recorded_time_ms": 2.152,
+    "note": "Historical fast artifact only; the newly generated IR has not been GPU timed and is not proven fastest."
+  }
+}

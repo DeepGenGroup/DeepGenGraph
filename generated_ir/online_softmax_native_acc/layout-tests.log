@@ -1,0 +1,5 @@
+PASS emitted dataflow: 256 threads, 4 registers, distinct matrix coordinates
+PASS standalone planning, idempotence and unsupported/stale metadata
+PASS shared fallback, multiple tile shapes/waves and repeated tiling
+PASS row-scaled loop layout sinking in both operand orders; column-scale fallback
+PASS full attention tiling, finalization and fragment scheduling

@@ -1,0 +1,16 @@
+PASS f16/f32, multi-tile B, 1/2/4 waves, idempotence and LLVM export
+PASS unsupported shape, instruction K and transposed-B fallbacks
+PASS layout-based selection: row-permuted B retained, incompatible column packets rejected, compatible producer B retained
+PASS same-shaped ALT output-layout mismatch is rejected
+PASS matrix reads preserve software-pipeline stages and rotated slots
+PASS legacy/useKPack/noKPack physical packing, readiness and matrix intrinsic
+PASS physical copy 32x64, axis=1, pair=0, store=0, direct_DMA=False
+PASS column-major GM, full-width staged DMA and matrix-read packets
+PASS emitted matrix-read addresses/fragments: f16, 64 threads, packed=False
+PASS emitted matrix-read addresses/fragments: f16, 64 threads, packed=True
+PASS emitted matrix-read addresses/fragments: f16, 256 threads, packed=False
+PASS emitted matrix-read addresses/fragments: f16, 256 threads, packed=True
+PASS emitted matrix-read addresses/fragments: f32, 64 threads, packed=False
+PASS emitted matrix-read addresses/fragments: f32, 64 threads, packed=True
+PASS emitted matrix-read addresses/fragments: f32, 256 threads, packed=False
+PASS emitted matrix-read addresses/fragments: f32, 256 threads, packed=True

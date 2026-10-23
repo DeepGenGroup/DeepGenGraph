@@ -1,0 +1,7 @@
+PASS pure register-only MMAC: convergent/nounwind/willreturn/memory(none); idempotence, unknown asm and padding unchanged
+PASS O3 baseline loads 2
+PASS O3 fixed loads 1
+PASS O3 load reuse for tuned and asymmetric padding
+PASS O3 unused-MMAC elimination and dependent accumulator chain
+PASS LLVM 15 parser retains readnone/convergent
+PASS legacy readnone roundtrip

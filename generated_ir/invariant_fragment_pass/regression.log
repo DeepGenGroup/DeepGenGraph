@@ -1,0 +1,1 @@
+PASS 22 retention cases: arbitrary operand, size/budget, idempotence, alias/write, readiness, zero-trip, uniformity

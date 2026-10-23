@@ -1,0 +1,2 @@
+PASS direct from_elements, mixed/different prefixes, insert chain and static row verification
+PASS CPU results: 20 cases through source/canonical/post-unroll/combined pipelines

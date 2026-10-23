@@ -1,0 +1,3 @@
+PASS 128/256 threads: noncontiguous GM, descriptor/bounds, LDS guards, explicit wait, object encoding (gfx950), no M0 clobber warning
+PASS 256/256 threads: noncontiguous GM, descriptor/bounds, LDS guards, explicit wait, object encoding (gfx950), no M0 clobber warning
+PASS rejects unsupported DMA controls and nonzero async group waits

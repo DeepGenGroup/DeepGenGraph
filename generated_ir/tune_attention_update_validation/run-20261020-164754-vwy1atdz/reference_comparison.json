@@ -1,0 +1,30 @@
+{
+  "baseline": {
+    "reference": "nohint_unrolled.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "nohint-unrolled-32k": {
+    "reference": "nohint_unrolled_32k.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "pipeline-baseline": {
+    "reference": "baseline.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "pipeline-wait-only": {
+    "reference": "wait_only.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "pipeline-loop-only": {
+    "reference": "loop_only.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "pipeline-combined": {
+    "reference": "combined.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  },
+  "pipeline-loop-only-40k": {
+    "reference": "loop_only_40k.ll",
+    "same_kernel_instructions_ignoring_debug": true
+  }
+}

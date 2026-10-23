@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-22T10:09:54Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l",
+  "total_candidates": 4,
+  "completed_candidates": 4,
+  "failed_candidates": 0,
+  "successful_candidates": 4,
+  "status_counts": {
+    "verified": 4
+  },
+  "last_result": {
+    "case": "group8-reverse-k128-swizzle",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0004-test_input_1x32x4096x128-64-64-32/group8-reverse-k128-swizzle",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0004-test_input_1x32x4096x128-64-64-32/group8-reverse-k128-swizzle/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/**/result.json",
+  "best_by_shape": {}
+}

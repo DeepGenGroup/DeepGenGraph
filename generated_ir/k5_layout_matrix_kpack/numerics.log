@@ -1,0 +1,5 @@
+LLVM model head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7110049e-05, mismatch=0
+LLVM model head=0 block=1: allclose=True, max_abs=0.0010877848, mean_abs=5.5758235e-05, mismatch=0
+LLVM model head=1 block=7: allclose=True, max_abs=0.00022155046, mean_abs=2.4653866e-05, mismatch=0
+LLVM model head=1 block=31: allclose=True, max_abs=9.5851719e-05, mean_abs=1.2669997e-05, mismatch=0
+PASS mathematical LLVM execution; hardware timing/hazards are not simulated.

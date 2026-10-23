@@ -1,0 +1,8 @@
+PASS grid-000001 group=4 prefetch=0 query=0
+PASS grid-000002 group=4 prefetch=1 query=0
+PASS grid-000003 group=8 prefetch=0 query=0
+PASS grid-000003 group=8 prefetch=0 query=31
+PASS grid-000004 group=8 prefetch=1 query=0
+PASS grid-000004 group=8 prefetch=1 query=31
+PASS grid-000005 group=16 prefetch=0 query=0
+PASS grid-000006 group=16 prefetch=1 query=0

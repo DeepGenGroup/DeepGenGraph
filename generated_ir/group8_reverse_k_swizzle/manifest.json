@@ -1,0 +1,97 @@
+{
+  "baseline": "generated_ir/block_order/group8_reverse.ll",
+  "baseline_sha256": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2",
+  "baseline_program_median_ms": 1.8489584922790527,
+  "candidate": "group8_reverse_k_swizzle128.ll",
+  "candidate_sha256": "73234d33f58e848a06f363a42f1090a2952e71791ec6e2e409e762f944a880c1",
+  "control": "group8_reverse_control.ll",
+  "control_sha256": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2",
+  "gpu_tested": false,
+  "static_lds_bytes": 16384,
+  "lds_transform": "F(A) = A ^ ((A >> 2) & 64)",
+  "producer_lane_permutation": "t' = t ^ ((t >> 2) & 4)",
+  "producer_implementation": "K buffer offset ^= (thread_id & 16) << 6; same m0/resource and 16B DMA",
+  "consumer_implementation": "K LDS byte address ^= (thread_id & 1) << 6",
+  "dma_offsets": [
+    {
+      "original": "%dma.buffer.offset928",
+      "swizzled": "%ksw.dma.offset0"
+    },
+    {
+      "original": "%dma.buffer.offset925",
+      "swizzled": "%ksw.dma.offset1"
+    },
+    {
+      "original": "%dma.buffer.offset916",
+      "swizzled": "%ksw.dma.offset2"
+    },
+    {
+      "original": "%dma.buffer.offset913",
+      "swizzled": "%ksw.dma.offset3"
+    },
+    {
+      "original": "%dma.buffer.offset904",
+      "swizzled": "%ksw.dma.offset4"
+    },
+    {
+      "original": "%dma.buffer.offset901",
+      "swizzled": "%ksw.dma.offset5"
+    },
+    {
+      "original": "%dma.buffer.offset892",
+      "swizzled": "%ksw.dma.offset6"
+    },
+    {
+      "original": "%dma.buffer.offset889",
+      "swizzled": "%ksw.dma.offset7"
+    }
+  ],
+  "read_pointers": {
+    "%address.local191": "%ksw.read0.pointer",
+    "%address.local205": "%ksw.read1.pointer",
+    "%address.local221": "%ksw.read2.pointer",
+    "%address.local227": "%ksw.read3.pointer",
+    "%address.local233": "%ksw.read4.pointer",
+    "%address.local239": "%ksw.read5.pointer",
+    "%address.local245": "%ksw.read6.pointer",
+    "%address.local251": "%ksw.read7.pointer",
+    "%address.local253": "%ksw.read8.pointer",
+    "%address.local255": "%ksw.read9.pointer",
+    "%address.local262": "%ksw.read10.pointer",
+    "%address.local268": "%ksw.read11.pointer",
+    "%address.local275": "%ksw.read12.pointer",
+    "%address.local281": "%ksw.read13.pointer",
+    "%address.local288": "%ksw.read14.pointer",
+    "%address.local294": "%ksw.read15.pointer"
+  },
+  "unchanged": [
+    "group8_reverse entry",
+    "Q",
+    "V",
+    "MMAC",
+    "waits/barriers",
+    "output",
+    "DMA widths/count"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  }
+}

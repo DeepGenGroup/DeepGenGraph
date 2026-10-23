@@ -1,0 +1,7 @@
+shm bytes 0 -> 0, barriers 0
+shm[0] 0 bytes, align 1, skipped: existing shared-memory pool
+shm[1] 8192 bytes, align 16, skipped: unsupported or escaping use: frisk.async_copy_gm_to_shm
+shm[2] 8192 bytes, align 16, skipped: unsupported or escaping use: frisk.async_copy_gm_to_shm
+shm[3] 8192 bytes, align 16, skipped: unsupported or escaping use: frisk.async_copy_gm_to_shm
+shm[4] 8192 bytes, align 16, skipped: unsupported or escaping use: frisk.async_copy_gm_to_shm
+shm bytes 0 -> 0, barriers 0

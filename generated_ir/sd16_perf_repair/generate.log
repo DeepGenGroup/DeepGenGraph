@@ -1,0 +1,2 @@
+Generated and numerically checked candidate.off.ll / candidate.on.ll.
+Target GPU correctness, allocated registers and performance still require measurement.

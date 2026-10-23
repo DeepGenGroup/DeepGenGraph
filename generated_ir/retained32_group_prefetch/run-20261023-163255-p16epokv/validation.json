@@ -1,0 +1,139 @@
+{
+  "baseline": "grid-000004",
+  "baseline_source_metadata_normalized_equal": true,
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/retained_32words.ll",
+  "variants": {
+    "grid-000001": {
+      "group": 4,
+      "reverse": 1,
+      "frag_prefetch": 0,
+      "sha256": "f6ba2103932d882bb58df07a1f1cf11c6485439378cd2ddaf9c907dfd7ceb3fa",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    },
+    "grid-000002": {
+      "group": 4,
+      "reverse": 1,
+      "frag_prefetch": 1,
+      "sha256": "4998d80809b4be9fc9c28dc354f36d4693ff43b966ba8c5cacc914de0a315517",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    },
+    "grid-000003": {
+      "group": 8,
+      "reverse": 1,
+      "frag_prefetch": 0,
+      "sha256": "787adf06e6c108b9fdcc791ac3ec3256f1da4a1938a6c9bb5e89a3c66ffaeb82",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        },
+        {
+          "head": 1,
+          "query": 31,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    },
+    "grid-000004": {
+      "group": 8,
+      "reverse": 1,
+      "frag_prefetch": 1,
+      "sha256": "ff859da1a2a95795eec5490bdae496b35ba017df69b5f84206e2d671afc18e44",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        },
+        {
+          "head": 1,
+          "query": 31,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    },
+    "grid-000005": {
+      "group": 16,
+      "reverse": 1,
+      "frag_prefetch": 0,
+      "sha256": "00fb8faa7ae3a14f8f29929e0a5b8faf0acd057df1005bd76b0230b3f55dfe20",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    },
+    "grid-000006": {
+      "group": 16,
+      "reverse": 1,
+      "frag_prefetch": 1,
+      "sha256": "e2ff6b093e5dae8b8a7b0ea1936f9b96ad1494622afa656816c0114f2b152c1b",
+      "static_lds_bytes": 16384,
+      "retained_tiles": 4,
+      "llvm_O3_verified": true,
+      "cases": [
+        {
+          "head": 1,
+          "query": 0,
+          "Q_elements_each_read_once": 16384,
+          "reference_passed": true,
+          "writes_only_selected_tile": true,
+          "delayed_DMA_and_cross_wave_LDS_audit_passed": true
+        }
+      ]
+    }
+  },
+  "gpu_tested": false,
+  "limitation": "CPU model checks selected blocks, not target GPU timing or register allocation."
+}

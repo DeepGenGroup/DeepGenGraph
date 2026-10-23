@@ -71,7 +71,7 @@ echo "========================================"
 # 1. Link LLVM IR + ROCm device bitcode
 # ------------------------------------------------------------
 
-${LLVM_DIR}/llvm-link "${LL_FILE}" \
+"${LLVM_DIR}/llvm-link" "${LL_FILE}" \
     "${ROCM_BC}/ocml.bc" \
     "${ROCM_BC}/ockl.bc" \
     "${ROCM_BC}/oclc_isa_version_${GPU_ARCH#gfx}.bc" \
@@ -90,7 +90,7 @@ ${LLVM_DIR}/llvm-link "${LL_FILE}" \
 # 不要使用 strip-debug / strip-named-metadata。
 # ------------------------------------------------------------
 
-${LLVM_DIR}/opt \
+"${LLVM_DIR}/opt" \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
     "${GPU_FEATURE_ARGS[@]}" \
@@ -107,7 +107,7 @@ ${LLVM_DIR}/opt \
 # ------------------------------------------------------------
 
 # Keep ABI v4 for the older HIP runtime, including the assembly sidecar.
-${LLVM_DIR}/llc \
+"${LLVM_DIR}/llc" \
     -mtriple=amdgcn-amd-amdhsa \
     -mcpu="${GPU_ARCH}" \
     "${GPU_FEATURE_ARGS[@]}" \
@@ -123,7 +123,7 @@ ${LLVM_DIR}/llc \
 # 4. Object -> HSACO
 # ------------------------------------------------------------
 
-${LLVM_DIR}/ld.lld \
+"${LLVM_DIR}/ld.lld" \
     -shared \
     --build-id=sha1 \
     kernel.o \
@@ -135,13 +135,20 @@ ${LLVM_DIR}/ld.lld \
 # llvm-dwarfdump --debug-line "${KERNEL_FILE}"
 # llvm-objdump -d --line-numbers "${KERNEL_FILE}" | less
 
-${LLVM_DIR}/llc -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
+"${LLVM_DIR}/llc" -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
     "${GPU_FEATURE_ARGS[@]}" \
     "${LLVM_CODEGEN_OPT}" -debugger-tune=gdb \
     -dwarf-version="${DWARF_VERSION}" -filetype=asm \
-    -print-after-all -filter-print-funcs=Attn_p2 \
     -amdhsa-code-object-version=4 \
-    opt.bc -o "${KERNEL_FILE}.amdgcn" 2> passes.log
+    opt.bc -o "${KERNEL_FILE}.amdgcn" 
+    
+# "${LLVM_DIR}/llc" -mtriple=amdgcn-amd-amdhsa -mcpu="${GPU_ARCH}" \
+#     "${GPU_FEATURE_ARGS[@]}" \
+#     "${LLVM_CODEGEN_OPT}" -debugger-tune=gdb \
+#     -dwarf-version="${DWARF_VERSION}" -filetype=asm \
+#     -print-after-all -filter-print-funcs=Attn_p2 \
+#     -amdhsa-code-object-version=4 \
+#     opt.bc -o "${KERNEL_FILE}.amdgcn" 2> passes.log
     
 echo
 echo "---- Generated ${KERNEL_FILE} and ${KERNEL_FILE}.amdgcn from ${LL_FILE}, Opt=O${OPT_LEVEL} ----"

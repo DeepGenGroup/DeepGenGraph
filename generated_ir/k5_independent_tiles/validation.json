@@ -1,0 +1,246 @@
+{
+  "default": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/default.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/default.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true,
+    "llvm_execution": [
+      {
+        "head": 0,
+        "block": 0,
+        "mmac": 256,
+        "exp2": 64,
+        "max_abs": 0.0010586032113448773
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "mmac": 512,
+        "exp2": 128,
+        "max_abs": 0.0006825797712374237
+      },
+      {
+        "head": 1,
+        "block": 7,
+        "mmac": 2048,
+        "exp2": 512,
+        "max_abs": 0.00022155012408740793
+      }
+    ]
+  },
+  "qk64_vo32": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/qk64_vo32.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/qk64_vo32.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "64",
+      "32"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true,
+    "llvm_execution": [
+      {
+        "head": 0,
+        "block": 0,
+        "mmac": 256,
+        "exp2": 64,
+        "max_abs": 0.0010586032113448773
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "mmac": 512,
+        "exp2": 128,
+        "max_abs": 0.0006825797712374237
+      },
+      {
+        "head": 1,
+        "block": 7,
+        "mmac": 2048,
+        "exp2": 512,
+        "max_abs": 0.00022155012408740793
+      }
+    ]
+  },
+  "qk32_vo64": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/qk32_vo64.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/qk32_vo64.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "32",
+      "64"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true,
+    "llvm_execution": [
+      {
+        "head": 0,
+        "block": 0,
+        "mmac": 256,
+        "exp2": 64,
+        "max_abs": 0.0010586032113448773
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "mmac": 512,
+        "exp2": 128,
+        "max_abs": 0.0006825797712374237
+      },
+      {
+        "head": 1,
+        "block": 7,
+        "mmac": 2048,
+        "exp2": 512,
+        "max_abs": 0.00022155012408740793
+      }
+    ]
+  },
+  "auto_qk_vo32": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/auto_qk_vo32.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/auto_qk_vo32.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "0",
+      "32"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true,
+    "llvm_execution": [
+      {
+        "head": 0,
+        "block": 0,
+        "mmac": 256,
+        "exp2": 64,
+        "max_abs": 0.0010586032113448773
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "mmac": 512,
+        "exp2": 128,
+        "max_abs": 0.0006825797712374237
+      },
+      {
+        "head": 1,
+        "block": 7,
+        "mmac": 2048,
+        "exp2": 512,
+        "max_abs": 0.00022155012408740793
+      }
+    ]
+  },
+  "unequal_input_steps": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/unequal_input_steps.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/unequal_input_steps.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true
+  },
+  "bm64_bn64": {
+    "command": [
+      "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/bm64_bn64.mlir",
+      "0",
+      "/data2/xsl/DeepGenGraph/generated_ir/k5_independent_tiles/bm64_bn64.ll",
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "64",
+      "32"
+    ],
+    "llvm_verify": "PASS",
+    "shared_qk_softmax": true
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "source": "generated_ir/q_bk_retention_sweep/retained_32words.ll",
+  "source_sha256": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915",
+  "variants": {
+    "baseline": {
+      "sha256": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 0
+    },
+    "k0_late_control": {
+      "sha256": "994199812ea4861dd8c58b68027ca89d9beecfc899068a4ecdae6c3e04cf4e31",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 0
+    },
+    "k0_prefetch_pv_tail": {
+      "sha256": "9074e3279242d62287bd0fe6e0bb14600d4bdede70e5b7de02845a367a3eb2e0",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 32
+    }
+  },
+  "target": "gfx936",
+  "assumptions": "Fixed BHSD=(1,32,4096,128), BM=BN=128, BK=32, 256 threads; valid launch N=1..32.",
+  "dynamic_counts": "For N BN iterations: K DMA=8N, V DMA=8N, Q DMA=8, waits=4+8N, barriers=5+12N; unchanged.",
+  "algorithm": "Prime K0(0); guarded K0(n+1) in low LDS after V3 reader handoff; retain next-header wait/publication."
+}

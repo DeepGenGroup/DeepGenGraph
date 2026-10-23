@@ -1,0 +1,213 @@
+{
+  "source": "generated_ir/q_two_bk_retained/retained_16words.ll",
+  "source_sha256": "eb04526e34435cc8e9766a76c4e72fcacc57e26969988a522e1af072a3d90925",
+  "baseline_byte_identical": true,
+  "baseline_measured_median_ms": 1.5019190311431885,
+  "input_mlir": "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+  "input_mlir_sha256": "f7a3ac094f288e2f24272b3de1edd003606f930ca19c5a63002671549bceff40",
+  "compiler_pass": "frisk-retain-invariant-fragments",
+  "sole_configuration_change": "--retain-fragment-words=16 / 24 / 32",
+  "variants": {
+    "baseline_16words": {
+      "sha256": "eb04526e34435cc8e9766a76c4e72fcacc57e26969988a522e1af072a3d90925",
+      "retain_words": 16,
+      "retained_BK_fragments": 2,
+      "retained_Q_columns": [
+        0,
+        64
+      ],
+      "counts": {
+        "entry": {
+          "DMA": 4,
+          "waits": 2,
+          "barriers": 3,
+          "lds_reads": 8,
+          "q_scales": 8,
+          "mmac": 0,
+          "hints": 0
+        },
+        "loop": {
+          "DMA": 20,
+          "waits": 10,
+          "barriers": 14,
+          "lds_reads": 136,
+          "q_scales": 8,
+          "mmac": 256,
+          "hints": 8
+        }
+      },
+      "static_lds_bytes": 16384,
+      "llvm_assemble_and_O3_verify": true,
+      "logical_Q_read_MiB": 280,
+      "logical_QKV_read_MiB": 1336,
+      "reproduction_command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/baseline_16words.ll",
+        "1",
+        "1",
+        "3.3",
+        "34816",
+        "approx",
+        "256",
+        "4,1",
+        "1",
+        "1",
+        "1",
+        "0",
+        "0",
+        "useKPack",
+        "asm128",
+        "32",
+        "32",
+        "--frag-prefetch=1",
+        "--frag-prefetch-words=4",
+        "--simplify-loop-control=1",
+        "--coalesce-waits=0",
+        "--workgroup-group-size=8",
+        "--workgroup-reverse=true",
+        "--swizzle-q=off",
+        "--swizzle-k=on",
+        "--swizzle-v=off",
+        "--retain-fragment-words=16"
+      ],
+      "provenance": "Byte copy of measured 16-word candidate and its compile log"
+    },
+    "retained_24words": {
+      "sha256": "e87cd4c604ac709033667521bb8a01cd1c3985a324163bdce7f6b92d47d02100",
+      "retain_words": 24,
+      "retained_BK_fragments": 3,
+      "retained_Q_columns": [
+        0,
+        96
+      ],
+      "counts": {
+        "entry": {
+          "DMA": 6,
+          "waits": 3,
+          "barriers": 4,
+          "lds_reads": 12,
+          "q_scales": 12,
+          "mmac": 0,
+          "hints": 0
+        },
+        "loop": {
+          "DMA": 18,
+          "waits": 9,
+          "barriers": 14,
+          "lds_reads": 132,
+          "q_scales": 4,
+          "mmac": 256,
+          "hints": 8
+        }
+      },
+      "static_lds_bytes": 16384,
+      "llvm_assemble_and_O3_verify": true,
+      "logical_Q_read_MiB": 156,
+      "logical_QKV_read_MiB": 1212,
+      "reproduction_command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/retained_24words.ll",
+        "1",
+        "1",
+        "3.3",
+        "34816",
+        "approx",
+        "256",
+        "4,1",
+        "1",
+        "1",
+        "1",
+        "0",
+        "0",
+        "useKPack",
+        "asm128",
+        "32",
+        "32",
+        "--frag-prefetch=1",
+        "--frag-prefetch-words=4",
+        "--simplify-loop-control=1",
+        "--coalesce-waits=0",
+        "--workgroup-group-size=8",
+        "--workgroup-reverse=true",
+        "--swizzle-q=off",
+        "--swizzle-k=on",
+        "--swizzle-v=off",
+        "--retain-fragment-words=24"
+      ],
+      "provenance": "Fresh MyTest export"
+    },
+    "retained_32words": {
+      "sha256": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915",
+      "retain_words": 32,
+      "retained_BK_fragments": 4,
+      "retained_Q_columns": [
+        0,
+        128
+      ],
+      "counts": {
+        "entry": {
+          "DMA": 8,
+          "waits": 4,
+          "barriers": 5,
+          "lds_reads": 16,
+          "q_scales": 16,
+          "mmac": 0,
+          "hints": 0
+        },
+        "loop": {
+          "DMA": 16,
+          "waits": 8,
+          "barriers": 12,
+          "lds_reads": 128,
+          "q_scales": 0,
+          "mmac": 256,
+          "hints": 8
+        }
+      },
+      "static_lds_bytes": 16384,
+      "llvm_assemble_and_O3_verify": true,
+      "logical_Q_read_MiB": 32,
+      "logical_QKV_read_MiB": 1088,
+      "reproduction_command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/retained_32words.ll",
+        "1",
+        "1",
+        "3.3",
+        "34816",
+        "approx",
+        "256",
+        "4,1",
+        "1",
+        "1",
+        "1",
+        "0",
+        "0",
+        "useKPack",
+        "asm128",
+        "32",
+        "32",
+        "--frag-prefetch=1",
+        "--frag-prefetch-words=4",
+        "--simplify-loop-control=1",
+        "--coalesce-waits=0",
+        "--workgroup-group-size=8",
+        "--workgroup-reverse=true",
+        "--swizzle-q=off",
+        "--swizzle-k=on",
+        "--swizzle-v=off",
+        "--retain-fragment-words=32"
+      ],
+      "provenance": "Fresh MyTest export"
+    }
+  },
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Retention budget is logical state, not allocated VGPRs. Target registers, scratch, LDS metadata and performance must be measured. Logical bytes are not HBM traffic."
+}

@@ -1,0 +1,4 @@
+PASS bitwise-identical FP16 output, head=0, block=0
+PASS bitwise-identical FP16 output, head=0, block=1
+PASS bitwise-identical FP16 output, head=1, block=7
+PASS bitwise-identical FP16 output, head=1, block=31

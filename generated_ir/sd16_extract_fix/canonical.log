@@ -1,0 +1,1091 @@
+generated_ir/sd16_extract_fix/thread.mlir:65:21: error: 'vector.extract' op mismatch between dynamic and static positions (kDynamic marker but no corresponding dynamic position) -- this can only happen due to an incorrect fold/rewrite
+              %95 = vector.insert %94, %92 [0, 3] : f16 into vector<1x4xf16>
+                    ^
+generated_ir/sd16_extract_fix/thread.mlir:65:21: note: see current operation: %700 = "vector.extract"(%554) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf16>) -> vector<4xf16>
+// -----// IR Dump After CanonicalizerPass Failed: canonicalize{cse-between-iterations=false    max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true} //----- //
+#map = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3, d2)>
+#map1 = affine_map<() -> (0)>
+#map2 = affine_map<() -> (2)>
+#map3 = affine_map<(d0) -> (d0 * 4 - (d0 floordiv 8) * 32)>
+#map4 = affine_map<(d0) -> (d0 floordiv 8)>
+#map5 = affine_map<(d0) -> (d0 * 4 - (d0 floordiv 8) * 32 + 1)>
+#map6 = affine_map<(d0) -> (d0 * 4 - (d0 floordiv 8) * 32 + 2)>
+#map7 = affine_map<(d0) -> (d0 * 4 - (d0 floordiv 8) * 32 + 3)>
+#map8 = affine_map<() -> (16)>
+#map9 = affine_map<(d0)[s0, s1, s2] -> (((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384) floordiv 524288) mod 32)>
+#map10 = affine_map<()[s0] -> (s0 * 128 - (s0 floordiv 32) * 4096)>
+#map11 = affine_map<(d0, d1)[s0, s1] -> (((d0 * 4096 + d1) floordiv 524288 + s0 * 32 + s1) mod 32)>
+#map12 = affine_map<(d0, d1)[s0, s1] -> ((d0 + s0 * 4096 + s1 * 128 + d1 floordiv 4096) mod 128)>
+#map13 = affine_map<(d0) -> (d0 mod 4096)>
+#map14 = affine_map<(d0)[s0] -> (d0 * 64 + s0 + (s0 floordiv 64) * 16 - ((s0 floordiv 64) floordiv 4) * 64 - (s0 floordiv 16) * 16)>
+#map15 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
+#map16 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4 + 1)>
+#map17 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4 + 2)>
+#map18 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4 + 3)>
+#map19 = affine_map<(d0) -> (d0 * 2)>
+#map20 = affine_map<()[s0] -> ((s0 mod 64) floordiv 4)>
+#map21 = affine_map<(d0)[s0] -> (d0 * 32 + s0 * 8 - (s0 floordiv 4) * 32)>
+#map22 = affine_map<(d0)[s0] -> (d0 * 8 - ((d0 * 32 + s0 mod 16 + 16) floordiv 32) * 8 + 4)>
+#map23 = affine_map<(d0)[s0] -> (d0 * 8 - ((d0 * 32 + s0 mod 16 + 16) floordiv 32) * 8 + 5)>
+#map24 = affine_map<(d0)[s0] -> (d0 * 8 - ((d0 * 32 + s0 mod 16 + 16) floordiv 32) * 8 + 6)>
+#map25 = affine_map<(d0)[s0] -> (d0 * 8 - ((d0 * 32 + s0 mod 16 + 16) floordiv 32) * 8 + 7)>
+#map26 = affine_map<(d0) -> (d0 * 2 + 1)>
+#map27 = affine_map<() -> (4)>
+#map28 = affine_map<(d0) -> (d0 * 4)>
+#map29 = affine_map<(d0) -> (d0 * 4 + 1)>
+#map30 = affine_map<(d0) -> (d0 * 4 + 2)>
+#map31 = affine_map<(d0) -> (d0 * 4 + 3)>
+#map32 = affine_map<(d0) -> (d0 mod 8)>
+#map33 = affine_map<() -> (1)>
+#map34 = affine_map<() -> (128)>
+#map35 = affine_map<(d0)[s0, s1] -> ((d0 floordiv 8) * 64 + s0 + s1 + (s0 floordiv 64) * 16 - ((s0 floordiv 64) floordiv 4) * 64 - (s0 floordiv 16) * 16)>
+#map36 = affine_map<(d0, d1)[s0] -> (d0 + d1 * 16 - (d1 floordiv 8) * 128 + ((s0 mod 64) floordiv 16) * 4)>
+#map37 = affine_map<(d0, d1)[s0] -> (d0 + d1 * 16 - (d1 floordiv 8) * 128 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+#map38 = affine_map<(d0, d1)[s0] -> (d0 + d1 * 16 - (d1 floordiv 8) * 128 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+#map39 = affine_map<(d0, d1)[s0] -> (d0 + d1 * 16 - (d1 floordiv 8) * 128 + ((s0 mod 64) floordiv 16) * 4 + 3)>
+#map40 = affine_map<() -> (8)>
+#map41 = affine_map<(d0)[s0, s1] -> ((d0 floordiv 4096 + s0 * 32 + s1) mod 32)>
+#map42 = affine_map<(d0)[s0] -> (d0 * 16 + ((s0 mod 64) floordiv 16) * 4)>
+#map43 = affine_map<()[s0] -> (s0 mod 16)>
+#map44 = affine_map<(d0)[s0] -> (d0 * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+#map45 = affine_map<(d0)[s0] -> (d0 * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+#map46 = affine_map<(d0)[s0] -> (d0 * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
+#map47 = affine_map<(d0, d1)[s0, s1] -> (((d0 * 128 + d1 + s0 * 16777216 + s1 * 524288 + 16) floordiv 524288) mod 32)>
+#map48 = affine_map<(d0) -> (d0 + 16)>
+#map49 = affine_map<()[s0] -> (s0 * 128 + 128)>
+#map50 = affine_map<()[s0] -> (s0 floordiv 64)>
+#map51 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4)>
+#map52 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 1)>
+#map53 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 2)>
+#map54 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 3)>
+#map55 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384 + 16) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 16)>
+#map56 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384 + 16) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 17)>
+#map57 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384 + 16) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 18)>
+#map58 = affine_map<(d0, d1)[s0, s1, s2, s3] -> (0, ((d0 + s0 * 16777216 + s1 * 524288 + s2 * 16384 + 16) floordiv 524288) mod 32, d1 * 64 + s2 * 128 + s3 - (s2 floordiv 32) * 4096 + (s3 floordiv 64) * 16 - ((s3 floordiv 64) floordiv 4) * 64 - (s3 floordiv 16) * 16, d0 + ((s3 mod 64) floordiv 16) * 4 + 19)>
+"builtin.module"() ({
+  "func.func"() <{function_type = (tensor<1x4096x32x128xf16>, tensor<1x4096x32x128xf16>, tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16>, sym_name = "Attn"}> ({
+  ^bb0(%arg87: tensor<1x4096x32x128xf16>, %arg88: tensor<1x4096x32x128xf16>, %arg89: tensor<1x4096x32x128xf16>):
+    %761 = "arith.constant"() <{value = dense<1.131250e+01> : tensor<1xf16>}> : () -> tensor<1xf16>
+    %762 = "deepgengraph.trilu"() <{diagonal = 1 : i64, is_upper = true, shape = array<i64: 4096, 4096>, val = 0xFC00 : f16}> : () -> tensor<4096x4096xf16>
+    %763 = "deepgengraph.permute"(%arg87) <{dims = array<i64: 0, 2, 1, 3>}> : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %764 = "deepgengraph.permute"(%arg89) <{dims = array<i64: 0, 2, 1, 3>}> : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %765 = "deepgengraph.permute"(%arg88) <{dims = array<i64: 0, 2, 3, 1>}> : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %766 = "deepgengraph.dot"(%763, %765) : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf16>
+    %767 = "deepgengraph.div"(%766, %761) : (tensor<1x32x4096x4096xf16>, tensor<1xf16>) -> tensor<1x32x4096x4096xf16>
+    %768 = "deepgengraph.add"(%767, %762) : (tensor<1x32x4096x4096xf16>, tensor<4096x4096xf16>) -> tensor<1x32x4096x4096xf16>
+    %769 = "deepgengraph.convert"(%768) <{dst_type = f32}> : (tensor<1x32x4096x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %770 = "deepgengraph.exp"(%769) : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %771 = "deepgengraph.reduce"(%770) <{keep_dim = true, reduce_dimension = -1 : i64, reduce_type = #deepgengraph.reduce_type<ADD>}> : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %772 = "deepgengraph.div"(%770, %771) : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %773 = "deepgengraph.convert"(%772) <{dst_type = f16}> : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %774 = "deepgengraph.dot"(%773, %764) : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %775 = "deepgengraph.permute"(%774) <{dims = array<i64: 0, 2, 1, 3>}> : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    "func.return"(%775) : (tensor<1x4096x32x128xf16>) -> ()
+  }) : () -> ()
+  "func.func"() <{function_type = (memref<1x32x4096x128xf16, 1>, memref<1x32x4096x128xf16, 1>, memref<1x32x4096x128xf16, 1>, memref<1x32x4096x128xf16, 1>) -> (), sym_name = "Attn_p2"}> ({
+  ^bb0(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x4096x128xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>):
+    %0 = "arith.constant"() <{value = 4 : index}> : () -> index
+    %1 = "arith.constant"() <{value = dense<0.000000e+00> : vector<2x4xf32>}> : () -> vector<2x4xf32>
+    %2 = "arith.constant"() <{value = dense<0.000000e+00> : vector<2x32xf16>}> : () -> vector<2x32xf16>
+    %3 = "arith.constant"() <{value = dense<0.000000e+00> : vector<1x1xf32>}> : () -> vector<1x1xf32>
+    %4 = "arith.constant"() <{value = dense<0.000000e+00> : vector<2x1xf32>}> : () -> vector<2x1xf32>
+    %5 = "arith.constant"() <{value = 32 : i32}> : () -> i32
+    %6 = "arith.constant"() <{value = 16 : i32}> : () -> i32
+    %7 = "arith.constant"() <{value = 64 : i32}> : () -> i32
+    %8 = "arith.constant"() <{value = 0 : i32}> : () -> i32
+    %9 = "arith.constant"() <{value = dense<0.000000e+00> : vector<1x4xf32>}> : () -> vector<1x4xf32>
+    %10 = "arith.constant"() <{value = dense<0.000000e+00> : vector<2x32xf32>}> : () -> vector<2x32xf32>
+    %11 = "arith.constant"() <{value = dense<0.000000e+00> : vector<4x8xf16>}> : () -> vector<4x8xf16>
+    %12 = "arith.constant"() <{value = dense<0.000000e+00> : vector<2x4xf16>}> : () -> vector<2x4xf16>
+    %13 = "arith.constant"() <{value = 128 : index}> : () -> index
+    %14 = "arith.constant"() <{value = 1 : index}> : () -> index
+    %15 = "arith.constant"() <{value = 0.000000e+00 : f32}> : () -> f32
+    %16 = "arith.constant"() <{value = 0xFF800000 : f32}> : () -> f32
+    %17 = "arith.constant"() <{value = 0.127531052 : f32}> : () -> f32
+    %18 = "memref.transpose"(%arg1) <{permutation = #map}> : (memref<1x32x4096x128xf16, 1>) -> memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1>
+    %19 = "gpu.block_id"() <{dimension = #gpu.dim<z>}> {range = 1 : index} : () -> index
+    %20 = "gpu.block_id"() <{dimension = #gpu.dim<y>}> {range = 32 : index} : () -> index
+    %21 = "gpu.block_id"() <{dimension = #gpu.dim<x>}> {range = 32 : index} : () -> index
+    %22 = "arith.truncf"(%17) : (f32) -> f16
+    %23 = "arith.muli"(%20, %13) <{overflowFlags = #arith.overflow<none>}> : (index, index) -> index
+    "affine.for"() <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 0>, step = 32 : index, upperBoundMap = #map34}> ({
+    ^bb0(%arg4: index):
+      %24 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg85: index, %arg86: vector<2x4xf32>):
+        %752 = "frisk.fragment"() <{kind = "load"}> ({
+          "frisk.fragment_yield"(%9) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %753 = "vector.extract"(%752) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %754 = "vector.insert"(%753, %arg86, %arg85) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %755 = "vector.extract"(%752) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %756 = "vector.insert"(%755, %754, %arg85) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %757 = "vector.extract"(%752) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %758 = "vector.insert"(%757, %756, %arg85) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %759 = "vector.extract"(%752) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %760 = "vector.insert"(%759, %758, %arg85) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%760) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "load_fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %25 = "affine.for"(%4) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg83: index, %arg84: vector<2x1xf32>):
+        %749 = "frisk.fragment"() <{kind = "load"}> ({
+          "frisk.fragment_yield"(%3) : (vector<1x1xf32>) -> ()
+        }) : () -> vector<1x1xf32>
+        %750 = "vector.extract"(%749) <{static_position = array<i64: 0, 0>}> : (vector<1x1xf32>) -> f32
+        %751 = "vector.insert"(%750, %arg84, %arg83) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x1xf32>, index) -> vector<2x1xf32>
+        "affine.yield"(%751) : (vector<2x1xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 1>, frisk.tile_shape = array<i64: 2, 1>, iterLabel = "load_fragment", tiled = true} : (vector<2x1xf32>) -> vector<2x1xf32>
+      %26 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg81: index, %arg82: vector<2x4xf32>):
+        %740 = "frisk.fragment"() <{kind = "load"}> ({
+          "frisk.fragment_yield"(%9) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %741 = "vector.extract"(%740) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %742 = "vector.insert"(%741, %arg82, %arg81) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %743 = "vector.extract"(%740) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %744 = "vector.insert"(%743, %742, %arg81) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %745 = "vector.extract"(%740) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %746 = "vector.insert"(%745, %744, %arg81) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %747 = "vector.extract"(%740) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %748 = "vector.insert"(%747, %746, %arg81) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%748) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "load_fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %27:3 = "affine.for"(%20, %24, %25, %26) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 1, 3>, step = 128 : index, upperBoundMap = #map49}> ({
+      ^bb0(%arg27: index, %arg28: vector<2x4xf32>, %arg29: vector<2x1xf32>, %arg30: vector<2x4xf32>):
+        %226 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+        ^bb0(%arg79: index, %arg80: vector<2x32xf32>):
+          %726 = "affine.apply"(%arg79) <{map = #map3}> : (index) -> index
+          %727 = "affine.apply"(%arg79) <{map = #map4}> : (index) -> index
+          %728 = "frisk.fragment"() <{kind = "load"}> ({
+            "frisk.fragment_yield"(%9) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %729 = "vector.extract"(%728) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %730 = "vector.insert"(%729, %arg80, %727, %726) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %731 = "affine.apply"(%arg79) <{map = #map5}> : (index) -> index
+          %732 = "vector.extract"(%728) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %733 = "vector.insert"(%732, %730, %727, %731) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %734 = "affine.apply"(%arg79) <{map = #map6}> : (index) -> index
+          %735 = "vector.extract"(%728) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %736 = "vector.insert"(%735, %733, %727, %734) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %737 = "affine.apply"(%arg79) <{map = #map7}> : (index) -> index
+          %738 = "vector.extract"(%728) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %739 = "vector.insert"(%738, %736, %727, %737) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          "affine.yield"(%739) : (vector<2x32xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "load_fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+        %227 = "affine.for"(%226) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 16 : index, upperBoundMap = #map34}> ({
+        ^bb0(%arg63: index, %arg64: vector<2x32xf32>):
+          %544 = "memref.alloc"() <{alignment = 16 : i64, operandSegmentSizes = array<i32: 0, 0>}> {frisk.shared_pack = 4 : i64, frisk.shared_pack_axis = 1 : i64, tiled = true} : () -> memref<128x16xf16, 3>
+          %545 = "memref.alloc"() <{alignment = 16 : i64, operandSegmentSizes = array<i32: 0, 0>}> {frisk.shared_pack = 8 : i64, frisk.shared_pack_axis = 1 : i64, frisk.shared_packet_rows = 2 : i64, tiled = true} : () -> memref<16x128xf16, 3>
+          %546 = "affine.apply"(%arg63, %19, %21, %20) <{map = #map9}> : (index, index, index, index) -> index
+          %547 = "affine.apply"(%20) <{map = #map10}> : (index) -> index
+          %548 = "memref.subview"(%arg0, %546, %547, %arg63) <{operandSegmentSizes = array<i32: 1, 3, 0, 0>, static_offsets = array<i64: 0, -9223372036854775808, -9223372036854775808, -9223372036854775808>, static_sizes = array<i64: 1, 1, 128, 16>, static_strides = array<i64: 1, 1, 1, 1>}> : (memref<1x32x4096x128xf16, 1>, index, index, index) -> memref<128x16xf16, strided<[128, 1], offset: ?>, 1>
+          "frisk.async_copy_gm_to_shm"(%548, %544) <{alignment = 16 : i64}> : (memref<128x16xf16, strided<[128, 1], offset: ?>, 1>, memref<128x16xf16, 3>) -> ()
+          "frisk.wait_buffer_ready"(%544) : (memref<128x16xf16, 3>) -> ()
+          %549 = "affine.apply"(%arg63, %arg27, %19, %21) <{map = #map11}> : (index, index, index, index) -> index
+          %550 = "affine.apply"(%arg63, %arg27, %19, %21) <{map = #map12}> : (index, index, index, index) -> index
+          %551 = "affine.apply"(%arg27) <{map = #map13}> : (index) -> index
+          %552 = "memref.subview"(%18, %549, %550, %551) <{operandSegmentSizes = array<i32: 1, 3, 0, 0>, static_offsets = array<i64: 0, -9223372036854775808, -9223372036854775808, -9223372036854775808>, static_sizes = array<i64: 1, 1, 16, 128>, static_strides = array<i64: 1, 1, 1, 1>}> : (memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1>, index, index, index) -> memref<16x128xf16, strided<[1, 128], offset: ?>, 1>
+          "frisk.async_copy_gm_to_shm"(%552, %545) <{alignment = 16 : i64}> : (memref<16x128xf16, strided<[1, 128], offset: ?>, 1>, memref<16x128xf16, 3>) -> ()
+          %553 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+          %554 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+          ^bb0(%arg77: index, %arg78: vector<2x4xf16>):
+            %704 = "frisk.fragment"() <{kind = "load"}> ({
+              %713 = "affine.apply"(%arg77, %553) <{map = #map14}> : (index, index) -> index
+              %714 = "affine.apply"(%553) <{map = #map15}> : (index) -> index
+              %715 = "memref.load"(%544, %713, %714) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %716 = "affine.apply"(%arg77, %553) <{map = #map14}> : (index, index) -> index
+              %717 = "affine.apply"(%553) <{map = #map16}> : (index) -> index
+              %718 = "memref.load"(%544, %716, %717) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %719 = "affine.apply"(%arg77, %553) <{map = #map14}> : (index, index) -> index
+              %720 = "affine.apply"(%553) <{map = #map17}> : (index) -> index
+              %721 = "memref.load"(%544, %719, %720) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %722 = "affine.apply"(%arg77, %553) <{map = #map14}> : (index, index) -> index
+              %723 = "affine.apply"(%553) <{map = #map18}> : (index) -> index
+              %724 = "memref.load"(%544, %722, %723) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %725 = "vector.from_elements"(%715, %718, %721, %724) : (f16, f16, f16, f16) -> vector<1x4xf16>
+              "frisk.fragment_yield"(%725) : (vector<1x4xf16>) -> ()
+            }) : () -> vector<1x4xf16>
+            %705 = "vector.extract"(%704) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+            %706 = "vector.insert"(%705, %arg78, %arg77) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %707 = "vector.extract"(%704) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+            %708 = "vector.insert"(%707, %706, %arg77) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %709 = "vector.extract"(%704) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+            %710 = "vector.insert"(%709, %708, %arg77) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %711 = "vector.extract"(%704) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+            %712 = "vector.insert"(%711, %710, %arg77) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            "affine.yield"(%712) : (vector<2x4xf16>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "load_fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+          %555 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+          ^bb0(%arg75: index, %arg76: vector<2x4xf16>):
+            %691 = "frisk.fragment"() <{kind = "compute"}> ({
+              %700 = "vector.extract"(%554) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf16>) -> vector<4xf16>
+              %701 = "vector.shape_cast"(%700) : (vector<4xf16>) -> vector<1x4xf16>
+              %702 = "vector.broadcast"(%22) : (f16) -> vector<1x4xf16>
+              %703 = "arith.mulf"(%701, %702) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.mul", tiled = true} : (vector<1x4xf16>, vector<1x4xf16>) -> vector<1x4xf16>
+              "frisk.fragment_yield"(%703) : (vector<1x4xf16>) -> ()
+            }) : () -> vector<1x4xf16>
+            %692 = "vector.extract"(%691) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+            %693 = "vector.insert"(%692, %arg76, %arg75) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %694 = "vector.extract"(%691) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+            %695 = "vector.insert"(%694, %693, %arg75) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %696 = "vector.extract"(%691) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+            %697 = "vector.insert"(%696, %695, %arg75) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            %698 = "vector.extract"(%691) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+            %699 = "vector.insert"(%698, %697, %arg75) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+            "affine.yield"(%699) : (vector<2x4xf16>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+          "frisk.wait_buffer_ready"(%545) : (memref<16x128xf16, 3>) -> ()
+          %556 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+          %557 = "affine.for"(%11) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map27}> ({
+          ^bb0(%arg73: index, %arg74: vector<4x8xf16>):
+            %652 = "affine.apply"(%arg73) <{map = #map19}> : (index) -> index
+            %653 = "frisk.fragment"() <{kind = "load"}> ({
+              %674 = "affine.apply"(%556) <{map = #map20}> : (index) -> index
+              %675 = "affine.apply"(%arg73, %556) <{map = #map21}> : (index, index) -> index
+              %676 = "frisk.read_matrix_from_shm"(%545, %674, %675) <{alt = 0 : i64, element_bit_width = 16 : i64, m = 32 : i64, n = 16 : i64, offset = 0 : i32, transpose = false}> {tiled = true} : (memref<16x128xf16, 3>, index, index) -> vector<4xi32>
+              %677 = "vector.bitcast"(%676) : (vector<4xi32>) -> vector<8xf16>
+              %678 = "vector.extract"(%677) <{static_position = array<i64: 0>}> : (vector<8xf16>) -> f16
+              %679 = "affine.apply"(%arg73, %556) <{map = #map22}> : (index, index) -> index
+              %680 = "vector.extract"(%677, %679) <{static_position = array<i64: -9223372036854775808>}> : (vector<8xf16>, index) -> f16
+              %681 = "vector.extract"(%677) <{static_position = array<i64: 1>}> : (vector<8xf16>) -> f16
+              %682 = "affine.apply"(%arg73, %556) <{map = #map23}> : (index, index) -> index
+              %683 = "vector.extract"(%677, %682) <{static_position = array<i64: -9223372036854775808>}> : (vector<8xf16>, index) -> f16
+              %684 = "vector.extract"(%677) <{static_position = array<i64: 2>}> : (vector<8xf16>) -> f16
+              %685 = "affine.apply"(%arg73, %556) <{map = #map24}> : (index, index) -> index
+              %686 = "vector.extract"(%677, %685) <{static_position = array<i64: -9223372036854775808>}> : (vector<8xf16>, index) -> f16
+              %687 = "vector.extract"(%677) <{static_position = array<i64: 3>}> : (vector<8xf16>) -> f16
+              %688 = "affine.apply"(%arg73, %556) <{map = #map25}> : (index, index) -> index
+              %689 = "vector.extract"(%677, %688) <{static_position = array<i64: -9223372036854775808>}> : (vector<8xf16>, index) -> f16
+              %690 = "vector.from_elements"(%678, %680, %681, %683, %684, %686, %687, %689) : (f16, f16, f16, f16, f16, f16, f16, f16) -> vector<4x2xf16>
+              "frisk.fragment_yield"(%690) : (vector<4x2xf16>) -> ()
+            }) : () -> vector<4x2xf16>
+            %654 = "vector.extract"(%653) <{static_position = array<i64: 0, 0>}> : (vector<4x2xf16>) -> f16
+            %655 = "vector.insert"(%654, %arg74, %652) <{static_position = array<i64: 0, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %656 = "affine.apply"(%arg73) <{map = #map26}> : (index) -> index
+            %657 = "vector.extract"(%653) <{static_position = array<i64: 0, 1>}> : (vector<4x2xf16>) -> f16
+            %658 = "vector.insert"(%657, %655, %656) <{static_position = array<i64: 0, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %659 = "vector.extract"(%653) <{static_position = array<i64: 1, 0>}> : (vector<4x2xf16>) -> f16
+            %660 = "vector.insert"(%659, %658, %652) <{static_position = array<i64: 1, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %661 = "affine.apply"(%arg73) <{map = #map26}> : (index) -> index
+            %662 = "vector.extract"(%653) <{static_position = array<i64: 1, 1>}> : (vector<4x2xf16>) -> f16
+            %663 = "vector.insert"(%662, %660, %661) <{static_position = array<i64: 1, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %664 = "vector.extract"(%653) <{static_position = array<i64: 2, 0>}> : (vector<4x2xf16>) -> f16
+            %665 = "vector.insert"(%664, %663, %652) <{static_position = array<i64: 2, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %666 = "affine.apply"(%arg73) <{map = #map26}> : (index) -> index
+            %667 = "vector.extract"(%653) <{static_position = array<i64: 2, 1>}> : (vector<4x2xf16>) -> f16
+            %668 = "vector.insert"(%667, %665, %666) <{static_position = array<i64: 2, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %669 = "vector.extract"(%653) <{static_position = array<i64: 3, 0>}> : (vector<4x2xf16>) -> f16
+            %670 = "vector.insert"(%669, %668, %652) <{static_position = array<i64: 3, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            %671 = "affine.apply"(%arg73) <{map = #map26}> : (index) -> index
+            %672 = "vector.extract"(%653) <{static_position = array<i64: 3, 1>}> : (vector<4x2xf16>) -> f16
+            %673 = "vector.insert"(%672, %670, %671) <{static_position = array<i64: 3, -9223372036854775808>}> : (f16, vector<4x8xf16>, index) -> vector<4x8xf16>
+            "affine.yield"(%673) : (vector<4x8xf16>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 4, 2>, frisk.tile_shape = array<i64: 4, 8>, iterLabel = "matrix_load", tiled = true} : (vector<4x8xf16>) -> vector<4x8xf16>
+          %558 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+          ^bb0(%arg69: index, %arg70: vector<2x32xf32>):
+            %614 = "affine.apply"(%arg69) <{map = #map3}> : (index) -> index
+            %615 = "affine.apply"(%arg69) <{map = #map4}> : (index) -> index
+            %616 = "affine.for"(%9) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map33}> ({
+            ^bb0(%arg71: index, %arg72: vector<1x4xf32>):
+              %628 = "frisk.fragment"() <{kind = "load"}> ({
+                %642 = "affine.apply"(%arg69) <{map = #map4}> : (index) -> index
+                %643 = "affine.apply"(%arg71) <{map = #map28}> : (index) -> index
+                %644 = "vector.extract"(%555, %642, %643) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x4xf16>, index, index) -> f16
+                %645 = "affine.apply"(%arg71) <{map = #map29}> : (index) -> index
+                %646 = "vector.extract"(%555, %642, %645) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x4xf16>, index, index) -> f16
+                %647 = "affine.apply"(%arg71) <{map = #map30}> : (index) -> index
+                %648 = "vector.extract"(%555, %642, %647) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x4xf16>, index, index) -> f16
+                %649 = "affine.apply"(%arg71) <{map = #map31}> : (index) -> index
+                %650 = "vector.extract"(%555, %642, %649) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x4xf16>, index, index) -> f16
+                %651 = "vector.from_elements"(%644, %646, %648, %650) : (f16, f16, f16, f16) -> vector<1x4xf16>
+                "frisk.fragment_yield"(%651) : (vector<1x4xf16>) -> ()
+              }) : () -> vector<1x4xf16>
+              %629 = "frisk.fragment"() <{kind = "load"}> ({
+                %632 = "affine.apply"(%arg71) <{map = #map28}> : (index) -> index
+                %633 = "affine.apply"(%arg69) <{map = #map32}> : (index) -> index
+                %634 = "vector.extract"(%557, %632, %633) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<4x8xf16>, index, index) -> f16
+                %635 = "affine.apply"(%arg71) <{map = #map29}> : (index) -> index
+                %636 = "vector.extract"(%557, %635, %633) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<4x8xf16>, index, index) -> f16
+                %637 = "affine.apply"(%arg71) <{map = #map30}> : (index) -> index
+                %638 = "vector.extract"(%557, %637, %633) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<4x8xf16>, index, index) -> f16
+                %639 = "affine.apply"(%arg71) <{map = #map31}> : (index) -> index
+                %640 = "vector.extract"(%557, %639, %633) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<4x8xf16>, index, index) -> f16
+                %641 = "vector.from_elements"(%634, %636, %638, %640) : (f16, f16, f16, f16) -> vector<4x1xf16>
+                "frisk.fragment_yield"(%641) : (vector<4x1xf16>) -> ()
+              }) : () -> vector<4x1xf16>
+              %630 = "frisk.fragment"() <{kind = "compute"}> ({
+                %631 = "frisk.warp_mma_rr"(%628, %629, %arg72) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", tiled = true} : (vector<1x4xf16>, vector<4x1xf16>, vector<1x4xf32>) -> vector<1x4xf32>
+                "frisk.fragment_yield"(%631) : (vector<1x4xf32>) -> ()
+              }) : () -> vector<1x4xf32>
+              "affine.yield"(%630) : (vector<1x4xf32>) -> ()
+            }) {frisk.fragment_loop, frisk.loopUnrollFull = true, iterLabel = "gemm_k"} : (vector<1x4xf32>) -> vector<1x4xf32>
+            %617 = "vector.extract"(%616) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+            %618 = "vector.insert"(%617, %arg70, %615, %614) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %619 = "affine.apply"(%arg69) <{map = #map5}> : (index) -> index
+            %620 = "vector.extract"(%616) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+            %621 = "vector.insert"(%620, %618, %615, %619) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %622 = "affine.apply"(%arg69) <{map = #map6}> : (index) -> index
+            %623 = "vector.extract"(%616) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+            %624 = "vector.insert"(%623, %621, %615, %622) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %625 = "affine.apply"(%arg69) <{map = #map7}> : (index) -> index
+            %626 = "vector.extract"(%616) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+            %627 = "vector.insert"(%626, %624, %615, %625) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            "affine.yield"(%627) : (vector<2x32xf32>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "gemm_mn", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+          %559 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+          ^bb0(%arg67: index, %arg68: vector<2x32xf32>):
+            %583 = "affine.apply"(%arg67) <{map = #map3}> : (index) -> index
+            %584 = "affine.apply"(%arg67) <{map = #map4}> : (index) -> index
+            %585 = "frisk.fragment"() <{kind = "compute"}> ({
+              %597 = "vector.extract"(%arg64, %584, %583) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %598 = "affine.apply"(%arg67) <{map = #map5}> : (index) -> index
+              %599 = "vector.extract"(%arg64, %584, %598) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %600 = "affine.apply"(%arg67) <{map = #map6}> : (index) -> index
+              %601 = "vector.extract"(%arg64, %584, %600) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %602 = "affine.apply"(%arg67) <{map = #map7}> : (index) -> index
+              %603 = "vector.extract"(%arg64, %584, %602) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %604 = "vector.from_elements"(%597, %599, %601, %603) : (f32, f32, f32, f32) -> vector<1x4xf32>
+              %605 = "vector.extract"(%558, %584, %583) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %606 = "affine.apply"(%arg67) <{map = #map5}> : (index) -> index
+              %607 = "vector.extract"(%558, %584, %606) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %608 = "affine.apply"(%arg67) <{map = #map6}> : (index) -> index
+              %609 = "vector.extract"(%558, %584, %608) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %610 = "affine.apply"(%arg67) <{map = #map7}> : (index) -> index
+              %611 = "vector.extract"(%558, %584, %610) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %612 = "vector.from_elements"(%605, %607, %609, %611) : (f32, f32, f32, f32) -> vector<1x4xf32>
+              %613 = "arith.addf"(%604, %612) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.add", tiled = true} : (vector<1x4xf32>, vector<1x4xf32>) -> vector<1x4xf32>
+              "frisk.fragment_yield"(%613) : (vector<1x4xf32>) -> ()
+            }) : () -> vector<1x4xf32>
+            %586 = "vector.extract"(%585) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+            %587 = "vector.insert"(%586, %arg68, %584, %583) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %588 = "affine.apply"(%arg67) <{map = #map5}> : (index) -> index
+            %589 = "vector.extract"(%585) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+            %590 = "vector.insert"(%589, %587, %584, %588) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %591 = "affine.apply"(%arg67) <{map = #map6}> : (index) -> index
+            %592 = "vector.extract"(%585) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+            %593 = "vector.insert"(%592, %590, %584, %591) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %594 = "affine.apply"(%arg67) <{map = #map7}> : (index) -> index
+            %595 = "vector.extract"(%585) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+            %596 = "vector.insert"(%595, %593, %584, %594) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            "affine.yield"(%596) : (vector<2x32xf32>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+          %560 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+          ^bb0(%arg65: index, %arg66: vector<2x32xf32>):
+            %561 = "affine.apply"(%arg65) <{map = #map3}> : (index) -> index
+            %562 = "affine.apply"(%arg65) <{map = #map4}> : (index) -> index
+            %563 = "frisk.fragment"() <{kind = "compute"}> ({
+              %575 = "vector.extract"(%559, %562, %561) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %576 = "affine.apply"(%arg65) <{map = #map5}> : (index) -> index
+              %577 = "vector.extract"(%559, %562, %576) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %578 = "affine.apply"(%arg65) <{map = #map6}> : (index) -> index
+              %579 = "vector.extract"(%559, %562, %578) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %580 = "affine.apply"(%arg65) <{map = #map7}> : (index) -> index
+              %581 = "vector.extract"(%559, %562, %580) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+              %582 = "vector.from_elements"(%575, %577, %579, %581) : (f32, f32, f32, f32) -> vector<1x4xf32>
+              "frisk.fragment_yield"(%582) : (vector<1x4xf32>) -> ()
+            }) : () -> vector<1x4xf32>
+            %564 = "vector.extract"(%563) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+            %565 = "vector.insert"(%564, %arg66, %562, %561) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %566 = "affine.apply"(%arg65) <{map = #map5}> : (index) -> index
+            %567 = "vector.extract"(%563) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+            %568 = "vector.insert"(%567, %565, %562, %566) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %569 = "affine.apply"(%arg65) <{map = #map6}> : (index) -> index
+            %570 = "vector.extract"(%563) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+            %571 = "vector.insert"(%570, %568, %562, %569) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            %572 = "affine.apply"(%arg65) <{map = #map7}> : (index) -> index
+            %573 = "vector.extract"(%563) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+            %574 = "vector.insert"(%573, %571, %562, %572) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+            "affine.yield"(%574) : (vector<2x32xf32>) -> ()
+          }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+          "affine.yield"(%560) : (vector<2x32xf32>) -> ()
+        }) {local_yield_transformed = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+        %228 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+        %229 = "arith.index_cast"(%228) : (index) -> i32
+        %230 = "arith.andi"(%229, %6) : (i32, i32) -> i32
+        %231 = "arith.cmpi"(%230, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+        %232 = "arith.andi"(%229, %5) : (i32, i32) -> i32
+        %233 = "arith.cmpi"(%232, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+        %234 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+        ^bb0(%arg61: index, %arg62: vector<2x32xf32>):
+          %506 = "affine.apply"(%arg61) <{map = #map3}> : (index) -> index
+          %507 = "affine.apply"(%arg61) <{map = #map4}> : (index) -> index
+          %508 = "frisk.fragment"() <{kind = "compute"}> ({
+            %520 = "vector.extract"(%227, %507, %506) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %521 = "affine.apply"(%arg61) <{map = #map5}> : (index) -> index
+            %522 = "vector.extract"(%227, %507, %521) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %523 = "affine.apply"(%arg61) <{map = #map6}> : (index) -> index
+            %524 = "vector.extract"(%227, %507, %523) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %525 = "affine.apply"(%arg61) <{map = #map7}> : (index) -> index
+            %526 = "vector.extract"(%227, %507, %525) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %527 = "arith.select"(%231, %520, %522) : (i1, f32, f32) -> f32
+            %528:2 = "gpu.shuffle"(%527, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+            %529 = "arith.select"(%231, %528#0, %520) : (i1, f32, f32) -> f32
+            %530 = "arith.select"(%231, %522, %528#0) : (i1, f32, f32) -> f32
+            %531 = "arith.select"(%231, %524, %526) : (i1, f32, f32) -> f32
+            %532:2 = "gpu.shuffle"(%531, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+            %533 = "arith.select"(%231, %532#0, %524) : (i1, f32, f32) -> f32
+            %534 = "arith.select"(%231, %526, %532#0) : (i1, f32, f32) -> f32
+            %535 = "arith.select"(%233, %529, %533) : (i1, f32, f32) -> f32
+            %536:2 = "gpu.shuffle"(%535, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+            %537 = "arith.select"(%233, %536#0, %529) : (i1, f32, f32) -> f32
+            %538 = "arith.select"(%233, %533, %536#0) : (i1, f32, f32) -> f32
+            %539 = "arith.select"(%233, %530, %534) : (i1, f32, f32) -> f32
+            %540:2 = "gpu.shuffle"(%539, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+            %541 = "arith.select"(%233, %540#0, %530) : (i1, f32, f32) -> f32
+            %542 = "arith.select"(%233, %534, %540#0) : (i1, f32, f32) -> f32
+            %543 = "vector.from_elements"(%537, %541, %538, %542) : (f32, f32, f32, f32) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%543) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %509 = "vector.extract"(%508) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %510 = "vector.insert"(%509, %arg62, %507, %506) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %511 = "affine.apply"(%arg61) <{map = #map5}> : (index) -> index
+          %512 = "vector.extract"(%508) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %513 = "vector.insert"(%512, %510, %507, %511) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %514 = "affine.apply"(%arg61) <{map = #map6}> : (index) -> index
+          %515 = "vector.extract"(%508) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %516 = "vector.insert"(%515, %513, %507, %514) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %517 = "affine.apply"(%arg61) <{map = #map7}> : (index) -> index
+          %518 = "vector.extract"(%508) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %519 = "vector.insert"(%518, %516, %507, %517) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          "affine.yield"(%519) : (vector<2x32xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+        %235 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+        %236 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+        ^bb0(%arg59: index, %arg60: vector<2x32xf32>):
+          %460 = "affine.apply"(%arg59) <{map = #map3}> : (index) -> index
+          %461 = "affine.apply"(%arg59) <{map = #map4}> : (index) -> index
+          %462 = "frisk.fragment"() <{kind = "compute"}> ({
+            %474 = "affine.apply"(%arg59, %235, %23) <{map = #map35}> : (index, index, index) -> index
+            %475 = "affine.apply"(%arg27, %arg59, %235) <{map = #map36}> : (index, index, index) -> index
+            %476 = "arith.addi"(%474, %14) <{overflowFlags = #arith.overflow<none>}> : (index, index) -> index
+            %477 = "arith.cmpi"(%476, %475) <{predicate = 7 : i64}> : (index, index) -> i1
+            %478 = "arith.select"(%477, %16, %15) : (i1, f32, f32) -> f32
+            %479 = "vector.extract"(%234, %461, %460) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %480 = "arith.addf"(%479, %478) <{fastmath = #arith.fastmath<none>}> {frisk.fused_mask_add} : (f32, f32) -> f32
+            %481 = "affine.apply"(%arg59) <{map = #map5}> : (index) -> index
+            %482 = "affine.apply"(%arg59, %235, %23) <{map = #map35}> : (index, index, index) -> index
+            %483 = "affine.apply"(%arg27, %arg59, %235) <{map = #map37}> : (index, index, index) -> index
+            %484 = "arith.addi"(%482, %14) <{overflowFlags = #arith.overflow<none>}> : (index, index) -> index
+            %485 = "arith.cmpi"(%484, %483) <{predicate = 7 : i64}> : (index, index) -> i1
+            %486 = "arith.select"(%485, %16, %15) : (i1, f32, f32) -> f32
+            %487 = "vector.extract"(%234, %461, %481) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %488 = "arith.addf"(%487, %486) <{fastmath = #arith.fastmath<none>}> {frisk.fused_mask_add} : (f32, f32) -> f32
+            %489 = "affine.apply"(%arg59) <{map = #map6}> : (index) -> index
+            %490 = "affine.apply"(%arg59, %235, %23) <{map = #map35}> : (index, index, index) -> index
+            %491 = "affine.apply"(%arg27, %arg59, %235) <{map = #map38}> : (index, index, index) -> index
+            %492 = "arith.addi"(%490, %14) <{overflowFlags = #arith.overflow<none>}> : (index, index) -> index
+            %493 = "arith.cmpi"(%492, %491) <{predicate = 7 : i64}> : (index, index) -> i1
+            %494 = "arith.select"(%493, %16, %15) : (i1, f32, f32) -> f32
+            %495 = "vector.extract"(%234, %461, %489) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %496 = "arith.addf"(%495, %494) <{fastmath = #arith.fastmath<none>}> {frisk.fused_mask_add} : (f32, f32) -> f32
+            %497 = "affine.apply"(%arg59) <{map = #map7}> : (index) -> index
+            %498 = "affine.apply"(%arg59, %235, %23) <{map = #map35}> : (index, index, index) -> index
+            %499 = "affine.apply"(%arg27, %arg59, %235) <{map = #map39}> : (index, index, index) -> index
+            %500 = "arith.addi"(%498, %14) <{overflowFlags = #arith.overflow<none>}> : (index, index) -> index
+            %501 = "arith.cmpi"(%500, %499) <{predicate = 7 : i64}> : (index, index) -> i1
+            %502 = "arith.select"(%501, %16, %15) : (i1, f32, f32) -> f32
+            %503 = "vector.extract"(%234, %461, %497) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %504 = "arith.addf"(%503, %502) <{fastmath = #arith.fastmath<none>}> {frisk.fused_mask_add} : (f32, f32) -> f32
+            %505 = "vector.from_elements"(%480, %488, %496, %504) : (f32, f32, f32, f32) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%505) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %463 = "vector.extract"(%462) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %464 = "vector.insert"(%463, %arg60, %461, %460) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %465 = "affine.apply"(%arg59) <{map = #map5}> : (index) -> index
+          %466 = "vector.extract"(%462) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %467 = "vector.insert"(%466, %464, %461, %465) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %468 = "affine.apply"(%arg59) <{map = #map6}> : (index) -> index
+          %469 = "vector.extract"(%462) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %470 = "vector.insert"(%469, %467, %461, %468) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %471 = "affine.apply"(%arg59) <{map = #map7}> : (index) -> index
+          %472 = "vector.extract"(%462) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %473 = "vector.insert"(%472, %470, %461, %471) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          "affine.yield"(%473) : (vector<2x32xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "mask_fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+        %237 = "affine.for"(%10) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+        ^bb0(%arg57: index, %arg58: vector<2x32xf32>):
+          %437 = "affine.apply"(%arg57) <{map = #map3}> : (index) -> index
+          %438 = "affine.apply"(%arg57) <{map = #map4}> : (index) -> index
+          %439 = "frisk.fragment"() <{kind = "compute"}> ({
+            %451 = "vector.extract"(%236, %438, %437) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %452 = "affine.apply"(%arg57) <{map = #map5}> : (index) -> index
+            %453 = "vector.extract"(%236, %438, %452) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %454 = "affine.apply"(%arg57) <{map = #map6}> : (index) -> index
+            %455 = "vector.extract"(%236, %438, %454) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %456 = "affine.apply"(%arg57) <{map = #map7}> : (index) -> index
+            %457 = "vector.extract"(%236, %438, %456) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %458 = "vector.from_elements"(%451, %453, %455, %457) : (f32, f32, f32, f32) -> vector<1x4xf32>
+            %459 = "math.exp2"(%458) <{fastmath = #arith.fastmath<none>}> {tiled = true} : (vector<1x4xf32>) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%459) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %440 = "vector.extract"(%439) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %441 = "vector.insert"(%440, %arg58, %438, %437) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %442 = "affine.apply"(%arg57) <{map = #map5}> : (index) -> index
+          %443 = "vector.extract"(%439) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %444 = "vector.insert"(%443, %441, %438, %442) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %445 = "affine.apply"(%arg57) <{map = #map6}> : (index) -> index
+          %446 = "vector.extract"(%439) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %447 = "vector.insert"(%446, %444, %438, %445) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          %448 = "affine.apply"(%arg57) <{map = #map7}> : (index) -> index
+          %449 = "vector.extract"(%439) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %450 = "vector.insert"(%449, %447, %438, %448) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f32, vector<2x32xf32>, index, index) -> vector<2x32xf32>
+          "affine.yield"(%450) : (vector<2x32xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "fragment", tiled = true} : (vector<2x32xf32>) -> vector<2x32xf32>
+        %238 = "affine.for"(%4) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg53: index, %arg54: vector<2x1xf32>):
+          %415 = "frisk.fragment"() <{kind = "compute"}> ({
+            %418 = "affine.for"(%15) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map40}> ({
+            ^bb0(%arg55: index, %arg56: f32):
+              %424 = "affine.apply"(%arg55) <{map = #map28}> : (index) -> index
+              %425 = "frisk.fragment"() <{kind = "compute"}> ({
+                %426 = "vector.extract"(%237, %arg53, %424) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+                %427 = "arith.addf"(%arg56, %426) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+                %428 = "affine.apply"(%arg55) <{map = #map29}> : (index) -> index
+                %429 = "vector.extract"(%237, %arg53, %428) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+                %430 = "arith.addf"(%427, %429) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+                %431 = "affine.apply"(%arg55) <{map = #map30}> : (index) -> index
+                %432 = "vector.extract"(%237, %arg53, %431) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+                %433 = "arith.addf"(%430, %432) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+                %434 = "affine.apply"(%arg55) <{map = #map31}> : (index) -> index
+                %435 = "vector.extract"(%237, %arg53, %434) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+                %436 = "arith.addf"(%433, %435) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+                "frisk.fragment_yield"(%436) : (f32) -> ()
+              }) : () -> f32
+              "affine.yield"(%425) : (f32) -> ()
+            }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 4>, frisk.tile_shape = array<i64: 32>, iterLabel = "reduce_axis_fragment", tiled = true} : (f32) -> f32
+            %419:2 = "gpu.shuffle"(%418, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> : (f32, i32, i32) -> (f32, i1)
+            %420 = "arith.addf"(%418, %419#0) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+            %421:2 = "gpu.shuffle"(%420, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> : (f32, i32, i32) -> (f32, i1)
+            %422 = "arith.addf"(%420, %421#0) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+            %423 = "vector.broadcast"(%422) : (f32) -> vector<1x1xf32>
+            "frisk.fragment_yield"(%423) : (vector<1x1xf32>) -> ()
+          }) : () -> vector<1x1xf32>
+          %416 = "vector.extract"(%415) <{static_position = array<i64: 0, 0>}> : (vector<1x1xf32>) -> f32
+          %417 = "vector.insert"(%416, %arg54, %arg53) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x1xf32>, index) -> vector<2x1xf32>
+          "affine.yield"(%417) : (vector<2x1xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 1>, frisk.tile_shape = array<i64: 2, 1>, iterLabel = "reduce_fragment", tiled = true} : (vector<2x1xf32>) -> vector<2x1xf32>
+        %239 = "affine.for"(%4) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg51: index, %arg52: vector<2x1xf32>):
+          %407 = "frisk.fragment"() <{kind = "compute"}> ({
+            %410 = "vector.extract"(%238, %arg51) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+            %411 = "vector.broadcast"(%410) : (f32) -> vector<1x1xf32>
+            %412 = "vector.extract"(%arg29, %arg51) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+            %413 = "vector.broadcast"(%412) : (f32) -> vector<1x1xf32>
+            %414 = "arith.addf"(%411, %413) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.add", tiled = true} : (vector<1x1xf32>, vector<1x1xf32>) -> vector<1x1xf32>
+            "frisk.fragment_yield"(%414) : (vector<1x1xf32>) -> ()
+          }) : () -> vector<1x1xf32>
+          %408 = "vector.extract"(%407) <{static_position = array<i64: 0, 0>}> : (vector<1x1xf32>) -> f32
+          %409 = "vector.insert"(%408, %arg52, %arg51) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x1xf32>, index) -> vector<2x1xf32>
+          "affine.yield"(%409) : (vector<2x1xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 1>, frisk.tile_shape = array<i64: 2, 1>, iterLabel = "fragment", tiled = true} : (vector<2x1xf32>) -> vector<2x1xf32>
+        %240 = "affine.for"(%2) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map8}> ({
+        ^bb0(%arg49: index, %arg50: vector<2x32xf16>):
+          %384 = "affine.apply"(%arg49) <{map = #map3}> : (index) -> index
+          %385 = "affine.apply"(%arg49) <{map = #map4}> : (index) -> index
+          %386 = "frisk.fragment"() <{kind = "compute"}> ({
+            %398 = "vector.extract"(%237, %385, %384) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %399 = "affine.apply"(%arg49) <{map = #map5}> : (index) -> index
+            %400 = "vector.extract"(%237, %385, %399) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %401 = "affine.apply"(%arg49) <{map = #map6}> : (index) -> index
+            %402 = "vector.extract"(%237, %385, %401) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %403 = "affine.apply"(%arg49) <{map = #map7}> : (index) -> index
+            %404 = "vector.extract"(%237, %385, %403) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf32>, index, index) -> f32
+            %405 = "vector.from_elements"(%398, %400, %402, %404) : (f32, f32, f32, f32) -> vector<1x4xf32>
+            %406 = "arith.truncf"(%405) {tiled = true} : (vector<1x4xf32>) -> vector<1x4xf16>
+            "frisk.fragment_yield"(%406) : (vector<1x4xf16>) -> ()
+          }) : () -> vector<1x4xf16>
+          %387 = "vector.extract"(%386) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+          %388 = "vector.insert"(%387, %arg50, %385, %384) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f16, vector<2x32xf16>, index, index) -> vector<2x32xf16>
+          %389 = "affine.apply"(%arg49) <{map = #map5}> : (index) -> index
+          %390 = "vector.extract"(%386) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+          %391 = "vector.insert"(%390, %388, %385, %389) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f16, vector<2x32xf16>, index, index) -> vector<2x32xf16>
+          %392 = "affine.apply"(%arg49) <{map = #map6}> : (index) -> index
+          %393 = "vector.extract"(%386) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+          %394 = "vector.insert"(%393, %391, %385, %392) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f16, vector<2x32xf16>, index, index) -> vector<2x32xf16>
+          %395 = "affine.apply"(%arg49) <{map = #map7}> : (index) -> index
+          %396 = "vector.extract"(%386) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+          %397 = "vector.insert"(%396, %394, %385, %395) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (f16, vector<2x32xf16>, index, index) -> vector<2x32xf16>
+          "affine.yield"(%397) : (vector<2x32xf16>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 32>, iterLabel = "fragment", tiled = true} : (vector<2x32xf16>) -> vector<2x32xf16>
+        %241 = "memref.alloc"() <{alignment = 16 : i64, operandSegmentSizes = array<i32: 0, 0>}> {frisk.shared_pack = 4 : i64, frisk.shared_pack_axis = 0 : i64, frisk.shared_pair_stride = 16 : i64, tiled = true} : () -> memref<128x16xf16, 3>
+        %242 = "affine.apply"(%arg27, %19, %21) <{map = #map41}> : (index, index, index) -> index
+        %243 = "affine.apply"(%arg27) <{map = #map13}> : (index) -> index
+        %244 = "memref.subview"(%arg2, %242, %243, %arg4) <{operandSegmentSizes = array<i32: 1, 3, 0, 0>, static_offsets = array<i64: 0, -9223372036854775808, -9223372036854775808, -9223372036854775808>, static_sizes = array<i64: 1, 1, 128, 16>, static_strides = array<i64: 1, 1, 1, 1>}> : (memref<1x32x4096x128xf16, 1>, index, index, index) -> memref<128x16xf16, strided<[128, 1], offset: ?>, 1>
+        "frisk.async_copy_gm_to_shm"(%244, %241) <{alignment = 16 : i64}> : (memref<128x16xf16, strided<[128, 1], offset: ?>, 1>, memref<128x16xf16, 3>) -> ()
+        "frisk.wait_buffer_ready"(%241) : (memref<128x16xf16, 3>) -> ()
+        %245 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg45: index, %arg46: vector<2x4xf32>):
+          %348 = "affine.for"(%9) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map40}> ({
+          ^bb0(%arg47: index, %arg48: vector<1x4xf32>):
+            %357 = "frisk.fragment"() <{kind = "load"}> ({
+              %375 = "affine.apply"(%arg47) <{map = #map28}> : (index) -> index
+              %376 = "vector.extract"(%240, %arg45, %375) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %377 = "affine.apply"(%arg47) <{map = #map29}> : (index) -> index
+              %378 = "vector.extract"(%240, %arg45, %377) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %379 = "affine.apply"(%arg47) <{map = #map30}> : (index) -> index
+              %380 = "vector.extract"(%240, %arg45, %379) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %381 = "affine.apply"(%arg47) <{map = #map31}> : (index) -> index
+              %382 = "vector.extract"(%240, %arg45, %381) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %383 = "vector.from_elements"(%376, %378, %380, %382) : (f16, f16, f16, f16) -> vector<1x4xf16>
+              "frisk.fragment_yield"(%383) : (vector<1x4xf16>) -> ()
+            }) : () -> vector<1x4xf16>
+            %358 = "frisk.fragment"() <{kind = "load"}> ({
+              %361 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+              %362 = "affine.apply"(%arg47, %361) <{map = #map42}> : (index, index) -> index
+              %363 = "affine.apply"(%361) <{map = #map43}> : (index) -> index
+              %364 = "memref.load"(%241, %362, %363) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %365 = "affine.apply"(%arg47, %361) <{map = #map44}> : (index, index) -> index
+              %366 = "affine.apply"(%361) <{map = #map43}> : (index) -> index
+              %367 = "memref.load"(%241, %365, %366) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %368 = "affine.apply"(%arg47, %361) <{map = #map45}> : (index, index) -> index
+              %369 = "affine.apply"(%361) <{map = #map43}> : (index) -> index
+              %370 = "memref.load"(%241, %368, %369) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %371 = "affine.apply"(%arg47, %361) <{map = #map46}> : (index, index) -> index
+              %372 = "affine.apply"(%361) <{map = #map43}> : (index) -> index
+              %373 = "memref.load"(%241, %371, %372) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %374 = "vector.from_elements"(%364, %367, %370, %373) : (f16, f16, f16, f16) -> vector<4x1xf16>
+              "frisk.fragment_yield"(%374) : (vector<4x1xf16>) -> ()
+            }) : () -> vector<4x1xf16>
+            %359 = "frisk.fragment"() <{kind = "compute"}> ({
+              %360 = "frisk.warp_mma_rr"(%357, %358, %arg48) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", tiled = true} : (vector<1x4xf16>, vector<4x1xf16>, vector<1x4xf32>) -> vector<1x4xf32>
+              "frisk.fragment_yield"(%360) : (vector<1x4xf32>) -> ()
+            }) : () -> vector<1x4xf32>
+            "affine.yield"(%359) : (vector<1x4xf32>) -> ()
+          }) {frisk.fragment_loop, frisk.loopUnrollFull = true, iterLabel = "gemm_k"} : (vector<1x4xf32>) -> vector<1x4xf32>
+          %349 = "vector.extract"(%348) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %350 = "vector.insert"(%349, %arg46, %arg45) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %351 = "vector.extract"(%348) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %352 = "vector.insert"(%351, %350, %arg45) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %353 = "vector.extract"(%348) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %354 = "vector.insert"(%353, %352, %arg45) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %355 = "vector.extract"(%348) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %356 = "vector.insert"(%355, %354, %arg45) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%356) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "gemm_mn", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        %246 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg43: index, %arg44: vector<2x4xf32>):
+          %334 = "frisk.fragment"() <{kind = "compute"}> ({
+            %343 = "vector.extract"(%arg28) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %344 = "vector.shape_cast"(%343) : (vector<4xf32>) -> vector<1x4xf32>
+            %345 = "vector.extract"(%245) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %346 = "vector.shape_cast"(%345) : (vector<4xf32>) -> vector<1x4xf32>
+            %347 = "arith.addf"(%344, %346) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.add", tiled = true} : (vector<1x4xf32>, vector<1x4xf32>) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%347) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %335 = "vector.extract"(%334) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %336 = "vector.insert"(%335, %arg44, %arg43) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %337 = "vector.extract"(%334) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %338 = "vector.insert"(%337, %336, %arg43) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %339 = "vector.extract"(%334) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %340 = "vector.insert"(%339, %338, %arg43) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %341 = "vector.extract"(%334) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %342 = "vector.insert"(%341, %340, %arg43) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%342) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        %247 = "memref.alloc"() <{alignment = 16 : i64, operandSegmentSizes = array<i32: 0, 0>}> {frisk.shared_pack = 4 : i64, frisk.shared_pack_axis = 0 : i64, frisk.shared_pair_stride = 16 : i64, tiled = true} : () -> memref<128x16xf16, 3>
+        %248 = "affine.apply"(%arg27, %arg4, %19, %21) <{map = #map47}> : (index, index, index, index) -> index
+        %249 = "affine.apply"(%arg27) <{map = #map13}> : (index) -> index
+        %250 = "affine.apply"(%arg4) <{map = #map48}> : (index) -> index
+        %251 = "memref.subview"(%arg2, %248, %249, %250) <{operandSegmentSizes = array<i32: 1, 3, 0, 0>, static_offsets = array<i64: 0, -9223372036854775808, -9223372036854775808, -9223372036854775808>, static_sizes = array<i64: 1, 1, 128, 16>, static_strides = array<i64: 1, 1, 1, 1>}> : (memref<1x32x4096x128xf16, 1>, index, index, index) -> memref<128x16xf16, strided<[128, 1], offset: ?>, 1>
+        "frisk.async_copy_gm_to_shm"(%251, %247) <{alignment = 16 : i64}> : (memref<128x16xf16, strided<[128, 1], offset: ?>, 1>, memref<128x16xf16, 3>) -> ()
+        "frisk.wait_buffer_ready"(%247) : (memref<128x16xf16, 3>) -> ()
+        %252 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg39: index, %arg40: vector<2x4xf32>):
+          %298 = "affine.for"(%9) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map40}> ({
+          ^bb0(%arg41: index, %arg42: vector<1x4xf32>):
+            %307 = "frisk.fragment"() <{kind = "load"}> ({
+              %325 = "affine.apply"(%arg41) <{map = #map28}> : (index) -> index
+              %326 = "vector.extract"(%240, %arg39, %325) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %327 = "affine.apply"(%arg41) <{map = #map29}> : (index) -> index
+              %328 = "vector.extract"(%240, %arg39, %327) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %329 = "affine.apply"(%arg41) <{map = #map30}> : (index) -> index
+              %330 = "vector.extract"(%240, %arg39, %329) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %331 = "affine.apply"(%arg41) <{map = #map31}> : (index) -> index
+              %332 = "vector.extract"(%240, %arg39, %331) <{static_position = array<i64: -9223372036854775808, -9223372036854775808>}> : (vector<2x32xf16>, index, index) -> f16
+              %333 = "vector.from_elements"(%326, %328, %330, %332) : (f16, f16, f16, f16) -> vector<1x4xf16>
+              "frisk.fragment_yield"(%333) : (vector<1x4xf16>) -> ()
+            }) : () -> vector<1x4xf16>
+            %308 = "frisk.fragment"() <{kind = "load"}> ({
+              %311 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+              %312 = "affine.apply"(%arg41, %311) <{map = #map42}> : (index, index) -> index
+              %313 = "affine.apply"(%311) <{map = #map43}> : (index) -> index
+              %314 = "memref.load"(%247, %312, %313) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %315 = "affine.apply"(%arg41, %311) <{map = #map44}> : (index, index) -> index
+              %316 = "affine.apply"(%311) <{map = #map43}> : (index) -> index
+              %317 = "memref.load"(%247, %315, %316) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %318 = "affine.apply"(%arg41, %311) <{map = #map45}> : (index, index) -> index
+              %319 = "affine.apply"(%311) <{map = #map43}> : (index) -> index
+              %320 = "memref.load"(%247, %318, %319) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %321 = "affine.apply"(%arg41, %311) <{map = #map46}> : (index, index) -> index
+              %322 = "affine.apply"(%311) <{map = #map43}> : (index) -> index
+              %323 = "memref.load"(%247, %321, %322) <{invariant = false, nontemporal = false}> : (memref<128x16xf16, 3>, index, index) -> f16
+              %324 = "vector.from_elements"(%314, %317, %320, %323) : (f16, f16, f16, f16) -> vector<4x1xf16>
+              "frisk.fragment_yield"(%324) : (vector<4x1xf16>) -> ()
+            }) : () -> vector<4x1xf16>
+            %309 = "frisk.fragment"() <{kind = "compute"}> ({
+              %310 = "frisk.warp_mma_rr"(%307, %308, %arg42) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", tiled = true} : (vector<1x4xf16>, vector<4x1xf16>, vector<1x4xf32>) -> vector<1x4xf32>
+              "frisk.fragment_yield"(%310) : (vector<1x4xf32>) -> ()
+            }) : () -> vector<1x4xf32>
+            "affine.yield"(%309) : (vector<1x4xf32>) -> ()
+          }) {frisk.fragment_loop, frisk.loopUnrollFull = true, iterLabel = "gemm_k"} : (vector<1x4xf32>) -> vector<1x4xf32>
+          %299 = "vector.extract"(%298) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %300 = "vector.insert"(%299, %arg40, %arg39) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %301 = "vector.extract"(%298) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %302 = "vector.insert"(%301, %300, %arg39) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %303 = "vector.extract"(%298) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %304 = "vector.insert"(%303, %302, %arg39) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %305 = "vector.extract"(%298) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %306 = "vector.insert"(%305, %304, %arg39) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%306) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "gemm_mn", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        %253 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg37: index, %arg38: vector<2x4xf32>):
+          %284 = "frisk.fragment"() <{kind = "compute"}> ({
+            %293 = "vector.extract"(%arg30) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %294 = "vector.shape_cast"(%293) : (vector<4xf32>) -> vector<1x4xf32>
+            %295 = "vector.extract"(%252) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %296 = "vector.shape_cast"(%295) : (vector<4xf32>) -> vector<1x4xf32>
+            %297 = "arith.addf"(%294, %296) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.add", tiled = true} : (vector<1x4xf32>, vector<1x4xf32>) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%297) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %285 = "vector.extract"(%284) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %286 = "vector.insert"(%285, %arg38, %arg37) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %287 = "vector.extract"(%284) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %288 = "vector.insert"(%287, %286, %arg37) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %289 = "vector.extract"(%284) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %290 = "vector.insert"(%289, %288, %arg37) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %291 = "vector.extract"(%284) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %292 = "vector.insert"(%291, %290, %arg37) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%292) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        %254 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg35: index, %arg36: vector<2x4xf32>):
+          %273 = "frisk.fragment"() <{kind = "compute"}> ({
+            %282 = "vector.extract"(%246) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %283 = "vector.shape_cast"(%282) : (vector<4xf32>) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%283) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %274 = "vector.extract"(%273) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %275 = "vector.insert"(%274, %arg36, %arg35) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %276 = "vector.extract"(%273) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %277 = "vector.insert"(%276, %275, %arg35) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %278 = "vector.extract"(%273) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %279 = "vector.insert"(%278, %277, %arg35) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %280 = "vector.extract"(%273) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %281 = "vector.insert"(%280, %279, %arg35) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%281) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        %255 = "affine.for"(%4) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg33: index, %arg34: vector<2x1xf32>):
+          %268 = "frisk.fragment"() <{kind = "compute"}> ({
+            %271 = "vector.extract"(%239, %arg33) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+            %272 = "vector.broadcast"(%271) : (f32) -> vector<1x1xf32>
+            "frisk.fragment_yield"(%272) : (vector<1x1xf32>) -> ()
+          }) : () -> vector<1x1xf32>
+          %269 = "vector.extract"(%268) <{static_position = array<i64: 0, 0>}> : (vector<1x1xf32>) -> f32
+          %270 = "vector.insert"(%269, %arg34, %arg33) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x1xf32>, index) -> vector<2x1xf32>
+          "affine.yield"(%270) : (vector<2x1xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 1>, frisk.tile_shape = array<i64: 2, 1>, iterLabel = "fragment", tiled = true} : (vector<2x1xf32>) -> vector<2x1xf32>
+        %256 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg31: index, %arg32: vector<2x4xf32>):
+          %257 = "frisk.fragment"() <{kind = "compute"}> ({
+            %266 = "vector.extract"(%253) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+            %267 = "vector.shape_cast"(%266) : (vector<4xf32>) -> vector<1x4xf32>
+            "frisk.fragment_yield"(%267) : (vector<1x4xf32>) -> ()
+          }) : () -> vector<1x4xf32>
+          %258 = "vector.extract"(%257) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+          %259 = "vector.insert"(%258, %arg32, %arg31) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %260 = "vector.extract"(%257) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+          %261 = "vector.insert"(%260, %259, %arg31) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %262 = "vector.extract"(%257) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+          %263 = "vector.insert"(%262, %261, %arg31) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          %264 = "vector.extract"(%257) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+          %265 = "vector.insert"(%264, %263, %arg31) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+          "affine.yield"(%265) : (vector<2x4xf32>) -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+        "affine.yield"(%254, %255, %256) : (vector<2x4xf32>, vector<2x1xf32>, vector<2x4xf32>) -> ()
+      }) {local_yield_transformed = true} : (index, vector<2x4xf32>, vector<2x1xf32>, vector<2x4xf32>) -> (vector<2x4xf32>, vector<2x1xf32>, vector<2x4xf32>)
+      %28 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+      %29 = "arith.index_cast"(%28) : (index) -> i32
+      %30 = "arith.andi"(%29, %6) : (i32, i32) -> i32
+      %31 = "arith.cmpi"(%30, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+      %32 = "arith.andi"(%29, %5) : (i32, i32) -> i32
+      %33 = "arith.cmpi"(%32, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+      %34 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg25: index, %arg26: vector<2x4xf32>):
+        %196 = "frisk.fragment"() <{kind = "compute"}> ({
+          %205 = "vector.extract"(%27#2, %arg25) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x4xf32>, index) -> f32
+          %206 = "vector.extract"(%27#2, %arg25) <{static_position = array<i64: -9223372036854775808, 1>}> : (vector<2x4xf32>, index) -> f32
+          %207 = "vector.extract"(%27#2, %arg25) <{static_position = array<i64: -9223372036854775808, 2>}> : (vector<2x4xf32>, index) -> f32
+          %208 = "vector.extract"(%27#2, %arg25) <{static_position = array<i64: -9223372036854775808, 3>}> : (vector<2x4xf32>, index) -> f32
+          %209 = "arith.select"(%31, %205, %206) : (i1, f32, f32) -> f32
+          %210:2 = "gpu.shuffle"(%209, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %211 = "arith.select"(%31, %210#0, %205) : (i1, f32, f32) -> f32
+          %212 = "arith.select"(%31, %206, %210#0) : (i1, f32, f32) -> f32
+          %213 = "arith.select"(%31, %207, %208) : (i1, f32, f32) -> f32
+          %214:2 = "gpu.shuffle"(%213, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %215 = "arith.select"(%31, %214#0, %207) : (i1, f32, f32) -> f32
+          %216 = "arith.select"(%31, %208, %214#0) : (i1, f32, f32) -> f32
+          %217 = "arith.select"(%33, %211, %215) : (i1, f32, f32) -> f32
+          %218:2 = "gpu.shuffle"(%217, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %219 = "arith.select"(%33, %218#0, %211) : (i1, f32, f32) -> f32
+          %220 = "arith.select"(%33, %215, %218#0) : (i1, f32, f32) -> f32
+          %221 = "arith.select"(%33, %212, %216) : (i1, f32, f32) -> f32
+          %222:2 = "gpu.shuffle"(%221, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %223 = "arith.select"(%33, %222#0, %212) : (i1, f32, f32) -> f32
+          %224 = "arith.select"(%33, %216, %222#0) : (i1, f32, f32) -> f32
+          %225 = "vector.from_elements"(%219, %223, %220, %224) : (f32, f32, f32, f32) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%225) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %197 = "vector.extract"(%196) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %198 = "vector.insert"(%197, %arg26, %arg25) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %199 = "vector.extract"(%196) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %200 = "vector.insert"(%199, %198, %arg25) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %201 = "vector.extract"(%196) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %202 = "vector.insert"(%201, %200, %arg25) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %203 = "vector.extract"(%196) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %204 = "vector.insert"(%203, %202, %arg25) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%204) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %35 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+      %36 = "arith.index_cast"(%35) : (index) -> i32
+      %37 = "arith.andi"(%36, %6) : (i32, i32) -> i32
+      %38 = "arith.cmpi"(%37, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+      %39 = "arith.andi"(%36, %5) : (i32, i32) -> i32
+      %40 = "arith.cmpi"(%39, %8) <{predicate = 1 : i64}> : (i32, i32) -> i1
+      %41 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg23: index, %arg24: vector<2x4xf32>):
+        %166 = "frisk.fragment"() <{kind = "compute"}> ({
+          %175 = "vector.extract"(%27#0, %arg23) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x4xf32>, index) -> f32
+          %176 = "vector.extract"(%27#0, %arg23) <{static_position = array<i64: -9223372036854775808, 1>}> : (vector<2x4xf32>, index) -> f32
+          %177 = "vector.extract"(%27#0, %arg23) <{static_position = array<i64: -9223372036854775808, 2>}> : (vector<2x4xf32>, index) -> f32
+          %178 = "vector.extract"(%27#0, %arg23) <{static_position = array<i64: -9223372036854775808, 3>}> : (vector<2x4xf32>, index) -> f32
+          %179 = "arith.select"(%38, %175, %176) : (i1, f32, f32) -> f32
+          %180:2 = "gpu.shuffle"(%179, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %181 = "arith.select"(%38, %180#0, %175) : (i1, f32, f32) -> f32
+          %182 = "arith.select"(%38, %176, %180#0) : (i1, f32, f32) -> f32
+          %183 = "arith.select"(%38, %177, %178) : (i1, f32, f32) -> f32
+          %184:2 = "gpu.shuffle"(%183, %6, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %185 = "arith.select"(%38, %184#0, %177) : (i1, f32, f32) -> f32
+          %186 = "arith.select"(%38, %178, %184#0) : (i1, f32, f32) -> f32
+          %187 = "arith.select"(%40, %181, %185) : (i1, f32, f32) -> f32
+          %188:2 = "gpu.shuffle"(%187, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %189 = "arith.select"(%40, %188#0, %181) : (i1, f32, f32) -> f32
+          %190 = "arith.select"(%40, %185, %188#0) : (i1, f32, f32) -> f32
+          %191 = "arith.select"(%40, %182, %186) : (i1, f32, f32) -> f32
+          %192:2 = "gpu.shuffle"(%191, %5, %7) <{mode = #gpu.shuffle_mode<xor>}> {frisk.layout_role = "wmmaC"} : (f32, i32, i32) -> (f32, i1)
+          %193 = "arith.select"(%40, %192#0, %182) : (i1, f32, f32) -> f32
+          %194 = "arith.select"(%40, %186, %192#0) : (i1, f32, f32) -> f32
+          %195 = "vector.from_elements"(%189, %193, %190, %194) : (f32, f32, f32, f32) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%195) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %167 = "vector.extract"(%166) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %168 = "vector.insert"(%167, %arg24, %arg23) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %169 = "vector.extract"(%166) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %170 = "vector.insert"(%169, %168, %arg23) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %171 = "vector.extract"(%166) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %172 = "vector.insert"(%171, %170, %arg23) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %173 = "vector.extract"(%166) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %174 = "vector.insert"(%173, %172, %arg23) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%174) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %42 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg21: index, %arg22: vector<2x4xf32>):
+        %152 = "frisk.fragment"() <{kind = "compute"}> ({
+          %161 = "vector.extract"(%27#1, %arg21) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %162 = "vector.extract"(%27#1, %arg21) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %163 = "vector.extract"(%27#1, %arg21) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %164 = "vector.extract"(%27#1, %arg21) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %165 = "vector.from_elements"(%161, %162, %163, %164) : (f32, f32, f32, f32) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%165) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %153 = "vector.extract"(%152) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %154 = "vector.insert"(%153, %arg22, %arg21) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %155 = "vector.extract"(%152) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %156 = "vector.insert"(%155, %154, %arg21) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %157 = "vector.extract"(%152) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %158 = "vector.insert"(%157, %156, %arg21) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %159 = "vector.extract"(%152) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %160 = "vector.insert"(%159, %158, %arg21) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%160) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %43 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg19: index, %arg20: vector<2x4xf32>):
+        %138 = "frisk.fragment"() <{kind = "compute"}> ({
+          %147 = "vector.extract"(%41) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %148 = "vector.shape_cast"(%147) : (vector<4xf32>) -> vector<1x4xf32>
+          %149 = "vector.extract"(%42) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %150 = "vector.shape_cast"(%149) : (vector<4xf32>) -> vector<1x4xf32>
+          %151 = "arith.divf"(%148, %150) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.div", tiled = true} : (vector<1x4xf32>, vector<1x4xf32>) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%151) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %139 = "vector.extract"(%138) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %140 = "vector.insert"(%139, %arg20, %arg19) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %141 = "vector.extract"(%138) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %142 = "vector.insert"(%141, %140, %arg19) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %143 = "vector.extract"(%138) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %144 = "vector.insert"(%143, %142, %arg19) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %145 = "vector.extract"(%138) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %146 = "vector.insert"(%145, %144, %arg19) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%146) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %44 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg17: index, %arg18: vector<2x4xf16>):
+        %126 = "frisk.fragment"() <{kind = "compute"}> ({
+          %135 = "vector.extract"(%43) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %136 = "vector.shape_cast"(%135) : (vector<4xf32>) -> vector<1x4xf32>
+          %137 = "arith.truncf"(%136) {tiled = true} : (vector<1x4xf32>) -> vector<1x4xf16>
+          "frisk.fragment_yield"(%137) : (vector<1x4xf16>) -> ()
+        }) : () -> vector<1x4xf16>
+        %127 = "vector.extract"(%126) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+        %128 = "vector.insert"(%127, %arg18, %arg17) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %129 = "vector.extract"(%126) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+        %130 = "vector.insert"(%129, %128, %arg17) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %131 = "vector.extract"(%126) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+        %132 = "vector.insert"(%131, %130, %arg17) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %133 = "vector.extract"(%126) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+        %134 = "vector.insert"(%133, %132, %arg17) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        "affine.yield"(%134) : (vector<2x4xf16>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+      %45 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg15: index, %arg16: vector<2x4xf16>):
+        %115 = "frisk.fragment"() <{kind = "compute"}> ({
+          %124 = "vector.extract"(%44) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf16>) -> vector<4xf16>
+          %125 = "vector.shape_cast"(%124) : (vector<4xf16>) -> vector<1x4xf16>
+          "frisk.fragment_yield"(%125) : (vector<1x4xf16>) -> ()
+        }) : () -> vector<1x4xf16>
+        %116 = "vector.extract"(%115) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+        %117 = "vector.insert"(%116, %arg16, %arg15) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %118 = "vector.extract"(%115) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+        %119 = "vector.insert"(%118, %117, %arg15) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %120 = "vector.extract"(%115) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+        %121 = "vector.insert"(%120, %119, %arg15) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %122 = "vector.extract"(%115) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+        %123 = "vector.insert"(%122, %121, %arg15) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        "affine.yield"(%123) : (vector<2x4xf16>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+      %46 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+      %47 = "affine.apply"(%46) <{map = #map50}> : (index) -> index
+      %48 = "arith.cmpi"(%47, %0) <{predicate = 6 : i64}> : (index, index) -> i1
+      "scf.if"(%48) ({
+        "affine.for"() <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 0>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg14: index):
+          "frisk.fragment"() <{kind = "store"}> ({
+            %111 = "vector.extract"(%45, %arg14) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%111, %arg3, %arg4, %arg14, %19, %21, %20, %46) <{map = #map51}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %112 = "vector.extract"(%45, %arg14) <{static_position = array<i64: -9223372036854775808, 1>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%112, %arg3, %arg4, %arg14, %19, %21, %20, %46) <{map = #map52}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %113 = "vector.extract"(%45, %arg14) <{static_position = array<i64: -9223372036854775808, 2>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%113, %arg3, %arg4, %arg14, %19, %21, %20, %46) <{map = #map53}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %114 = "vector.extract"(%45, %arg14) <{static_position = array<i64: -9223372036854775808, 3>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%114, %arg3, %arg4, %arg14, %19, %21, %20, %46) <{map = #map54}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            "frisk.fragment_yield"() : () -> ()
+          }) : () -> ()
+          "affine.yield"() : () -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "store", tiled = true} : () -> ()
+        "scf.yield"() : () -> ()
+      }, {
+      }) : (i1) -> ()
+      %49 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg12: index, %arg13: vector<2x4xf32>):
+        %97 = "frisk.fragment"() <{kind = "compute"}> ({
+          %106 = "vector.extract"(%27#1, %arg12) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %107 = "vector.extract"(%27#1, %arg12) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %108 = "vector.extract"(%27#1, %arg12) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %109 = "vector.extract"(%27#1, %arg12) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x1xf32>, index) -> f32
+          %110 = "vector.from_elements"(%106, %107, %108, %109) : (f32, f32, f32, f32) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%110) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %98 = "vector.extract"(%97) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %99 = "vector.insert"(%98, %arg13, %arg12) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %100 = "vector.extract"(%97) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %101 = "vector.insert"(%100, %99, %arg12) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %102 = "vector.extract"(%97) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %103 = "vector.insert"(%102, %101, %arg12) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %104 = "vector.extract"(%97) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %105 = "vector.insert"(%104, %103, %arg12) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%105) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %50 = "affine.for"(%1) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg10: index, %arg11: vector<2x4xf32>):
+        %83 = "frisk.fragment"() <{kind = "compute"}> ({
+          %92 = "vector.extract"(%34) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %93 = "vector.shape_cast"(%92) : (vector<4xf32>) -> vector<1x4xf32>
+          %94 = "vector.extract"(%49) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %95 = "vector.shape_cast"(%94) : (vector<4xf32>) -> vector<1x4xf32>
+          %96 = "arith.divf"(%93, %95) <{fastmath = #arith.fastmath<none>}> {origin = "frisk.div", tiled = true} : (vector<1x4xf32>, vector<1x4xf32>) -> vector<1x4xf32>
+          "frisk.fragment_yield"(%96) : (vector<1x4xf32>) -> ()
+        }) : () -> vector<1x4xf32>
+        %84 = "vector.extract"(%83) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf32>) -> f32
+        %85 = "vector.insert"(%84, %arg11, %arg10) <{static_position = array<i64: -9223372036854775808, 0>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %86 = "vector.extract"(%83) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf32>) -> f32
+        %87 = "vector.insert"(%86, %85, %arg10) <{static_position = array<i64: -9223372036854775808, 1>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %88 = "vector.extract"(%83) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf32>) -> f32
+        %89 = "vector.insert"(%88, %87, %arg10) <{static_position = array<i64: -9223372036854775808, 2>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        %90 = "vector.extract"(%83) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf32>) -> f32
+        %91 = "vector.insert"(%90, %89, %arg10) <{static_position = array<i64: -9223372036854775808, 3>}> : (f32, vector<2x4xf32>, index) -> vector<2x4xf32>
+        "affine.yield"(%91) : (vector<2x4xf32>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf32>) -> vector<2x4xf32>
+      %51 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg8: index, %arg9: vector<2x4xf16>):
+        %71 = "frisk.fragment"() <{kind = "compute"}> ({
+          %80 = "vector.extract"(%50) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf32>) -> vector<4xf32>
+          %81 = "vector.shape_cast"(%80) : (vector<4xf32>) -> vector<1x4xf32>
+          %82 = "arith.truncf"(%81) {tiled = true} : (vector<1x4xf32>) -> vector<1x4xf16>
+          "frisk.fragment_yield"(%82) : (vector<1x4xf16>) -> ()
+        }) : () -> vector<1x4xf16>
+        %72 = "vector.extract"(%71) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+        %73 = "vector.insert"(%72, %arg9, %arg8) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %74 = "vector.extract"(%71) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+        %75 = "vector.insert"(%74, %73, %arg8) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %76 = "vector.extract"(%71) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+        %77 = "vector.insert"(%76, %75, %arg8) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %78 = "vector.extract"(%71) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+        %79 = "vector.insert"(%78, %77, %arg8) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        "affine.yield"(%79) : (vector<2x4xf16>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+      %52 = "affine.for"(%12) <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 1>, step = 1 : index, upperBoundMap = #map2}> ({
+      ^bb0(%arg6: index, %arg7: vector<2x4xf16>):
+        %60 = "frisk.fragment"() <{kind = "compute"}> ({
+          %69 = "vector.extract"(%51) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xf16>) -> vector<4xf16>
+          %70 = "vector.shape_cast"(%69) : (vector<4xf16>) -> vector<1x4xf16>
+          "frisk.fragment_yield"(%70) : (vector<1x4xf16>) -> ()
+        }) : () -> vector<1x4xf16>
+        %61 = "vector.extract"(%60) <{static_position = array<i64: 0, 0>}> : (vector<1x4xf16>) -> f16
+        %62 = "vector.insert"(%61, %arg7, %arg6) <{static_position = array<i64: -9223372036854775808, 0>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %63 = "vector.extract"(%60) <{static_position = array<i64: 0, 1>}> : (vector<1x4xf16>) -> f16
+        %64 = "vector.insert"(%63, %62, %arg6) <{static_position = array<i64: -9223372036854775808, 1>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %65 = "vector.extract"(%60) <{static_position = array<i64: 0, 2>}> : (vector<1x4xf16>) -> f16
+        %66 = "vector.insert"(%65, %64, %arg6) <{static_position = array<i64: -9223372036854775808, 2>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        %67 = "vector.extract"(%60) <{static_position = array<i64: 0, 3>}> : (vector<1x4xf16>) -> f16
+        %68 = "vector.insert"(%67, %66, %arg6) <{static_position = array<i64: -9223372036854775808, 3>}> : (f16, vector<2x4xf16>, index) -> vector<2x4xf16>
+        "affine.yield"(%68) : (vector<2x4xf16>) -> ()
+      }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "fragment", tiled = true} : (vector<2x4xf16>) -> vector<2x4xf16>
+      %53 = "gpu.thread_id"() <{dimension = #gpu.dim<x>}> : () -> index
+      %54 = "affine.apply"(%53) <{map = #map50}> : (index) -> index
+      %55 = "arith.cmpi"(%54, %0) <{predicate = 6 : i64}> : (index, index) -> i1
+      "scf.if"(%55) ({
+        "affine.for"() <{lowerBoundMap = #map1, operandSegmentSizes = array<i32: 0, 0, 0>, step = 1 : index, upperBoundMap = #map2}> ({
+        ^bb0(%arg5: index):
+          "frisk.fragment"() <{kind = "store"}> ({
+            %56 = "vector.extract"(%52, %arg5) <{static_position = array<i64: -9223372036854775808, 0>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%56, %arg3, %arg4, %arg5, %19, %21, %20, %53) <{map = #map55}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %57 = "vector.extract"(%52, %arg5) <{static_position = array<i64: -9223372036854775808, 1>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%57, %arg3, %arg4, %arg5, %19, %21, %20, %53) <{map = #map56}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %58 = "vector.extract"(%52, %arg5) <{static_position = array<i64: -9223372036854775808, 2>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%58, %arg3, %arg4, %arg5, %19, %21, %20, %53) <{map = #map57}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            %59 = "vector.extract"(%52, %arg5) <{static_position = array<i64: -9223372036854775808, 3>}> : (vector<2x4xf16>, index) -> f16
+            "affine.store"(%59, %arg3, %arg4, %arg5, %19, %21, %20, %53) <{map = #map58}> : (f16, memref<1x32x4096x128xf16, 1>, index, index, index, index, index, index) -> ()
+            "frisk.fragment_yield"() : () -> ()
+          }) : () -> ()
+          "affine.yield"() : () -> ()
+        }) {frisk.fragment_loop, frisk.fragment_shape = array<i64: 1, 4>, frisk.tile_shape = array<i64: 2, 4>, iterLabel = "store", tiled = true} : () -> ()
+        "scf.yield"() : () -> ()
+      }, {
+      }) : (i1) -> ()
+      "affine.yield"() : () -> ()
+    }) {local_yield_transformed = true} : () -> ()
+    "func.return"() : () -> ()
+  }) {block_layout = array<i64: 4, 1>, block_layout_order = array<i64: 0, 1>, frisk.block_warps = array<i64: 4, 1>, frisk.k_layout_bhsd, thread_num = 256 : i32, warp_layout = array<i64: 16, 4>} : () -> ()
+}) : () -> ()
+
+

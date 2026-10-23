@@ -1,0 +1,231 @@
+useKPack: DMA=16B, MMAC input=8B, kpack=2, BK=32 -> 32
+split-D tiles: BM=128, BN=64, Dqk=128, Dvo=128, QK=32 -> 32, VO=32 -> 32, kpack=2
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  deepgengraph.kernel @Attn_p2(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> attributes {parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 128 : i64, unit_num = 32 : i64}]} {
+    %0 = deepgengraph_triton.ptr_of %arg0 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %1 = deepgengraph_triton.ptr_of %arg2 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %2 = deepgengraph_triton.ptr_of %arg1 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %3 = deepgengraph_triton.empty_ptr type = tensor<1x4096x32x128xf16> : <tensor<1x4096x32x128xf16>>
+    deepgengraph_triton.device_kernel args = [%0, %1, %2, %3], grid = [1, 32, 32] {
+    ^bb0(%arg3: index, %arg4: index, %arg5: index, %arg6: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg7: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg8: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg9: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>):
+      %cst = arith.constant dense<0.127531052> : tensor<1xf32>
+      %5 = deepgengraph.convert %cst, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
+      %cst_0 = arith.constant 0xFF800000 : f32
+      %cst_1 = arith.constant 0.000000e+00 : f32
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c128 = arith.constant 128 : index
+      %c64 = arith.constant 64 : index
+      %c32 = arith.constant 32 : index
+      %c128_2 = arith.constant 128 : index
+      %c4096 = arith.constant 4096 : index
+      %c524288 = arith.constant 524288 : index
+      %c16777216 = arith.constant 16777216 : index
+      %6 = arith.muli %arg3, %c16777216 : index
+      %7 = arith.muli %arg4, %c524288 : index
+      %8 = arith.addi %6, %7 : index
+      %9 = arith.muli %arg5, %c128 : index
+      %10 = arith.muli %9, %c128_2 : index
+      %11 = arith.addi %8, %10 : index
+      %12 = arith.addi %9, %c128 : index
+      affine.for %arg10 = 0 to 128 step 32 {
+        %13 = arith.addi %11, %arg10 : index
+        %14 = deepgengraph_triton.block_ptr_of base = %arg9, base_offset = %13, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %15 = deepgengraph.zero shape = [128, 32], type = f32 : () -> tensor<128x32xf32>
+        %16 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
+        %cst_3 = arith.constant dense<0xFF800000> : tensor<1xf32>
+        %17 = deepgengraph.add %16, %cst_3 : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+        %18:3 = scf.for %arg11 = %c0 to %12 step %c64 iter_args(%arg12 = %15, %arg13 = %16, %arg14 = %17) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>) {
+          %21 = deepgengraph.zero shape = [128, 64], type = f32 : () -> tensor<128x64xf32>
+          %c32_4 = arith.constant 32 : index
+          %22 = scf.for %arg15 = %c0 to %c128_2 step %c32_4 iter_args(%arg16 = %21) -> (tensor<128x64xf32>) {
+            %41 = arith.addi %11, %arg15 : index
+            %42 = arith.muli %arg15, %c4096 : index
+            %43 = arith.addi %8, %42 : index
+            %44 = arith.addi %43, %arg11 : index
+            %45 = deepgengraph_triton.block_ptr_of base = %arg6, base_offset = %41, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+            %46 = deepgengraph_triton.block_ptr_of base = %arg8, base_offset = %44, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 64], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x64xf16>}>
+            %47 = deepgengraph_triton.block_load %45 : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+            %48 = deepgengraph_triton.block_load %46 : (!deepgengraph_triton<block_ptr{tensor<32x64xf16>}>) -> tensor<32x64xf16>
+            %49 = deepgengraph.mul %47, %5 : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+            %50 = deepgengraph.precise_dot_op %49, %48, acc = f32 {frisk.split_d_qk} : (tensor<128x32xf16>, tensor<32x64xf16>) -> tensor<128x64xf32>
+            %51 = deepgengraph.add %arg16, %50 : (tensor<128x64xf32>, tensor<128x64xf32>) -> tensor<128x64xf32>
+            scf.yield %51 : tensor<128x64xf32>
+          } {frisk.simplify_loop}
+          %23 = deepgengraph.mask starts = [%9, %arg11], sizes = [128, 64], type = f32 {
+          ^bb0(%arg15: index, %arg16: index):
+            %41 = arith.addi %arg15, %c1 : index
+            %42 = arith.cmpi ule, %41, %arg16 : index
+            %43 = scf.if %42 -> (f32) {
+              scf.yield %cst_0 : f32
+            } else {
+              scf.yield %cst_1 : f32
+            }
+            deepgengraph.mask_yield %43 : f32
+          } : (index, index) -> tensor<128x64xf32>
+          %24 = deepgengraph.add %22, %23 : (tensor<128x64xf32>, tensor<128x64xf32>) -> tensor<128x64xf32>
+          %25 = deepgengraph.reduce(%24, init = %arg14), dim = 1, op = MAX, keep_dim = true : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %26 = deepgengraph.sub %24, %25 : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x64xf32>
+          %27 = deepgengraph.sub %arg14, %25 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %28 = deepgengraph.exp2 %27 {frisk.split_d_exp} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+          %29 = deepgengraph.mul %arg13, %28 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %30 = deepgengraph.exp2 %26 {frisk.split_d_exp} : (tensor<128x64xf32>) -> tensor<128x64xf32>
+          %31 = deepgengraph.reduce(%30, init = %29), dim = 1, op = ADD, keep_dim = true : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %32 = deepgengraph.convert %30, type = f16 : (tensor<128x64xf32>) -> tensor<128x64xf16>
+          %33 = arith.muli %arg11, %c128_2 : index
+          %34 = arith.addi %8, %33 : index
+          %35 = arith.addi %34, %arg10 : index
+          %36 = deepgengraph_triton.block_ptr_of base = %arg7, base_offset = %35, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x32xf16>}>
+          %37 = deepgengraph_triton.block_load %36 : (!deepgengraph_triton<block_ptr{tensor<64x32xf16>}>) -> tensor<64x32xf16>
+          %38 = deepgengraph.precise_dot_op %32, %37, acc = f32 : (tensor<128x64xf16>, tensor<64x32xf16>) -> tensor<128x32xf32>
+          %39 = deepgengraph.mul %arg12, %28 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+          %40 = deepgengraph.add %39, %38 : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+          scf.yield %40, %31, %25 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>
+        }
+        %19 = deepgengraph.div %18#0, %18#1 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %20 = deepgengraph.convert %19, type = f16 : (tensor<128x32xf32>) -> tensor<128x32xf16>
+        deepgengraph_triton.block_store %14, %20 : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+      } {frisk.split_d_output}
+    } : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> ()
+    %4 = deepgengraph_triton.tensor_from %3 : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> tensor<1x4096x32x128xf16>
+    deepgengraph.return %4 : tensor<1x4096x32x128xf16>
+  }
+}
+
+---------- after simplifyPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  deepgengraph.kernel @Attn_p2(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>, %arg3: tensor<1x4096x32x128xf16>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>, out_idx = [3 : i32], parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 128 : i64, unit_num = 32 : i64}]} {
+    %cst = arith.constant dense<0.127531052> : tensor<1xf32>
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %c64 = arith.constant 64 : index
+    %c32 = arith.constant 32 : index
+    %c4096 = arith.constant 4096 : index
+    %c524288 = arith.constant 524288 : index
+    %c16777216 = arith.constant 16777216 : index
+    %cst_2 = arith.constant dense<0xFF800000> : tensor<1xf32>
+    %0 = deepgengraph_triton.ptr_of %arg0 {argId = 0 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %1 = deepgengraph_triton.ptr_of %arg2 {argId = 2 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %2 = deepgengraph_triton.ptr_of %arg1 {argId = 1 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %3 = deepgengraph_triton.ptr_of %arg3 {argId = 3 : i32, frisk.fresh_output} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %block_id_x = gpu.block_id x
+    %block_id_y = gpu.block_id y
+    %block_id_z = gpu.block_id z
+    %4 = deepgengraph.convert %cst, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
+    %5 = arith.muli %block_id_z, %c16777216 : index
+    %6 = arith.muli %block_id_y, %c524288 : index
+    %7 = arith.addi %5, %6 : index
+    %8 = arith.muli %block_id_x, %c128 : index
+    %9 = arith.muli %8, %c128 : index
+    %10 = arith.addi %7, %9 : index
+    %11 = arith.addi %8, %c128 : index
+    affine.for %arg4 = 0 to 128 step 32 {
+      %12 = arith.addi %10, %arg4 : index
+      %13 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %12, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %14 = deepgengraph.zero shape = [128, 32], type = f32 : () -> tensor<128x32xf32>
+      %15 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
+      %16 = deepgengraph.add %15, %cst_2 : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+      %17:3 = scf.for %arg5 = %c0 to %11 step %c64 iter_args(%arg6 = %14, %arg7 = %15, %arg8 = %16) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>) {
+        %20 = deepgengraph.zero shape = [128, 64], type = f32 : () -> tensor<128x64xf32>
+        %21 = scf.for %arg9 = %c0 to %c128 step %c32 iter_args(%arg10 = %20) -> (tensor<128x64xf32>) {
+          %40 = arith.addi %10, %arg9 : index
+          %41 = arith.muli %arg9, %c4096 : index
+          %42 = arith.addi %7, %41 : index
+          %43 = arith.addi %42, %arg5 : index
+          %44 = deepgengraph_triton.block_ptr_of base = %0, base_offset = %40, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 0 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+          %45 = deepgengraph_triton.block_ptr_of base = %2, base_offset = %43, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 64], order = [0, 1] {argId = 1 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x64xf16>}>
+          %46 = deepgengraph_triton.block_load %44 {argId = 0 : i32, block_shape = array<i64: 128, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+          %47 = deepgengraph_triton.block_load %45 {argId = 1 : i32, block_shape = array<i64: 32, 64>, offset = array<i64: 0, 0>, order = array<i64: 0, 1>, stride = array<i64: 1, 4096>} : (!deepgengraph_triton<block_ptr{tensor<32x64xf16>}>) -> tensor<32x64xf16>
+          %48 = deepgengraph.mul %46, %4 : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+          %49 = deepgengraph.precise_dot_op %48, %47, acc = f32 {frisk.split_d_qk} : (tensor<128x32xf16>, tensor<32x64xf16>) -> tensor<128x64xf32>
+          %50 = deepgengraph.add %arg10, %49 : (tensor<128x64xf32>, tensor<128x64xf32>) -> tensor<128x64xf32>
+          scf.yield %50 : tensor<128x64xf32>
+        } {frisk.simplify_loop}
+        %22 = deepgengraph.mask starts = [%8, %arg5], sizes = [128, 64], type = f32 {
+        ^bb0(%arg9: index, %arg10: index):
+          %40 = arith.addi %arg9, %c1 : index
+          %41 = arith.cmpi ule, %40, %arg10 : index
+          %42 = scf.if %41 -> (f32) {
+            scf.yield %cst_0 : f32
+          } else {
+            scf.yield %cst_1 : f32
+          }
+          deepgengraph.mask_yield %42 : f32
+        } : (index, index) -> tensor<128x64xf32>
+        %23 = deepgengraph.add %21, %22 : (tensor<128x64xf32>, tensor<128x64xf32>) -> tensor<128x64xf32>
+        %24 = deepgengraph.reduce(%23, init = %arg8), dim = 1, op = MAX, keep_dim = true : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %25 = deepgengraph.sub %23, %24 : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x64xf32>
+        %26 = deepgengraph.sub %arg8, %24 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %27 = deepgengraph.exp2 %26 {frisk.split_d_exp} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+        %28 = deepgengraph.mul %arg7, %27 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %29 = deepgengraph.exp2 %25 {frisk.split_d_exp} : (tensor<128x64xf32>) -> tensor<128x64xf32>
+        %30 = deepgengraph.reduce(%29, init = %28), dim = 1, op = ADD, keep_dim = true : (tensor<128x64xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %31 = deepgengraph.convert %29, type = f16 : (tensor<128x64xf32>) -> tensor<128x64xf16>
+        %32 = arith.muli %arg5, %c128 : index
+        %33 = arith.addi %7, %32 : index
+        %34 = arith.addi %33, %arg4 : index
+        %35 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %34, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [64, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<64x32xf16>}>
+        %36 = deepgengraph_triton.block_load %35 {argId = 2 : i32, block_shape = array<i64: 64, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<64x32xf16>}>) -> tensor<64x32xf16>
+        %37 = deepgengraph.precise_dot_op %31, %36, acc = f32 : (tensor<128x64xf16>, tensor<64x32xf16>) -> tensor<128x32xf32>
+        %38 = deepgengraph.mul %arg6, %27 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %39 = deepgengraph.add %38, %37 : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        scf.yield %39, %30, %24 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>
+      }
+      %18 = deepgengraph.div %17#0, %17#1 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %19 = deepgengraph.convert %18, type = f16 : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %13, %19 {argId = 3 : i32, block_shape = array<i64: 128, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    } {frisk.split_d_output}
+    deepgengraph.return
+  }
+}
+[def] arith.constant
+[def] arith.addi
+[def] arith.constant
+[def] arith.muli
+[def] arith.constant
+[def] gpu.block_id
+[def] arith.constant
+[def] arith.constant
+split-D sharing: QK copies=1, softmax copies=2 per key tile
+loc("/data2/xsl/DeepGenGraph/generated_ir/online_softmax/export/run-20261023-170455-sr5_433m/input-0002-test_input_1x32x4096x128-128-64-32-online/retained32-baseline/input.mlir":2:1): error: explicit split-D tiles would repeat QK/softmax across output slices; increase carrier-words or VO tile (tensor jam limit is 8)

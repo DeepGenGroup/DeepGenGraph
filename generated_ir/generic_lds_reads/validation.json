@@ -1,0 +1,57 @@
+{
+  "baseline_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "optimized_sha256": "dd503af588f046675279dacaf7dfda8e14f2de6415a4921a92a0837ba5215479",
+  "cpu_delayed_dma": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "bitwise_equal": true,
+      "identical_memory_trace": true,
+      "no_pending_dma": true,
+      "aligned_lane_loads_checked": 36864,
+      "barriers": 16,
+      "vm_waits": 12,
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 7,
+      "bitwise_equal": true,
+      "identical_memory_trace": true,
+      "no_pending_dma": true,
+      "aligned_lane_loads_checked": 294912,
+      "barriers": 128,
+      "vm_waits": 96,
+      "max_abs_error": 0.00022155012408740793
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "bitwise_equal": true,
+      "identical_memory_trace": true,
+      "no_pending_dma": true,
+      "aligned_lane_loads_checked": 331776,
+      "barriers": 144,
+      "vm_waits": 108,
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 31,
+      "bitwise_equal": true,
+      "identical_memory_trace": true,
+      "no_pending_dma": true,
+      "aligned_lane_loads_checked": 1179648,
+      "barriers": 512,
+      "vm_waits": 384,
+      "max_abs_error": 8.609342196802539e-05
+    }
+  ],
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "CPU model does not simulate independently progressing waves or target backend timing."
+}

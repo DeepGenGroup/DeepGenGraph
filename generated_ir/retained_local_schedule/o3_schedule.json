@@ -1,0 +1,18 @@
+{
+  "wait_tail2": {
+    "two_mmac_tails_between_dma_and_wait": 3,
+    "vm_waits_static": 12,
+    "hardware_barriers_static": 18
+  },
+  "fragment_pair": {
+    "whole_read_pairs_before_prior_mmac": 27,
+    "vm_waits_static": 12,
+    "hardware_barriers_static": 18
+  },
+  "combined": {
+    "two_mmac_tails_between_dma_and_wait": 3,
+    "whole_read_pairs_before_prior_mmac": 27,
+    "vm_waits_static": 12,
+    "hardware_barriers_static": 18
+  }
+}

@@ -1,0 +1,328 @@
+{
+  "source": "generated_ir/invariant_fragment_pass/retained_8words.ll",
+  "source_sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+  "baseline_byte_identical": true,
+  "source_measured_median_ms": 1.6460869908332825,
+  "wait_changes": [
+    {
+      "original_mmac_lines": [
+        388,
+        390
+      ],
+      "q_dma_lines": [
+        416,
+        439
+      ],
+      "before_wait_line": 460,
+      "mmac_count": 2
+    },
+    {
+      "original_mmac_lines": [
+        622,
+        624
+      ],
+      "q_dma_lines": [
+        642,
+        660
+      ],
+      "before_wait_line": 680,
+      "mmac_count": 2
+    },
+    {
+      "original_mmac_lines": [
+        836,
+        838
+      ],
+      "q_dma_lines": [
+        856,
+        874
+      ],
+      "before_wait_line": 894,
+      "mmac_count": 2
+    }
+  ],
+  "fragment_changes": [
+    {
+      "mmac_original_line": 303,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n152",
+        "%sched.n153"
+      ]
+    },
+    {
+      "mmac_original_line": 309,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n156",
+        "%sched.n157"
+      ]
+    },
+    {
+      "mmac_original_line": 315,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n160",
+        "%sched.n161"
+      ]
+    },
+    {
+      "mmac_original_line": 321,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n164",
+        "%sched.n165"
+      ]
+    },
+    {
+      "mmac_original_line": 327,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n168",
+        "%sched.n169"
+      ]
+    },
+    {
+      "mmac_original_line": 333,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n172",
+        "%sched.n173"
+      ]
+    },
+    {
+      "mmac_original_line": 529,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n300",
+        "%sched.n301"
+      ]
+    },
+    {
+      "mmac_original_line": 535,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n304",
+        "%sched.n305"
+      ]
+    },
+    {
+      "mmac_original_line": 541,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n308",
+        "%sched.n309"
+      ]
+    },
+    {
+      "mmac_original_line": 547,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n312",
+        "%sched.n313"
+      ]
+    },
+    {
+      "mmac_original_line": 553,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n316",
+        "%sched.n317"
+      ]
+    },
+    {
+      "mmac_original_line": 559,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n320",
+        "%sched.n321"
+      ]
+    },
+    {
+      "mmac_original_line": 565,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n324",
+        "%sched.n325"
+      ]
+    },
+    {
+      "mmac_original_line": 743,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n451",
+        "%sched.n452"
+      ]
+    },
+    {
+      "mmac_original_line": 749,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n455",
+        "%sched.n456"
+      ]
+    },
+    {
+      "mmac_original_line": 755,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n459",
+        "%sched.n460"
+      ]
+    },
+    {
+      "mmac_original_line": 761,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n463",
+        "%sched.n464"
+      ]
+    },
+    {
+      "mmac_original_line": 767,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n467",
+        "%sched.n468"
+      ]
+    },
+    {
+      "mmac_original_line": 773,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n471",
+        "%sched.n472"
+      ]
+    },
+    {
+      "mmac_original_line": 779,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n475",
+        "%sched.n476"
+      ]
+    },
+    {
+      "mmac_original_line": 1008,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n635",
+        "%sched.n636"
+      ]
+    },
+    {
+      "mmac_original_line": 1014,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n639",
+        "%sched.n640"
+      ]
+    },
+    {
+      "mmac_original_line": 1020,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n643",
+        "%sched.n644"
+      ]
+    },
+    {
+      "mmac_original_line": 1026,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n647",
+        "%sched.n648"
+      ]
+    },
+    {
+      "mmac_original_line": 1032,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n651",
+        "%sched.n652"
+      ]
+    },
+    {
+      "mmac_original_line": 1038,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n655",
+        "%sched.n656"
+      ]
+    },
+    {
+      "mmac_original_line": 1044,
+      "raw_read_words": 4,
+      "loads": [
+        "%sched.n659",
+        "%sched.n660"
+      ]
+    }
+  ],
+  "variants": {
+    "baseline": {
+      "sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+      "waits_static": 12,
+      "barriers_static": 18,
+      "sched_hints_static": 8,
+      "LDS_bytes": 16384,
+      "DMA_sites": 24,
+      "MMAC_sites": 256,
+      "llvm_assemble_and_O3_verify": true
+    },
+    "wait_tail2": {
+      "sha256": "cc6f55c166c24da371ca9f5e18e3bfaa19f26afc18f5a22e3e94b94ba9360364",
+      "waits_static": 12,
+      "barriers_static": 18,
+      "sched_hints_static": 8,
+      "LDS_bytes": 16384,
+      "DMA_sites": 24,
+      "MMAC_sites": 256,
+      "llvm_assemble_and_O3_verify": true
+    },
+    "fragment_pair": {
+      "sha256": "7cdc8e092e077a65e178739d566553b81b7caed497e3c0f8f3c473f2c7e516de",
+      "waits_static": 12,
+      "barriers_static": 18,
+      "sched_hints_static": 62,
+      "LDS_bytes": 16384,
+      "DMA_sites": 24,
+      "MMAC_sites": 256,
+      "llvm_assemble_and_O3_verify": true
+    },
+    "combined": {
+      "sha256": "1f208c780bfd6b6cb0d394dcb3407157b10958ccad5e163765426bd6e1bd21c9",
+      "waits_static": 12,
+      "barriers_static": 18,
+      "sched_hints_static": 62,
+      "LDS_bytes": 16384,
+      "DMA_sites": 24,
+      "MMAC_sites": 256,
+      "llvm_assemble_and_O3_verify": true
+    }
+  },
+  "launch": {
+    "schema_version": 1,
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "gpu_tested": false,
+  "limitations": "Fingerprint-restricted scheduling experiment; 4 raw words per read pair is not a bound on final VGPR delta. Device codegen/performance must be measured."
+}

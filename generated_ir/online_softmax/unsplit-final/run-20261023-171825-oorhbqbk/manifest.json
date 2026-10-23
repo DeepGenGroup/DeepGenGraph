@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "state": "running",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-23T09:18:25Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk",
+  "total_candidates": 1,
+  "completed_candidates": 0,
+  "failed_candidates": 0,
+  "successful_candidates": 0,
+  "status_counts": {},
+  "last_result": null,
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk/**/result.json",
+  "best_by_shape": {}
+}

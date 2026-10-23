@@ -1,0 +1,329 @@
+{
+  "sha256": {
+    "baseline_16words": "eb04526e34435cc8e9766a76c4e72fcacc57e26969988a522e1af072a3d90925",
+    "retained_24words": "e87cd4c604ac709033667521bb8a01cd1c3985a324163bdce7f6b92d47d02100",
+    "retained_32words": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915"
+  },
+  "cases": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "variants": {
+        "baseline_16words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 144,
+          "q_scales": 16,
+          "waits": 12,
+          "barriers": 17,
+          "retained_elements_each_loaded_once": 8192,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_24words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 144,
+          "q_scales": 16,
+          "waits": 12,
+          "barriers": 18,
+          "retained_elements_each_loaded_once": 12288,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_32words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 144,
+          "q_scales": 16,
+          "waits": 12,
+          "barriers": 17,
+          "retained_elements_each_loaded_once": 16384,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "variants": {
+        "baseline_16words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 4,
+            "3": 4
+          },
+          "lds_reads": 280,
+          "q_scales": 24,
+          "waits": 22,
+          "barriers": 31,
+          "retained_elements_each_loaded_once": 8192,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_24words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 4
+          },
+          "lds_reads": 276,
+          "q_scales": 20,
+          "waits": 21,
+          "barriers": 32,
+          "retained_elements_each_loaded_once": 12288,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_32words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 272,
+          "q_scales": 16,
+          "waits": 20,
+          "barriers": 29,
+          "retained_elements_each_loaded_once": 16384,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "variants": {
+        "baseline_16words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 16,
+            "3": 16
+          },
+          "lds_reads": 1096,
+          "q_scales": 72,
+          "waits": 82,
+          "barriers": 115,
+          "retained_elements_each_loaded_once": 8192,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_24words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 16
+          },
+          "lds_reads": 1068,
+          "q_scales": 44,
+          "waits": 75,
+          "barriers": 116,
+          "retained_elements_each_loaded_once": 12288,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_32words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 1040,
+          "q_scales": 16,
+          "waits": 68,
+          "barriers": 101,
+          "retained_elements_each_loaded_once": 16384,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "variants": {
+        "baseline_16words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 18,
+            "3": 18
+          },
+          "lds_reads": 1232,
+          "q_scales": 80,
+          "waits": 92,
+          "barriers": 129,
+          "retained_elements_each_loaded_once": 8192,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_24words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 18
+          },
+          "lds_reads": 1200,
+          "q_scales": 48,
+          "waits": 84,
+          "barriers": 130,
+          "retained_elements_each_loaded_once": 12288,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_32words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 1168,
+          "q_scales": 16,
+          "waits": 76,
+          "barriers": 113,
+          "retained_elements_each_loaded_once": 16384,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "variants": {
+        "baseline_16words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 64,
+            "3": 64
+          },
+          "lds_reads": 4360,
+          "q_scales": 264,
+          "waits": 322,
+          "barriers": 451,
+          "retained_elements_each_loaded_once": 8192,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_24words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 64
+          },
+          "lds_reads": 4236,
+          "q_scales": 140,
+          "waits": 291,
+          "barriers": 452,
+          "retained_elements_each_loaded_once": 12288,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "retained_32words": {
+          "q_fragment_DMA_calls": {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+            "3": 2
+          },
+          "lds_reads": 4112,
+          "q_scales": 16,
+          "waits": 260,
+          "barriers": 389,
+          "retained_elements_each_loaded_once": 16384,
+          "all_Q_element_multiplicities_checked": true,
+          "bitwise_equal": true,
+          "KV_trace_identical": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "hazard_negative_controls": [
+    {
+      "variant": "retained_24words",
+      "case": "missing_last_Q_wait",
+      "rejected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "variant": "retained_24words",
+      "case": "missing_last_Q_publication",
+      "rejected": "cross-wave RAW without publication barrier"
+    },
+    {
+      "variant": "retained_32words",
+      "case": "missing_last_Q_wait",
+      "rejected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "variant": "retained_32words",
+      "case": "missing_last_Q_publication",
+      "rejected": "cross-wave RAW without publication barrier"
+    }
+  ],
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Actual LLVM CPU execution with delayed DMA and barrier-epoch hazard checks; not cycle-accurate GPU execution or target register allocation."
+}

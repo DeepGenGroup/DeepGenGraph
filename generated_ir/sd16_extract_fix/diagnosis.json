@@ -1,0 +1,14 @@
+{
+  "reproduced": true,
+  "upstream_pattern": "FromElementsToShapeCast",
+  "cause": "Combines getStaticPosition() arrays and drops dynamic prefix operands; differing dynamic SSA indices can also compare equal.",
+  "fix": "Project-local pattern filter shared by canonicalizer entry points and post-unroll greedy canonicalization. Default canonicalizer options and other patterns retained. System LLVM unchanged.",
+  "regression": "20 CPU cases across original, canonicalized, post-unroll and combined forms; direct from_elements, insert chains, same/different dynamic rows, mixed/static prefixes.",
+  "full_exports": "All three provided inputs with frag-prefetch=0 and 1; commands recorded in validation.json.",
+  "limitation": "No full attention numerical or performance measurement on gfx936 in this environment.",
+  "canonicalizer_defaults": "Preserved via CanonicalizerPassOptions: top-down traversal and normal region simplification.",
+  "llvm22_artifacts": [
+    "sd16.baseline.ll",
+    "sd16.frag-prefetch.ll"
+  ]
+}

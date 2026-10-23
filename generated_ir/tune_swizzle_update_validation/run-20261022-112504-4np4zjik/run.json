@@ -1,0 +1,43 @@
+{
+  "argv": [
+    "--input",
+    "3rd/deepgengraph/test/test_input_spidD.mlir",
+    "generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+    "--case",
+    "group8-reverse-k128-swizzle",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as",
+    "--output-dir",
+    "generated_ir/tune_swizzle_update_validation"
+  ],
+  "input": null,
+  "loop_iv": "auto",
+  "input_sha256": null,
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/tune_swizzle_update_validation/run-20261022-112504-4np4zjik/input-0001-test_input_spidD/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "6eb3238e8bbab3a76da448558b679bf4135ea14a712f990ffb5121daf52a5f6f"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/tune_swizzle_update_validation/run-20261022-112504-4np4zjik/input-0002-nohint_unrolled/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "f7a3ac094f288e2f24272b3de1edd003606f930ca19c5a63002671549bceff40"
+    }
+  ],
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1792636890270384319,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "source": "generated_ir/group8_reverse_k_swizzle/group8_reverse_k_swizzle128.ll",
+  "control_sha256": "73234d33f58e848a06f363a42f1090a2952e71791ec6e2e409e762f944a880c1",
+  "candidate": "group8_reverse_k128_gep.ll",
+  "candidate_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "control_program_median_ms": 1.8204780220985413,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "static_lds_bytes": 16384,
+  "all_24_DMA_sites_128bit_and_unchanged": true,
+  "K_swizzle_layout_unchanged": true,
+  "Q_V_math_entry_waits_barriers_unchanged": true,
+  "changes": [
+    "K addresses use two bases plus constant GEP",
+    "K loads declare verified 8-byte alignment"
+  ],
+  "pointer_base_byte_offset_mapping": [
+    [
+      0,
+      0
+    ],
+    [
+      0,
+      4096
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      1,
+      4096
+    ],
+    [
+      0,
+      128
+    ],
+    [
+      0,
+      4224
+    ],
+    [
+      1,
+      128
+    ],
+    [
+      1,
+      4224
+    ],
+    [
+      0,
+      1024
+    ],
+    [
+      0,
+      5120
+    ],
+    [
+      1,
+      1024
+    ],
+    [
+      1,
+      5120
+    ],
+    [
+      0,
+      1152
+    ],
+    [
+      0,
+      5248
+    ],
+    [
+      1,
+      1152
+    ],
+    [
+      1,
+      5248
+    ]
+  ],
+  "limitations": "CPU delayed DMA does not simulate independent waves. Isolated gfx900 probe is not gfx936 full-kernel code generation or a performance measurement.",
+  "launch": {
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "addresses": {
+    "all_16_pointers_256_threads_identical": true,
+    "independent_of_head_query_loop": true,
+    "all_128_load_sites_covered": true,
+    "align8_and_LDS_bounds_verified": true,
+    "bank_model_32banks_b64_16lane_phases": {
+      "2": 16
+    }
+  },
+  "local_gfx900_read_probe": {
+    "control": {
+      "ds_read2st64_b64": 2,
+      "ds_read_b64": 12
+    },
+    "gep": {
+      "ds_read2_b64": 8
+    }
+  },
+  "llvm_assemble_O3_verify": true,
+  "cpu_delayed_DMA_numerics": [
+    {
+      "head": 0,
+      "query": 0,
+      "bitwise_equal_to_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 0.0010586032113448773,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        12,
+        16,
+        256
+      ]
+    },
+    {
+      "head": 1,
+      "query": 7,
+      "bitwise_equal_to_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 0.00022155012408740793,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        96,
+        128,
+        2048
+      ]
+    },
+    {
+      "head": 1,
+      "query": 31,
+      "bitwise_equal_to_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 9.585399210360057e-05,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        384,
+        512,
+        8192
+      ]
+    }
+  ]
+}

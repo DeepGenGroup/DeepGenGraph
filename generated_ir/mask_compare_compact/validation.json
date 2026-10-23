@@ -1,0 +1,64 @@
+{
+  "baseline": {
+    "sha256": "ffd552980df2a4b836f14e7e0ebb3134af8ec81756eb6028d1a4ef7f6219a959",
+    "integer_comparisons": {
+      "scalar_i32": 6,
+      "scalar_i64": 68
+    },
+    "mmac_calls": 160,
+    "mmac_sideeffect_calls": 160,
+    "local_comparison_boundaries": 0,
+    "path": "generated_ir/attn_best_async_current.ll"
+  },
+  "candidate": {
+    "sha256": "9a073ba9a4a6dfc04c990f2734febf7d1c6790e923fc19e40455401eed9792c8",
+    "integer_comparisons": {
+      "scalar_i32": 74,
+      "scalar_i64": 4
+    },
+    "mmac_calls": 160,
+    "mmac_sideeffect_calls": 0,
+    "local_comparison_boundaries": 62,
+    "path": "generated_ir/mask_compare_compact/attention.ll"
+  },
+  "candidate_after_o3": {
+    "sha256": "0f697d219c6fcfbf7218d2f8dc9aa08c486a1a0e8a7d62d84b4812f4ead6209a",
+    "integer_comparisons": {
+      "vector_i32": 64,
+      "scalar_i32": 11,
+      "scalar_i64": 4
+    },
+    "mmac_calls": 160,
+    "mmac_sideeffect_calls": 0,
+    "local_comparison_boundaries": 62
+  },
+  "validation": {
+    "llvm_verify": true,
+    "llvm_o3": true,
+    "gfx936_codegen_or_execution": false,
+    "note": "LLVM verification/O3, MMAC effects/fusion regression and four mathematical model cases passed. GPU timing and hazards are not simulated; gfx936 hardware validation remains outstanding.",
+    "mmac_effects_regression": true,
+    "mmac_accumulator_fusion_regression": true,
+    "mmac_effects_llvm15_roundtrip": true,
+    "all_asm_templates_constraints_and_nop_padding_preserved": true,
+    "mmac_model_cases_bitwise_identical_to_previous_candidate": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        7
+      ],
+      [
+        1,
+        31
+      ]
+    ],
+    "mmac_model_cases_match_dense_reference": true
+  }
+}

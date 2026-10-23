@@ -1,0 +1,34 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/group8_reverse_k_gep/group8_reverse_k128_gep.ll",
+  "source_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "baseline_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "optimized_sha256": "dd503af588f046675279dacaf7dfda8e14f2de6415a4921a92a0837ba5215479",
+  "pass_name": "CanonicalizeLDSGEPsPass",
+  "export_tool_sha256": "2e4eab376f7f70b91a99de07c5314e1ee681fe56be3a25b01b5b3d598c985667",
+  "pass_source_sha256": "a2f9ac3df493ab5f771d9ef6a05caa3885b29794a825e6ef17843580409aa9a9",
+  "diagnostics": "CanonicalizeLDSGEPs: Attn_p2: 68 proven constant offsets",
+  "baseline": {
+    "lds_loads": 144,
+    "lds_load_alignments": {
+      "2": 16,
+      "8": 128
+    },
+    "dma128_sites": 24,
+    "block_barriers": 16,
+    "vm_wait_sites": 12,
+    "mmac_sites": 256
+  },
+  "optimized": {
+    "lds_loads": 144,
+    "lds_load_alignments": {
+      "8": 144
+    },
+    "dma128_sites": 24,
+    "block_barriers": 16,
+    "vm_wait_sites": 12,
+    "mmac_sites": 256
+  },
+  "llvm_assemble_and_O3_verify": true,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false
+}

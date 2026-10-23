@@ -1,0 +1,4 @@
+PASS {"seed": 42, "head": 0, "query": 0, "bitwise_equal": true, "identical_memory_trace": true, "no_pending_dma": true, "aligned_lane_loads_checked": 36864, "barriers": 16, "vm_waits": 12, "max_abs_error": 0.0010586032113448773}
+PASS {"seed": 42, "head": 1, "query": 7, "bitwise_equal": true, "identical_memory_trace": true, "no_pending_dma": true, "aligned_lane_loads_checked": 294912, "barriers": 128, "vm_waits": 96, "max_abs_error": 0.00022155012408740793}
+PASS {"seed": 7, "head": 1, "query": 8, "bitwise_equal": true, "identical_memory_trace": true, "no_pending_dma": true, "aligned_lane_loads_checked": 331776, "barriers": 144, "vm_waits": 108, "max_abs_error": 0.0001878444103157184}
+PASS {"seed": 7, "head": 1, "query": 31, "bitwise_equal": true, "identical_memory_trace": true, "no_pending_dma": true, "aligned_lane_loads_checked": 1179648, "barriers": 512, "vm_waits": 384, "max_abs_error": 8.609342196802539e-05}

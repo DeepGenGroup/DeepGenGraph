@@ -1,0 +1,392 @@
+{
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Sampled CPU execution; does not model independent wave timing or target codegen.",
+  "variants": {
+    "bm128_bn128": {
+      "sha256": "6b6d07a0d86e31a42a01b5926bee833d1f60ef9e3aa320da3fa8059b021b3c60",
+      "llvm_verify": true,
+      "llvm_O3_verify": true,
+      "cpu_delayed_dma": [
+        {
+          "head": 0,
+          "query": 0,
+          "physical_xy": [
+            7,
+            24
+          ],
+          "max_abs_error": 0.0010586032113448773,
+          "mmac": 256,
+          "waits": 12,
+          "barriers": 16,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 1,
+          "physical_xy": [
+            14,
+            24
+          ],
+          "max_abs_error": 0.0006825797712374237,
+          "mmac": 512,
+          "waits": 24,
+          "barriers": 32,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 7,
+          "physical_xy": [
+            8,
+            24
+          ],
+          "max_abs_error": 0.00022155012408740793,
+          "mmac": 2048,
+          "waits": 96,
+          "barriers": 128,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 8,
+          "physical_xy": [
+            15,
+            16
+          ],
+          "max_abs_error": 0.00016660457902800685,
+          "mmac": 2304,
+          "waits": 108,
+          "barriers": 144,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 31,
+          "physical_xy": [
+            8,
+            0
+          ],
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac": 8192,
+          "waits": 384,
+          "barriers": 512,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        }
+      ]
+    },
+    "bm128_bn64": {
+      "sha256": "55aa265746db22717413794a8a7e568fddbecdf18b3fa3dfe025a50e8dac1a0a",
+      "llvm_verify": true,
+      "llvm_O3_verify": true,
+      "cpu_delayed_dma": [
+        {
+          "head": 0,
+          "query": 0,
+          "physical_xy": [
+            7,
+            24
+          ],
+          "max_abs_error": 0.0010586032113448773,
+          "mmac": 256,
+          "waits": 24,
+          "barriers": 32,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 1,
+          "physical_xy": [
+            14,
+            24
+          ],
+          "max_abs_error": 0.0006825797712374237,
+          "mmac": 512,
+          "waits": 48,
+          "barriers": 64,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 7,
+          "physical_xy": [
+            8,
+            24
+          ],
+          "max_abs_error": 0.00022155012408740793,
+          "mmac": 2048,
+          "waits": 192,
+          "barriers": 256,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 8,
+          "physical_xy": [
+            15,
+            16
+          ],
+          "max_abs_error": 0.00016660457902800685,
+          "mmac": 2304,
+          "waits": 216,
+          "barriers": 288,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 31,
+          "physical_xy": [
+            8,
+            0
+          ],
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac": 8192,
+          "waits": 768,
+          "barriers": 1024,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        }
+      ]
+    },
+    "bm64_bn128": {
+      "sha256": "ed37e1a546c57e4d9590ffce5d847e6ba288cd98e0190853ac3d02549df9f838",
+      "llvm_verify": true,
+      "llvm_O3_verify": true,
+      "cpu_delayed_dma": [
+        {
+          "head": 0,
+          "query": 0,
+          "physical_xy": [
+            7,
+            28
+          ],
+          "max_abs_error": 0.0010586032113448773,
+          "mmac": 128,
+          "waits": 12,
+          "barriers": 15,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 1,
+          "physical_xy": [
+            14,
+            28
+          ],
+          "max_abs_error": 0.0005527507452266489,
+          "mmac": 128,
+          "waits": 12,
+          "barriers": 15,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 7,
+          "physical_xy": [
+            8,
+            28
+          ],
+          "max_abs_error": 0.0003135430189586952,
+          "mmac": 512,
+          "waits": 48,
+          "barriers": 60,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 8,
+          "physical_xy": [
+            15,
+            24
+          ],
+          "max_abs_error": 0.00028498608793020574,
+          "mmac": 640,
+          "waits": 60,
+          "barriers": 75,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 63,
+          "physical_xy": [
+            8,
+            0
+          ],
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac": 4096,
+          "waits": 384,
+          "barriers": 480,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        }
+      ]
+    },
+    "bm64_bn64": {
+      "sha256": "bd22ce89932d9ac26aa1153fbd7bacb2797ce89a9e8400021d401875d1dbdb43",
+      "llvm_verify": true,
+      "llvm_O3_verify": true,
+      "cpu_delayed_dma": [
+        {
+          "head": 0,
+          "query": 0,
+          "physical_xy": [
+            7,
+            28
+          ],
+          "max_abs_error": 0.0010586032113448773,
+          "mmac": 64,
+          "waits": 12,
+          "barriers": 16,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 1,
+          "physical_xy": [
+            14,
+            28
+          ],
+          "max_abs_error": 0.0005527507452266489,
+          "mmac": 128,
+          "waits": 24,
+          "barriers": 32,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 7,
+          "physical_xy": [
+            8,
+            28
+          ],
+          "max_abs_error": 0.0003135430189586952,
+          "mmac": 512,
+          "waits": 96,
+          "barriers": 128,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 8,
+          "physical_xy": [
+            15,
+            24
+          ],
+          "max_abs_error": 0.00028498608793020574,
+          "mmac": 576,
+          "waits": 108,
+          "barriers": 144,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 63,
+          "physical_xy": [
+            8,
+            0
+          ],
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac": 4096,
+          "waits": 768,
+          "barriers": 1024,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        }
+      ]
+    },
+    "measured_control": {
+      "sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+      "llvm_verify": true,
+      "llvm_O3_verify": true,
+      "cpu_delayed_dma": [
+        {
+          "head": 0,
+          "query": 0,
+          "physical_xy": [
+            7,
+            24
+          ],
+          "max_abs_error": 0.0010586032113448773,
+          "mmac": 256,
+          "waits": 12,
+          "barriers": 16,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 1,
+          "physical_xy": [
+            14,
+            24
+          ],
+          "max_abs_error": 0.0006825797712374237,
+          "mmac": 512,
+          "waits": 24,
+          "barriers": 32,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 7,
+          "physical_xy": [
+            8,
+            24
+          ],
+          "max_abs_error": 0.00022155012408740793,
+          "mmac": 2048,
+          "waits": 96,
+          "barriers": 128,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 8,
+          "physical_xy": [
+            15,
+            16
+          ],
+          "max_abs_error": 0.00016660457902800685,
+          "mmac": 2304,
+          "waits": 108,
+          "barriers": 144,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        },
+        {
+          "head": 1,
+          "query": 31,
+          "physical_xy": [
+            8,
+            0
+          ],
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac": 8192,
+          "waits": 384,
+          "barriers": 512,
+          "matches_reference": true,
+          "writes_only_selected_tile": true
+        }
+      ]
+    }
+  }
+}

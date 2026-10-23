@@ -1,0 +1,1502 @@
+{
+  "variants": {
+    "baseline": {
+      "sha256": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 0
+    },
+    "k0_late_control": {
+      "sha256": "994199812ea4861dd8c58b68027ca89d9beecfc899068a4ecdae6c3e04cf4e31",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 0
+    },
+    "k0_prefetch_pv_tail": {
+      "sha256": "9074e3279242d62287bd0fe6e0bb14600d4bdede70e5b7de02845a367a3eb2e0",
+      "static_lds_bytes": 16384,
+      "retained_words": 32,
+      "overlap_pv_mmac_per_nonfinal_bn": 32
+    }
+  },
+  "cases": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "variants": {
+        "baseline": {
+          "waits": 12,
+          "barriers": 17,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_late_control": {
+          "waits": 12,
+          "barriers": 17,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_prefetch_pv_tail": {
+          "waits": 12,
+          "barriers": 17,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "variants": {
+        "baseline": {
+          "waits": 20,
+          "barriers": 29,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_late_control": {
+          "waits": 20,
+          "barriers": 29,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_prefetch_pv_tail": {
+          "waits": 20,
+          "barriers": 29,
+          "k0_overlap_mmac": 32,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "variants": {
+        "baseline": {
+          "waits": 68,
+          "barriers": 101,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_late_control": {
+          "waits": 68,
+          "barriers": 101,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_prefetch_pv_tail": {
+          "waits": 68,
+          "barriers": 101,
+          "k0_overlap_mmac": 224,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "variants": {
+        "baseline": {
+          "waits": 76,
+          "barriers": 113,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_late_control": {
+          "waits": 76,
+          "barriers": 113,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_prefetch_pv_tail": {
+          "waits": 76,
+          "barriers": 113,
+          "k0_overlap_mmac": 256,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2016
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2016
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "variants": {
+        "baseline": {
+          "waits": 260,
+          "barriers": 389,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2304
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2304
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2560
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2560
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2816
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2816
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3072
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3072
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3328
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3328
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3584
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3584
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3840
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3840
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4096
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4096
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4352
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4352
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4608
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4608
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4864
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4864
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5120
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5120
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5376
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5376
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5632
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5632
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5888
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5888
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6144
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6144
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6400
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6400
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6656
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6656
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6912
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6912
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7168
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7168
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7424
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7424
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7680
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7680
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7936
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7936
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_late_control": {
+          "waits": 260,
+          "barriers": 389,
+          "k0_overlap_mmac": 0,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 1,
+              "mmac_before": 256
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 2,
+              "mmac_before": 512
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 3,
+              "mmac_before": 768
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 4,
+              "mmac_before": 1024
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1280
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1536
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1792
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2048
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2304
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2304
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2560
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2560
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2816
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2816
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3072
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3072
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3328
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3328
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3584
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3584
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3840
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3840
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4096
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4096
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4352
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4352
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4608
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4608
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4864
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4864
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5120
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5120
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5376
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5376
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5632
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5632
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5888
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5888
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6144
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6144
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6400
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6400
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6656
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6656
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6912
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6912
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7168
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7168
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7424
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7424
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7680
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7680
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7936
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7936
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        },
+        "k0_prefetch_pv_tail": {
+          "waits": 260,
+          "barriers": 389,
+          "k0_overlap_mmac": 992,
+          "k0_issues": [
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 0,
+              "mmac_before": 0
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 1,
+              "mmac_before": 224
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 2,
+              "mmac_before": 480
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 3,
+              "mmac_before": 736
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 4,
+              "mmac_before": 992
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 5,
+              "mmac_before": 1248
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 6,
+              "mmac_before": 1504
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            },
+            {
+              "tile": 7,
+              "mmac_before": 1760
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2016
+            },
+            {
+              "tile": 8,
+              "mmac_before": 2016
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2272
+            },
+            {
+              "tile": 9,
+              "mmac_before": 2272
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2528
+            },
+            {
+              "tile": 10,
+              "mmac_before": 2528
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2784
+            },
+            {
+              "tile": 11,
+              "mmac_before": 2784
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3040
+            },
+            {
+              "tile": 12,
+              "mmac_before": 3040
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3296
+            },
+            {
+              "tile": 13,
+              "mmac_before": 3296
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3552
+            },
+            {
+              "tile": 14,
+              "mmac_before": 3552
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3808
+            },
+            {
+              "tile": 15,
+              "mmac_before": 3808
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4064
+            },
+            {
+              "tile": 16,
+              "mmac_before": 4064
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4320
+            },
+            {
+              "tile": 17,
+              "mmac_before": 4320
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4576
+            },
+            {
+              "tile": 18,
+              "mmac_before": 4576
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4832
+            },
+            {
+              "tile": 19,
+              "mmac_before": 4832
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5088
+            },
+            {
+              "tile": 20,
+              "mmac_before": 5088
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5344
+            },
+            {
+              "tile": 21,
+              "mmac_before": 5344
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5600
+            },
+            {
+              "tile": 22,
+              "mmac_before": 5600
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5856
+            },
+            {
+              "tile": 23,
+              "mmac_before": 5856
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6112
+            },
+            {
+              "tile": 24,
+              "mmac_before": 6112
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6368
+            },
+            {
+              "tile": 25,
+              "mmac_before": 6368
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6624
+            },
+            {
+              "tile": 26,
+              "mmac_before": 6624
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6880
+            },
+            {
+              "tile": 27,
+              "mmac_before": 6880
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7136
+            },
+            {
+              "tile": 28,
+              "mmac_before": 7136
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7392
+            },
+            {
+              "tile": 29,
+              "mmac_before": 7392
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7648
+            },
+            {
+              "tile": 30,
+              "mmac_before": 7648
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7904
+            },
+            {
+              "tile": 31,
+              "mmac_before": 7904
+            }
+          ],
+          "bitwise_equal": true,
+          "ordered_global_and_LDS_traces_identical": true,
+          "no_outstanding_DMA": true,
+          "cross_wave_barrier_epoch_audit_passed": true
+        }
+      },
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "O3_schedule": {
+    "k0_late_control": {
+      "O3_preserves_issue_side_of_final_PV": true
+    },
+    "k0_prefetch_pv_tail": {
+      "O3_preserves_issue_side_of_final_PV": true
+    }
+  },
+  "negative_controls": [
+    {
+      "case": "missing_reader_handoff",
+      "rejected": "cross-wave WAR without reader-completion barrier: epoch=16 mma=224 lds_reads=144 wave=0 bytes=[0 1 2 3 4 5 6 7]"
+    },
+    {
+      "case": "missing_K0_wait",
+      "rejected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "case": "missing_last_iteration_guard",
+      "rejected": "extra K0 DMA at kernel exit"
+    }
+  ],
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "CPU execution of actual input IR with delayed DMA and per-byte cross-wave LDS audit; not cycle-accurate. O3 checked structurally. Hardware scheduling/register allocation/performance require DTK GPU testing."
+}

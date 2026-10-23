@@ -1,0 +1,7 @@
+PASS CPU shared writes/reads, both axes, unequal shapes, vector coalescing, idempotence and invalid swizzle
+PASS CPU swizzle through selected/loop-carried aliases; conflicting contracts rejected
+PASS invalid subpacket swizzle, missing role binding, and unmatched producer rejected
+PASS CPU all workgroups: tail, oversized group, uneven axes, reverse, identity, idempotence
+PASS LLVM constant-difference proof, volatile/unrelated exclusions and verifier
+PASS exact nonlinear address proof and alignment; wider thread domain with counterexamples left unchanged
+PASS hardware capabilities, phases, LDS maps, DMA planning and conflicts

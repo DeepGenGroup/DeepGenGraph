@@ -1,0 +1,2 @@
+PASS: collective matrix-read addresses rematerialize locally without duplicating or moving the read
+PASS: local matrix addresses survive downstream O3

@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "--case",
+    "baseline",
+    "--case",
+    "nohint-rolled",
+    "--case",
+    "nohint-unrolled-32k",
+    "--case",
+    "pipeline-baseline",
+    "--case",
+    "pipeline-wait-only",
+    "--case",
+    "pipeline-loop-only",
+    "--case",
+    "pipeline-combined",
+    "--case",
+    "pipeline-loop-only-40k",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as",
+    "--output-dir",
+    "generated_ir/tune_attention_update_validation"
+  ],
+  "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+  "loop_iv": "dk",
+  "input_sha256": "580f3bb5ab41cc2b31ad42f2e130cc4ff154e9e0e20523d8979cccfe545e77a7",
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1792485268071648145,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false
+}

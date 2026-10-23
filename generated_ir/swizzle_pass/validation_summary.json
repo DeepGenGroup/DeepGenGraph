@@ -1,0 +1,37 @@
+{
+  "layout_unit_tests": "passed, including 30 configurable XOR bit pairs",
+  "generic_pass_tests": "passed: both axes, packet coalescing, selected and loop-carried aliases, rejection paths, tail workgroups, full-domain GEP proof",
+  "existing_shared_packing_regression": "passed",
+  "existing_alias_regression": "passed (fixtures updated for LLVM 24 memref alignment syntax)",
+  "gpu_tested": false,
+  "gfx936_codegen_tested": false,
+  "recommended_variant": "group8_reverse_k128.ll",
+  "experimental_all_switches_variant": "group8_reverse_qkv128.ll",
+  "detail_files": [
+    "group8_reverse_k128.validation.json",
+    "group8_reverse_qkv128.validation.json",
+    "read_probe.json",
+    "regression.log"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "BHSD": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "dynamic_shared_bytes": 0,
+    "K_layout": "BHSD"
+  }
+}

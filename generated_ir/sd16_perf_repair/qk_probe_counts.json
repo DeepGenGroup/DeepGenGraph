@@ -1,0 +1,19 @@
+{
+  "off": {
+    "ds_opcodes": {
+      "ds_read2st64_b64": 4,
+      "ds_read2_b64": 6
+    },
+    "total": 10,
+    "scope": "gfx90a one QK iteration probe; NOT target GPU kernel measurement"
+  },
+  "on": {
+    "ds_opcodes": {
+      "ds_read2st64_b64": 3,
+      "ds_read2_b64": 3,
+      "ds_read_b64": 8
+    },
+    "total": 14,
+    "scope": "gfx90a one QK iteration probe; NOT target GPU kernel measurement"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "argv": [
+    "--input-dir",
+    "generated_ir/bm_bn_sweep/inputs",
+    "--case",
+    "group8-reverse-k128-swizzle",
+    "--set",
+    "threads=256",
+    "--set",
+    "waves=4,1",
+    "--output-dir",
+    "generated_ir/bm_bn_sweep/export",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as"
+  ],
+  "input": null,
+  "loop_iv": "auto",
+  "input_sha256": null,
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/inputs/test_input_1x32x4096x128-128-128-32.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0001-test_input_1x32x4096x128-128-128-32/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "27122de62ca7c1d8858b49b8f4ba3d51d01b88746566643ab5d6e0b6c19c3c1a"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/inputs/test_input_1x32x4096x128-128-64-32.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0002-test_input_1x32x4096x128-128-64-32/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "2def01dd63c019bdab78f200e992945236986693ef5a8f932bdd433170bd5832"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/inputs/test_input_1x32x4096x128-64-128-32.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0003-test_input_1x32x4096x128-64-128-32/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "976356cc86428afe24846db8f90f8e0031002cc5455579bc7695586cb807abb3"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/inputs/test_input_1x32x4096x128-64-64-32.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/bm_bn_sweep/export/run-20261022-180820-lrul_y0l/input-0004-test_input_1x32x4096x128-64-64-32/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "860d94b6f0ba6de9bbb9c3f612309f2b79abbf3cd79464c564c37f21490b4273"
+    }
+  ],
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1792636890270384319,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

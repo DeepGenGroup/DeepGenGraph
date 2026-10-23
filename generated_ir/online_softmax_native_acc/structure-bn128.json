@@ -1,0 +1,16 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/kernel.ll",
+  "sha256": "2ebae1fa1f4366d3c4072d0aec4bd2fe2bcec623cc667bf154a409de0d358b1e",
+  "bn": 128,
+  "shuffle_sites": {
+    "outside_loop": 64,
+    "inside_loop": 8
+  },
+  "zero_seed_mmac": 16,
+  "vector4_fadds": 16,
+  "mmac_instructions": 256,
+  "gpu_tested": false,
+  "estimated_shared_ops": 5160960,
+  "previous_measured_shared_ops": 9224192,
+  "shared_ops_note": "Fixed causal 1x32x4096x128, BM=BN=128. Assumes unchanged QKV LDS codegen; requires GPU PMC validation."
+}

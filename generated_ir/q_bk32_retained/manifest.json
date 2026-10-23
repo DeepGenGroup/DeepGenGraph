@@ -1,0 +1,59 @@
+{
+  "source": "generated_ir/group8_reverse_k_gep/group8_reverse_k128_gep.ll",
+  "baseline_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "candidate_sha256": "e1d184dad63ca51f89e793fdc4acad3539994af1b5dabd1afabc6ce5ad03ded2",
+  "source_program_median_ms": 1.7790470123291016,
+  "retained_q_columns": [
+    0,
+    32
+  ],
+  "retained_fragment_type": "4 x <4 x half> per thread",
+  "packed_state_bytes_per_thread": 32,
+  "packed_32bit_words_per_thread": 8,
+  "static_lds_bytes": 16384,
+  "launch": {
+    "schema_version": 1,
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "dma_sites": {
+    "baseline_loop": 24,
+    "candidate_prologue": 2,
+    "candidate_loop": 22
+  },
+  "q_dma_calls_per_block": {
+    "baseline": "8*N",
+    "candidate": "2+6*N"
+  },
+  "kv_dma_calls_per_block": "16*N in both",
+  "barriers_per_block": {
+    "baseline": "16*N",
+    "candidate": "1+16*N"
+  },
+  "waits_per_block": {
+    "baseline": "12*N",
+    "candidate": "1+12*N"
+  },
+  "N": "query_tile+1",
+  "llvm_assemble_and_O3_verify": true,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Fixed-shape fingerprinted experiment; final VGPR/scratch and GPU speed require target compilation and timing."
+}

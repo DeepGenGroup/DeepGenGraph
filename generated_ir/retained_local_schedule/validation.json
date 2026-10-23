@@ -1,0 +1,222 @@
+{
+  "sha256": {
+    "baseline": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+    "wait_tail2": "cc6f55c166c24da371ca9f5e18e3bfaa19f26afc18f5a22e3e94b94ba9360364",
+    "fragment_pair": "7cdc8e092e077a65e178739d566553b81b7caed497e3c0f8f3c473f2c7e516de",
+    "combined": "1f208c780bfd6b6cb0d394dcb3407157b10958ccad5e163765426bd6e1bd21c9"
+  },
+  "cases": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "variants": {
+        "baseline": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 8,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "wait_tail2": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 8,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 62,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "combined": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 62,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "variants": {
+        "baseline": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 16,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "wait_tail2": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 16,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 124,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "combined": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 124,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "variants": {
+        "baseline": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 64,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "wait_tail2": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 64,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 496,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "combined": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 496,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "variants": {
+        "baseline": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 72,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "wait_tail2": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 72,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 558,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "combined": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 558,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "variants": {
+        "baseline": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 256,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "wait_tail2": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 256,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 1984,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "combined": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 1984,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "hazard_negative_controls": [
+    {
+      "case": "missing_dma_wait",
+      "rejected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "case": "missing_handoff_barrier",
+      "rejected": "cross-wave WAR without reader-completion barrier: epoch=1 mma=0 lds_reads=4 wave=0 bytes=[256 257 258 259 260 261 262 263]"
+    }
+  ],
+  "gpu_tested": false,
+  "limitations": "LDS byte/reader-wave checks establish barrier-epoch ordering for modeled paths; this is not a cycle-accurate GPU simulator or target register-allocation check."
+}

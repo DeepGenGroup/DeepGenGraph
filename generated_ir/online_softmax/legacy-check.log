@@ -1,0 +1,5 @@
+候选数：1；过滤不合法的参数组合：0
+输出目录：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/legacy-check/run-20261023-171757-1bj1qx_j
+[1/1] retained32-baseline
+  verified
+完成：1 成功，0 失败；汇总：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/legacy-check/run-20261023-171757-1bj1qx_j/manifest.json

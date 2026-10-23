@@ -1,0 +1,13 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/kernel_bn64.ll",
+  "sha256": "46c82d6210a5aac5f07c85a3c7f38344daeb6bc69fd1b4a675df8c48ec29ad07",
+  "bn": 64,
+  "shuffle_sites": {
+    "outside_loop": 64,
+    "inside_loop": 8
+  },
+  "zero_seed_mmac": 8,
+  "vector4_fadds": 8,
+  "mmac_instructions": 128,
+  "gpu_tested": false
+}

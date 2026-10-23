@@ -1,0 +1,4 @@
+PASS all 3 ABIs, flattening, scalar extraction, A/B/C ordering and O3 chains
+PASS default/explicit no-padding inline asm and conservative fallback
+PASS malformed fragments, attributes and conflicting declarations
+PASS intrinsic accumulator fusion and nonzero/modifier/multi-use exclusions

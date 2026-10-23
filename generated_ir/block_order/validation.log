@@ -1,0 +1,9 @@
+PASS baseline mapping/unchanged body/LLVM/O3 numerics
+PASS head_fast mapping/unchanged body/LLVM/O3 numerics
+PASS group2 mapping/unchanged body/LLVM/O3 numerics
+PASS group4 mapping/unchanged body/LLVM/O3 numerics
+PASS group8 mapping/unchanged body/LLVM/O3 numerics
+PASS group16 mapping/unchanged body/LLVM/O3 numerics
+PASS query_fast mapping/unchanged body/LLVM/O3 numerics
+PASS group8_reverse mapping/unchanged body/LLVM/O3 numerics
+PASS query_fast_reverse mapping/unchanged body/LLVM/O3 numerics

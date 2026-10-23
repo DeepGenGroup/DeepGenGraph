@@ -1,0 +1,11 @@
+{
+  "status": "verified",
+  "seconds": 4.16076196503127,
+  "sha256": "56ac0de01e13bca0d63453a4b897e34dafbf909e09b4208758e56c02eec1c5d2",
+  "input_sha256": "580f3bb5ab41cc2b31ad42f2e130cc4ff154e9e0e20523d8979cccfe545e77a7",
+  "native_lds_bytes": 40960,
+  "static_lds_bytes": 40960,
+  "scheduled_loops": 1,
+  "simplified_loops": 0,
+  "hardware_tested": false
+}

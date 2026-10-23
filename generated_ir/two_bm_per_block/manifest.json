@@ -1,0 +1,37 @@
+{
+  "source": "generated_ir/group8_reverse_k_gep/group8_reverse_k128_gep.ll",
+  "source_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "source_measured_ms": 1.7790470123291016,
+  "timing_evidence": "pmc_test.log (UTF-16), group8_reverse_k128_gep.ll",
+  "ir": "group8_reverse_k128_gep_two_bm.ll",
+  "sha256": "6605b592313fa14a5f26a34d9994fa6328a81cc966ca7ad46a5d33dfd01fa862",
+  "bm": 128,
+  "bn": 128,
+  "bk": 32,
+  "tiles_per_block": 2,
+  "static_lds_bytes": 16384,
+  "mapping": "p=by*16+bx; l=2*p; h=(l>>3)&31; q0=31-((l>>8)*8+(l&7)); q1=q0-1",
+  "launch": {
+    "schema_version": 1,
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      16,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "gpu_tested": false
+}

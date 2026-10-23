@@ -1,0 +1,212 @@
+{
+  "ds_by_mlir_line": {
+    "68": {
+      "ds_read2st64_b64": 4
+    },
+    "69": {
+      "ds_read_b64": 16,
+      "ds_read2st64_b64": 8
+    },
+    "86": {
+      "ds_bpermute_b32": 4
+    },
+    "93": {
+      "ds_read_m32x16_b16": 32,
+      "ds_write_b128": 8,
+      "ds_read2_b64": 4,
+      "ds_read_b32": 4,
+      "ds_read_u16": 8,
+      "ds_read_b64": 4
+    },
+    "56": {
+      "ds_bpermute_b32": 64
+    }
+  },
+  "scratch_instructions": [
+    [
+      95,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:28 ; 4-byte Folded Spill"
+    ],
+    [
+      97,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:32 ; 4-byte Folded Spill"
+    ],
+    [
+      99,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:36 ; 4-byte Folded Spill"
+    ],
+    [
+      101,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:40 ; 4-byte Folded Spill"
+    ],
+    [
+      103,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:44 ; 4-byte Folded Spill"
+    ],
+    [
+      105,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:48 ; 4-byte Folded Spill"
+    ],
+    [
+      107,
+      66,
+      "buffer_store_dword v2, off, s[76:79], 0 offset:52 ; 4-byte Folded Spill"
+    ],
+    [
+      108,
+      66,
+      "buffer_store_dword v1, off, s[76:79], 0 offset:24 ; 4-byte Folded Spill"
+    ],
+    [
+      110,
+      66,
+      "buffer_store_dword v1, off, s[76:79], 0 offset:56 ; 4-byte Folded Spill"
+    ],
+    [
+      139,
+      66,
+      "buffer_store_dword v1, off, s[76:79], 0 offset:20 ; 4-byte Folded Spill"
+    ],
+    [
+      174,
+      66,
+      "buffer_load_dword v200, off, s[76:79], 0 offset:24 ; 4-byte Folded Reload"
+    ],
+    [
+      175,
+      66,
+      "buffer_load_dword v202, off, s[76:79], 0 offset:56 ; 4-byte Folded Reload"
+    ],
+    [
+      1643,
+      85,
+      "buffer_load_dword v6, off, s[76:79], 0 offset:20 ; 4-byte Folded Reload"
+    ],
+    [
+      1648,
+      86,
+      "buffer_store_dword v3, off, s[76:79], 0 offset:60 ; 4-byte Folded Spill"
+    ],
+    [
+      1651,
+      86,
+      "buffer_store_dword v4, off, s[76:79], 0 offset:64 ; 4-byte Folded Spill"
+    ],
+    [
+      1667,
+      86,
+      "buffer_store_dword v7, off, s[76:79], 0 offset:68 ; 4-byte Folded Spill"
+    ],
+    [
+      1679,
+      86,
+      "buffer_store_dword v194, off, s[76:79], 0 offset:4 ; 4-byte Folded Spill"
+    ],
+    [
+      1691,
+      93,
+      "buffer_store_dword v255, off, s[76:79], 0 offset:8 ; 4-byte Folded Spill"
+    ],
+    [
+      1694,
+      93,
+      "buffer_store_dword v199, off, s[76:79], 0 offset:12 ; 4-byte Folded Spill"
+    ],
+    [
+      1697,
+      93,
+      "buffer_store_dword v201, off, s[76:79], 0 offset:16 ; 4-byte Folded Spill"
+    ],
+    [
+      1707,
+      93,
+      "buffer_load_dword v193, off, s[76:79], 0 offset:28 ; 4-byte Folded Reload"
+    ],
+    [
+      1710,
+      93,
+      "buffer_load_dword v194, off, s[76:79], 0 offset:32 ; 4-byte Folded Reload"
+    ],
+    [
+      1713,
+      93,
+      "buffer_load_dword v97, off, s[76:79], 0 offset:36 ; 4-byte Folded Reload"
+    ],
+    [
+      1716,
+      93,
+      "buffer_load_dword v98, off, s[76:79], 0 offset:40 ; 4-byte Folded Reload"
+    ],
+    [
+      1719,
+      93,
+      "buffer_load_dword v99, off, s[76:79], 0 offset:44 ; 4-byte Folded Reload"
+    ],
+    [
+      1722,
+      93,
+      "buffer_load_dword v199, off, s[76:79], 0 offset:48 ; 4-byte Folded Reload"
+    ],
+    [
+      1725,
+      93,
+      "buffer_load_dword v201, off, s[76:79], 0 offset:52 ; 4-byte Folded Reload"
+    ],
+    [
+      2450,
+      93,
+      "buffer_load_dword v21, off, s[76:79], 0 offset:8 ; 4-byte Folded Reload"
+    ],
+    [
+      2453,
+      93,
+      "buffer_load_dword v25, off, s[76:79], 0 offset:12 ; 4-byte Folded Reload"
+    ],
+    [
+      2456,
+      93,
+      "buffer_load_dword v29, off, s[76:79], 0 offset:16 ; 4-byte Folded Reload"
+    ],
+    [
+      2974,
+      0,
+      "buffer_load_dword v194, off, s[76:79], 0 offset:4 ; 4-byte Folded Reload"
+    ],
+    [
+      2996,
+      0,
+      "buffer_load_dword v87, off, s[76:79], 0 offset:4 ; 4-byte Folded Reload"
+    ],
+    [
+      2997,
+      0,
+      "buffer_load_dword v2, off, s[76:79], 0 offset:60 ; 4-byte Folded Reload"
+    ],
+    [
+      2998,
+      0,
+      "buffer_load_dword v3, off, s[76:79], 0 offset:64 ; 4-byte Folded Reload"
+    ],
+    [
+      2999,
+      0,
+      "buffer_load_dword v8, off, s[76:79], 0 offset:68 ; 4-byte Folded Reload"
+    ],
+    [
+      3013,
+      56,
+      "buffer_store_dword v1, off, s[76:79], 0 offset:20 ; 4-byte Folded Spill"
+    ],
+    [
+      3076,
+      56,
+      "buffer_load_dword v7, off, s[76:79], 0 offset:20 ; 4-byte Folded Reload"
+    ]
+  ]
+}

@@ -1,0 +1,10 @@
+1
+shm.ll:316:32: error: expected value token
+  %182 = fmul <4 x half> %179, splat (half 0xH3015), !dbg !13
+                               ^
+
+Isolated unchanged baseline declaration:
+declare noundef range(i32 0, 1024) i32 @llvm.amdgcn.workitem.id.x()
+shm.ll:1:17: error: expected type
+declare noundef range(i32 0, 1024) i32 @llvm.amdgcn.workitem.id.x()
+                ^

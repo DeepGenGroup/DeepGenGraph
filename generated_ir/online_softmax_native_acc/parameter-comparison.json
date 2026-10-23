@@ -1,0 +1,14 @@
+{
+  "best_to_current": {
+    "workgroup-query-axis": [
+      "y",
+      "x"
+    ],
+    "workgroup-head-axis": [
+      "x",
+      "y"
+    ]
+  },
+  "note": "Input parallel_map order changed: query/head axes auto-detected accordingly. All other parameters identical.",
+  "workgroup_mapping_ir_identical": true
+}

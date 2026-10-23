@@ -1,0 +1,9 @@
+PASS complete A/B lookahead, exact instruction/operand preservation and idempotence
+PASS writes, waits, barriers, opaque readonly calls, volatile/atomic/global accesses and control flow
+PASS shared A/B values, unique packet accounting and delayed FP preparation
+PASS local peak budget includes live-out addresses and independent temporaries
+PASS matrix packets, full-group fallback, accumulator-dependent and indirect addresses
+PASS HCU intrinsic, bare/padded MMAC, opaque assembly and target/optnone guards
+PASS LLVM verifier and option validation
+PASS gfx90a machine scheduler: merged/split LDS reads produce lgkmcnt(1)/(2), no spills
+PASS 100 randomized CPU differential executions (MMAC replaced by identical FP model)

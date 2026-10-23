@@ -1,0 +1,17 @@
+PASS scf.for publication_only
+PASS scf.for matrix_read
+PASS scf.for existing_tail
+PASS scf.for existing_prefix
+PASS scf.for read_only
+PASS scf.for write_only
+PASS scf.for nested
+PASS scf.for alias
+PASS affine.for publication_only
+PASS affine.for matrix_read
+PASS affine.for existing_tail
+PASS affine.for existing_prefix
+PASS affine.for read_only
+PASS affine.for write_only
+PASS affine.for nested
+PASS affine.for alias
+PASS divergent scopes and single-allocation lowering integration

@@ -1,0 +1,185 @@
+{
+  "inputs_sha256": {
+    "k_test.gcn.log": "2df701ad7e926e70b582a73bdc656cd9b4902cc9d99fdfa0d1a5132d67bb3fa1",
+    "pmc_test.log": "fd9c1cc6ae0d7c5042d5e4e6cad12eca68eaae9143fd6b6600f041261d05edf3",
+    "generated_ir/block_order/group8_reverse.ll": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2"
+  },
+  "gpu_tested": false,
+  "model": "32 banks x 4 bytes; ordinary b64 operands: 16 contiguous lanes per phase, distinct words per bank",
+  "limitations": "gfx936 instruction phases and hipprof raw metric formula are not independently verified. V uses a b128 packet proxy only. Percent*time is a normalization diagnostic, not a speedup bound. Proposed permutations have no generated target code or GPU timing.",
+  "ordinary_load_address_stats": {
+    "Q": {
+      "original": {
+        "2": 16
+      },
+      "K_16B_packet_xor_bit8_into_bit6": {
+        "2": 16
+      },
+      "Q_8B_packet_xor_bit7_into_bit3": {
+        "1": 16
+      },
+      "K_8B_packet_xor_bits8_9_into_bits3_6": {
+        "2": 16
+      }
+    },
+    "K": {
+      "original": {
+        "4": 128
+      },
+      "K_16B_packet_xor_bit8_into_bit6": {
+        "2": 128
+      },
+      "Q_8B_packet_xor_bit7_into_bit3": {
+        "4": 128
+      },
+      "K_8B_packet_xor_bits8_9_into_bits3_6": {
+        "1": 128
+      }
+    }
+  },
+  "examples": {
+    "Q": {
+      "pointer": "%address.local172",
+      "lane_0_to_15_bytes": [
+        0,
+        16,
+        32,
+        48,
+        64,
+        80,
+        96,
+        112,
+        128,
+        144,
+        160,
+        176,
+        192,
+        208,
+        224,
+        240
+      ],
+      "lane_0_to_15_first_bank": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28,
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28
+      ]
+    },
+    "K": {
+      "pointer": "%address.local191",
+      "lane_0_to_15_bytes": [
+        8192,
+        8448,
+        8704,
+        8960,
+        8208,
+        8464,
+        8720,
+        8976,
+        8224,
+        8480,
+        8736,
+        8992,
+        8240,
+        8496,
+        8752,
+        9008
+      ],
+      "lane_0_to_15_first_bank": [
+        0,
+        0,
+        0,
+        0,
+        4,
+        4,
+        4,
+        4,
+        8,
+        8,
+        8,
+        8,
+        12,
+        12,
+        12,
+        12
+      ]
+    }
+  },
+  "V_matrix_b128_packet_proxy_only": {
+    "1": 32
+  },
+  "K_16B_DMA_permutation_byte_provenance_verified": true,
+  "static_ds_per_loop": {
+    "shuffle": 4,
+    "V": 32,
+    "Q": 8,
+    "K": 32
+  },
+  "static_epilogue_ds": 64,
+  "wave_iterations": 67584,
+  "dynamic_ds": {
+    "shuffle": 270336,
+    "V": 2162688,
+    "Q": 540672,
+    "K": 2162688,
+    "epilogue_shuffle": 262144
+  },
+  "dynamic_ds_total": 5398528,
+  "measured_shared_memory_operations": 5398528,
+  "normalization_check": [
+    {
+      "variant": "query_fast_reverse",
+      "profiler_seconds": 0.001866,
+      "conflict_percent": 24.9400196434,
+      "product_ms_not_recoverable_runtime": 0.465380766545844
+    },
+    {
+      "variant": "group8_reverse",
+      "profiler_seconds": 0.001831,
+      "conflict_percent": 25.3730600829,
+      "product_ms_not_recoverable_runtime": 0.46458073011789897
+    },
+    {
+      "variant": "head_fast",
+      "profiler_seconds": 0.00213,
+      "conflict_percent": 21.8311117295,
+      "product_ms_not_recoverable_runtime": 0.46500267983835003
+    },
+    {
+      "variant": "group16",
+      "profiler_seconds": 0.001955,
+      "conflict_percent": 23.8149540082,
+      "product_ms_not_recoverable_runtime": 0.4655823508603101
+    },
+    {
+      "variant": "group8",
+      "profiler_seconds": 0.002061,
+      "conflict_percent": 22.5866891953,
+      "product_ms_not_recoverable_runtime": 0.46551166431513297
+    },
+    {
+      "variant": "group4",
+      "profiler_seconds": 0.002028,
+      "conflict_percent": 22.9503152236,
+      "product_ms_not_recoverable_runtime": 0.46543239273460796
+    },
+    {
+      "variant": "group2",
+      "profiler_seconds": 0.002045,
+      "conflict_percent": 22.7361009082,
+      "product_ms_not_recoverable_runtime": 0.46495326357269
+    }
+  ]
+}

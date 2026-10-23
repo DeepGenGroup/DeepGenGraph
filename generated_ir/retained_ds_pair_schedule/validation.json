@@ -1,0 +1,213 @@
+{
+  "sha256": {
+    "baseline": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+    "fragment_pair": "7cdc8e092e077a65e178739d566553b81b7caed497e3c0f8f3c473f2c7e516de",
+    "ds_pair_prefetch": "eee5012228d4b7c96a0a701e3db37085c1070991825ed22bf86780394fe3fc35",
+    "ds_pair_prefetch_soft": "c578d37b43e964619e0aca4efd7aa92c3c4e71b9146e5e24b15f3751358df3f8"
+  },
+  "cases": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "variants": {
+        "baseline": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 8,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 62,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 64,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch_soft": {
+          "waits": 12,
+          "barriers": 18,
+          "hints": 8,
+          "lds_epoch_accesses": 200,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "variants": {
+        "baseline": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 16,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 124,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 128,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch_soft": {
+          "waits": 23,
+          "barriers": 34,
+          "hints": 16,
+          "lds_epoch_accesses": 394,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "variants": {
+        "baseline": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 64,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 496,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 512,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch_soft": {
+          "waits": 89,
+          "barriers": 130,
+          "hints": 64,
+          "lds_epoch_accesses": 1558,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "variants": {
+        "baseline": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 72,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 558,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 576,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch_soft": {
+          "waits": 100,
+          "barriers": 146,
+          "hints": 72,
+          "lds_epoch_accesses": 1752,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "variants": {
+        "baseline": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 256,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "fragment_pair": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 1984,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 2048,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        },
+        "ds_pair_prefetch_soft": {
+          "waits": 353,
+          "barriers": 514,
+          "hints": 256,
+          "lds_epoch_accesses": 6214,
+          "bitwise_equal": true,
+          "global_and_lds_access_traces_identical": true
+        }
+      },
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "negative_control": "read or overwrite of a destination whose DMA has not completed",
+  "gpu_tested": false,
+  "limitations": "CPU LLVM execution and barrier-epoch hazard checks; not cycle-accurate GPU execution or proof of target instruction combining."
+}

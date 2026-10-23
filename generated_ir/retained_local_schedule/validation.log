@@ -1,0 +1,24 @@
+PASS baseline head=0 query=0 {"waits": 12, "barriers": 18, "hints": 8, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS wait_tail2 head=0 query=0 {"waits": 12, "barriers": 18, "hints": 8, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=0 query=0 {"waits": 12, "barriers": 18, "hints": 62, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS combined head=0 query=0 {"waits": 12, "barriers": 18, "hints": 62, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=1 {"waits": 23, "barriers": 34, "hints": 16, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS wait_tail2 head=1 query=1 {"waits": 23, "barriers": 34, "hints": 16, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=1 {"waits": 23, "barriers": 34, "hints": 124, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS combined head=1 query=1 {"waits": 23, "barriers": 34, "hints": 124, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=7 {"waits": 89, "barriers": 130, "hints": 64, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS wait_tail2 head=1 query=7 {"waits": 89, "barriers": 130, "hints": 64, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=7 {"waits": 89, "barriers": 130, "hints": 496, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS combined head=1 query=7 {"waits": 89, "barriers": 130, "hints": 496, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=8 {"waits": 100, "barriers": 146, "hints": 72, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS wait_tail2 head=1 query=8 {"waits": 100, "barriers": 146, "hints": 72, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=8 {"waits": 100, "barriers": 146, "hints": 558, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS combined head=1 query=8 {"waits": 100, "barriers": 146, "hints": 558, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=31 {"waits": 353, "barriers": 514, "hints": 256, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS wait_tail2 head=1 query=31 {"waits": 353, "barriers": 514, "hints": 256, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=31 {"waits": 353, "barriers": 514, "hints": 1984, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS combined head=1 query=31 {"waits": 353, "barriers": 514, "hints": 1984, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+FAILED BLOCK 4 INSTRUCTION %66 = load <4 x half>, ptr addrspace(3) %address.local371, align 8
+PASS negative missing_dma_wait read or overwrite of a destination whose DMA has not completed
+FAILED BLOCK 104 INSTRUCTION %131 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1593, i32 %dma.buffer.offset1591, <4 x i32> %dma.buffer.rsrc1592) #10
+PASS negative missing_handoff_barrier cross-wave WAR without reader-completion barrier: epoch=1 mma=0 lds_reads=4 wave=0 bytes=[256 257 258 259 260 261 262 263]

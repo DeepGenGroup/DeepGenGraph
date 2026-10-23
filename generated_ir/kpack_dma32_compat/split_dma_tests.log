@@ -1,0 +1,5 @@
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+PASS 128/256 lanes: exact data, untouched guards/inactive waves, four zero-offset dword LDS instructions (gfx900)
+PASS 256/256 lanes: exact data, untouched guards/inactive waves, four zero-offset dword LDS instructions (gfx900)
+PASS nonzero immediate offset rejected

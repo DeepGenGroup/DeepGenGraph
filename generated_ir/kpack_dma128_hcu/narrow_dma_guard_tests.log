@@ -1,0 +1,9 @@
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+original offsets: [0, -48, -40, -32, -24, -16, -8, 0]
+guarded offsets: [0, 0, 0, 0, 0, 0, 0, 0]
+integrated offsets: [0, 0, 0, 0, 0, 0, 0, 0]
+imported offsets: [0, 0, 0, 0, 0, 0, 0, 0]
+PASS pointer identity, instruction preservation, rejection cases and gfx900 codegen

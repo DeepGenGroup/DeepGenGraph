@@ -1,0 +1,69 @@
+{
+  "ir": "generated_ir/k5_layout_matrix_kpack/attention.ll",
+  "sha256": "25b7ca10edf5b1ae35d0675a4afc340de567fd5fa36492cb3a01dc683e5662b6",
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "async",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+  },
+  "argv": [
+    "./3rd/deepgengraph/build/test/MyTest",
+    "3rd/deepgengraph/test/test_input_spidD.mlir",
+    "0",
+    "generated_ir/k5_layout_matrix_kpack/attention.ll",
+    "1",
+    "1",
+    "3.3",
+    "34816",
+    "approx",
+    "256",
+    "4,1",
+    "1",
+    "1",
+    "1",
+    "0",
+    "0",
+    "useKPack",
+    "asm128"
+  ],
+  "configuration": {
+    "pipeline": false,
+    "reorder": true,
+    "pack_shared": true,
+    "wmma_layout": "b-permute (3.3)",
+    "carrier_words": 34816,
+    "math": "approx",
+    "threads": 256,
+    "block_warps": [
+      4,
+      1
+    ],
+    "register_lifetimes": true,
+    "uniform_masks": true,
+    "prefetch_packets": true,
+    "fuse_mask_add": false,
+    "lds_reuse_words": 0,
+    "dma_pack": "useKPack",
+    "dma_export": "asm128",
+    "kpack": 2,
+    "BK": 64
+  },
+  "export": {
+    "matrix_read_calls": 32,
+    "matrix_read_source_line_counts": {
+      "93": 32
+    },
+    "matrix_selection": "packet-preserving logical layout and ISA lane/register mapping; no tensor-name special cases",
+    "static_dma_calls": 16,
+    "static_bpermute_calls": 68,
+    "lds_bytes": 32768,
+    "staging_bytes": 0,
+    "register_prefetch_packets_emitted": 0
+  },
+  "validation": {
+    "llvm_verifier": "PASS",
+    "matrix_layout_tests": "PASS",
+    "b_permute_layout_tests": "PASS (ordinary-read layout-map control)",
+    "llvm_numerical_model": "PASS: head/block (0,0), (0,1), (1,7), (1,31), atol=rtol=0.01",
+    "hardware": "Not run; CPU execution does not model DMA hazards or gfx936 backend scheduling"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "best_ir": "generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000001/kernel.ll",
+  "aligned_ir": "generated_ir/online_softmax_best_aligned/run-20261023-173120-_o7ne8xg/retained32-baseline/kernel.ll",
+  "previous_parameter_differences": {
+    "frag-prefetch": [
+      "0",
+      "1"
+    ],
+    "workgroup-group-size": [
+      "4",
+      "8"
+    ],
+    "workgroup-head-axis": [
+      "x",
+      "y"
+    ],
+    "workgroup-query-axis": [
+      "y",
+      "x"
+    ]
+  },
+  "remaining_parameter_differences": {
+    "workgroup-head-axis": [
+      "x",
+      "y"
+    ],
+    "workgroup-query-axis": [
+      "y",
+      "x"
+    ]
+  },
+  "physical_workgroup_mapping_identical": true,
+  "static_llvm_instruction_sites": {
+    "best": {
+      "mmac": 256,
+      "mmac_zero_C": 16,
+      "dma128": 24,
+      "barriers": 17,
+      "bpermute": 68,
+      "exp2": 64,
+      "maxnum": 0,
+      "vector4_fadd": 16
+    },
+    "previous_online": {
+      "mmac": 256,
+      "mmac_zero_C": 32,
+      "dma128": 24,
+      "barriers": 17,
+      "bpermute": 72,
+      "exp2": 66,
+      "maxnum": 70,
+      "vector4_fadd": 32
+    },
+    "aligned_online": {
+      "mmac": 256,
+      "mmac_zero_C": 32,
+      "dma128": 24,
+      "barriers": 17,
+      "bpermute": 72,
+      "exp2": 66,
+      "maxnum": 70,
+      "vector4_fadd": 32
+    }
+  },
+  "resources": {
+    "best": {
+      "static_lds_bytes": 16384,
+      "retention_reports": [
+        {
+          "operand_tiles": 4,
+          "budget_words_per_thread": 32
+        }
+      ],
+      "buffer_dma128_sites": 24
+    },
+    "previous_online": {
+      "static_lds_bytes": 16384,
+      "retention_reports": [
+        {
+          "operand_tiles": 4,
+          "budget_words_per_thread": 32
+        }
+      ],
+      "buffer_dma128_sites": 24
+    },
+    "aligned_online": {
+      "static_lds_bytes": 16384,
+      "retention_reports": [
+        {
+          "operand_tiles": 4,
+          "budget_words_per_thread": 32
+        }
+      ],
+      "buffer_dma128_sites": 24
+    }
+  },
+  "gpu_tested": false
+}

@@ -1,0 +1,144 @@
+{
+  "baseline_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "candidate_sha256": "e1d184dad63ca51f89e793fdc4acad3539994af1b5dabd1afabc6ce5ad03ded2",
+  "cpu_delayed_dma": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "bitwise_equal": true,
+      "kv_and_remaining_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_retained_q_element_loaded_once": true,
+      "baseline_global_read_bytes": {
+        "Q0": 8192,
+        "K": 32768,
+        "Qrest": 24576,
+        "V": 32768
+      },
+      "candidate_global_read_bytes": {
+        "Q0": 8192,
+        "K": 32768,
+        "Qrest": 24576,
+        "V": 32768
+      },
+      "baseline_lds_loads": 144,
+      "candidate_lds_loads": 144,
+      "baseline_barriers": 16,
+      "candidate_barriers": 17,
+      "no_pending_dma": true,
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "bitwise_equal": true,
+      "kv_and_remaining_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_retained_q_element_loaded_once": true,
+      "baseline_global_read_bytes": {
+        "Q0": 16384,
+        "K": 65536,
+        "Qrest": 49152,
+        "V": 65536
+      },
+      "candidate_global_read_bytes": {
+        "Q0": 8192,
+        "K": 65536,
+        "Qrest": 49152,
+        "V": 65536
+      },
+      "baseline_lds_loads": 288,
+      "candidate_lds_loads": 284,
+      "baseline_barriers": 32,
+      "candidate_barriers": 33,
+      "no_pending_dma": true,
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "bitwise_equal": true,
+      "kv_and_remaining_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_retained_q_element_loaded_once": true,
+      "baseline_global_read_bytes": {
+        "Q0": 65536,
+        "K": 262144,
+        "Qrest": 196608,
+        "V": 262144
+      },
+      "candidate_global_read_bytes": {
+        "Q0": 8192,
+        "K": 262144,
+        "Qrest": 196608,
+        "V": 262144
+      },
+      "baseline_lds_loads": 1152,
+      "candidate_lds_loads": 1124,
+      "baseline_barriers": 128,
+      "candidate_barriers": 129,
+      "no_pending_dma": true,
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "bitwise_equal": true,
+      "kv_and_remaining_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_retained_q_element_loaded_once": true,
+      "baseline_global_read_bytes": {
+        "Q0": 73728,
+        "K": 294912,
+        "Qrest": 221184,
+        "V": 294912
+      },
+      "candidate_global_read_bytes": {
+        "Q0": 8192,
+        "K": 294912,
+        "Qrest": 221184,
+        "V": 294912
+      },
+      "baseline_lds_loads": 1296,
+      "candidate_lds_loads": 1264,
+      "baseline_barriers": 144,
+      "candidate_barriers": 145,
+      "no_pending_dma": true,
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "bitwise_equal": true,
+      "kv_and_remaining_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_retained_q_element_loaded_once": true,
+      "baseline_global_read_bytes": {
+        "Q0": 262144,
+        "K": 1048576,
+        "Qrest": 786432,
+        "V": 1048576
+      },
+      "candidate_global_read_bytes": {
+        "Q0": 8192,
+        "K": 1048576,
+        "Qrest": 786432,
+        "V": 1048576
+      },
+      "baseline_lds_loads": 4608,
+      "candidate_lds_loads": 4484,
+      "baseline_barriers": 512,
+      "candidate_barriers": 513,
+      "no_pending_dma": true,
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Collective CPU model does not simulate independent wave timing or register allocation."
+}

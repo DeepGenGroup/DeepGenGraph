@@ -1,0 +1,97 @@
+{
+  "sha256": "a7be3570d44a9c420c06f462f6c697e8faf36e8a68e2a6befe980f8721ae6066",
+  "llvm_verify": true,
+  "llvm_O3_verify": true,
+  "exhaustive_mapping": true,
+  "physical_blocks": 512,
+  "logical_tiles": 1024,
+  "cpu_delayed_dma": [
+    {
+      "head": 0,
+      "query_tiles": [
+        0,
+        1
+      ],
+      "physical_xy": [
+        0,
+        0
+      ],
+      "bitwise_equal_to_baseline": true,
+      "matches_reference": true,
+      "writes_only_two_tiles": true,
+      "no_pending_dma": true,
+      "max_abs_errors": [
+        0.0010586032113448773,
+        0.0010878125002414807
+      ],
+      "mmac": 768,
+      "barriers": 49
+    },
+    {
+      "head": 1,
+      "query_tiles": [
+        6,
+        7
+      ],
+      "physical_xy": [
+        7,
+        0
+      ],
+      "bitwise_equal_to_baseline": true,
+      "matches_reference": true,
+      "writes_only_two_tiles": true,
+      "no_pending_dma": true,
+      "max_abs_errors": [
+        0.0003454040495538546,
+        0.00022155012408740793
+      ],
+      "mmac": 3840,
+      "barriers": 241
+    },
+    {
+      "head": 1,
+      "query_tiles": [
+        8,
+        9
+      ],
+      "physical_xy": [
+        4,
+        8
+      ],
+      "bitwise_equal_to_baseline": true,
+      "matches_reference": true,
+      "writes_only_two_tiles": true,
+      "no_pending_dma": true,
+      "max_abs_errors": [
+        0.00016660457902800685,
+        0.00017824991968698467
+      ],
+      "mmac": 4864,
+      "barriers": 305
+    },
+    {
+      "head": 1,
+      "query_tiles": [
+        30,
+        31
+      ],
+      "physical_xy": [
+        7,
+        24
+      ],
+      "bitwise_equal_to_baseline": true,
+      "matches_reference": true,
+      "writes_only_two_tiles": true,
+      "no_pending_dma": true,
+      "max_abs_errors": [
+        8.962230891385037e-05,
+        9.585399210360057e-05
+      ],
+      "mmac": 16128,
+      "barriers": 1009
+    }
+  ],
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "CPU model does not simulate independent wave timing or GPU performance."
+}

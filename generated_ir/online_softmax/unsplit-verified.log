@@ -1,0 +1,6 @@
+候选数：1；过滤不合法的参数组合：0
+/data2/xsl/DeepGenGraph/generated_ir/online_softmax/test_input_1x32x4096x128-64-32-online.mlir: 无 %dk，保留循环标记（pipeline-stages/loop-mark 不适用）
+输出目录：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-verified/run-20261023-172221-8_rr092n
+[1/1] legacy-baseline
+  verified
+完成：1 成功，0 失败；汇总：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-verified/run-20261023-172221-8_rr092n/manifest.json

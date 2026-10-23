@@ -1,0 +1,60 @@
+{
+  "baseline_hardware": {
+    "speedup": 0.317,
+    "kernel_ms": 3.512,
+    "vgpr": 256,
+    "sgpr": 112,
+    "scratch_bytes": 76,
+    "lds_bytes": 32768,
+    "shm_operations": 8372224,
+    "bank_conflict_percent": 41.7422760151
+  },
+  "baseline_llvm": {
+    "sha256": "25b7ca10edf5b1ae35d0675a4afc340de567fd5fa36492cb3a01dc683e5662b6",
+    "llvm_bytes": 299111,
+    "ordinary_lds_loads": 136,
+    "ordinary_lds_stores": 64,
+    "matrix_loads": 32,
+    "locally_rematerialized_matrix_addresses": 0,
+    "dma128": 16,
+    "mmac": 192,
+    "bpermute": 68,
+    "lds_bytes": 32768,
+    "has_async_staging": false
+  },
+  "optimized_llvm": {
+    "sha256": "469fa54cc60bec4d894254d6b6bee5e012eb51e2b441f7ea68f442cd145ffe2d",
+    "llvm_bytes": 255534,
+    "ordinary_lds_loads": 72,
+    "ordinary_lds_stores": 0,
+    "matrix_loads": 32,
+    "locally_rematerialized_matrix_addresses": 32,
+    "dma128": 16,
+    "mmac": 192,
+    "bpermute": 68,
+    "lds_bytes": 32768,
+    "has_async_staging": false
+  },
+  "validation": {
+    "llvm_verify": "PASS",
+    "attention_mathematical_execution": "4 cases PASS, head/block = 0/0, 0/1, 1/7, 1/31",
+    "matrix_selection_and_lowering": "PASS f16/f32, 64/128/256 threads, K-compatible selection, GEMM chain without LDS staging",
+    "packet_layout": "PASS bijection, inverse, 16-byte direct DMA, all tile packet model",
+    "matrix_address_lifetimes": "PASS, survives downstream O3, collective order preserved",
+    "wmma_b_permute_regression": "PASS"
+  },
+  "limitations": [
+    "No gfx936 execution/backend available locally; optimized scratch, VGPR, speedup and hardware bank counter are unmeasured.",
+    "Matrix bank result is a 32-bank packet-address model, not the undocumented collective instruction timing/counter.",
+    "Q/K address-model conflicts remain 2-way/4-way with this DMA packing.",
+    "Existing LLVM15 lifetime suite fails on range return syntax, also present in the unchanged baseline declaration (isolated reproduction in baseline.llvm15.log). Full baseline IR additionally fails LLVM15 parsing earlier on newer value syntax. Modern LLVM verification passes."
+  ],
+  "numerics": [
+    "LLVM model head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0",
+    "LLVM model head=0 block=1: allclose=True, max_abs=0.0010877848, mean_abs=5.5762142e-05, mismatch=0",
+    "LLVM model head=1 block=7: allclose=True, max_abs=0.00022155046, mean_abs=2.4651474e-05, mismatch=0",
+    "LLVM model head=1 block=31: allclose=True, max_abs=9.5851719e-05, mean_abs=1.2668324e-05, mismatch=0",
+    "PASS mathematical LLVM execution; hardware timing/hazards are not simulated."
+  ],
+  "reproduce": "bash generated_ir/k5_matrix_optimized/generate.sh"
+}

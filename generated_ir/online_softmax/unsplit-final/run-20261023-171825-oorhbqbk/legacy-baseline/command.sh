@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- /data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk/legacy-baseline
+env FRISK_GM_TO_SHM_MODE=legacy FRISK_GM_TO_SHM_ALIGNMENT=0 /data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest /data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk/legacy-baseline/input.mlir 0 /data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk/legacy-baseline/kernel.ll 1 1 3.3 34816 strict 256 4,1 1 0 0 1 0 legacy split32 0 0 --frag-prefetch=0 --frag-prefetch-words=8 --retain-fragment-words=0 --simplify-loop-control=1 --coalesce-waits=1 --swizzle-q=off --swizzle-k=off --swizzle-v=off --swizzle-q-arg=-1 --swizzle-k-arg=-1 --swizzle-v-arg=-1 --workgroup-group-size=0 --workgroup-reverse=0 > /data2/xsl/DeepGenGraph/generated_ir/online_softmax/unsplit-final/run-20261023-171825-oorhbqbk/legacy-baseline/lowering.log 2>&1

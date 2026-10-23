@@ -1,0 +1,7 @@
+候选数：1；过滤不合法的参数组合：0
+输出目录：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/release/run-20261023-172519-7itoy6x9
+[1/2] input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline
+  verified
+[2/2] input-0002-test_input_1x32x4096x128-128-64-32-online/retained32-baseline
+  verified
+完成：2 成功，0 失败；汇总：/data2/xsl/DeepGenGraph/generated_ir/online_softmax/release/run-20261023-172519-7itoy6x9/manifest.json

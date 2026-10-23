@@ -1,0 +1,101 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD.mlir",
+  "configuration": "existing best_k5; logical 16B packed layout; split32 generic async DMA compatibility export",
+  "mytest_arguments": [
+    0,
+    "OUTPUT",
+    1,
+    1,
+    "3.3",
+    34816,
+    "approx",
+    256,
+    "4,1",
+    1,
+    1,
+    1,
+    0,
+    0,
+    "MODE",
+    "split32"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "hardware_tested": false,
+  "variants": {
+    "useKPack": {
+      "bk": 64,
+      "kpack": 2,
+      "dma_bytes_per_lane": 4,
+      "copy_threads": 256,
+      "static_lds_bytes": 32768,
+      "static_dma_calls": 64,
+      "direct_copy_sites": 4,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "56948b6659e92d6dbcc888d7f149fbeea7b3fb656348cb4157df1e6d5a8bc743",
+      "dma_intrinsic": "llvm.amdgcn.global.load.async.lds",
+      "logical_packet_bytes_per_lane": 16,
+      "static_address_bpermute_calls_added": 128,
+      "cpu_max_absolute_error": 0.0010877848
+    },
+    "noKPack": {
+      "bk": 32,
+      "kpack": 2,
+      "dma_bytes_per_lane": 4,
+      "copy_threads": 128,
+      "static_lds_bytes": 16384,
+      "static_dma_calls": 96,
+      "direct_copy_sites": 6,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "2396493bb4db7069423c643cbaea177d03606a04548048eca6647f626ffba1ff",
+      "dma_intrinsic": "llvm.amdgcn.global.load.async.lds",
+      "logical_packet_bytes_per_lane": 16,
+      "static_address_bpermute_calls_added": 192,
+      "cpu_max_absolute_error": 0.0010877848
+    }
+  },
+  "export_intrinsic": "llvm.amdgcn.global.load.async.lds",
+  "target_dtk_instruction_selection": "4B primitive+markers SELECTED in user probe; full split kernels NOT RUN on target",
+  "narrow_dma_guard_regression": "PASS, including gfx900 codegen",
+  "target_default_feature_probes": {
+    "source": "User-provided target DTK probe results",
+    "selected": [
+      "amdgcn_async_4",
+      "amdgcn_legacy_4",
+      "amdgcn_async_4_markers"
+    ],
+    "rejected": [
+      "amdgcn_async_8",
+      "amdgcn_async_16",
+      "hcu_dword",
+      "hcu_dwordx2",
+      "hcu_dwordx4",
+      "amdgcn_legacy_16"
+    ]
+  },
+  "native_128bit_dma": false,
+  "split_dma_address_and_data_regression": "PASS, 128/256 active threads, LDS padding/inactive guards, noncontiguous sources, idempotence, nonzero offset rejection",
+  "local_isolated_codegen": "PASS gfx900: four zero-offset global_load_dword ... lds instructions",
+  "source_feature_result": "Explicit +glb2lds-dword-x2x4 rejected HCU dwordx4 on user target"
+}

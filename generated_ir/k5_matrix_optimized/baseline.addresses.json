@@ -1,0 +1,16 @@
+{
+  "generated_ir/k5_matrix_optimized/baseline.ll": {
+    "mlir:68 load 8B": {
+      "2": 8
+    },
+    "mlir:69 load 8B": {
+      "4": 64
+    },
+    "mlir:93 matrix-packet-proxy 16B": {
+      "4": 32
+    },
+    "mlir:93 load 2B": {
+      "16": 64
+    }
+  }
+}

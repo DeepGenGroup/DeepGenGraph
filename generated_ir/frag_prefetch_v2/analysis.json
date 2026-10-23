@@ -1,0 +1,195 @@
+{
+  "inputs": {
+    "temp": {
+      "path": "temp.ll",
+      "sha256": "90216490931dc2c536ede96f606dccc3a681a869841602ff63bd1b58dc052840"
+    },
+    "attn_best": {
+      "path": "generated_ir/attn_best_async_current.ll",
+      "sha256": "ffd552980df2a4b836f14e7e0ebb3134af8ec81756eb6028d1a4ef7f6219a959"
+    },
+    "old_on": {
+      "path": "generated_ir/frag_prefetch/temp.frag-prefetch.ll",
+      "sha256": "b60437a8e583f90b71aba5ed0b81aed93d121940b836fafcdf13f7c5371e77c5"
+    }
+  },
+  "exports": {
+    "temp.off": {
+      "before_O3": {
+        "ordinary_lds_vector_loads": 36,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 0
+      },
+      "after_O3": {
+        "ordinary_lds_vector_loads": 20,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 0
+      },
+      "diagnostic": ""
+    },
+    "temp.on": {
+      "before_O3": {
+        "ordinary_lds_vector_loads": 36,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 2
+      },
+      "after_O3": {
+        "ordinary_lds_vector_loads": 20,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 2
+      },
+      "diagnostic": "FragPrefetch: 1 complete A/B packets advanced, 0 budget skips, 14 read-group skips; one-MMAC lookahead, 4 extra SSA words/thread (not allocated VGPRs)"
+    },
+    "attn_best.off": {
+      "before_O3": {
+        "ordinary_lds_vector_loads": 36,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 0
+      },
+      "after_O3": {
+        "ordinary_lds_vector_loads": 20,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 0
+      },
+      "diagnostic": ""
+    },
+    "attn_best.on": {
+      "before_O3": {
+        "ordinary_lds_vector_loads": 36,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 2
+      },
+      "after_O3": {
+        "ordinary_lds_vector_loads": 20,
+        "matrix_reads": 32,
+        "bpermutes": 68,
+        "mmac": 160,
+        "schedule_hints": 2
+      },
+      "diagnostic": "FragPrefetch: 1 complete A/B packets advanced, 0 budget skips, 14 read-group skips; one-MMAC lookahead, 4 extra SSA words/thread (not allocated VGPRs)"
+    }
+  },
+  "qk_gfx90a_probe": {
+    "off": {
+      "instruction_counts": {
+        "ds_read2st64_b64": 4,
+        "ds_read2_b64": 6
+      },
+      "total_ds_reads": 10,
+      "resources": [
+        "; NumVgprs: 83",
+        "; ScratchSize: 0"
+      ]
+    },
+    "old_on": {
+      "instruction_counts": {
+        "ds_read2st64_b64": 2,
+        "ds_read_b64": 28,
+        "ds_read2_b64": 2
+      },
+      "total_ds_reads": 32,
+      "resources": [
+        "; NumVgprs: 75",
+        "; ScratchSize: 0"
+      ]
+    },
+    "effects_only": {
+      "instruction_counts": {
+        "ds_read2st64_b64": 2,
+        "ds_read_b64": 12,
+        "ds_read2_b64": 2
+      },
+      "total_ds_reads": 16,
+      "resources": [
+        "; NumVgprs: 81",
+        "; ScratchSize: 0"
+      ]
+    },
+    "on": {
+      "instruction_counts": {
+        "ds_read2st64_b64": 4,
+        "ds_read2_b64": 6
+      },
+      "total_ds_reads": 10,
+      "resources": [
+        "; NumVgprs: 83",
+        "; ScratchSize: 0"
+      ]
+    }
+  },
+  "user_gfx936_on_asm_origins": [
+    {
+      "mlir_line": 56,
+      "opcode": "ds_bpermute_b32",
+      "static_count": 64
+    },
+    {
+      "mlir_line": 68,
+      "opcode": "ds_read2st64_b64",
+      "static_count": 2
+    },
+    {
+      "mlir_line": 69,
+      "opcode": "ds_read2_b64",
+      "static_count": 2
+    },
+    {
+      "mlir_line": 69,
+      "opcode": "ds_read_b64",
+      "static_count": 28
+    },
+    {
+      "mlir_line": 86,
+      "opcode": "ds_bpermute_b32",
+      "static_count": 4
+    },
+    {
+      "mlir_line": 93,
+      "opcode": "ds_read_m32x16_b16",
+      "static_count": 32
+    }
+  ],
+  "dynamic_reconstruction": {
+    "outer_wave_iterations": 67584,
+    "qk_inner_wave_iterations": 270336,
+    "Q_reads": 540672,
+    "K_reads_old_on": 8110080,
+    "K_reads_off_inferred": 2162688,
+    "V_matrix_reads": 2162688,
+    "row_reduction_bpermutes": 270336,
+    "output_bpermutes": 262144,
+    "old_on_total": 11345920,
+    "off_total_reconstructed": 5398528,
+    "note": "On matches supplied ISA/profile exactly. Off K count is inferred from the supplied counter and independently reproduced by the gfx90a QK probe; matched off gfx936 ISA was not supplied."
+  },
+  "limitations": [
+    "No gfx936 compiler/GPU available here; new full-kernel VGPR count, bank conflicts, numerical correctness and performance require target rerun. Probe VGPRs are NOT full-kernel VGPRs."
+  ],
+  "validation": {
+    "build": "LegacyLLVMExportTest and MyTest passed",
+    "regression_log": "regression.log",
+    "full_input_runs": "input_runs.json",
+    "full_operand_graph_checks": [
+      "temp",
+      "attn_best",
+      "test_input",
+      "test_input_spidD"
+    ],
+    "target_validation": "pending gfx936 rerun",
+    "sd16_mlir_export": "pre-existing vector.extract lowering error; checked exported temp.ll instead"
+  }
+}

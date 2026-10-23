@@ -1,0 +1,131 @@
+
+默认优先使用脚本同目录的 MyTest 和 test_input_spidD.mlir，缺失时查找上层仓库。
+--tool 可显式覆盖工具路径；独立目录中可用 --input 指定生成的 MLIR。
+--input 接受一个或多个文件；--input-dir 接受目录下的全部 *.mlir（不递归）。
+--input-list FILE 接受每行一个路径的列表；--input-list - 读取标准输入，
+可直接接收 generate_attention_ir.py 的标准输出。相对路径以当前工作目录为准。
+多输入按“输入 × 候选”编译，独立保存到同一 run-*，结果统一使用 JSON。
+默认 baseline 为当前实测最快的 nohint 展开配置（加速比 0.51737，仅适用于
+本次测试环境）；仍需在目标 GPU 上验证。默认只导出 IR。
+
+完整流程（可选）：
+  --hsaco       每候选调用 GenHsaco.sh：链接设备库、opt/llc、链接 HSACO。
+  --benchmark   包含 --hsaco，并调用 launchKernel.py 校验及测时。
+  --opt-level   GenHsaco.sh 的优化等级，默认 3。
+  GenHsaco.sh 继承 LLVM_DIR、ROCM_BC、GPU_ARCH、GPU_FEATURES、DWARF_VERSION；
+  请按目标机器设置（脚本默认 gfx936），相关环境值写入 run.json。
+  --gen-hsaco / --launcher / --launch-python 可覆盖脚本和 GPU Python 路径。
+  启动 shape 自动从 MLIR 的 BSHD 转为 BHSD，grid 按后端映射转成 X,Y,Z，
+  block 从导出 LLVM IR 的 reqd_work_group_size 读取，动态 shared-mem=0。
+  K layout 默认 bhsd（当前 MyTest 启用 K normalization）；旧工具可指定 --k-layout bhds。
+  --device / --warmup / --repeat / --seed 控制测试，默认 0 / 10 / 50 / 0。
+  每候选保存 launch.json、hsaco.log、benchmark.log、benchmark.json。
+  每个完成的候选立即保存 result.json、manifest.json、best.json、best_by_shape.json。
+  只有校验通过者参与排名，按 speedup 最大选优；相同比值优先 kernel median 小者。
+  SDPA 为每候选重新测量，speedup=sdpa_median_ms/kernel_median_ms。
+  best.json 按输入分组，best_by_shape.json 按完整 BHSD 分组。
+  --summary-dir 可将实时 summary.json 与 best_by_shape.json 同步到一键入口的 session。
+  JSON 通过临时文件原子替换；中断后保留已完成候选，未完成候选不参与排名。
+
+三个独立控制：
+  pipeline=0|1                 MyTest 的旧位置参数，控制手工 pipeline 调度。
+                               0 不会关闭 frisk.pipeline_hint 自动流水线！
+  pipeline-stages=none|keep|N   修改目标循环的 frisk.pipeline_hint；none 删除，
+                               keep 保留输入，N 为 1..64；1 禁用，2 双缓冲。
+  loop-mark=0|1|keep           修改目标循环的 frisk.simplify_loop；1 添加，
+                               允许 nohint 循环独立展开；0 删除，keep 保留。
+  simplify-loop-control=0|1    是否运行循环简化 Pass（默认 1）。
+  coalesce-waits=0|1           是否合并重复 wait/barrier（此处默认 0）。
+默认 --loop-iv auto：有 %dk 时修改该循环；没有时保留所有循环标记，并提示跳过。
+因此也接受 generate_attention_ir.py 未指定 --bk 的非 split-D 输出。
+非 split-D 输入建议使用 --case legacy-baseline；baseline 的 useKPack 和显式
+qk-tile/vo-tile 要求 split-D 结构，脚本不会偷偷替换这些编译参数，失败会记录到汇总。
+显式 --loop-iv dk 时，只修改唯一的 scf.for %dk；缺失或不唯一时报错。
+其他循环的属性保留。每候选保存 input.mlir，绝不改写原始输入。
+
+完整 MyTest 参数（下列顺序固定）：
+  input pipeline output reorder pack layout carrier math threads waves \
+  lifetimes masks prefetch fuse reuse dma-pack dma-export qk-tile vo-tile \
+  --frag-prefetch=N --frag-prefetch-words=N \
+  --simplify-loop-control=N --coalesce-waits=N
+
+--set / --sweep 的参数名及含义：
+  reorder/pack/lifetimes/masks/prefetch/fuse：0/1，分别为指令重排、packed LDS、
+    存活期优化、有效 tile mask 简化、global packet 寄存器预取、mask/add 融合。
+  layout：3.1/shared、3.2/shuffle、3.3/b-permute。
+  carrier：非负 64 位整数，单位 words/block，0=不限；不是 VGPR 上限。
+  math：strict/mmac/mmac-exp2/mmac-recip/approx；approx 需检查数值误差。
+  threads：64..1024 的 64 倍数；waves：M,N，各 1..16，M*N=threads/64。
+  reuse：非负 32 位整数，LDS fragment 寄存器复用预算 words/thread，0=关闭；
+    它不是 Q/K/V 共享内存空间复用 Pass 的开关。
+  copy：legacy/async/sync/hybrid，对应 FRISK_GM_TO_SHM_MODE。
+  alignment：0 或正的 2 次幂，字节，对应 FRISK_GM_TO_SHM_ALIGNMENT；
+    是调用者对 tile 起始地址的对齐保证，不是自动补齐。当前基线为 16。
+  dma-pack：legacy/useKPack/noKPack；后两种要求 copy=async。
+  dma-export：auto/split32/hcu128/asm128；auto 随 copy 选择，async/hybrid
+    使用 asm128，其他使用 split32；gfx936 当前采用 asm128。
+  qk-tile/vo-tile：非负整数，0=自动；独立控制 QK/VO 分块，当前基线为 32/32。
+  frag-prefetch：0/1，MMAC fragment 预取，与 prefetch 参数不同。
+  frag-prefetch-words：正整数，fragment 预取 words/thread 预算，基线为 4。
+  swizzle-q/swizzle-k/swizzle-v：off/on/源位:目标位，默认 off。
+    on 或 1 等价于 8:6；off 或 0 关闭。位编号为 allocation 相对字节地址，
+    目标位 XOR 源位；两位须不同且在 4..30，完整保留 16-byte DMA 包。
+    任一开启时，MyTest 自动运行 LLVM CanonicalizeLDSGEPsPass；没有独立调优开关。
+    旧 Q 的 7:3 会拆包，因此不支持。其他形状/别名/DMA 合法性由编译器证明。
+  swizzle-q-arg/swizzle-k-arg/swizzle-v-arg：-1（默认，使用角色注解）或显式 ABI 编号。
+  workgroup-group-size：非负整数，0=关闭，正数为 query 分组大小，支持尾组。
+  workgroup-reverse：0/1 或 false/true；开启需要正的 group-size。
+  workgroup-query-axis/workgroup-head-axis：auto/x/y/z，默认 auto。
+    auto 根据每个输入的 BSHD parallel_map 的 res_dims 推导，并写入实际配置；
+    不根据 SSA 名或网格大小猜测。旧输入 y/x 与当前输入 x/y 均可处理。
+    与 reorder（fragment 指令重排）是不同开关；不改变 launch grid。
+  lds-bytes：0=不干预；正数将单个 i8 LDS 池扩大到指定字节数（不允许缩小）。
+    仅用于容量控制实验，不改变访存偏移；多 LDS 池时拒绝，须检查目标汇编
+    group_segment_fixed_size 确认最终分配。此项不是 MyTest 参数。
+环境变量由脚本显式设置，不继承 shell 的同名值。
+
+预设（--case 接受 glob，可以重复）：
+  baseline / nohint-unrolled：当前起点，nohint + DK 展开，原生 LDS 16 KiB。
+  group8-reverse：baseline + group=8 + reverse；swizzle 均关闭。
+  group8-reverse-k128-swizzle：group8-reverse + 仅 K 8:6，建议先与前者对照。
+  group8-reverse-qk128-swizzle / group8-reverse-qkv128-swizzle：Q/K 或 Q/K/V 均为 8:6。
+    Q/V 为保留 128-bit DMA 的实验布局，不保证性能收益。
+  nohint-rolled：无 hint、不展开，对照旧 nohint。
+  nohint-unrolled-32k：同 nohint-unrolled，LDS 扩至 32 KiB。
+  pipeline-baseline / pipeline-wait-only / pipeline-loop-only / pipeline-combined：
+    hint=2，分别关闭两项清理 / 仅等待合并 / 仅循环简化 / 两项开启。
+  pipeline-loop-only-40k：仅循环简化 + LDS 扩至 40 KiB。
+  legacy-baseline：保留旧脚本的 strict/legacy 参数，保留输入原有标记。
+  k5*：保留历史组合参数；mytest-default：省略全部可选 MyTest 参数，保留输入。
+    mytest-default 不接受 --set；JSON 列表中 compiler_defaults=true、parameters=null 表示未传参数。
+  coverage 还包含单因素对照、合法 threads/waves 组合及部分预算扫描。
+  --sweep 只生成指定轴的笛卡尔积；优先级 sweep > set > 预设。
+  不合法的 threads/waves、copy/dma-pack、swizzle/DMA、workgroup 组合自动过滤。
+  Swizzle 要求 pack=1、copy=async/hybrid、alignment>=16，且不得用 split32；
+  每块 tile 的实际连续性/对齐由编译器进一步检查；lowering 失败记录并继续。
+
+示例：
+  python3 TuneAttention.py --case group8-reverse --case group8-reverse-k128-swizzle --dry-run
+  python3 TuneAttention.py --set workgroup-group-size=8 --set workgroup-reverse=1 \
+    --sweep 'swizzle-q=off;on' --sweep 'swizzle-k=off;on' --sweep 'swizzle-v=off;on'
+  python3 TuneAttention.py --case baseline --dry-run
+  python3 TuneAttention.py --case baseline --llvm-as /data2/xsl/install/bin/llvm-as
+  python3 TuneAttention.py --case 'nohint-*' --case 'pipeline-*'
+  python3 TuneAttention.py --sweep 'pipeline-stages=none;2;3' \
+    --sweep 'simplify-loop-control=0;1' --sweep 'coalesce-waits=0;1'
+  python3 TuneAttention.py --sweep 'qk-tile=16;32;64' --sweep 'vo-tile=16;32;64'
+  python3 TuneAttention.py --case baseline --set math=strict
+  python3 TuneAttention.py --case mytest-default --build
+  python3 TuneAttention.py --case baseline --benchmark
+  python3 TuneAttention.py --input generated_ir/tiles/test_input_1x32x4096x128-64-32-32.mlir --case baseline
+  python3 TuneAttention.py --input-dir generated_ir/tiles --case baseline
+  set -o pipefail
+  python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 --output-dir generated_ir/tiles \
+    | python3 TuneAttention.py --input-list - --case baseline
+
+每次运行新建 run-*；每候选保存 input.mlir、kernel.ll、lowering.log、command.sh、
+config.json、result.json。result.json 包含输入/IR SHA256、静态 LDS 字节数、
+实际流水线标记数、展开循环数、swizzle 规划、DMA 指令点数及 GEP 规范化报告。
+这些是静态 IR/Pass 信息，不是 PMC bank 冲突或最终 ds_read2 数量。normalized_sha256 仅归一化候选目录路径，
+便于发现仅源文件路径不同的重复 IR；哈希不是性能结论。
+--llvm-as 验证最终（含容量调整后）IR。性能和数值正确性仍需 GPU 实测。

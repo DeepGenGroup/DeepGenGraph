@@ -1,0 +1,28 @@
+{
+  "off": {
+    "file": "generated_ir/sd16_perf_repair/candidate.off.ll",
+    "sha256": "717327abcf6bc2173e1b84693e9b0c6eed4c7106164ada32c1227e4f19e1a358",
+    "ordinary_lds_stores": 0,
+    "mmac_instructions": 160,
+    "bpermute_instructions": 68,
+    "integer_induction_phis": 2,
+    "async_copy_diagnostic": "LowerFriskAsyncCopy: 6 direct, 0 staged, 0 fallback; staging bytes 0",
+    "prefetch_diagnostic": [],
+    "numerical_model_passed": true,
+    "target_gpu_measured": false
+  },
+  "on": {
+    "file": "generated_ir/sd16_perf_repair/candidate.on.ll",
+    "sha256": "7a7c0cda4b94c35f11b1bee54b888d564587a333247d62f76a5398c94f863b44",
+    "ordinary_lds_stores": 0,
+    "mmac_instructions": 160,
+    "bpermute_instructions": 68,
+    "integer_induction_phis": 2,
+    "async_copy_diagnostic": "LowerFriskAsyncCopy: 6 direct, 0 staged, 0 fallback; staging bytes 0",
+    "prefetch_diagnostic": [
+      "FragPrefetch: 13 complete A/B packets advanced, 0 budget skips, 8 read-group skips; one-MMAC lookahead, 4 extra SSA words/thread (not allocated VGPRs)"
+    ],
+    "numerical_model_passed": true,
+    "target_gpu_measured": false
+  }
+}

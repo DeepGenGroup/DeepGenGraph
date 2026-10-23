@@ -1,0 +1,118 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD.mlir",
+  "configuration": "existing best_k5; async DMA, alignment 16",
+  "mytest_arguments": [
+    0,
+    "OUTPUT",
+    1,
+    1,
+    "3.3",
+    34816,
+    "approx",
+    256,
+    "4,1",
+    1,
+    1,
+    1,
+    0,
+    0,
+    "MODE"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "hardware_tested": false,
+  "variants": {
+    "useKPack": {
+      "bk": 64,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 256,
+      "static_lds_bytes": 32768,
+      "static_dma_calls": 16,
+      "direct_copy_sites": 4,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "15aa02b08252c6b0e2bdde623d07f89ad51efb13a73d76089634f11f2962b729",
+      "dma_intrinsic": "llvm.hcu.global.load.dwordx4.lds",
+      "computation_and_address_body_vs_previous": "IDENTICAL after normalizing DMA ABI and attribute group IDs"
+    },
+    "noKPack": {
+      "bk": 32,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 128,
+      "static_lds_bytes": 16384,
+      "static_dma_calls": 24,
+      "direct_copy_sites": 6,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "c9b462b74889ca2650574d11b2ede38592635c8a2a7cc464c04293754d1cb872",
+      "dma_intrinsic": "llvm.hcu.global.load.dwordx4.lds",
+      "computation_and_address_body_vs_previous": "IDENTICAL after normalizing DMA ABI and attribute group IDs"
+    }
+  },
+  "export_intrinsic": "llvm.hcu.global.load.dwordx4.lds",
+  "export_operands": [
+    "global pointer AS1",
+    "LDS wave base AS3",
+    "offset=0",
+    "aux=0",
+    "bps=0"
+  ],
+  "target_dtk_instruction_selection": "REJECTED ON TARGET: user reported useKPack failure with gfx936 DTK",
+  "host_hcu_abi_and_o3_test": "PASS",
+  "narrow_dma_guard_regression": "PASS, including gfx900 codegen",
+  "intrinsic_definition_sources": {
+    "IntrinsicsHCU.log": "4f446fd185f5cffbff81ee28b15814f8050d36824d6e41615d7781c5834aad1b",
+    "IntrinsicsHCU.h.log": "5bf5961b1c7c429f34995a809769c8035e52ced4132582054a26e1be46adbc1e"
+  },
+  "target_failure": {
+    "source": "User-provided remote llc error; not reproduced locally",
+    "arch": "gfx936",
+    "error": "hcu global_load_*_lds not support on the target",
+    "compiler": "AOMP-18.0-12, LLVM 22.0.0, source ce1873ac686bb90ddec72bb99889a4e80e2de382",
+    "scope": "The reported failure does not establish hardware DMA capability or correctness of either kernel"
+  },
+  "target_default_feature_probes": {
+    "source": "User-provided target DTK probe results",
+    "selected": [
+      "amdgcn_async_4",
+      "amdgcn_legacy_4",
+      "amdgcn_async_4_markers"
+    ],
+    "rejected": [
+      "amdgcn_async_8",
+      "amdgcn_async_16",
+      "hcu_dword",
+      "hcu_dwordx2",
+      "hcu_dwordx4",
+      "amdgcn_legacy_16"
+    ]
+  },
+  "target_feature_followup": {
+    "source": "targetfeature.log:239 (UTF-16)",
+    "source_sha256": "2b0f901c2636658b484498f628e51323cf3a9d8d7b721c12e6f346f083cd49c0",
+    "feature": "glb2lds-dword-x2x4",
+    "description": "support global_load_dwordx2/x4 to lds.",
+    "status": "FAILED remotely: user reports the same hcu global_load_*_lds not support on the target with +glb2lds-dword-x2x4"
+  }
+}

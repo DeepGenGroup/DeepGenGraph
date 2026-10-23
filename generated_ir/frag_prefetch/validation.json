@@ -1,0 +1,271 @@
+{
+  "baseline": {
+    "path": "temp.ll",
+    "sha256": "90216490931dc2c536ede96f606dccc3a681a869841602ff63bd1b58dc052840",
+    "unchanged": true
+  },
+  "tuning": {
+    "frag-prefetch_default": 0,
+    "frag-prefetch-words_default": 8,
+    "provided_variant_words": 4,
+    "scope": "one-next-MMAC complete raw A/B packet, same basic block read-only phase",
+    "budget": "raw packet words and local SSA peak increase including address temporaries; not a physical VGPR cap"
+  },
+  "artifacts": {
+    "baseline_llvm22": "generated_ir/frag_prefetch/temp.baseline.ll",
+    "prefetch_llvm22": "generated_ir/frag_prefetch/temp.frag-prefetch.ll"
+  },
+  "temp_result": {
+    "advanced_packets": 14,
+    "budget_skips": 1,
+    "exact_operand_graphs_preserved": true,
+    "loads_added": 0,
+    "existing_waits_modified": 0,
+    "s_nop_modified": false
+  },
+  "input_runs": [
+    {
+      "input": "test_input_spidD",
+      "mode": "off",
+      "exit": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input_spidD.off.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=0"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": []
+    },
+    {
+      "input": "test_input_spidD",
+      "mode": "on",
+      "exit": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input_spidD.on.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=1"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": [
+        "FragPrefetch: 0 complete A/B packets advanced, 0 budget skips; one-MMAC lookahead, 8 extra SSA words/thread (not allocated VGPRs)"
+      ]
+    },
+    {
+      "input": "test_input_sd16",
+      "mode": "off",
+      "exit": 1,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_sd16.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input_sd16.off.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=0"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": [
+        "loc(\"/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_sd16.mlir\":68:24): error: 'vector.extract' op mismatch between dynamic and static positions (kDynamic marker but no corresponding dynamic position) -- this can only happen due to an incorrect fold/rewrite"
+      ]
+    },
+    {
+      "input": "test_input_sd16",
+      "mode": "on",
+      "exit": 1,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_sd16.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input_sd16.on.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=1"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": [
+        "loc(\"/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_sd16.mlir\":68:24): error: 'vector.extract' op mismatch between dynamic and static positions (kDynamic marker but no corresponding dynamic position) -- this can only happen due to an incorrect fold/rewrite"
+      ]
+    },
+    {
+      "input": "test_input",
+      "mode": "off",
+      "exit": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input.off.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=0"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": []
+    },
+    {
+      "input": "test_input",
+      "mode": "on",
+      "exit": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/test_input.on.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "--frag-prefetch=1"
+      ],
+      "env": {
+        "FRISK_GM_TO_SHM_MODE": "async",
+        "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+      },
+      "diagnostics": [
+        "FragPrefetch: 3 complete A/B packets advanced, 0 budget skips; one-MMAC lookahead, 8 extra SSA words/thread (not allocated VGPRs)"
+      ]
+    }
+  ],
+  "checks": {
+    "strategy-tests": {
+      "passed": true,
+      "log": "generated_ir/frag_prefetch/strategy-tests.log"
+    },
+    "hcu-tests": {
+      "passed": true,
+      "log": "generated_ir/frag_prefetch/hcu-tests.log"
+    },
+    "register-mma-tests": {
+      "passed": true,
+      "log": "generated_ir/frag_prefetch/register-mma-tests.log"
+    },
+    "reorder-tests": {
+      "passed": true,
+      "log": "generated_ir/frag_prefetch/reorder-tests.log"
+    },
+    "lds_reuse": {
+      "passed": true,
+      "command": "python3 3rd/deepgengraph/test/check_lds_fragment_reuse.py 3rd/deepgengraph/build/test/LegacyLLVMExportTest"
+    },
+    "historical_fragment_schedule": {
+      "passed": false,
+      "reason": "Middle-IR static-vector-index assertion fails on a dynamic extract from vector<8xf16>; independent full-export operand DAG checks pass for test_input and spidD."
+    },
+    "full_cli": {
+      "passed": true,
+      "command": [
+        "3rd/deepgengraph/build/test/MyTest",
+        "--frag-prefetch=1",
+        "3rd/deepgengraph/test/test_input_spidD.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/frag_prefetch/cli-full.ll",
+        "1",
+        "1",
+        "3.2",
+        "24576",
+        "strict",
+        "256",
+        "4,1",
+        "1",
+        "0",
+        "0",
+        "1",
+        "0",
+        "legacy",
+        "split32",
+        "0",
+        "0",
+        "--frag-prefetch-words=4"
+      ]
+    }
+  },
+  "machine_probe": {
+    "target": "gfx90a",
+    "compiler": "local LLVM 24",
+    "substitution": "HCU MMAC spelling replaced by corresponding MFMA for scheduler probe only",
+    "merged_read_wait": "lgkmcnt(1)",
+    "split_read_wait": "lgkmcnt(2)",
+    "spill_bytes": 0,
+    "hardware_execution": false
+  },
+  "gfx936": {
+    "tested": false,
+    "reason": "No local DTK/gfx936 toolchain or GPU available; no performance or physical-register-count claim"
+  },
+  "additional_fix": "LowerInfo.cpp getMaxThreadOwnDatasz returned int without a return; changed to void to remove undefined behavior that aborted all three input pipelines before fragment scheduling."
+}

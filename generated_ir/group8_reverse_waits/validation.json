@@ -1,0 +1,19 @@
+{
+  "candidate_sha256": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2",
+  "byte_identical_to_original_and_rebuilt_control": true,
+  "llvm_assemble": "PASS",
+  "llvm_o3_verify": "PASS",
+  "static_waits_before_after": [
+    12,
+    12
+  ],
+  "static_barriers_before_after": [
+    16,
+    16
+  ],
+  "static_lds_bytes": 16384,
+  "gpu_tested": false,
+  "cpu_numerics_rerun": false,
+  "reason": "Exact byte identity to the original IR; no additional numerical execution needed.",
+  "original_validation": "../block_order/validation.json"
+}

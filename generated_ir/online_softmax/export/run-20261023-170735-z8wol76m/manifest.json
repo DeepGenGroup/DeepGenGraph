@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-23T09:08:21Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/export/run-20261023-170735-z8wol76m",
+  "total_candidates": 3,
+  "completed_candidates": 3,
+  "failed_candidates": 2,
+  "successful_candidates": 1,
+  "status_counts": {
+    "failed:1": 2,
+    "verified": 1
+  },
+  "last_result": {
+    "case": "retained32-baseline",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/export/run-20261023-170735-z8wol76m/input-0003-nohint_unrolled/retained32-baseline",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/export/run-20261023-170735-z8wol76m/input-0003-nohint_unrolled/retained32-baseline/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/export/run-20261023-170735-z8wol76m/**/result.json",
+  "best_by_shape": {}
+}

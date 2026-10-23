@@ -1,0 +1,6 @@
+PASS 160 pure MMAC calls; all asm templates, constraints and NOP padding preserved
+head=0 block=0: bitwise_identical=True: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0
+head=0 block=1: bitwise_identical=True: allclose=True, max_abs=0.0010877848, mean_abs=5.5762142e-05, mismatch=0
+head=1 block=7: bitwise_identical=True: allclose=True, max_abs=0.00022155046, mean_abs=2.4651474e-05, mismatch=0
+head=1 block=31: bitwise_identical=True: allclose=True, max_abs=9.5851719e-05, mean_abs=1.2668324e-05, mismatch=0
+PASS mathematical LLVM execution; hardware timing/hazards are not simulated.

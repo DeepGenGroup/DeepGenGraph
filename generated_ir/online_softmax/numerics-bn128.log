@@ -1,0 +1,35 @@
+PASS {"case": "random", "head": 1, "query": 0, "bn": 128, "max_abs_error": 0.0010615858711160442, "finite": true, "full_Q_loaded_once": true, "delayed_DMA_passed": true}
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_online_softmax.py", line 115, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_online_softmax.py", line 84, in main
+    np.testing.assert_allclose(actual, expected, atol=.01, rtol=.01)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 1768, in assert_allclose
+    assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         verbose=verbose, header=header, equal_nan=equal_nan,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         strict=strict)
+                         ^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 983, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Not equal to tolerance rtol=0.01, atol=0.01
+
+Mismatched elements: 15483 / 16384 (94.5%)
+First 5 mismatches are at indices:
+ [0, 0]: -0.6376953125 (ACTUAL), 0.17219330660858045 (DESIRED)
+ [0, 1]: -0.04290771484375 (ACTUAL), 0.17083734220646293 (DESIRED)
+ [0, 2]: 1.4736328125 (ACTUAL), 0.14891841109118334 (DESIRED)
+ [0, 3]: 0.6171875 (ACTUAL), 0.02813935883211694 (DESIRED)
+ [0, 4]: -0.33935546875 (ACTUAL), -0.21132649264164086 (DESIRED)
+Max absolute difference among violations: 3.56102541
+Max relative difference among violations: 594764.17629687
+ ACTUAL: array([[-0.6377 , -0.0429 ,  1.474  , ..., -0.6953 ,  1.114  ,  0.1451 ],
+       [-0.215  ,  0.0632 ,  1.949  , ..., -0.883  ,  0.7026 , -0.1547 ],
+       [ 0.1786 ,  0.5474 ,  1.376  , ..., -0.44   ,  1.049  ,  0.46   ],...
+ DESIRED: array([[ 0.172193,  0.170837,  0.148918, ...,  0.07732 ,  0.14691 ,
+         0.094364],
+       [ 0.095061, -0.041288,  0.1024  , ...,  0.035159,  0.051584,...

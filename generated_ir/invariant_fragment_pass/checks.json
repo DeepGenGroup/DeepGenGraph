@@ -1,0 +1,10 @@
+{
+  "pass_regressions": "PASS 22 retention cases: arbitrary operand, size/budget, idempotence, alias/write, readiness, zero-trip, uniformity",
+  "shared_liveness_regressions": 43,
+  "shared_loop_sync_regressions": 17,
+  "build_targets": [
+    "MyTest",
+    "ThreadTilingTest"
+  ],
+  "gpu_tested": false
+}

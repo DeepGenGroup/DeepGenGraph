@@ -1,0 +1,38 @@
+{
+  "source": "generated_ir/group8_reverse_k_swizzle/group8_reverse_k_swizzle128.ll",
+  "source_sha256": "73234d33f58e848a06f363a42f1090a2952e71791ec6e2e409e762f944a880c1",
+  "source_program_median_ms": 1.8204780220985413,
+  "candidate": "group8_reverse_q32_k128_swizzle.ll",
+  "candidate_sha256": "850ac43f809692807feeb6a6d6835729a26e2554015e97d6357d4d856931f1cd",
+  "control": "group8_reverse_k128_control.ll",
+  "control_sha256": "73234d33f58e848a06f363a42f1090a2952e71791ec6e2e409e762f944a880c1",
+  "Q_transform": "F(A) = A ^ ((A >> 4) & 8)",
+  "Q_DMA": "8 dwordx4 sites replaced by 32 dword sites; no address bpermute, no staging",
+  "Q_read": "16 b64 load sites; byte address ^= thread_id & 8",
+  "K_V_DMA": "Unchanged buffer_load_dwordx4 lds (128 bits)",
+  "static_lds_bytes": 16384,
+  "waits_barriers_entry_arithmetic_unchanged": true,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "launch": {
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  }
+}

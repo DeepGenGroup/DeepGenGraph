@@ -1,0 +1,2 @@
+baseline {"sha256": "840ff9be621fd194768aa8746416566d6b8d64b2f37bfdbb59f9f38d86999574", "retain_words": 0, "dma_sites": 24, "mmac_sites": 256, "static_lds_arrays": ["16384"], "LLVM_assemble_and_O3_verify": true}
+retained_8words {"sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19", "retain_words": 8, "dma_sites": 24, "mmac_sites": 256, "static_lds_arrays": ["16384"], "LLVM_assemble_and_O3_verify": true}

@@ -1,0 +1,6 @@
+{
+  "original": "generated_ir/q_bk_retention_sweep/retained_32words.ll",
+  "reexport": "generated_ir/online_softmax/legacy-check/run-20261023-171757-1bj1qx_j/retained32-baseline/kernel.ll",
+  "normalized_equal": true,
+  "original_sha256": "c5627d7e797e5ee93c73ba04d7112a238ba4dbcb52a888267a4c7b30520f9915"
+}

@@ -1,0 +1,168 @@
+{
+  "cases": [
+    {
+      "seed": 42,
+      "head": 0,
+      "query": 0,
+      "bitwise_equal_pass_off_on_and_historical": true,
+      "kv_and_other_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_loaded_once": true,
+      "baseline": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 8,
+          "Qrest": 6,
+          "V": 8
+        },
+        "lds_loads": 144,
+        "barriers": 16,
+        "vm_waits": 12
+      },
+      "candidate": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 8,
+          "Qrest": 6,
+          "V": 8
+        },
+        "lds_loads": 144,
+        "barriers": 18,
+        "vm_waits": 12
+      },
+      "max_abs_error": 0.0010586032113448773
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 1,
+      "bitwise_equal_pass_off_on_and_historical": true,
+      "kv_and_other_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_loaded_once": true,
+      "baseline": {
+        "read_calls": {
+          "Q0": 4,
+          "K": 16,
+          "Qrest": 12,
+          "V": 16
+        },
+        "lds_loads": 288,
+        "barriers": 32,
+        "vm_waits": 24
+      },
+      "candidate": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 16,
+          "Qrest": 12,
+          "V": 16
+        },
+        "lds_loads": 284,
+        "barriers": 34,
+        "vm_waits": 23
+      },
+      "max_abs_error": 0.0006825797712374237
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 7,
+      "bitwise_equal_pass_off_on_and_historical": true,
+      "kv_and_other_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_loaded_once": true,
+      "baseline": {
+        "read_calls": {
+          "Q0": 16,
+          "K": 64,
+          "Qrest": 48,
+          "V": 64
+        },
+        "lds_loads": 1152,
+        "barriers": 128,
+        "vm_waits": 96
+      },
+      "candidate": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 64,
+          "Qrest": 48,
+          "V": 64
+        },
+        "lds_loads": 1124,
+        "barriers": 130,
+        "vm_waits": 89
+      },
+      "max_abs_error": 0.00032456683604820125
+    },
+    {
+      "seed": 7,
+      "head": 1,
+      "query": 8,
+      "bitwise_equal_pass_off_on_and_historical": true,
+      "kv_and_other_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_loaded_once": true,
+      "baseline": {
+        "read_calls": {
+          "Q0": 18,
+          "K": 72,
+          "Qrest": 54,
+          "V": 72
+        },
+        "lds_loads": 1296,
+        "barriers": 144,
+        "vm_waits": 108
+      },
+      "candidate": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 72,
+          "Qrest": 54,
+          "V": 72
+        },
+        "lds_loads": 1264,
+        "barriers": 146,
+        "vm_waits": 100
+      },
+      "max_abs_error": 0.0001878444103157184
+    },
+    {
+      "seed": 42,
+      "head": 1,
+      "query": 31,
+      "bitwise_equal_pass_off_on_and_historical": true,
+      "kv_and_other_q_read_trace_identical": true,
+      "retained_q_elements": 4096,
+      "each_loaded_once": true,
+      "baseline": {
+        "read_calls": {
+          "Q0": 64,
+          "K": 256,
+          "Qrest": 192,
+          "V": 256
+        },
+        "lds_loads": 4608,
+        "barriers": 512,
+        "vm_waits": 384
+      },
+      "candidate": {
+        "read_calls": {
+          "Q0": 2,
+          "K": 256,
+          "Qrest": 192,
+          "V": 256
+        },
+        "lds_loads": 4484,
+        "barriers": 514,
+        "vm_waits": 353
+      },
+      "max_abs_error": 9.585399210360057e-05
+    }
+  ],
+  "prologue_publication_and_storage_handoff_barriers_checked": true,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "Collective CPU execution checks DMA readiness and arithmetic, not independent-wave timing, VGPR allocation or device performance."
+}

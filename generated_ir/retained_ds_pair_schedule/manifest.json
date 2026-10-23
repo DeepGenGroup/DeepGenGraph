@@ -1,0 +1,524 @@
+{
+  "source": "generated_ir/invariant_fragment_pass/retained_8words.ll",
+  "source_sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+  "pairs": [
+    {
+      "loads": [
+        "%sched.n149",
+        "%sched.n152"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        0,
+        4096
+      ],
+      "anchor": "%sched.n150",
+      "anchor_index": 301,
+      "moved_indices": [
+        303,
+        304
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n153",
+        "%sched.n156"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        128,
+        4224
+      ],
+      "anchor": "%sched.n154",
+      "anchor_index": 307,
+      "moved_indices": [
+        309,
+        310
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n157",
+        "%sched.n160"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        128,
+        4224
+      ],
+      "anchor": "%sched.n158",
+      "anchor_index": 313,
+      "moved_indices": [
+        315,
+        316
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n161",
+        "%sched.n164"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        1024,
+        5120
+      ],
+      "anchor": "%sched.n162",
+      "anchor_index": 319,
+      "moved_indices": [
+        321,
+        322
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n165",
+        "%sched.n168"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        1024,
+        5120
+      ],
+      "anchor": "%sched.n166",
+      "anchor_index": 325,
+      "moved_indices": [
+        327,
+        328
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n169",
+        "%sched.n172"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        1152,
+        5248
+      ],
+      "anchor": "%sched.n170",
+      "anchor_index": 331,
+      "moved_indices": [
+        333,
+        334
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n173",
+        "%sched.n176"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        1152,
+        5248
+      ],
+      "anchor": "%sched.n174",
+      "anchor_index": 337,
+      "moved_indices": [
+        339,
+        340
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n301",
+        "%sched.n304"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8192,
+        12288
+      ],
+      "anchor": "%sched.n302",
+      "anchor_index": 533,
+      "moved_indices": [
+        535,
+        536
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n305",
+        "%sched.n308"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n306",
+      "anchor_index": 539,
+      "moved_indices": [
+        541,
+        542
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n309",
+        "%sched.n312"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n310",
+      "anchor_index": 545,
+      "moved_indices": [
+        547,
+        548
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n313",
+        "%sched.n316"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n314",
+      "anchor_index": 551,
+      "moved_indices": [
+        553,
+        554
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n317",
+        "%sched.n320"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n318",
+      "anchor_index": 557,
+      "moved_indices": [
+        559,
+        560
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n321",
+        "%sched.n324"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n322",
+      "anchor_index": 563,
+      "moved_indices": [
+        565,
+        566
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n325",
+        "%sched.n328"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n326",
+      "anchor_index": 569,
+      "moved_indices": [
+        571,
+        572
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n452",
+        "%sched.n455"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8192,
+        12288
+      ],
+      "anchor": "%sched.n453",
+      "anchor_index": 747,
+      "moved_indices": [
+        749,
+        750
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n456",
+        "%sched.n459"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n457",
+      "anchor_index": 753,
+      "moved_indices": [
+        755,
+        756
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n460",
+        "%sched.n463"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n461",
+      "anchor_index": 759,
+      "moved_indices": [
+        761,
+        762
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n464",
+        "%sched.n467"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n465",
+      "anchor_index": 765,
+      "moved_indices": [
+        767,
+        768
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n468",
+        "%sched.n471"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n469",
+      "anchor_index": 771,
+      "moved_indices": [
+        773,
+        774
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n472",
+        "%sched.n475"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n473",
+      "anchor_index": 777,
+      "moved_indices": [
+        779,
+        780
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n476",
+        "%sched.n479"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n477",
+      "anchor_index": 783,
+      "moved_indices": [
+        785,
+        786
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n636",
+        "%sched.n639"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8192,
+        12288
+      ],
+      "anchor": "%sched.n637",
+      "anchor_index": 1012,
+      "moved_indices": [
+        1014,
+        1015
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n640",
+        "%sched.n643"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n641",
+      "anchor_index": 1018,
+      "moved_indices": [
+        1020,
+        1021
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n644",
+        "%sched.n647"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        8320,
+        12416
+      ],
+      "anchor": "%sched.n645",
+      "anchor_index": 1024,
+      "moved_indices": [
+        1026,
+        1027
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n648",
+        "%sched.n651"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n649",
+      "anchor_index": 1030,
+      "moved_indices": [
+        1032,
+        1033
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n652",
+        "%sched.n655"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9216,
+        13312
+      ],
+      "anchor": "%sched.n653",
+      "anchor_index": 1036,
+      "moved_indices": [
+        1038,
+        1039
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n656",
+        "%sched.n659"
+      ],
+      "base": "%address.local431",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n657",
+      "anchor_index": 1042,
+      "moved_indices": [
+        1044,
+        1045
+      ]
+    },
+    {
+      "loads": [
+        "%sched.n660",
+        "%sched.n663"
+      ],
+      "base": "%address.local460",
+      "byte_offsets": [
+        9344,
+        13440
+      ],
+      "anchor": "%sched.n661",
+      "anchor_index": 1048,
+      "moved_indices": [
+        1050,
+        1051
+      ]
+    }
+  ],
+  "variants": {
+    "baseline": {
+      "sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+      "hints_static": 8,
+      "vm_waits_static": 12,
+      "hardware_barriers_static": 18,
+      "o3_ordinary_lds_loads": 80,
+      "llvm_assemble_and_O3_verify": true
+    },
+    "fragment_pair": {
+      "sha256": "7cdc8e092e077a65e178739d566553b81b7caed497e3c0f8f3c473f2c7e516de",
+      "hints_static": 62,
+      "vm_waits_static": 12,
+      "hardware_barriers_static": 18,
+      "o3_ordinary_lds_loads": 80,
+      "llvm_assemble_and_O3_verify": true
+    },
+    "ds_pair_prefetch": {
+      "sha256": "eee5012228d4b7c96a0a701e3db37085c1070991825ed22bf86780394fe3fc35",
+      "hints_static": 64,
+      "vm_waits_static": 12,
+      "hardware_barriers_static": 18,
+      "o3_ordinary_lds_loads": 80,
+      "llvm_assemble_and_O3_verify": true,
+      "o3_address_pairs_before_independent_mmac": 28,
+      "o3_pair_internal_sched_barriers": 0
+    },
+    "ds_pair_prefetch_soft": {
+      "sha256": "c578d37b43e964619e0aca4efd7aa92c3c4e71b9146e5e24b15f3751358df3f8",
+      "hints_static": 8,
+      "vm_waits_static": 12,
+      "hardware_barriers_static": 18,
+      "o3_ordinary_lds_loads": 80,
+      "llvm_assemble_and_O3_verify": true,
+      "o3_address_pairs_before_independent_mmac": 28,
+      "o3_pair_internal_sched_barriers": 0
+    }
+  },
+  "baseline_byte_identical": true,
+  "previous_fragment_pair_byte_identical": true,
+  "gpu_tested": false,
+  "limitations": "Address pairing and O3 checks do not prove gfx936 DS combining. Actual assembly, VGPR/scratch and performance require target DTK compilation."
+}

@@ -1,0 +1,2 @@
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+{'K_unique_pointers': 16, 'threads': 256, 'bank_model': {2: 16}, 'gfx900_isolated_reads': {'ds_read2_b64': 8}, 'gfx936_full_kernel_tested': False}

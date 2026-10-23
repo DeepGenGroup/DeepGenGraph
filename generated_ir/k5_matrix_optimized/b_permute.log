@@ -1,0 +1,7 @@
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (16, 64, 16, 64)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (64, 128, 32, 128)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (128, 128, 32, 128)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (32, 192, 64, 64)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (64, 128, 32, 256)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (128, 192, 32, 512)
+PASS P-only selection, terminal/unrelated GEMMs unchanged, 3.1/3.2 and 3.3 fallback

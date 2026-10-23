@@ -1,0 +1,24 @@
+{
+  "source": "baseline.ll",
+  "source_sha256": "6ecaf558dedf0c5d0bdbf341d510543f26bd29be0e418c53fcd6651f00ff1b29",
+  "file": "baseline_swap_bx_by.ll",
+  "sha256": "24bdcbd39aa0761fee22119b1ff6c80bda2d637eaa8e691b51deda885ce2214c",
+  "changed_lines": 2,
+  "logical_head": "workgroup.id.y",
+  "logical_query_tile": "workgroup.id.x",
+  "grid": [
+    32,
+    32,
+    1
+  ],
+  "block": [
+    256,
+    1,
+    1
+  ],
+  "llvm_verify": true,
+  "llvm_o3_verify": true,
+  "exactly_matches_query_fast_after_eliminating_two_identity_adds": true,
+  "query_fast_validation_reference": "validation.json",
+  "gpu_tested": false
+}

@@ -1,0 +1,12 @@
+PASS: local addresses survive O3; volatile loads/PHIs/control flow preserved; uniform, strictfp and unknown-call fallbacks; idempotence
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_register_lifetimes.py", line 190, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_register_lifetimes.py", line 146, in main
+    assert not failed, error
+           ^^^^^^^^^^
+AssertionError: shm.ll:6:17: error: expected type
+declare noundef range(i32 0, 1024) i32 @llvm.amdgcn.workitem.id.x() #0
+                ^
+

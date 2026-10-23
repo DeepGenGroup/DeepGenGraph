@@ -1,0 +1,11 @@
+{
+  "K_unique_pointers": 16,
+  "threads": 256,
+  "bank_model": {
+    "2": 16
+  },
+  "gfx900_isolated_reads": {
+    "ds_read2_b64": 8
+  },
+  "gfx936_full_kernel_tested": false
+}

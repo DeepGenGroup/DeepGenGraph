@@ -1,0 +1,68 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/release/run-20261023-172519-7itoy6x9/input-0002-test_input_1x32x4096x128-128-64-32-online/retained32-baseline/kernel.ll",
+  "sha256": "74a4da51e804385b5aff92adc31a95f6891fb6c9737bbdd870c266083ed59d61",
+  "cases": [
+    {
+      "case": "random",
+      "head": 1,
+      "query": 0,
+      "bn": 64,
+      "max_abs_error": 0.0010615858711160442,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    },
+    {
+      "case": "random",
+      "head": 1,
+      "query": 1,
+      "bn": 64,
+      "max_abs_error": 0.0007240293560800692,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    },
+    {
+      "case": "random",
+      "head": 1,
+      "query": 31,
+      "bn": 64,
+      "max_abs_error": 9.588000178817335e-05,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    },
+    {
+      "case": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "bn": 64,
+      "max_abs_error": 6.103118260700202e-05,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    },
+    {
+      "case": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "bn": 64,
+      "max_abs_error": 6.103118260700202e-05,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    },
+    {
+      "case": "max_changes",
+      "head": 1,
+      "query": 2,
+      "bn": 64,
+      "max_abs_error": 8.792915971495008e-05,
+      "finite": true,
+      "full_Q_loaded_once": true,
+      "delayed_DMA_passed": true
+    }
+  ],
+  "legacy_overflow_reproduced": null,
+  "gpu_tested": false
+}

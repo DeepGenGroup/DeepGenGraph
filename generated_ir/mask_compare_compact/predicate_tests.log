@@ -1,0 +1,2 @@
+PASS 406770 full-width predicate/FP cases before, after and after O3; signed zero, NaN, infinities and word/sign boundaries
+PASS all ten integer predicates, OR/XOR on either/both operands, fallbacks, existing exports, idempotence, O3 survival and gfx900 codegen

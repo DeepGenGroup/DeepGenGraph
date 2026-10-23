@@ -1,0 +1,44 @@
+{
+  "argv": [
+    "--input",
+    "generated_ir/online_softmax/test_input_1x32x4096x128-128-128-32-online.mlir",
+    "generated_ir/online_softmax/test_input_1x32x4096x128-128-64-32-online.mlir",
+    "--case",
+    "retained32-baseline",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as",
+    "--output-dir",
+    "generated_ir/online_softmax/release"
+  ],
+  "input": null,
+  "loop_iv": "auto",
+  "sweep_base": null,
+  "input_sha256": null,
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/test_input_1x32x4096x128-128-128-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/release/run-20261023-172519-7itoy6x9/input-0001-test_input_1x32x4096x128-128-128-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "412e5a6671f8dcd37f86112790b558d43ffd50741861b605982b5a96dbb6b78c"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/test_input_1x32x4096x128-128-64-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/release/run-20261023-172519-7itoy6x9/input-0002-test_input_1x32x4096x128-128-64-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "9c6115e792731053e8bc30160e948a65b0cbcbd5cf4ba24b019865bcc5537922"
+    }
+  ],
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1792747510320582488,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

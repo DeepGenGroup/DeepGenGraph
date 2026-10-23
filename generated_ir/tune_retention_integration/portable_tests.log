@@ -1,0 +1,7 @@
+.....  当前最佳 BHSD=1x32x4096x128: speedup=3.000000x，kernel=2.000000 ms，SDPA=6.000000 ms；/tmp/tmpk85m1rsv/tuning/run-test/0
+  当前最佳 BHSD=1x32x512x128: speedup=1.000000x，kernel=0.500000 ms，SDPA=0.500000 ms；/tmp/tmpk85m1rsv/tuning/run-test/3
+....
+----------------------------------------------------------------------
+Ran 9 tests in 0.502s
+
+OK

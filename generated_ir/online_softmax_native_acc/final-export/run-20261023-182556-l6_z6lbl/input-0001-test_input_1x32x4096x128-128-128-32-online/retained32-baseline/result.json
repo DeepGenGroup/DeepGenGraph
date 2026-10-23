@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "candidate_index": 1,
+  "case": "retained32-baseline",
+  "directory": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline",
+  "source_input": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax/test_input_1x32x4096x128-128-128-32-online.mlir",
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline/input.mlir",
+  "llvm_ir": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline/kernel.ll",
+  "log": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline/lowering.log",
+  "parameters": {
+    "pipeline": "0",
+    "reorder": "1",
+    "pack": "1",
+    "layout": "3.3",
+    "carrier": "34816",
+    "math": "approx",
+    "threads": "256",
+    "waves": "4,1",
+    "lifetimes": "1",
+    "masks": "1",
+    "prefetch": "1",
+    "fuse": "0",
+    "reuse": "0",
+    "copy": "async",
+    "alignment": "16",
+    "dma-pack": "useKPack",
+    "dma-export": "asm128",
+    "qk-tile": "32",
+    "vo-tile": "32",
+    "frag-prefetch": "0",
+    "frag-prefetch-words": "4",
+    "retain-fragment-words": "32",
+    "pipeline-stages": "none",
+    "loop-mark": "1",
+    "simplify-loop-control": "1",
+    "coalesce-waits": "0",
+    "lds-bytes": "0",
+    "swizzle-q": "off",
+    "swizzle-k": "8:6",
+    "swizzle-v": "off",
+    "swizzle-q-arg": "-1",
+    "swizzle-k-arg": "-1",
+    "swizzle-v-arg": "-1",
+    "workgroup-group-size": "4",
+    "workgroup-reverse": "1",
+    "workgroup-query-axis": "x",
+    "workgroup-head-axis": "y"
+  },
+  "compiler_defaults": false,
+  "launch": null,
+  "loop_iv": "dk",
+  "status": "verified",
+  "seconds": 43.59115447697695,
+  "sha256": "2ebae1fa1f4366d3c4072d0aec4bd2fe2bcec623cc667bf154a409de0d358b1e",
+  "normalized_sha256": "fb1374df309ff337b5cbd49262cb7ce350208b6eadbd3862c3fd99c0fc9c9944",
+  "input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a",
+  "native_lds_bytes": 16384,
+  "static_lds_bytes": 16384,
+  "scheduled_loops": 0,
+  "simplified_loops": 1,
+  "buffer_dma128_sites": 24,
+  "buffer_dma32_sites": 0,
+  "lds_b64_half_load_sites": 144,
+  "retention_reports": [
+    {
+      "operand_tiles": 4,
+      "budget_words_per_thread": 32
+    }
+  ],
+  "retained_loop_words_observed": [
+    32
+  ],
+  "shared_swizzle_plans": [
+    {
+      "argument": 1,
+      "source_bit": 8,
+      "target_bit": 6,
+      "dma_bytes": 16,
+      "aliases": 1
+    }
+  ],
+  "lds_gep_reported_offsets": 134,
+  "workgroup_orders": [
+    [
+      4,
+      0,
+      1,
+      1
+    ]
+  ],
+  "hardware_tested": false,
+  "benchmark_attempted": false
+}

@@ -1,0 +1,75 @@
+
+默认输入：3rd/deepgengraph/test/test_input_spidD.mlir。
+默认 baseline 为当前实测最快的 nohint 展开配置（加速比 0.51737，仅适用于
+本次测试环境）；仍需在目标 GPU 上验证。脚本只导出 IR，不自动运行或评选。
+
+三个独立控制：
+  pipeline=0|1                 MyTest 的旧位置参数，控制手工 pipeline 调度。
+                               0 不会关闭 frisk.pipeline_hint 自动流水线！
+  pipeline-stages=none|keep|N   修改目标循环的 frisk.pipeline_hint；none 删除，
+                               keep 保留输入，N 为 1..64；1 禁用，2 双缓冲。
+  loop-mark=0|1|keep           修改目标循环的 frisk.simplify_loop；1 添加，
+                               允许 nohint 循环独立展开；0 删除，keep 保留。
+  simplify-loop-control=0|1    是否运行循环简化 Pass（默认 1）。
+  coalesce-waits=0|1           是否合并重复 wait/barrier（此处默认 0）。
+目标用 --loop-iv dk 指定，只修改唯一的 scf.for %dk；缺失或不唯一时报错。
+其他循环的属性保留。每候选保存 input.mlir，绝不改写原始输入。
+
+完整 MyTest 参数（下列顺序固定）：
+  input pipeline output reorder pack layout carrier math threads waves \
+  lifetimes masks prefetch fuse reuse dma-pack dma-export qk-tile vo-tile \
+  --frag-prefetch=N --frag-prefetch-words=N \
+  --simplify-loop-control=N --coalesce-waits=N
+
+--set / --sweep 的参数名及含义：
+  reorder/pack/lifetimes/masks/prefetch/fuse：0/1，分别为指令重排、packed LDS、
+    存活期优化、有效 tile mask 简化、global packet 寄存器预取、mask/add 融合。
+  layout：3.1/shared、3.2/shuffle、3.3/b-permute。
+  carrier：非负 64 位整数，单位 words/block，0=不限；不是 VGPR 上限。
+  math：strict/mmac/mmac-exp2/mmac-recip/approx；approx 需检查数值误差。
+  threads：64..1024 的 64 倍数；waves：M,N，各 1..16，M*N=threads/64。
+  reuse：非负 32 位整数，LDS fragment 寄存器复用预算 words/thread，0=关闭；
+    它不是 Q/K/V 共享内存空间复用 Pass 的开关。
+  copy：legacy/async/sync/hybrid，对应 FRISK_GM_TO_SHM_MODE。
+  alignment：0 或正的 2 次幂，字节，对应 FRISK_GM_TO_SHM_ALIGNMENT；
+    是调用者对 tile 起始地址的对齐保证，不是自动补齐。当前基线为 16。
+  dma-pack：legacy/useKPack/noKPack；后两种要求 copy=async。
+  dma-export：auto/split32/hcu128/asm128；auto 随 copy 选择，async/hybrid
+    使用 asm128，其他使用 split32；gfx936 当前采用 asm128。
+  qk-tile/vo-tile：非负整数，0=自动；独立控制 QK/VO 分块，当前基线为 32/32。
+  frag-prefetch：0/1，MMAC fragment 预取，与 prefetch 参数不同。
+  frag-prefetch-words：正整数，fragment 预取 words/thread 预算，基线为 4。
+  lds-bytes：0=不干预；正数将单个 i8 LDS 池扩大到指定字节数（不允许缩小）。
+    仅用于容量控制实验，不改变访存偏移；多 LDS 池时拒绝，须检查目标汇编
+    group_segment_fixed_size 确认最终分配。此项不是 MyTest 参数。
+环境变量由脚本显式设置，不继承 shell 的同名值。
+
+预设（--case 接受 glob，可以重复）：
+  baseline / nohint-unrolled：当前起点，nohint + DK 展开，原生 LDS 16 KiB。
+  nohint-rolled：无 hint、不展开，对照旧 nohint。
+  nohint-unrolled-32k：同 nohint-unrolled，LDS 扩至 32 KiB。
+  pipeline-baseline / pipeline-wait-only / pipeline-loop-only / pipeline-combined：
+    hint=2，分别关闭两项清理 / 仅等待合并 / 仅循环简化 / 两项开启。
+  pipeline-loop-only-40k：仅循环简化 + LDS 扩至 40 KiB。
+  legacy-baseline：保留旧脚本的 strict/legacy 参数，保留输入原有标记。
+  k5*：保留历史组合参数；mytest-default：省略全部可选 MyTest 参数，保留输入。
+    mytest-default 不接受 --set，列表里使用 compiler-default 标明未传参数。
+  coverage 还包含单因素对照、合法 threads/waves 组合及部分预算扫描。
+  --sweep 只生成指定轴的笛卡尔积；优先级 sweep > set > 预设。
+  不合法的 threads/waves 或 copy/dma-pack 组合自动过滤；lowering 失败记录并继续。
+
+示例：
+  python3 TuneAttention.py --case baseline --dry-run
+  python3 TuneAttention.py --case baseline --llvm-as /data2/xsl/install/bin/llvm-as
+  python3 TuneAttention.py --case 'nohint-*' --case 'pipeline-*'
+  python3 TuneAttention.py --sweep 'pipeline-stages=none;2;3' \
+    --sweep 'simplify-loop-control=0;1' --sweep 'coalesce-waits=0;1'
+  python3 TuneAttention.py --sweep 'qk-tile=16;32;64' --sweep 'vo-tile=16;32;64'
+  python3 TuneAttention.py --case baseline --set math=strict
+  python3 TuneAttention.py --case mytest-default --build
+
+每次运行新建 run-*；每候选保存 input.mlir、kernel.ll、lowering.log、command.sh、
+config.json、result.json。manifest.tsv 包含输入/IR SHA256、静态 LDS 字节数、
+实际流水线标记数和展开循环数。normalized_sha256 仅归一化候选目录路径，
+便于发现仅源文件路径不同的重复 IR；哈希不是性能结论。
+--llvm-as 验证最终（含容量调整后）IR。性能和数值正确性仍需 GPU 实测。

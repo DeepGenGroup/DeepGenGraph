@@ -1,0 +1,862 @@
+{
+  "gpu_tested": false,
+  "variants": {
+    "baseline": {
+      "sha256": "6ecaf558dedf0c5d0bdbf341d510543f26bd29be0e418c53fcd6651f00ff1b29",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          11,
+          0
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            1,
+            7
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            1,
+            31
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "group2": {
+      "sha256": "055f9d9e0cec86e33eb2d1c9abea969cf1e84dd25f1161bfb2d06eb10e2e80e6",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          5,
+          1
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            3,
+            6
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            3,
+            30
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "group4": {
+      "sha256": "500771e6ba2a03add4183af811397359e13de35c3fa6e26439839a07384ee5a5",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            7,
+            4
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            7,
+            28
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "group8": {
+      "sha256": "e824dc576db800852feb9cc06ad05a71242b5f1cae446a86abea6e237df9bebd",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          6
+        ],
+        [
+          0,
+          7
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          3
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            15,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            15,
+            24
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "group16": {
+      "sha256": "81a0f5a9bb224bfe56327db46961ee8d4880c926ae405bbd218d9e17560b1180",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          6
+        ],
+        [
+          0,
+          7
+        ],
+        [
+          0,
+          8
+        ],
+        [
+          0,
+          9
+        ],
+        [
+          0,
+          10
+        ],
+        [
+          0,
+          11
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            23,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            31,
+            16
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "query_fast": {
+      "sha256": "48525156f71b0e72c3c2ef60faed246bf3b99aec5e9465417b4335c3a7e688a7",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          6
+        ],
+        [
+          0,
+          7
+        ],
+        [
+          0,
+          8
+        ],
+        [
+          0,
+          9
+        ],
+        [
+          0,
+          10
+        ],
+        [
+          0,
+          11
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            0,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            7,
+            1
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            31,
+            1
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "group8_reverse": {
+      "sha256": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          31
+        ],
+        [
+          0,
+          30
+        ],
+        [
+          0,
+          29
+        ],
+        [
+          0,
+          28
+        ],
+        [
+          0,
+          27
+        ],
+        [
+          0,
+          26
+        ],
+        [
+          0,
+          25
+        ],
+        [
+          0,
+          24
+        ],
+        [
+          1,
+          31
+        ],
+        [
+          1,
+          30
+        ],
+        [
+          1,
+          29
+        ],
+        [
+          1,
+          28
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            7,
+            24
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            8,
+            24
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            8,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    },
+    "query_fast_reverse": {
+      "sha256": "c057c10779871f7e179fc8c60dd9cc9623d743c151e60509f2380e439bf59888",
+      "entry_only_change": true,
+      "all_1024_blocks_exactly_once": true,
+      "llvm_verify": true,
+      "llvm_o3_verify": true,
+      "first_12_head_query_pairs": [
+        [
+          0,
+          31
+        ],
+        [
+          0,
+          30
+        ],
+        [
+          0,
+          29
+        ],
+        [
+          0,
+          28
+        ],
+        [
+          0,
+          27
+        ],
+        [
+          0,
+          26
+        ],
+        [
+          0,
+          25
+        ],
+        [
+          0,
+          24
+        ],
+        [
+          0,
+          23
+        ],
+        [
+          0,
+          22
+        ],
+        [
+          0,
+          21
+        ],
+        [
+          0,
+          20
+        ]
+      ],
+      "cpu_delayed_dma": [
+        {
+          "logical_head_query": [
+            0,
+            0
+          ],
+          "physical_xy": [
+            31,
+            0
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.0010586032113448773,
+          "mmac_count": 256,
+          "waits": 12,
+          "barriers": 16
+        },
+        {
+          "logical_head_query": [
+            1,
+            7
+          ],
+          "physical_xy": [
+            24,
+            1
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 0.00022155012408740793,
+          "mmac_count": 2048,
+          "waits": 96,
+          "barriers": 128
+        },
+        {
+          "logical_head_query": [
+            1,
+            31
+          ],
+          "physical_xy": [
+            0,
+            1
+          ],
+          "bitwise_equal_to_baseline": true,
+          "writes_only_selected_tile": true,
+          "max_abs_error": 9.585399210360057e-05,
+          "mmac_count": 8192,
+          "waits": 384,
+          "barriers": 512
+        }
+      ]
+    }
+  },
+  "limitations": "Entry mapping is exhaustively checked. CPU DMA model does not simulate independent waves, cache, GPU scheduling, or target codegen."
+}

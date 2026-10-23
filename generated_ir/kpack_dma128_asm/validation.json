@@ -1,0 +1,91 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD.mlir",
+  "input_sha256": "fc53ff6597fddcebd05cba0f812746fcdfeb98128a70e7def06035d3b0912c9a",
+  "configuration": "existing best_k5, async 16-byte buffer-to-LDS inline asm, alignment 16",
+  "mytest_arguments": [
+    0,
+    "OUTPUT",
+    1,
+    1,
+    "3.3",
+    34816,
+    "approx",
+    256,
+    "4,1",
+    1,
+    1,
+    1,
+    0,
+    0,
+    "MODE",
+    "asm128"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "native_128bit_dma": true,
+  "instruction": "buffer_load_dwordx4 $2, $3, 0 offen lds",
+  "asm_constraints": "={m0},s,v,s,~{memory}",
+  "completion": "explicit s_waitcnt vmcnt(0) at original wait.asyncmark(0) points; publication barriers retained",
+  "source_descriptor": {
+    "base": "uniform kernel tensor argument",
+    "range_bytes": 33554432,
+    "word3": "0x00020000",
+    "format_source": "local CK gfx9 byte-addressed format; supplied example omits tl_templates/hcu descriptor header",
+    "lane_offset": "actual source pointer minus tensor base"
+  },
+  "target_minimal_probe": "PASS user-reported gfx936 llc object generation for original M0-clobber inline-asm form; reserved-register warning",
+  "target_final_kernel_compilation": "NOT RUN locally: target DTK unavailable",
+  "hardware_tested": false,
+  "local_object_test": "PASS gfx950: actual object disassembly has dwordx4 LDS load and vmcnt(0); explicit M0 output emits no reserved clobber warning",
+  "local_data_address_regression": "PASS 128 and 256 active threads, noncontiguous GM, resource bounds and uniformity, LDS guards, idempotence, unsupported controls and wait-group rejection",
+  "variants": {
+    "useKPack": {
+      "bk": 64,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 256,
+      "static_lds_bytes": 32768,
+      "static_dma_calls": 16,
+      "explicit_wait_sites": 4,
+      "barrier_sites": 7,
+      "sync_fallback": false,
+      "staging": false,
+      "llvm_verifier": "PASS",
+      "cpu_numerics_cases": 5,
+      "cpu_numerics": "PASS atol=0.01, rtol=0.01",
+      "cpu_max_absolute_error": 0.0010877848,
+      "sha256": "1041c4258164848b7bff337535879f7eabd8e45c5cf8b1cfee17490e7488e53e"
+    },
+    "noKPack": {
+      "bk": 32,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 128,
+      "static_lds_bytes": 16384,
+      "static_dma_calls": 24,
+      "explicit_wait_sites": 6,
+      "barrier_sites": 9,
+      "sync_fallback": false,
+      "staging": false,
+      "llvm_verifier": "PASS",
+      "cpu_numerics_cases": 5,
+      "cpu_numerics": "PASS atol=0.01, rtol=0.01",
+      "cpu_max_absolute_error": 0.0010877848,
+      "sha256": "bd690eb449530491fe486c5bbaf4655180870f079bb4666775778998cbef2f59"
+    }
+  },
+  "last_head_descriptor_bounds": "PASS both variants: head=31, block=31, actual 32MiB tensor range; max absolute error=0.00011509657"
+}

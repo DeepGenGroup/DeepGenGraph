@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-23T08:36:58Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv",
+  "total_candidates": 6,
+  "completed_candidates": 6,
+  "failed_candidates": 0,
+  "successful_candidates": 6,
+  "status_counts": {
+    "verified": 6
+  },
+  "last_result": {
+    "case": "grid-000006",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000006",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000006/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/**/result.json",
+  "best_by_shape": {}
+}

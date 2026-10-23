@@ -1,0 +1,75 @@
+{
+  "baseline_sha256": "73234d33f58e848a06f363a42f1090a2952e71791ec6e2e409e762f944a880c1",
+  "candidate_sha256": "850ac43f809692807feeb6a6d6835729a26e2554015e97d6357d4d856931f1cd",
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false,
+  "limitations": "CPU delayed DMA does not simulate independent wave timing. 32-bank address model is not a hardware counter prediction.",
+  "static_lds_bytes": 16384,
+  "only_Q_address_and_DMA_changes": true,
+  "llvm_assemble_O3_verify": true,
+  "isolated_buffer_dword_lds_gfx900_assembly": true,
+  "addresses": {
+    "all_32_heads_32_queries_256_threads": true,
+    "Q_dword_packets": 8388608,
+    "exact_coverage_and_source_provenance": true,
+    "bank_model": {
+      "Q": {
+        "before": {
+          "2": 16
+        },
+        "after": {
+          "1": 16
+        }
+      },
+      "K": {
+        "before": {
+          "2": 128
+        },
+        "after": {
+          "2": 128
+        }
+      }
+    }
+  },
+  "cpu_delayed_dma_numerics": [
+    {
+      "head": 0,
+      "query": 0,
+      "bitwise_equal_to_K128_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 0.0010586032113448773,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        12,
+        16,
+        256
+      ]
+    },
+    {
+      "head": 1,
+      "query": 7,
+      "bitwise_equal_to_K128_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 0.00022155012408740793,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        96,
+        128,
+        2048
+      ]
+    },
+    {
+      "head": 1,
+      "query": 31,
+      "bitwise_equal_to_K128_control": true,
+      "matches_attention_reference": true,
+      "max_abs_error": 9.585399210360057e-05,
+      "writes_only_selected_tile": true,
+      "waits_barriers_mmac": [
+        384,
+        512,
+        8192
+      ]
+    }
+  ]
+}

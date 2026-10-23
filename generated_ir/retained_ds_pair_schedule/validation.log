@@ -1,0 +1,22 @@
+PASS baseline head=0 query=0 {"waits": 12, "barriers": 18, "hints": 8, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=0 query=0 {"waits": 12, "barriers": 18, "hints": 62, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch head=0 query=0 {"waits": 12, "barriers": 18, "hints": 64, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch_soft head=0 query=0 {"waits": 12, "barriers": 18, "hints": 8, "lds_epoch_accesses": 200, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=1 {"waits": 23, "barriers": 34, "hints": 16, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=1 {"waits": 23, "barriers": 34, "hints": 124, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch head=1 query=1 {"waits": 23, "barriers": 34, "hints": 128, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch_soft head=1 query=1 {"waits": 23, "barriers": 34, "hints": 16, "lds_epoch_accesses": 394, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=7 {"waits": 89, "barriers": 130, "hints": 64, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=7 {"waits": 89, "barriers": 130, "hints": 496, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch head=1 query=7 {"waits": 89, "barriers": 130, "hints": 512, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch_soft head=1 query=7 {"waits": 89, "barriers": 130, "hints": 64, "lds_epoch_accesses": 1558, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=8 {"waits": 100, "barriers": 146, "hints": 72, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=8 {"waits": 100, "barriers": 146, "hints": 558, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch head=1 query=8 {"waits": 100, "barriers": 146, "hints": 576, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch_soft head=1 query=8 {"waits": 100, "barriers": 146, "hints": 72, "lds_epoch_accesses": 1752, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS baseline head=1 query=31 {"waits": 353, "barriers": 514, "hints": 256, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS fragment_pair head=1 query=31 {"waits": 353, "barriers": 514, "hints": 1984, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch head=1 query=31 {"waits": 353, "barriers": 514, "hints": 2048, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+PASS ds_pair_prefetch_soft head=1 query=31 {"waits": 353, "barriers": 514, "hints": 256, "lds_epoch_accesses": 6214, "bitwise_equal": true, "global_and_lds_access_traces_identical": true}
+FAILED BLOCK 4 INSTRUCTION %66 = load <4 x half>, ptr addrspace(3) %address.local371, align 8
+PASS negative missing_dma_wait read or overwrite of a destination whose DMA has not completed

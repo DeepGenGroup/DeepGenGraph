@@ -1,0 +1,196 @@
+{
+  "baseline": {
+    "sha256": "b1d2689b2c660e5caa0b34f596c92fe62418f6de8812f5e7c8218b1306e59696",
+    "static_lds_bytes": 40960,
+    "llvm_verify": true,
+    "llvm_o3_verify": true,
+    "cpu_delayed_dma": [
+      {
+        "head": 0,
+        "block": 0,
+        "max_abs_error": 0.0010586032113448773,
+        "vm_waits": 12,
+        "barriers": 20,
+        "mmac_with_pending_dma": 192
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "max_abs_error": 0.0006825797712374237,
+        "vm_waits": 24,
+        "barriers": 40,
+        "mmac_with_pending_dma": 384
+      }
+    ],
+    "mytest_flags": [
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "32",
+      "32",
+      "--frag-prefetch=1",
+      "--frag-prefetch-words=4",
+      "--simplify-loop-control=0",
+      "--coalesce-waits=0"
+    ]
+  },
+  "wait_only": {
+    "sha256": "2dc8f536c90712eb926e9c08a0f134ef98654d7dbea0c48bcb8c153a12019404",
+    "static_lds_bytes": 40960,
+    "llvm_verify": true,
+    "llvm_o3_verify": true,
+    "cpu_delayed_dma": [
+      {
+        "head": 0,
+        "block": 0,
+        "max_abs_error": 0.0010586032113448773,
+        "vm_waits": 8,
+        "barriers": 16,
+        "mmac_with_pending_dma": 192
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "max_abs_error": 0.0006825797712374237,
+        "vm_waits": 16,
+        "barriers": 32,
+        "mmac_with_pending_dma": 384
+      }
+    ],
+    "mytest_flags": [
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "32",
+      "32",
+      "--frag-prefetch=1",
+      "--frag-prefetch-words=4",
+      "--simplify-loop-control=0",
+      "--coalesce-waits=1"
+    ]
+  },
+  "loop_only": {
+    "sha256": "2285ca54555181b054a9449eb572a3ce1ad2cef7c3e8cd3a5a6995f7a5190bb7",
+    "static_lds_bytes": 32768,
+    "llvm_verify": true,
+    "llvm_o3_verify": true,
+    "cpu_delayed_dma": [
+      {
+        "head": 0,
+        "block": 0,
+        "max_abs_error": 0.0010586032113448773,
+        "vm_waits": 12,
+        "barriers": 16,
+        "mmac_with_pending_dma": 224
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "max_abs_error": 0.0006825797712374237,
+        "vm_waits": 24,
+        "barriers": 32,
+        "mmac_with_pending_dma": 448
+      }
+    ],
+    "mytest_flags": [
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "32",
+      "32",
+      "--frag-prefetch=1",
+      "--frag-prefetch-words=4",
+      "--simplify-loop-control=1",
+      "--coalesce-waits=0"
+    ]
+  },
+  "combined": {
+    "sha256": "e760b261830179743b4350e28484a537e33ce32c98a8aed0a25b98fc36b95d2a",
+    "static_lds_bytes": 32768,
+    "llvm_verify": true,
+    "llvm_o3_verify": true,
+    "cpu_delayed_dma": [
+      {
+        "head": 0,
+        "block": 0,
+        "max_abs_error": 0.0010586032113448773,
+        "vm_waits": 8,
+        "barriers": 12,
+        "mmac_with_pending_dma": 224
+      },
+      {
+        "head": 1,
+        "block": 1,
+        "max_abs_error": 0.0006825797712374237,
+        "vm_waits": 16,
+        "barriers": 24,
+        "mmac_with_pending_dma": 448
+      },
+      {
+        "head": 1,
+        "block": 31,
+        "max_abs_error": 9.585399210360057e-05,
+        "vm_waits": 256,
+        "barriers": 384,
+        "mmac_with_pending_dma": 7168
+      }
+    ],
+    "mytest_flags": [
+      "1",
+      "1",
+      "3.3",
+      "34816",
+      "approx",
+      "256",
+      "4,1",
+      "1",
+      "1",
+      "1",
+      "0",
+      "0",
+      "useKPack",
+      "asm128",
+      "32",
+      "32",
+      "--frag-prefetch=1",
+      "--frag-prefetch-words=4",
+      "--simplify-loop-control=1",
+      "--coalesce-waits=1"
+    ]
+  },
+  "gpu_tested": false,
+  "note": "CPU model checks numerical execution and deferred DMA storage hazards; it does not model independently progressing waves or GPU performance. Dynamic counts are per modeled workgroup, not static instruction counts."
+}

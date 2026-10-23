@@ -1,0 +1,116 @@
+{
+  "source": "generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+  "source_sha256": "f7a3ac094f288e2f24272b3de1edd003606f930ca19c5a63002671549bceff40",
+  "historical_best": "generated_ir/group8_reverse_k_gep/group8_reverse_k128_gep.ll",
+  "historical_best_sha256": "c19c67ba6ecf235946229e89bf647f8e10640f015d3b1da7ce54fd91d0045f2f",
+  "note": "Both variants are freshly lowered with identical settings except retention. The baseline is not a byte copy of the historical hand-edited LLVM winner.",
+  "variants": {
+    "baseline": {
+      "sha256": "840ff9be621fd194768aa8746416566d6b8d64b2f37bfdbb59f9f38d86999574",
+      "retain_words": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/invariant_fragment_pass/baseline.ll",
+        "1",
+        "1",
+        "3.3",
+        "34816",
+        "approx",
+        "256",
+        "4,1",
+        "1",
+        "1",
+        "1",
+        "0",
+        "0",
+        "useKPack",
+        "asm128",
+        "32",
+        "32",
+        "--frag-prefetch=1",
+        "--frag-prefetch-words=4",
+        "--simplify-loop-control=1",
+        "--coalesce-waits=0",
+        "--workgroup-group-size=8",
+        "--workgroup-reverse=true",
+        "--swizzle-q=off",
+        "--swizzle-k=on",
+        "--swizzle-v=off",
+        "--retain-fragment-words=0"
+      ],
+      "dma_sites": 24,
+      "mmac_sites": 256,
+      "static_lds_arrays": [
+        "16384"
+      ],
+      "LLVM_assemble_and_O3_verify": true
+    },
+    "retained_8words": {
+      "sha256": "8923ce4d910b6c2e6ce91fa3345c5f2e702b57d2bef5ef37cd12c726b0efea19",
+      "retain_words": 8,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+        "/data2/xsl/DeepGenGraph/generated_ir/pipeline_cleanup/nohint_unrolled.mlir",
+        "0",
+        "/data2/xsl/DeepGenGraph/generated_ir/invariant_fragment_pass/retained_8words.ll",
+        "1",
+        "1",
+        "3.3",
+        "34816",
+        "approx",
+        "256",
+        "4,1",
+        "1",
+        "1",
+        "1",
+        "0",
+        "0",
+        "useKPack",
+        "asm128",
+        "32",
+        "32",
+        "--frag-prefetch=1",
+        "--frag-prefetch-words=4",
+        "--simplify-loop-control=1",
+        "--coalesce-waits=0",
+        "--workgroup-group-size=8",
+        "--workgroup-reverse=true",
+        "--swizzle-q=off",
+        "--swizzle-k=on",
+        "--swizzle-v=off",
+        "--retain-fragment-words=8"
+      ],
+      "dma_sites": 24,
+      "mmac_sites": 256,
+      "static_lds_arrays": [
+        "16384"
+      ],
+      "LLVM_assemble_and_O3_verify": true
+    }
+  },
+  "launch": {
+    "schema_version": 1,
+    "kernel": "Attn_p2",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "gpu_tested": false
+}

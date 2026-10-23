@@ -1,0 +1,20 @@
+PASS baseline head=0 query=0 overlap=0
+PASS k0_late_control head=0 query=0 overlap=0
+PASS k0_prefetch_pv_tail head=0 query=0 overlap=0
+PASS baseline head=1 query=1 overlap=0
+PASS k0_late_control head=1 query=1 overlap=0
+PASS k0_prefetch_pv_tail head=1 query=1 overlap=32
+PASS baseline head=1 query=7 overlap=0
+PASS k0_late_control head=1 query=7 overlap=0
+PASS k0_prefetch_pv_tail head=1 query=7 overlap=224
+PASS baseline head=1 query=8 overlap=0
+PASS k0_late_control head=1 query=8 overlap=0
+PASS k0_prefetch_pv_tail head=1 query=8 overlap=256
+PASS baseline head=1 query=31 overlap=0
+PASS k0_late_control head=1 query=31 overlap=0
+PASS k0_prefetch_pv_tail head=1 query=31 overlap=992
+FAILED BLOCK k0.issue INSTRUCTION %k0.next.bnk.n239 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.next.dma.buffer.lds1590, i32 %k0.next.dma.buffer.offset1588, <4 x i32> %k0.next.dma.buffer.rsrc1589) #10
+PASS negative missing_reader_handoff cross-wave WAR without reader-completion barrier: epoch=16 mma=224 lds_reads=144 wave=0 bytes=[0 1 2 3 4 5 6 7]
+FAILED BLOCK bnk.n212 INSTRUCTION %bnk.n306 = load <4 x half>, ptr addrspace(3) %address.local494, align 8
+PASS negative missing_K0_wait read or overwrite of a destination whose DMA has not completed
+PASS negative missing_last_iteration_guard extra K0 DMA at kernel exit

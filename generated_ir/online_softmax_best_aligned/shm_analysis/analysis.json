@@ -1,0 +1,101 @@
+{
+  "inputs_sha256": {
+    "pmc_test.log": "9ca8e3e2600012eebc051131bec3d5d2296abf8d7ed48930d639d7429b0b54c9",
+    "k_test.gcn.log": "f7c696cad1bc7d47a28688c10fe93bfef23ccc1d3494d4292c0b18f5192a29d3"
+  },
+  "counter_comparator": "retained_32words original; group4 best has timing only in supplied log",
+  "assembly_kernel_static_counts": {
+    "buffer_load_dwordx4": 24,
+    "s_barrier": 17,
+    "ds_read2st64_b64": 10,
+    "v_mmac_f32_16x16x16_f16": 256,
+    "ds_read2_b64": 30,
+    "ds_bpermute_b32": 72,
+    "ds_read_m32x16_b16": 32
+  },
+  "assembly_counts_by_source_line": {
+    "70:22": {
+      "buffer_load_dwordx4": 8,
+      "s_barrier": 4
+    },
+    "72:24": {
+      "ds_read2st64_b64": 6
+    },
+    "60:24": {
+      "s_barrier": 2
+    },
+    "0:0": {
+      "ds_read2st64_b64": 2
+    },
+    "71:22": {
+      "buffer_load_dwordx4": 8,
+      "s_barrier": 4
+    },
+    "73:26": {
+      "ds_read2st64_b64": 2,
+      "v_mmac_f32_16x16x16_f16": 128,
+      "ds_read2_b64": 30
+    },
+    "101:20": {
+      "buffer_load_dwordx4": 8,
+      "s_barrier": 7
+    },
+    "89:20": {
+      "ds_bpermute_b32": 4
+    },
+    "95:20": {
+      "ds_bpermute_b32": 4
+    },
+    "102:23": {
+      "ds_read_m32x16_b16": 32,
+      "v_mmac_f32_16x16x16_f16": 128,
+      "ds_bpermute_b32": 64
+    }
+  },
+  "llvm_shuffle_sites": {
+    "unsafe_best": {
+      "outside_loop": 64,
+      "inside_loop": 4
+    },
+    "stable_aligned": {
+      "outside_loop": 0,
+      "inside_loop": 72
+    }
+  },
+  "waves": 4096,
+  "BN_wave_iterations": 67584,
+  "dynamic_components_old_new": {
+    "Q_prologue_reads": [
+      32768,
+      32768
+    ],
+    "K_V_loop_reads": [
+      4325376,
+      4325376
+    ],
+    "sum_shuffles": [
+      270336,
+      270336
+    ],
+    "max_shuffles": [
+      0,
+      270336
+    ],
+    "PV_layout_shuffles": [
+      262144,
+      4325376
+    ]
+  },
+  "reconstructed_totals_old_new": [
+    4890624,
+    9224192
+  ],
+  "observed_totals_old_new": [
+    4890624,
+    9224192
+  ],
+  "increase_from_PV_layout": 4063232,
+  "increase_from_max": 270336,
+  "ideal_after_sinking_PV_layout": 5160960,
+  "ideal_note": "Accounting target only: excludes any new alpha layout adaptation; not measured performance"
+}

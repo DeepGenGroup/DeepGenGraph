@@ -1,0 +1,12 @@
+PASS physical copy 16x24, axis=0, pair=0, store=0, direct_DMA=True
+PASS physical copy 24x16, axis=1, pair=0, store=0, direct_DMA=True
+PASS physical copy 32x24, axis=0, pair=4, store=0, direct_DMA=True
+PASS physical copy 64x40, axis=0, pair=16, store=0, direct_DMA=True
+PASS physical copy 32x64, axis=1, pair=0, store=4, direct_DMA=False
+PASS physical copy 16x24, axis=0, pair=0, store=0, direct_DMA=False
+PASS physical copy 16x24, axis=0, pair=0, store=0, direct_DMA=False
+PASS issue hoisting, late wait, descriptor dependencies, alias/write/barrier boundaries, idempotence
+PASS separate DMA completions, varying sizes, no storage overlap, alias/write/barrier guards
+PASS explicit named waits preserved; CPU DMA data, tails and memory guards
+PASS reuse after completion, release barrier, incomplete/overlapping DMA rejection
+PASS malformed, out-of-bounds and non-bijective permutation rejection

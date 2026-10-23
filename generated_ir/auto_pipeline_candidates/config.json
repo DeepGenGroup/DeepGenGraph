@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "FRISK_GM_TO_SHM_MODE": "async",
+    "FRISK_GM_TO_SHM_ALIGNMENT": "16"
+  },
+  "mytest_parameters": {
+    "pipeline": 0,
+    "reorder": 1,
+    "pack-shared": 1,
+    "wmma-layout": "3.3",
+    "carrier-words": 34816,
+    "math": "approx",
+    "threads": 256,
+    "block-warps": "4,1",
+    "register-lifetimes": 1,
+    "uniform-masks": 1,
+    "prefetch-packets": 1,
+    "fuse-mask-add": 0,
+    "lds-reuse-words": 0,
+    "dma-pack": "useKPack",
+    "dma-export": "asm128",
+    "qk-tile": 32,
+    "vo-tile": 32
+  },
+  "named_options": {
+    "frag-prefetch": 1,
+    "frag-prefetch-words": 4
+  },
+  "input_attribute": {
+    "frisk.pipeline_hint": 2
+  },
+  "llvm_as_verified": true,
+  "llvm_o3_verify_passed": true,
+  "target_hsaco_built": false,
+  "performance_measured": false,
+  "generate_script": "generate.sh",
+  "build_and_benchmark_script": "run.sh"
+}

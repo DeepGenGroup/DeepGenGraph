@@ -1,0 +1,87 @@
+{
+  "source": "generated_ir/pipeline_cleanup/nohint_unrolled.ll",
+  "source_sha256": "6ecaf558dedf0c5d0bdbf341d510543f26bd29be0e418c53fcd6651f00ff1b29",
+  "shape_bhsd": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "tile_bm_bn_bk": [
+    128,
+    128,
+    32
+  ],
+  "grid": [
+    32,
+    32,
+    1
+  ],
+  "block": [
+    256,
+    1,
+    1
+  ],
+  "kernel": "Attn_p2",
+  "k_layout": "bhsd",
+  "static_lds_bytes": 16384,
+  "gpu_tested": false,
+  "variants": {
+    "baseline": {
+      "file": "baseline.ll",
+      "sha256": "6ecaf558dedf0c5d0bdbf341d510543f26bd29be0e418c53fcd6651f00ff1b29",
+      "query_group_size": 1,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "group2": {
+      "file": "group2.ll",
+      "sha256": "055f9d9e0cec86e33eb2d1c9abea969cf1e84dd25f1161bfb2d06eb10e2e80e6",
+      "query_group_size": 2,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "group4": {
+      "file": "group4.ll",
+      "sha256": "500771e6ba2a03add4183af811397359e13de35c3fa6e26439839a07384ee5a5",
+      "query_group_size": 4,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "group8": {
+      "file": "group8.ll",
+      "sha256": "e824dc576db800852feb9cc06ad05a71242b5f1cae446a86abea6e237df9bebd",
+      "query_group_size": 8,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "group16": {
+      "file": "group16.ll",
+      "sha256": "81a0f5a9bb224bfe56327db46961ee8d4880c926ae405bbd218d9e17560b1180",
+      "query_group_size": 16,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "query_fast": {
+      "file": "query_fast.ll",
+      "sha256": "48525156f71b0e72c3c2ef60faed246bf3b99aec5e9465417b4335c3a7e688a7",
+      "query_group_size": 32,
+      "reverse_query": false,
+      "entry_only_change": true
+    },
+    "group8_reverse": {
+      "file": "group8_reverse.ll",
+      "sha256": "b82cdd9f10f130753d896a15fc0acb46841bd955e9cacae2bb4f44f453816eb2",
+      "query_group_size": 8,
+      "reverse_query": true,
+      "entry_only_change": true
+    },
+    "query_fast_reverse": {
+      "file": "query_fast_reverse.ll",
+      "sha256": "c057c10779871f7e179fc8c60dd9cc9623d743c151e60509f2380e439bf59888",
+      "query_group_size": 32,
+      "reverse_query": true,
+      "entry_only_change": true
+    }
+  }
+}

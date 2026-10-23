@@ -1,0 +1,77 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD.mlir",
+  "configuration": "existing best_k5; async DMA, alignment 16",
+  "mytest_arguments": [
+    0,
+    "OUTPUT",
+    1,
+    1,
+    "3.3",
+    34816,
+    "approx",
+    256,
+    "4,1",
+    1,
+    1,
+    1,
+    0,
+    0,
+    "MODE"
+  ],
+  "launch": {
+    "kernel": "Attn_p2",
+    "grid": [
+      32,
+      32,
+      1
+    ],
+    "block": [
+      256,
+      1,
+      1
+    ],
+    "shared_mem": 0,
+    "k_layout": "bhsd"
+  },
+  "hardware_tested": false,
+  "variants": {
+    "useKPack": {
+      "bk": 64,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 256,
+      "static_lds_bytes": 32768,
+      "static_dma_calls": 16,
+      "direct_copy_sites": 4,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "eacf2f2380159003361157a5024ec01fc09f51d15cdec59c75f01f6ce86ea03f"
+    },
+    "noKPack": {
+      "bk": 32,
+      "kpack": 2,
+      "dma_bytes_per_lane": 16,
+      "copy_threads": 128,
+      "static_lds_bytes": 16384,
+      "static_dma_calls": 24,
+      "direct_copy_sites": 6,
+      "staging": false,
+      "sync_fallback": false,
+      "llvm_as_and_verifier": "PASS",
+      "cpu_numerics_cases": 4,
+      "cpu_numerics": "PASS (atol=0.01, rtol=0.01)",
+      "sha256": "bf7f772a4f763deb4c057948b9056057ec4a457ae720b07f7e66aac121386de9"
+    }
+  },
+  "target_dtk_instruction_selection": "REJECTED ON TARGET: user reported generic wide async DMA instruction-selection failure",
+  "target_failure": {
+    "source": "User-provided remote llc error; not reproduced locally",
+    "arch": "gfx936",
+    "error": "Cannot select: intrinsic %llvm.amdgcn.global.load.async.lds",
+    "compiler": "AOMP-18.0-12, LLVM 22.0.0, source ce1873ac686bb90ddec72bb99889a4e80e2de382",
+    "scope": "The reported failure does not establish hardware DMA capability or correctness of either kernel"
+  }
+}

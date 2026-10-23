@@ -1,0 +1,2 @@
+PASS HCU operand ABI, narrow-path preservation, guards, waits/barrier, idempotence and host O3
+NOT RUN: DTK gfx936 instruction selection (supply --target-llvm-bin)

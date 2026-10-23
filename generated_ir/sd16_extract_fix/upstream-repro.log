@@ -1,0 +1,4 @@
+generated_ir/sd16_extract_fix/minimal.mlir:6:11: error: 'vector.extract' op mismatch between dynamic and static positions (kDynamic marker but no corresponding dynamic position) -- this can only happen due to an incorrect fold/rewrite
+%result = vector.from_elements %e0, %e1, %e2, %e3 : vector<4xi32>
+          ^
+generated_ir/sd16_extract_fix/minimal.mlir:6:11: note: see current operation: %0 = "vector.extract"(%arg0) <{static_position = array<i64: -9223372036854775808>}> : (vector<2x4xi32>) -> vector<4xi32>

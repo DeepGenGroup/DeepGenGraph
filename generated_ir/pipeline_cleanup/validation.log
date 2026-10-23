@@ -1,0 +1,13 @@
+baseline head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0
+baseline head=1 block=1: allclose=True, max_abs=0.00068259239, mean_abs=5.197573e-05, mismatch=0
+PASS baseline [{"head": 0, "block": 0, "max_abs_error": 0.0010586032113448773, "vm_waits": 12, "barriers": 20, "mmac_with_pending_dma": 192}, {"head": 1, "block": 1, "max_abs_error": 0.0006825797712374237, "vm_waits": 24, "barriers": 40, "mmac_with_pending_dma": 384}]
+wait_only head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0
+wait_only head=1 block=1: allclose=True, max_abs=0.00068259239, mean_abs=5.197573e-05, mismatch=0
+PASS wait_only [{"head": 0, "block": 0, "max_abs_error": 0.0010586032113448773, "vm_waits": 8, "barriers": 16, "mmac_with_pending_dma": 192}, {"head": 1, "block": 1, "max_abs_error": 0.0006825797712374237, "vm_waits": 16, "barriers": 32, "mmac_with_pending_dma": 384}]
+loop_only head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0
+loop_only head=1 block=1: allclose=True, max_abs=0.00068259239, mean_abs=5.197573e-05, mismatch=0
+PASS loop_only [{"head": 0, "block": 0, "max_abs_error": 0.0010586032113448773, "vm_waits": 12, "barriers": 16, "mmac_with_pending_dma": 224}, {"head": 1, "block": 1, "max_abs_error": 0.0006825797712374237, "vm_waits": 24, "barriers": 32, "mmac_with_pending_dma": 448}]
+combined head=0 block=0: allclose=True, max_abs=0.0010585785, mean_abs=8.7113534e-05, mismatch=0
+combined head=1 block=1: allclose=True, max_abs=0.00068259239, mean_abs=5.197573e-05, mismatch=0
+combined head=1 block=31: allclose=True, max_abs=9.5851719e-05, mean_abs=1.2668324e-05, mismatch=0
+PASS combined [{"head": 0, "block": 0, "max_abs_error": 0.0010586032113448773, "vm_waits": 8, "barriers": 12, "mmac_with_pending_dma": 224}, {"head": 1, "block": 1, "max_abs_error": 0.0006825797712374237, "vm_waits": 16, "barriers": 24, "mmac_with_pending_dma": 448}, {"head": 1, "block": 31, "max_abs_error": 9.585399210360057e-05, "vm_waits": 256, "barriers": 384, "mmac_with_pending_dma": 7168}]

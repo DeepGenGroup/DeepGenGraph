@@ -1,0 +1,13 @@
+PASS unroll, static indices and four-load packets: MMMMMMMMMMMMMMMMCCCCCCCCCCCCCCCC -> MMMMCMMMMCMMMMCMMMMCCCCCCCCCCCCC
+PASS RAW/WAR/WAW with aliased arguments and subviews
+PASS boundary barrier
+PASS boundary opaque_asm
+PASS boundary atomic
+PASS boundary call
+PASS boundary conditional
+PASS MMA order and intact hardware padding
+PASS tuned MMA padding remains schedulable and unchanged
+PASS conservative asm recognition extra_instruction
+PASS conservative asm recognition memory_clobber
+PASS CPU baseline
+PASS CPU scheduled
