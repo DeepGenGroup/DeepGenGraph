@@ -25,12 +25,14 @@ def Deepgengraph_RngDistributionAttr : EnumAttr<Deepgengraph_Dialect, Deepgengra
 def DEEPGENGRAPH_REDUCE_ADD : I32EnumAttrCase<"ADD", 1>;
 def DEEPGENGRAPH_REDUCE_MUL : I32EnumAttrCase<"MUL", 2>;
 def DEEPGENGRAPH_REDUCE_ANY : I32EnumAttrCase<"ANY", 3>;
+def DEEPGENGRAPH_REDUCE_MAX : I32EnumAttrCase<"MAX", 4>;
 def Deepgengraph_ReduceType : I32EnumAttr<"ReduceType",
     "Reduce type",
     [
       DEEPGENGRAPH_REDUCE_ADD,
       DEEPGENGRAPH_REDUCE_MUL,
-      DEEPGENGRAPH_REDUCE_ANY
+      DEEPGENGRAPH_REDUCE_ANY,
+      DEEPGENGRAPH_REDUCE_MAX
     ]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::deepgengraph";

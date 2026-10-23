@@ -481,7 +481,7 @@ static bool isFriskArithmeticOp(Operation *op) {
   }
   // Cast preserves the element distribution, so either its input or output
   // can anchor the same bidirectional layout inference as arithmetic ops.
-  return isa<AddOp, SubOp, MulOp, DivOp, Exp2Op, CastOp, FillOp>(op);
+  return isa<AddOp, SubOp, MaxOp, MulOp, DivOp, Exp2Op, CastOp, FillOp>(op);
 }
 
 static void
@@ -1287,9 +1287,27 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
   if (auto read = dyn_cast<ReadMatrixFromShmOp>(op))
     sourceInfo = getNearestInferedInfoEither(buf_info_maps, read.getResult(),
                                             op, preferBefore);
+  // A reduced row carries no information about distribution along columns.
+  // In particular, online softmax broadcasts one alpha row to both score and
+  // output tiles, which can have different widths. Do not seed a full matrix
+  // from that row's inherited (pre-reduction) block_repeat. Wait for a full
+  // operand/result layout; the PV result provides it through bidirectional
+  // inference even when the loop-carried O has not been inferred yet.
+  SmallVector<int64_t, 2> fullShape(2, 1);
+  for (const auto &[value, pos] : memrefs) {
+    auto shape = cast<ShapedType>(value.getType()).getShape();
+    if (shape.size() == 2)
+      for (unsigned dim = 0; dim < 2; ++dim)
+        fullShape[dim] = std::max(fullShape[dim], shape[dim]);
+  }
   for (const auto &[memref, pos] : memrefs) {
     if (sourceInfo) break;
     (void)pos;
+    auto shape = cast<ShapedType>(memref.getType()).getShape();
+    if (shape.size() == 2 &&
+        ((shape[0] == 1 && fullShape[0] > 1) ||
+         (shape[1] == 1 && fullShape[1] > 1)))
+      continue;
     sourceInfo = getNearestInferedInfoEither(buf_info_maps, memref, op,
                                              preferBefore);
     if (sourceInfo != nullptr) {

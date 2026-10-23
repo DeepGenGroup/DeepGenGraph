@@ -4310,13 +4310,14 @@ private:
                                     MLIRContext *context) {
     ConversionTarget target(*context);
     addThreadLevelLegalDialects(target);
-    target.addIllegalOp<frisk::AddOp, frisk::SubOp, frisk::DivOp, frisk::MulOp,
+    target.addIllegalOp<frisk::AddOp, frisk::SubOp, frisk::MaxOp, frisk::DivOp, frisk::MulOp,
                         frisk::Exp2Op, frisk::MaskOp>();
     target.addLegalOp<UnrealizedConversionCastOp>();
 
     RewritePatternSet patterns(context);
     patterns.add<FriskBinaryOpConversion<frisk::AddOp, arith::AddFOp>,
                  FriskBinaryOpConversion<frisk::SubOp, arith::SubFOp>,
+                 FriskBinaryOpConversion<frisk::MaxOp, arith::MaxNumFOp>,
                  FriskBinaryOpConversion<frisk::DivOp, arith::DivFOp>,
                  FriskBinaryOpConversion<frisk::MulOp, arith::MulFOp>,
                  FriskExp2OpConversion>(typeConverter, context);

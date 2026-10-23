@@ -1181,10 +1181,19 @@ struct AffineForEmptyInitsAndYieldPattern : public OpConversionPattern<affine::A
     auto oldYieldOp = mlir::cast<affine::AffineYieldOp>(newBlock->getTerminator());
     rewriter.setInsertionPoint(oldYieldOp);
     for (auto [idx, initVal] : llvm::enumerate(op.getInits())) {
+      // Computed initializers (e.g. the -inf running maximum) are loop
+      // state too, not only alloc_buffer/zero results.
+      // Pointer conversion wrappers carry addresses, not tensor accumulators.
       Operation *initDef = initVal.getDefiningOp();
-      if (!initDef || !isa<frisk::AllocBufferOp, frisk::ZeroOp>(initDef)) {
+      bool tensorMaterialization =
+          isa_and_nonnull<UnrealizedConversionCastOp>(initDef) &&
+          llvm::any_of(initDef->getOperandTypes(),
+                       [](Type type) { return isa<TensorType>(type); });
+      if (!initDef ||
+          (!isa<frisk::AllocBufferOp>(initDef) &&
+           !initDef->hasTrait<frisk::ComputedTile>() &&
+           !tensorMaterialization))
         continue;
-      }
       if (idx >= oldYieldOp.getNumOperands()) {
         continue;
       }
@@ -1393,13 +1402,31 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
       case dg::ReduceType::ADD: kind = "add";break;
       case dg::ReduceType::MUL: kind = "mul";break;
       case dg::ReduceType::ANY: kind = "any";break;
-      default: assert(false); break;
+      case dg::ReduceType::MAX: kind = "max";break;
+      default: return op.emitOpError("unsupported reduction kind");
     }
     auto operand = adaptor.getOperand();
     AppendMemspaceToMemrefValue(operand, inMs[0]);
-    auto reduce = rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), op.getReduceDimension());
-    auto addToOld = rewriter.create<frisk::AddOp>(loc,buffer.getType(), buffer, adaptor.getInit());
-    rewriter.replaceOp(op, addToOld);
+    int64_t dim = op.getReduceDimension();
+    if (dim < 0) dim += inMemTy.getRank();
+    rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), dim);
+    Value result = buffer;
+    if (Value init = adaptor.getInit()) {
+      switch (op.getReduceType()) {
+      case dg::ReduceType::ADD:
+        result = rewriter.create<frisk::AddOp>(loc, buffer.getType(), buffer, init);
+        break;
+      case dg::ReduceType::MUL:
+        result = rewriter.create<frisk::MulOp>(loc, buffer.getType(), buffer, init);
+        break;
+      case dg::ReduceType::MAX:
+        result = rewriter.create<frisk::MaxOp>(loc, buffer.getType(), buffer, init);
+        break;
+      default:
+        return op.emitOpError("unsupported reduction init combination");
+      }
+    }
+    rewriter.replaceOp(op, result);
     return success();
   }
 };

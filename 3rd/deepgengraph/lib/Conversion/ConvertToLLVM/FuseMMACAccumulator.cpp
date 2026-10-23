@@ -40,17 +40,19 @@ llvm::CallInst *getMMAC(llvm::Value *value) {
   return call;
 }
 
-bool collectSeedExtracts(llvm::Value *value, llvm::Instruction *before,
-                        llvm::DominatorTree &dominance,
-                        llvm::SmallVectorImpl<llvm::Instruction *> &moves) {
+bool collectSeedComputations(llvm::Value *value, llvm::Instruction *before,
+                             llvm::DominatorTree &dominance,
+                             llvm::SmallVectorImpl<llvm::Instruction *> &moves) {
   if (dominance.dominates(value, before)) return true;
   auto *inst = llvm::dyn_cast<llvm::Instruction>(value);
   if (!inst || inst->getParent() != before->getParent() ||
-      !llvm::isa<llvm::ExtractValueInst, llvm::ExtractElementInst,
-                 llvm::ShuffleVectorInst>(inst)) return false;
+      (!llvm::isa<llvm::ExtractValueInst, llvm::ExtractElementInst,
+                  llvm::InsertValueInst, llvm::InsertElementInst,
+                  llvm::ShuffleVectorInst>(inst) &&
+       inst->getOpcode() != llvm::Instruction::FMul)) return false;
   if (llvm::is_contained(moves, inst)) return true;
   for (llvm::Value *operand : inst->operands())
-    if (!collectSeedExtracts(operand, before, dominance, moves)) return false;
+    if (!collectSeedComputations(operand, before, dominance, moves)) return false;
   moves.push_back(inst);
   return true;
 }
@@ -77,8 +79,11 @@ llvm::PreservedAnalyses FuseMMACAccumulatorPass::run(
         llvm::Value *seed = inst.getOperand(1 - side);
         llvm::SmallVector<llvm::Instruction *> extracts;
         if (!zero || !zero->isNullValue() ||
-            !collectSeedExtracts(seed, first, dominance, extracts)) continue;
-        // Move only pure extracts of already available values. Keep all MMAC
+            !collectSeedComputations(seed, first, dominance, extracts)) continue;
+        // Move only aggregate/vector construction and unconstrained multiplies
+        // of already available values (e.g. broadcast(alpha) * O). Never move
+        // a load or call, or move instructions across a block boundary.
+        // StrictFP functions are excluded above. Keep all MMAC
         // calls, their order, padding, side effects and convergence intact.
         for (auto *extract : extracts) extract->moveBefore(first->getIterator());
         first->setArgOperand(2, seed);

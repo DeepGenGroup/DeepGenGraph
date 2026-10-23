@@ -70,7 +70,7 @@ public:
           connect(loop.getInitArgs()[i], loop.getResult(i));
           connect(loop.getInitArgs()[i], yield.getOperand(i));
         }
-      } else if (mlir::isa<tileDG::AddOp, tileDG::MulOp, tileDG::DivOp,
+      } else if (mlir::isa<tileDG::AddOp, tileDG::SubOp, tileDG::MulOp, tileDG::DivOp,
                            tileDG::ConvertOp, tileDG::Exp2Op>(op)) {
         // Broadcast dimensions of size one do not follow a wider tile axis.
         for (mlir::Value result : op->getResults())
@@ -219,7 +219,16 @@ mlir::LogicalResult configureSplitDAttention(mlir::ModuleOp module, bool kpack,
   auto marker = builder.getUnitAttr();
   output->setAttr(outputTileMarker, marker);
   qk->setAttr(qkTileMarker, marker);
-  keyLoop.walk([&](tileDG::Exp2Op exp) { exp->setAttr(expTileMarker, marker); });
+  // Track the probability matrix consumed by PV, not the row-wise exp2 used
+  // to rescale an online softmax recurrence. Both are shared computations,
+  // but counting every exp2 as a separate softmax falsely rejects online IR.
+  mlir::Value probability = pv.getLhs();
+  if (auto cast = probability.getDefiningOp<tileDG::ConvertOp>())
+    probability = cast.getOperand();
+  auto weightExp = probability.getDefiningOp<tileDG::Exp2Op>();
+  if (!weightExp)
+    return pv.emitError("expected PV probabilities produced by exp2 and optional convert");
+  weightExp->setAttr(expTileMarker, marker);
   if (kpack && oldQK == oldVO && newQK == newVO)
     llvm::errs() << "useKPack: DMA=" << dma->bytesPerLane << "B, MMAC input=" << fragmentBytes
                  << "B, kpack=" << factor << ", BK=" << oldQK << " -> " << newQK << "\n";

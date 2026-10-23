@@ -131,7 +131,7 @@ def main():
         for bm, bn, bk, budget in [(32, 64, 32, 24576), (64, 32, 16, 24576),
                                     (128, 128, 32, 24576), (128, 128, 32, 28672)]:
             path = Path(tmp) / f'{bm}-{bn}-{bk}.mlir'
-            path.write_text(generate_ir(source, bm, bn, bk)[0])
+            path.write_text(generate_ir(source, bm, bn, bk, softmax="legacy")[0])
             output = path.with_suffix('.ll')
             proc = subprocess.run([str(mytest), str(path), '0', str(output),
                                    '1', '1', '3.3', str(budget), 'strict'],

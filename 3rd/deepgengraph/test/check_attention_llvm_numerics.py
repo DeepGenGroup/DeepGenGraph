@@ -175,6 +175,8 @@ class LLVMWorkgroupModel:
             return out
         name, args = re.search('@([\\w.]+)\\((.*)\\)', body).groups()
         args = [self.typed(x) for x in split_args(args)] if args else []
+        if name.startswith('llvm.maxnum.'):
+            return np.fmax(args[0], args[1])
         if name.endswith('workgroup.id.x'):
             return np.full(self.t, self.head, dtype=np.int64)
         if name.endswith('workgroup.id.y'):
@@ -319,7 +321,7 @@ class LLVMWorkgroupModel:
             return np.trunc(a / b).astype(np.int64)
         if op == 'lshr' and bits < 64:
             a = a % (1 << bits)
-        funcs = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or, 'xor': np.bitwise_xor, 'shl': np.left_shift, 'lshr': np.right_shift, 'ashr': np.right_shift, 'fadd': np.add, 'fmul': np.multiply, 'fdiv': np.divide}
+        funcs = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or, 'xor': np.bitwise_xor, 'shl': np.left_shift, 'lshr': np.right_shift, 'ashr': np.right_shift, 'fadd': np.add, 'fsub': np.subtract, 'fmul': np.multiply, 'fdiv': np.divide}
         assert op in funcs, expr
         result = funcs[op](a, b)
         if bits and bits < 64:

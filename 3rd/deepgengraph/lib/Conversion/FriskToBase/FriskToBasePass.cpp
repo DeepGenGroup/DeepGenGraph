@@ -303,6 +303,16 @@ public:
       }
       auto vectorType =
           VectorType::get(memrefType.getShape(), memrefType.getElementType());
+      Operation *producer = buffer.getDefiningOp();
+      if (producer && producer->hasTrait<frisk::ComputedTile>() &&
+          !isa<frisk::ZeroOp>(producer)) {
+        // Preserve computed initial values when promoting mutable loop state
+        // to SSA vectors. In particular, online softmax starts m at -inf.
+        auto init = rewriter.create<frisk::CastOp>(op.getLoc(), vectorType, buffer);
+        vectorTypes.push_back(vectorType);
+        vectorInits.push_back(init.getResult());
+        continue;
+      }
       Attribute zeroAttr = rewriter.getZeroAttr(memrefType.getElementType());
       if (!zeroAttr) {
         return failure();

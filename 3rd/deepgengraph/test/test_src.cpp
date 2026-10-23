@@ -726,7 +726,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     if (!blockWarps.empty())
       function->setAttr("frisk.block_warps", builder.getDenseI64ArrayAttr(blockWarps));
   });
-  if (failed(annotateAttentionSeqLenPipeline(*src)))
+  if (isPipelineSched && failed(annotateAttentionSeqLenPipeline(*src)))
     return 1;
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif

@@ -34,7 +34,7 @@ struct Transfer {
 // tiles. Gemm's legacy unqualified MemWrite effect describes its result, not
 // mutation of A/B. Do not extend this exception to arbitrary ComputedTile ops.
 bool readsOperands(Operation *op) {
-  return isa<frisk::GemmOp, frisk::AddOp, frisk::SubOp, frisk::MulOp,
+  return isa<frisk::GemmOp, frisk::AddOp, frisk::SubOp, frisk::MaxOp, frisk::MulOp,
              frisk::DivOp, frisk::Exp2Op, frisk::CastOp,
              frisk::ReadMatrixFromShmOp>(op);
 }

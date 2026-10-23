@@ -93,7 +93,8 @@ static int GetOperandMemspace(mlir::Value operand){
   }
   // operand 源于 reduce_op 的结果 ： memspace和 init 参数的memspace相同
   if(auto reduceOp = mlir::dyn_cast<dg::ReduceOp>(defOp)){
-    return GetOperandMemspace(reduceOp.getInit());
+    return reduceOp.getInit() ? GetOperandMemspace(reduceOp.getInit())
+                             : int(frisk::attr::MemorySpace::Local);
   }
   // operand 源于 affineFor的返回（affineYield 更新iterArgs） ： 等于initArg中的对应value的memspace
   if(auto forOp = mlir::dyn_cast<affine::AffineForOp>(defOp)){
@@ -279,10 +280,9 @@ struct DataflowAnalyzePass : public PassWrapper<DataflowAnalyzePass, OperationPa
                 else {
                   resultIdx = 0;
                 }
-              } else {
-                // 如果 cast 失败，说明它是 BlockArgument 等，非 Operation 结果
-                continue;
               }
+              // Loop block arguments resolve to their initializer above. Its
+              // result memory space also applies to the carried value.
 
               // 获取 defOp 的 OUT_MEMSPACE 属性并赋值给当前的 inMs
               if (defOp->hasAttr(OUT_MEMSPACE)) {

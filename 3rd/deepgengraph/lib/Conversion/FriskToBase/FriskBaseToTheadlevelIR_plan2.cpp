@@ -341,7 +341,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
       // Elementwise producers (e.g. scaling Q before MMA) read the same
       // operand fragments. Include them in the all-access packing proof;
       // previously only direct GEMM users were considered, leaving Q plain.
-      bool elementwise = isa<frisk::AddOp, frisk::SubOp, frisk::MulOp,
+      bool elementwise = isa<frisk::AddOp, frisk::SubOp, frisk::MaxOp, frisk::MulOp,
                              frisk::DivOp, frisk::Exp2Op, frisk::CastOp>(user);
       if (gemm || elementwise) {
         auto *info = layouts.getLowerInfo(buffer, user);
@@ -1155,6 +1155,20 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
       continue;
     Value carrier = add.getLhs() == convert->getResult(0)
                         ? add.getRhs() : add.getLhs();
+    // Online softmax carries alpha * O + PV. Only a single-use, row-wise
+    // scale is eligible; prove that projecting the C permutation onto rows
+    // leaves alpha's lane/register coordinates unchanged before moving it.
+    frisk::MulOp scale = carrier.getDefiningOp<frisk::MulOp>();
+    Value alpha;
+    if (scale) {
+      if (scale->getBlock() != loop.getBody() || !scale->hasOneUse())
+        continue;
+      carrier = scale.getLhs();
+      alpha = scale.getRhs();
+      auto lhsArg = dyn_cast<BlockArgument>(carrier);
+      if (!lhsArg || lhsArg.getOwner() != loop.getBody())
+        std::swap(carrier, alpha);
+    }
     auto arg = dyn_cast<BlockArgument>(carrier);
     if (!arg || arg.getOwner() != loop.getBody() || arg.getArgNumber() == 0 ||
         !isa<VectorType>(arg.getType()))
@@ -1174,7 +1188,8 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
         map.getResult(0) != getAffineConstantExpr(2, kernel.getContext()))
       continue;
     if (llvm::any_of(carrier.getUses(), [&](OpOperand &use) {
-          return use.getOwner() != add && use.getOwner() != copy &&
+          return use.getOwner() != (scale ? scale.getOperation() : add.getOperation()) &&
+                 use.getOwner() != copy &&
                  use.getOwner() != yield;
         }))
       continue;
@@ -1185,6 +1200,32 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     auto type = cast<ShapedType>(carrier.getType());
     if (type.getShape() != cast<ShapedType>(convert.getMemref().getType()).getShape())
       continue;
+    std::optional<LowerInfo> alphaLayout;
+    if (scale) {
+      auto alphaType = dyn_cast<ShapedType>(alpha.getType());
+      auto *oldAlpha = infos.getLowerInfo(alpha, scale);
+      auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+      if (!alphaType || alphaType.getRank() != 2 ||
+          alphaType.getDimSize(0) != type.getDimSize(0) ||
+          alphaType.getDimSize(1) != 1 || !oldAlpha || !threads)
+        continue;
+      LowerInfo projected = source;
+      projected.buffer = alpha;
+      projected.op = scale;
+      projected.pos = LowerInfo::BufPos::In;
+      projected.ignoreDim = 1;
+      projected.thread_own_data_size[1] = 1;
+      projected.convertFrom = nullptr;
+      auto oldTile = getFullThreadTileType(alpha, *oldAlpha);
+      auto newTile = getFullThreadTileType(alpha, projected);
+      if (failed(oldTile) || failed(newTile) || *oldTile != *newTile ||
+          !sameThreadTileCoordinates(
+              effectiveThreadTileMap(*oldAlpha, alphaType, *oldTile, kernel.getContext()),
+              effectiveThreadTileMap(projected, alphaType, *newTile, kernel.getContext()),
+              *newTile, threads.getInt()))
+        continue;
+      alphaLayout = projected;
+    }
     OpBuilder b(loop);
     b.setInsertionPointAfter(loop);
     Value result = loop.getResult(index);
@@ -1198,6 +1239,7 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     for (auto &entry : infos) {
       auto &info = entry.second;
       if (info.buffer != carrier && info.buffer != add.getResult() &&
+          !(scale && info.buffer == scale.getResult()) &&
           !(info.buffer == result && info.op == loop) &&
           !(info.buffer == loop.getInits()[index] && info.op == loop))
         continue;
@@ -1214,6 +1256,8 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     input.buffer = convert.getMemref();
     input.pos = LowerInfo::BufPos::In;
     infos.addLowerInfo(add, input);
+    if (alphaLayout)
+      infos.addLowerInfo(scale, *alphaLayout);
     convert->getResult(0).replaceAllUsesWith(convert.getMemref());
     convertLayoutInfo.erase(convert);
     convert.erase();
@@ -3716,7 +3760,7 @@ public:
 static bool isBlockTileOperation(Operation *op) {
   if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(op))
     return read.isBlockForm();
-  return isa<frisk::GemmOp, frisk::MaskOp, frisk::AddOp, frisk::SubOp,
+  return isa<frisk::GemmOp, frisk::MaskOp, frisk::AddOp, frisk::SubOp, frisk::MaxOp,
       frisk::MulOp, frisk::DivOp, frisk::Exp2Op, frisk::CastOp, frisk::CopyOp,
       frisk::CopyToRegOp, frisk::FillOp, frisk::ZeroOp, frisk::ReduceOp,
       frisk::BlockOp, frisk::ConvertLayoutOp, frisk::AllocBufferOp>(op);
@@ -4039,6 +4083,7 @@ public:
         ReduceOpTiling, BlockOpTiling, ConvertLayoutOpTiling>(context);
     patterns.add<FriskBinaryOpTiling<frisk::AddOp, arith::AddFOp>,
         FriskBinaryOpTiling<frisk::SubOp, arith::SubFOp>,
+        FriskBinaryOpTiling<frisk::MaxOp, arith::MaxNumFOp>,
         FriskBinaryOpTiling<frisk::MulOp, arith::MulFOp>,
         FriskBinaryOpTiling<frisk::DivOp, arith::DivFOp>>(context);
     if (failed(applyPartialConversion(kernel, target, std::move(patterns)))) {

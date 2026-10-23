@@ -165,6 +165,28 @@ def main():
             assert normalized == twice
         print("PASS shared fallback, multiple tile shapes/waves and repeated tiling")
 
+        # A row scale commutes with C's column-lane permutation. Column scales
+        # do not: retain the in-loop conversion unless their mapping is proved.
+        for reverse, factor_shape in [(False, '32x1'), (True, '32x1'), (False, '1x32')]:
+            lhs, rhs = ('%alpha', '%acc') if reverse else ('%acc', '%alpha')
+            lhs_ty, rhs_ty = (f'memref<{factor_shape}xf32>', 'vector<32x32xf32>') if reverse else (
+                'vector<32x32xf32>', f'memref<{factor_shape}xf32>')
+            source = f'''func.func @scaled(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %alpha: memref<{factor_shape}xf32>) -> vector<32x32xf32> attributes {{thread_num = 64 : i32}} {{
+  %init = arith.constant dense<0.0> : vector<32x32xf32>
+  %out = affine.for %i = 0 to 3 iter_args(%acc = %init) -> vector<32x32xf32> {{
+    %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+    %scaled = frisk.mul {lhs}, {rhs} : {lhs_ty}, {rhs_ty} -> memref<32x32xf32>
+    %next = frisk.add %scaled, %g : memref<32x32xf32>, memref<32x32xf32> -> memref<32x32xf32>
+    frisk.copy %next to %acc [affine_map<() -> (2)>] : memref<32x32xf32>, vector<32x32xf32>
+    affine.yield %acc : vector<32x32xf32>
+  }}
+  return %out : vector<32x32xf32>
+}}'''
+            _, log = run(directory, f'scaled-{reverse}-{factor_shape}', source,
+                         '--convert-friskbase-to-thread')
+            assert ('"loop_result"' in log) == (factor_shape == '32x1'), log[-6000:]
+        print('PASS row-scaled loop layout sinking in both operand orders; column-scale fallback')
+
         attention, _ = run(directory, "attention", (HERE / "test_friskBaseDebug.mlir").read_text(),
                            "--convert-friskbase-to-thread", "--finalize-thread-tiling",
                            "--frisk-frag-ir-reorder", "--lower-frisk-fragments")

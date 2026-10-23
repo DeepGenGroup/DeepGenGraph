@@ -80,6 +80,27 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
   ret <4 x float> %r
 }}
 '''
+    for name, attr, late in [('late_scale', '', False),
+                             ('strict_scale', 'strictfp', False),
+                             ('late_loaded_scale', '', True)]:
+        seed = ('  %row = load volatile <4 x float>, ptr %p\n'
+                if late else '  %row = extractvalue [2 x <4 x float>] %carrier, 1\n')
+        source += f'''define <4 x float> @{name}(<4 x half> %a, <4 x half> %b, [2 x <4 x float>] %carrier, <4 x float> %alpha, ptr %p) {attr} {{
+  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+{seed}  %scaled = fmul <4 x float> %row, %alpha
+  %result = fadd <4 x float> %x, %scaled
+  ret <4 x float> %result
+}}
+'''
+    source += f'''define <4 x float> @late_broadcast_scale(<4 x half> %a, <4 x half> %b, <4 x float> %carrier, float %alpha) {{
+  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+  %insert = insertelement <4 x float> poison, float %alpha, i32 0
+  %broadcast = shufflevector <4 x float> %insert, <4 x float> poison, <4 x i32> zeroinitializer
+  %scaled = fmul <4 x float> %carrier, %broadcast
+  %result = fadd <4 x float> %x, %scaled
+  ret <4 x float> %result
+}}
+'''
     strict = run([tool, '-'], source)
     native_only = run([tool, '--native-exp2', '-'], source)
     reciprocal_only = run([tool, '--reciprocal', '-'], source)
@@ -89,11 +110,14 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
     assert strict.count('fdiv float') == 2 and '@llvm.amdgcn.exp2' not in strict
     fusion = run([tool, '--fuse-mmac-accumulator', '-'], source)
     fused_body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', fusion, re.S)[0]
-    for name in ('fuse', 'late_extract', 'reverse_add'):
-        assert 'fadd' not in fused_body(name) and 'zeroinitializer' not in fused_body(name)
-    for name in ('nonzero', 'multiuse', 'late_load', 'cross_block', 'unknown_asm', 'strict_fp'):
+    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale'):
+        assert 'fadd' not in fused_body(name) and '<4 x float> zeroinitializer' not in fused_body(name)
+    for name in ('nonzero', 'multiuse', 'late_load', 'cross_block', 'unknown_asm', 'strict_fp',
+                 'strict_scale', 'late_loaded_scale'):
         assert 'fadd' in fused_body(name), name
     assert fused_body('late_load').index('call ') < fused_body('late_load').index('load volatile')
+    assert fused_body('late_scale').index('fmul ') < fused_body('late_scale').index('call ')
+    assert fused_body('late_loaded_scale').index('call ') < fused_body('late_loaded_scale').index('load volatile')
     assert fusion.count('v_mmac_') == source.count('v_mmac_')
     assert fused_body('normalize').count('fdiv float') == 2
     assert '@__ocml_exp2_f32' in fused_body('normalize')

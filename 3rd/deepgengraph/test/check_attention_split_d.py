@@ -168,9 +168,15 @@ def execute(nodes, env, grid):
                      block_args[1]: col + np.arange(shape[1])[None, :]}
             value = np.broadcast_to(execute(body, local, grid)[0], shape).astype(np.float32)
         elif op.startswith("frisk.reduce"):
-            assert 'kind = "add"' in op
             axis = int(re.search(r"dim = (\d+)", op)[1])
-            env[args[1]][...] = env[args[0]].sum(axis=axis, keepdims=True, dtype=np.float32)
+            kind = re.search(r'kind = "(\w+)"', op)[1]
+            if kind == 'add':
+                value = env[args[0]].sum(axis=axis, keepdims=True, dtype=np.float32)
+            elif kind == 'max':
+                value = env[args[0]].max(axis=axis, keepdims=True)
+            else:
+                raise AssertionError(f'Unsupported reduction: {kind}')
+            env[args[1]][...] = value
             continue
         elif op.startswith("frisk.gemm"):
             assert "transA = false, transB = false" in op
@@ -179,8 +185,9 @@ def execute(nodes, env, grid):
             value = np.exp2(env[args[0]])
         elif op.startswith("frisk.cast"):
             value = np.asarray(env[args[0]]).astype(result_type(op)[1])
-        elif op.startswith(("frisk.add", "frisk.mul", "frisk.div")):
-            fn = {"frisk.add": np.add, "frisk.mul": np.multiply, "frisk.div": np.divide}[op.split()[0]]
+        elif op.startswith(("frisk.add", "frisk.sub", "frisk.max", "frisk.mul", "frisk.div")):
+            fn = {"frisk.add": np.add, "frisk.sub": np.subtract, "frisk.max": np.fmax,
+                  "frisk.mul": np.multiply, "frisk.div": np.divide}[op.split()[0]]
             value = fn(env[args[0]], env[args[1]]).astype(result_type(op)[1])
         else:
             raise AssertionError(f"Unsupported IR (do not silently skip): {op}")
@@ -231,7 +238,8 @@ def main():
     fixture_bm, fixture_bn, fixture_bk = (
         int(re.search(rf'%c{name} = arith.constant (\d+)', fixture_text)[1])
         for name in ('BM', 'BN', 'BK'))
-    assert fixture_text == generate_ir(source, fixture_bm, fixture_bn, fixture_bk)[0]
+    # This fixture deliberately records the historical non-stable kernel.
+    assert fixture_text == generate_ir(source, fixture_bm, fixture_bn, fixture_bk, softmax="legacy")[0]
     for bk in (0, -1, 3, 129):
         try:
             generate_ir(source, 64, 32, bk)
@@ -244,7 +252,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="attention-split-d-") as directory:
         for bm, bn, bk in configs:
             path = Path(directory) / f"attention-{bm}-{bn}-{bk}.mlir"
-            ir, _ = generate_ir(small, bm, bn, bk)
+            ir, _ = generate_ir(small, bm, bn, bk, softmax="legacy")
             assert ir.split("  deepgengraph.kernel", 1)[0] == small.split("  deepgengraph.kernel", 1)[0]
             path.write_text(ir)
             output = path.with_suffix(".ll")

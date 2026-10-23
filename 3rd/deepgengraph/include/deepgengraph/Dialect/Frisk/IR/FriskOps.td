@@ -729,6 +729,8 @@ class Frisk_UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
 // 3. 实例化具体的算子
 def Frisk_AddOp : Frisk_ArithmeticOp<"add", [Commutative]>; // 加法支持交换律 Trait
 def Frisk_SubOp : Frisk_ArithmeticOp<"sub">;
+// Floating-point maxNum, also used to combine reduce(max) with its init.
+def Frisk_MaxOp : Frisk_ArithmeticOp<"max", [Commutative]>;
 def Frisk_MulOp : Frisk_ArithmeticOp<"mul", [Commutative]>; // 乘法支持交换律 Trait
 def Frisk_DivOp : Frisk_ArithmeticOp<"div">;
 def Frisk_Exp2Op : Frisk_UnaryArithmeticOp<"exp2">;

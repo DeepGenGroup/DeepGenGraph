@@ -58,7 +58,7 @@ public:
     // legacy unqualified effects do not mean writes to those operands. Do not
     // infer this from the trait alone: it describes results, not all effects.
     // In particular this lets K readiness move past Q scaling, up to GEMM.
-    if (isa<AddOp, SubOp, MulOp, DivOp, Exp2Op, CastOp, GemmOp, ZeroOp>(op)) {
+    if (isa<AddOp, SubOp, MaxOp, MulOp, DivOp, Exp2Op, CastOp, GemmOp, ZeroOp>(op)) {
       for (Value operand : op->getOperands())
         if (isa<BaseMemRefType>(operand.getType()) &&
             mayAlias(operand, issue.getDst()))
