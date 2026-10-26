@@ -8,6 +8,8 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   IROptimize.cpp
   FuseFragmentAccumulator.cpp
   FuseMMACAccumulator.cpp
+  MaskAddBypass.cpp
+  LocalReduction.cpp
   CanonicalizeLDSGEPs.cpp
   OptimizeRegisterLifetimes.cpp
   OptimizeRegisterMath.cpp

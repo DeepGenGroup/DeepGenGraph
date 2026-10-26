@@ -1,4 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -11,10 +12,28 @@
 int main(int argc, char **argv) {
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
+  llvm::StringRef maskAddBypass;
+  llvm::StringRef localReduce;
+  mlir::frisk::LocalReductionOptions localReductionOptions;
   llvm::SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     llvm::StringRef option(argv[i]);
-    if (option.consume_front("--frag-prefetch=")) {
+    bool consumed = false;
+    if (!mlir::frisk::parseLocalReductionOption(option, localReduce, localReductionOptions, consumed)) {
+      llvm::errs() << "invalid local-reduce option: " << option << "\n";
+      return 1;
+    }
+    if (consumed) continue;
+    if (option.consume_front("--mask-add-bypass=")) {
+      if (option != "off" && option != "legal" && option != "approx") {
+        llvm::errs() << "mask-add-bypass must be off, legal, or approx\n";
+        return 1;
+      }
+      maskAddBypass = option;
+    } else if (option.starts_with("--mask-add-bypass")) {
+      llvm::errs() << "use --mask-add-bypass=off|legal|approx\n";
+      return 1;
+    } else if (option.consume_front("--frag-prefetch=")) {
       if (option != "0" && option != "1") {
         llvm::errs() << "frag-prefetch must be 0 or 1\n";
         return 1;
@@ -34,6 +53,32 @@ int main(int argc, char **argv) {
   }
   argc = positional.size();
   argv = positional.data();
+  if (!localReductionOptions.valid()) {
+    llvm::errs() << "local-reduce requires chains=2..16, min-inputs>=2*chains and <=2048\n";
+    return 1;
+  }
+  // Exact standalone A/B path: do not prepare MMA attributes, change LDS
+  // descriptors or run unrelated optimizations on an already-exported IR.
+  if (!maskAddBypass.empty() || !localReduce.empty()) {
+    if (argc != 2 || fragPrefetch) {
+      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] <input.ll>\n";
+      return 1;
+    }
+    llvm::LLVMContext context;
+    llvm::SMDiagnostic diagnostic;
+    auto module = llvm::parseIRFile(argv[1], diagnostic, context);
+    if (!module) {
+      diagnostic.print(argv[0], llvm::errs());
+      return 1;
+    }
+    if (!maskAddBypass.empty() && maskAddBypass != "off")
+      mlir::frisk::bypassMaskAdds(*module, maskAddBypass == "approx");
+    if (!localReduce.empty() && localReduce != "off")
+      mlir::frisk::optimizeLocalReductions(*module, localReductionOptions);
+    if (llvm::verifyModule(*module, &llvm::errs())) return 1;
+    module->print(llvm::outs(), nullptr);
+    return 0;
+  }
   if (argc == 3 && (llvm::StringRef(argv[1]) == "--legalize-text" ||
                     llvm::StringRef(argv[1]) == "--llvm22-text")) {
     auto buffer = llvm::MemoryBuffer::getFileOrSTDIN(argv[2]);

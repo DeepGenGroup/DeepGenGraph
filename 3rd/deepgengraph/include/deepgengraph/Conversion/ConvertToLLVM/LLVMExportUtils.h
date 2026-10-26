@@ -48,6 +48,11 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
 void fuseMMACAccumulators(llvm::Module &module);
 
+/// Bypass score+zero on an existing clear-mask branch. Legal mode requires
+/// LLVM to prove the identity; allowSignedZero explicitly permits ignoring
+/// signed zero for matched additions only. No memory/call/CFG changes.
+void bypassMaskAdds(llvm::Module &module, bool allowSignedZero = false);
+
 /// Shorten address, integer-predicate and math/narrowing live ranges on AMDGPU.
 /// Repeated i64 predicates with common upper words share those tests and use
 /// local i32 low-word operands, preserving the complete signed/unsigned range.

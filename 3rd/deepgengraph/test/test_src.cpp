@@ -2,6 +2,7 @@
 #include "SplitDAttentionTiles.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -417,12 +418,30 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool fragPrefetch = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
+  StringRef maskAddBypass = "off";
+  StringRef localReduce = "off";
+  frisk::LocalReductionOptions localReductionOptions;
   unsigned fragPrefetchWords = 8;
   unsigned retainFragmentWords = 0;
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
-    if (option.consume_front("--retain-fragment-words=")) {
+    bool consumed = false;
+    if (!frisk::parseLocalReductionOption(option, localReduce, localReductionOptions, consumed)) {
+      llvm::errs() << "invalid local-reduce option: " << option << "\n";
+      return 1;
+    }
+    if (consumed) continue;
+    if (option.consume_front("--mask-add-bypass=")) {
+      if (option != "off" && option != "legal" && option != "approx") {
+        llvm::errs() << "mask-add-bypass must be off, legal, or approx\n";
+        return 1;
+      }
+      maskAddBypass = option;
+    } else if (option.starts_with("--mask-add-bypass")) {
+      llvm::errs() << "use --mask-add-bypass=off|legal|approx\n";
+      return 1;
+    } else if (option.consume_front("--retain-fragment-words=")) {
       if (option.getAsInteger(10, retainFragmentWords)) {
         llvm::errs() << "retain-fragment-words must be a nonnegative integer\n";
         return 1;
@@ -528,6 +547,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   StringRef mathMode = argc > 8 ? argv[8] : "strict";
+  if (!localReductionOptions.valid()) {
+    llvm::errs() << "local-reduce requires chains=2..16, min-inputs>=2*chains and <=2048\n";
+    return 1;
+  }
+  if (localReduce == "approx" && mathMode != "approx") {
+    llvm::errs() << "local-reduce=approx requires math=approx; use legal for strict math\n";
+    return 1;
+  }
+  if (maskAddBypass == "approx" && mathMode != "approx") {
+    llvm::errs() << "mask-add-bypass=approx requires math=approx; use legal for strict math\n";
+    return 1;
+  }
   bool optimizeLifetimes = argc < 12 || StringRef(argv[11]) == "1";
   bool uniformMasks = argc > 12 && StringRef(argv[12]) == "1";
   bool prefetchPackets = argc > 13 && StringRef(argv[13]) == "1";
@@ -911,6 +942,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-exp2", mathMode == "mmac-recip");
   else if (mathMode == "mmac")
     frisk::fuseMMACAccumulators(*llvmModule);
+  if (maskAddBypass != "off")
+    frisk::bypassMaskAdds(*llvmModule, maskAddBypass == "approx");
+  if (localReduce != "off")
+    frisk::optimizeLocalReductions(*llvmModule, localReductionOptions);
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
   if (optimizeLifetimes)

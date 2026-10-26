@@ -1461,8 +1461,8 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
   if (inferArithmeticOp(op, buf_info_maps, preferBefore)) {
     return true;
   }
-
-  assert(false && "the operation can not be recognized.");
+  auto name = op->getName().getStringRef();
+  assert(false && "the operation can not be recognized." + name);
   LLVM_OUT_MSG("---- inferError 6");
   return false;
 }
