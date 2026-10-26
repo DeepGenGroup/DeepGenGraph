@@ -7,15 +7,23 @@
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 32 --output 3rd/deepgengraph/test/test_input_spidD.mlir
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 64 --output-dir generated_ir
 
+标准输出为每行一个生成文件的绝对路径，可直接交给 TuneAttention：
+  set -o pipefail
+  python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 --output-dir generated_ir/tiles |
+    python3 TuneAttention.py --input-list - --case baseline
+未指定 --bk 时，可使用 TuneAttention 的 --case legacy-baseline。
+在目标 GPU 环境给 TuneAttention 加 --benchmark，可继续生成 HSACO 并校验、测时。
+
 输出名：test_input_{B}x{H}x{S}x{D}-{BM}-{BN}.mlir。
 模板的输入布局为 BSHD；文件名使用 BHSD。只改变 kernel 的分块参数，
-保留模板中的寻址、计算及缩放方式，func.func @Attn 原文保持不变。
+保留模板中的寻址及预缩放方式；默认生成 online softmax。
 BM、BN 必须为 S 的正整数因子，因为模板没有尾块越界保护。
 生成 IR 不代表所有分块都满足后端的硬件指令和共享内存限制。
 指定 BK 时输出名增加 -{BK}；BK 必须整除 D。不指定则保留原 BM/BN 模式。
 split-D 的 QK 使用 f32 累加，完成整个 D 的规约后才计算 mask/exp2。
 V/O 按输出列分块（不沿输出 D 求和），每个输出块重算 QK/分母。
-沿用模板的预缩放与非稳定 exp2 softmax，不改变其数值范围限制。
+默认维护跨 key tile 的行最大值，并同步重缩放分母和输出累加器。
+--softmax legacy 可复现历史非稳定 exp2 版本；online 文件名增加 -online。
 """
 
 import argparse
@@ -35,9 +43,11 @@ def replace_once(text, pattern, replacement):
     return result
 
 
-def generate_ir(source, bm, bn, bk=None):
+def generate_ir(source, bm, bn, bk=None, softmax="online"):
     """返回 (IR 文本, BHSD)，针对仓库中 BM=64、BN=32 的模板。"""
-    # 单独截取 kernel；其前后的字节（包括完整 Attn）不做任何替换。
+    if softmax not in ("online", "legacy"):
+        raise ValueError("softmax 必须为 online 或 legacy")
+    # 分块替换仅作用于 kernel；online 模式另外稳定化高层 Attn。
     kernels = list(re.finditer(r"^  deepgengraph\.kernel @Attn_p2\(", source, re.M))
     if len(kernels) != 1:
         raise ValueError("模板必须包含一个 deepgengraph.kernel @Attn_p2")
@@ -92,8 +102,13 @@ def generate_ir(source, bm, bn, bk=None):
         r"size_per_unit = 64 : i64, unit_num = \d+ : i64",
         lambda m: f"{m[1]}size_per_unit = {bm} : i64, unit_num = {s // bm} : i64",
     )
+    # Grid follows entry argument order [z, y, x]; bx denotes the query tile.
+    axes = re.search(r"\^bb0\(%bz: index, %(bx|by): index, %(bx|by): index,", kernel)
+    if axes is None or axes[1] == axes[2]:
+        raise ValueError("模板入口必须包含 bz 和不同的 bx/by 轴")
+    extents = {"bx": s // bm, "by": h}
     kernel = replace_once(kernel, r"grid = \[\d+, \d+, \d+\]",
-                          f"grid = [{b}, {s // bm}, {h}]")
+                          f"grid = [{b}, {extents[axes[1]]}, {extents[axes[2]]}]")
 
     # 用语义化 SSA 名称，BM/BN 与 D/H 相等时也不会出现重复定义。
     kernel = re.sub(r"%c(?:64|32)\b",
@@ -108,9 +123,78 @@ def generate_ir(source, bm, bn, bk=None):
                           lambda m: f"{m[1]}[{bn}, 0]")
     if bk is not None:
         kernel = split_d_kernel(kernel, b, h, s, d, bm, bn, bk)
+    if softmax == "online":
+        kernel = online_softmax_kernel(kernel, bm, bn, d, bk)
     # causal attention 需覆盖当前 Q tile 的全部有效 key：(bx + 1) * BM。
     # BN > BM 也可用；多加载的未来 key 由原有 causal mask 排除。
-    return source[:start] + kernel + source[end:], (b, h, s, d)
+    prefix = source[:start]
+    if softmax == "online":
+        prefix = stable_reference_function(prefix)
+    return prefix + kernel + source[end:], (b, h, s, d)
+
+
+def stable_reference_function(text):
+    """Keep the accompanying high-level function stable, including FP32 QK."""
+    text = replace_once(text, r"(%4 = )deepgengraph.dot (%1, %3) : (.*?) -> (tensor<[^>]+)xf16>",
+                        r"\1deepgengraph.precise_dot_op \2, acc = f32 : \3 -> \4xf32>")
+    text = replace_once(text, r"(%cst = arith.constant dense<[^>]+> : tensor<1x)f16>", r"\1f32>")
+    for name in ("5", "6"):
+        text = replace_once(text, rf"(%{name} = [^\n]+)",
+                            lambda m: m[0].replace("xf16>", "xf32>"))
+    text = replace_once(text, r"(val = )0xFC00 : f16", r"\g<1>0xFF800000 : f32")
+    # Conversion is now an identity; use the masked FP32 score directly.
+    text = replace_once(text, r"    %7 = deepgengraph.convert %6[^\n]*\n", "")
+    match = re.search(r"    %8 = deepgengraph.exp %7 : \((tensor<([^>]+)xf32>)\) -> [^\n]+", text)
+    if match is None:
+        raise ValueError("模板 Attn 缺少预期的 exp softmax")
+    score = match[1]
+    dims = match[2].split("x")
+    row = 'tensor<' + 'x'.join(dims[:-1] + ['1']) + 'xf32>'
+    replacement = (f"    %rowMax = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : ({score}) -> {row}\n"
+                   f"    %shifted = deepgengraph.sub %6, %rowMax : ({score}, {row}) -> {score}\n"
+                   f"    %8 = deepgengraph.exp %shifted : ({score}) -> {score}")
+    return text[:match.start()] + replacement + text[match.end():]
+
+
+def online_softmax_kernel(kernel, bm, bn, d, bk):
+    """m'=max(m, rowmax(s)); alpha=exp2(m-m'); (l,o)'=alpha*(l,o)+(sum(p),pV).
+
+    Scores already use log2(e)/sqrt(D). Every causal row includes key zero in
+    the first tile; later fully masked row/tile pairs keep the finite old max.
+    Consequently neither initial -inf - -inf nor division by zero is needed
+    for finite Q/K/V in this template's valid launch geometry.
+    """
+    row = f"tensor<{bm}x1xf32>"
+    score = f"tensor<{bm}x{bn}xf32>"
+    out = f"tensor<{bm}x{bk or d}xf32>"
+    split = bk is not None
+    zero, old_m = ("%rowZero", "%accM") if split else ("%15", "%accM")
+    old_l, old_o = ("%accL", "%accO") if split else ("%arg14", "%arg13")
+    masked, weights = ("%masked", "%weights") if split else ("%26", "%27")
+    init = (f"\n        %maxInitValue = arith.constant dense<0xFF800000> : tensor<1xf32>\n"
+            f"        %rowNegInf = deepgengraph.add {zero}, %maxInitValue : ({row}, tensor<1xf32>) -> {row}")
+    kernel = replace_once(kernel, rf"({re.escape(zero)} = deepgengraph.zero[^\n]+)", lambda m: m[0] + init)
+    if split:
+        kernel = replace_once(kernel, r"%attention:2 = ([^\n]+)%accL = %rowZero\) -> \(([^\n]+)\) \{",
+                              r"%attention:3 = \1%accL = %rowZero, %accM = %rowNegInf) -> (\2, " + row + ") {")
+    else:
+        kernel = replace_once(kernel, r"%19:4 = ([^\n]+)%arg14 = %15\) -> \(([^\n]+)\) \{",
+                              r"%19:5 = \1%arg14 = %15, %accM = %rowNegInf) -> (\2, " + row + ") {")
+    stable = (f"%nextM = deepgengraph.reduce({masked}, init = {old_m}), dim = 1, op = MAX, keep_dim = true : ({score}, {row}) -> {row}\n"
+              f"          %shifted = deepgengraph.sub {masked}, %nextM : ({score}, {row}) -> {score}\n"
+              f"          %maxDelta = deepgengraph.sub {old_m}, %nextM : ({row}, {row}) -> {row}\n"
+              f"          %alpha = deepgengraph.exp2 %maxDelta : ({row}) -> {row}\n"
+              f"          %scaledL = deepgengraph.mul {old_l}, %alpha : ({row}, {row}) -> {row}\n"
+              f"          {weights} = deepgengraph.exp2 %shifted : ({score}) -> {score}")
+    kernel = replace_once(kernel, rf"{re.escape(weights)} = deepgengraph.exp2 {re.escape(masked)}[^\n]+", stable)
+    kernel = replace_once(kernel, rf"(deepgengraph.reduce\({re.escape(weights)}, init = ){re.escape(old_l)}", r"\1%scaledL")
+    next_o = "%nextO" if split else "%31"
+    kernel = replace_once(kernel, rf"({re.escape(next_o)} = deepgengraph.add ){re.escape(old_o)}",
+                          f"%scaledO = deepgengraph.mul {old_o}, %alpha : ({out}, {row}) -> {out}\n          " + r"\1%scaledO")
+    yields = "%nextO, %nextL" if split else "%32, %33, %31, %28"
+    kernel = replace_once(kernel, rf"scf.yield {re.escape(yields)} : ([^\n]+)",
+                          f"scf.yield {yields}, %nextM : " + r"\1, " + row)
+    return kernel
 
 
 def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
@@ -232,6 +316,8 @@ def main():
                         help="K/V 序列分块大小，可输入多个值；与 BM 取笛卡尔积")
     parser.add_argument("--bk", "--BK", type=int, nargs="+",
                         help="D 轴分块大小，可输入多个值；必须整除 D")
+    parser.add_argument("--softmax", choices=("online", "legacy"), default="online",
+                        help="默认 online：MAX 归约及跨 key tile 重缩放；legacy 复现旧非稳定版本")
     parser.add_argument("--output", type=Path,
                         help="单组参数的指定输出文件（例如 test_input_spidD.mlir）")
     parser.add_argument("--output-dir", type=Path, default=ROOT,
@@ -242,8 +328,10 @@ def main():
         outputs = []
         for bm, bn, bk in itertools.product(dict.fromkeys(args.bm), dict.fromkeys(args.bn),
                                            dict.fromkeys(args.bk or [None])):
-            ir, bhsd = generate_ir(source, bm, bn, bk)
+            ir, bhsd = generate_ir(source, bm, bn, bk, softmax=args.softmax)
             suffix = f"-{bk}" if bk is not None else ""
+            if args.softmax == "online":
+                suffix += "-online"
             filename = f"test_input_{'x'.join(map(str, bhsd))}-{bm}-{bn}{suffix}.mlir"
             outputs.append((args.output or args.output_dir / filename, ir))
         if args.output and len(outputs) != 1:

@@ -36,6 +36,13 @@ def settings(path, smoke):
     config = json.loads(path.read_text())
     if not isinstance(config, dict):
         raise ValueError("调优配置必须是 JSON 对象")
+    config.setdefault("softmax", "online")
+    config.setdefault("sweep_base", None)
+    if config["softmax"] not in ("online", "legacy"):
+        raise ValueError("softmax 必须为 online 或 legacy")
+    if config["sweep_base"] is not None and (
+            not isinstance(config["sweep_base"], str) or not config["sweep_base"]):
+        raise ValueError("sweep_base 必须为非空预设名或 null")
     for key in ("bm", "bn", "bk"):
         values = config[key]
         minimum = 0 if key == "bk" else 1
@@ -62,8 +69,11 @@ def settings(path, smoke):
         raise ValueError("output_dir 必须为非空路径")
     if config["sweep"] and config["cases"]:
         raise ValueError("使用 sweep 时请将 cases 设为 []；扫描候选名是 grid-*")
+    if config["sweep_base"] and not config["sweep"]:
+        raise ValueError("sweep_base 必须与 sweep 一起使用")
     if smoke:
-        config.update(bm=[64], bn=[32], bk=[32], cases=["baseline"],
+        config.update(bm=[128], bn=[128], bk=[32], softmax="online",
+                      cases=["online-baseline"], sweep_base=None,
                       set=[], sweep=[], warmup=1, repeat=3)
     return config
 
@@ -152,7 +162,8 @@ print("GPU_CHECK_JSON=" + json.dumps({
 
 def commands(config, mode, session, tool, gpu_python):
     generate = [sys.executable, str(ROOT / "generate_attention_ir.py"),
-                "--output-dir", str(session / "inputs")]
+                "--output-dir", str(session / "inputs"),
+                "--softmax", config.get("softmax", "online")]
     for key in ("bm", "bn"):
         generate += ["--" + key, *map(str, config[key])]
     # Separate invocations let BK=0 use the generator's existing no-BK mode.
@@ -166,6 +177,8 @@ def commands(config, mode, session, tool, gpu_python):
     for key in ("cases", "set", "sweep"):
         for value in config[key]:
             tune += ["--case" if key == "cases" else "--" + key, value]
+    if config.get("sweep_base"):
+        tune += ["--sweep-base", config["sweep_base"]]
     for key in ("opt_level", "device", "warmup", "repeat", "seed", "timeout"):
         tune += ["--" + key.replace("_", "-"), str(config[key])]
     if mode != "ir":
@@ -198,7 +211,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "tuning.json")
     parser.add_argument("--mode", choices=("benchmark", "hsaco", "ir"), default="benchmark")
-    parser.add_argument("--smoke", action="store_true", help="只跑 64x32x32 baseline，预热1次/测量3次")
+    parser.add_argument("--smoke", action="store_true", help="只跑 online 128x128x32 online-baseline，预热1次/测量3次")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="只检查当前模式的运行环境")
     modes.add_argument("--dry-run", action="store_true", help="只打印完整命令，不创建文件或检查 GPU")

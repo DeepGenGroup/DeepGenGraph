@@ -1,7 +1,9 @@
 import argparse
 import ctypes
+import json
 import math
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -11,7 +13,7 @@ import torch
 # HIP Runtime
 # ============================================================
 
-hip = ctypes.CDLL("libamdhip64.so")
+hip = None
 
 hipError_t = ctypes.c_int
 hipModule_t = ctypes.c_void_p
@@ -19,57 +21,63 @@ hipFunction_t = ctypes.c_void_p
 hipStream_t = ctypes.c_void_p
 
 
-# hipModuleLoad
-hip.hipModuleLoad.argtypes = [
-    ctypes.POINTER(hipModule_t),
-    ctypes.c_char_p,
-]
-hip.hipModuleLoad.restype = hipError_t
+def initialize_hip():
+    """Load HIP only when launching; CPU hosts can still inspect arguments."""
+    global hip
+    if hip is not None:
+        return
+    hip = ctypes.CDLL("libamdhip64.so")
+    # hipModuleLoad
+    hip.hipModuleLoad.argtypes = [
+        ctypes.POINTER(hipModule_t),
+        ctypes.c_char_p,
+    ]
+    hip.hipModuleLoad.restype = hipError_t
 
 
-# hipModuleGetFunction
-hip.hipModuleGetFunction.argtypes = [
-    ctypes.POINTER(hipFunction_t),
-    hipModule_t,
-    ctypes.c_char_p,
-]
-hip.hipModuleGetFunction.restype = hipError_t
+    # hipModuleGetFunction
+    hip.hipModuleGetFunction.argtypes = [
+        ctypes.POINTER(hipFunction_t),
+        hipModule_t,
+        ctypes.c_char_p,
+    ]
+    hip.hipModuleGetFunction.restype = hipError_t
 
 
-# hipModuleLaunchKernel
-hip.hipModuleLaunchKernel.argtypes = [
-    hipFunction_t,
-    ctypes.c_uint,  # gridDimX
-    ctypes.c_uint,  # gridDimY
-    ctypes.c_uint,  # gridDimZ
-    ctypes.c_uint,  # blockDimX
-    ctypes.c_uint,  # blockDimY
-    ctypes.c_uint,  # blockDimZ
-    ctypes.c_uint,  # sharedMemBytes
-    hipStream_t,    # stream
-    ctypes.POINTER(ctypes.c_void_p),  # kernelParams
-    ctypes.POINTER(ctypes.c_void_p),  # extra
-]
-hip.hipModuleLaunchKernel.restype = hipError_t
+    # hipModuleLaunchKernel
+    hip.hipModuleLaunchKernel.argtypes = [
+        hipFunction_t,
+        ctypes.c_uint,  # gridDimX
+        ctypes.c_uint,  # gridDimY
+        ctypes.c_uint,  # gridDimZ
+        ctypes.c_uint,  # blockDimX
+        ctypes.c_uint,  # blockDimY
+        ctypes.c_uint,  # blockDimZ
+        ctypes.c_uint,  # sharedMemBytes
+        hipStream_t,    # stream
+        ctypes.POINTER(ctypes.c_void_p),  # kernelParams
+        ctypes.POINTER(ctypes.c_void_p),  # extra
+    ]
+    hip.hipModuleLaunchKernel.restype = hipError_t
 
 
-# hipModuleUnload
-hip.hipModuleUnload.argtypes = [
-    hipModule_t,
-]
-hip.hipModuleUnload.restype = hipError_t
+    # hipModuleUnload
+    hip.hipModuleUnload.argtypes = [
+        hipModule_t,
+    ]
+    hip.hipModuleUnload.restype = hipError_t
 
 
-# hipDeviceSynchronize
-hip.hipDeviceSynchronize.argtypes = []
-hip.hipDeviceSynchronize.restype = hipError_t
+    # hipDeviceSynchronize
+    hip.hipDeviceSynchronize.argtypes = []
+    hip.hipDeviceSynchronize.restype = hipError_t
 
 
-# hipGetErrorString
-hip.hipGetErrorString.argtypes = [
-    hipError_t,
-]
-hip.hipGetErrorString.restype = ctypes.c_char_p
+    # hipGetErrorString
+    hip.hipGetErrorString.argtypes = [
+        hipError_t,
+    ]
+    hip.hipGetErrorString.restype = ctypes.c_char_p
 
 
 # ============================================================
@@ -89,16 +97,19 @@ def hip_check(err):
 # ============================================================
 
 def parse_xyz(value):
-    values = value.split(",")
-    if len(values) != 3:
+    return parse_dimensions(value, 3)
+
+
+def parse_dimensions(value, count):
+    try:
+        values = tuple(int(x) for x in value.split(","))
+    except ValueError:
+        values = ()
+    if len(values) != count or any(x <= 0 for x in values):
         raise argparse.ArgumentTypeError(
-            "Expected X,Y,Z, for example: 32,64,1"
+            f"Expected {count} comma-separated positive integers"
         )
-    return (
-        int(values[0]),
-        int(values[1]),
-        int(values[2]),
-    )
+    return values
 
 
 # ============================================================
@@ -115,6 +126,7 @@ def loaded_hsaco(
     shared_mem_bytes=0,
 ):
     """Keep the module and argument storage alive across repeated launches."""
+    initialize_hip()
     torch.cuda.init()
     stream = torch.cuda.current_stream()
     module = hipModule_t()
@@ -513,7 +525,7 @@ def compare_results(
 # Main
 # ============================================================
 
-def main():
+def parse_arguments(argv=None):
 
     parser = argparse.ArgumentParser(
         description="Launch AMD HSACO attention kernel"
@@ -531,11 +543,10 @@ def main():
 
     parser.add_argument(
         "--kernel",
-        default="Attn_p2",
         help="Kernel symbol name"
     )
     parser.add_argument(
-        "--k-layout", choices=("bhsd", "bhds"), default="bhsd",
+        "--k-layout", choices=("bhsd", "bhds"),
         help="K storage layout; use bhds for kernels built without K normalization"
     )
 
@@ -546,21 +557,18 @@ def main():
     parser.add_argument(
         "--grid",
         type=parse_xyz,
-        required=True,
         help="Grid dimensions X,Y,Z, example: 32,64,1"
     )
 
     parser.add_argument(
         "--block",
         type=parse_xyz,
-        required=True,
         help="Block dimensions X,Y,Z, example: 64,1,1"
     )
 
     parser.add_argument(
         "--shared-mem",
         type=int,
-        default=0,
         help="Dynamic shared memory bytes"
     )
 
@@ -580,11 +588,48 @@ def main():
         help="Timed samples per implementation (default: 50)"
     )
 
-    args = parser.parse_args()
+    parser.add_argument("--config", type=Path, help="launch.json produced by TuneAttention")
+    parser.add_argument("--shape", type=lambda x: parse_dimensions(x, 4),
+                        help="B,H,S,D; default 1,32,4096,128 without --config")
+    parser.add_argument("--json-output", type=Path, help="Write correctness and timing results as JSON")
+    parser.add_argument("--seed", type=int, default=0, help="Random input seed, default 0")
+    args = parser.parse_args(argv)
+    config = {}
+    if args.config:
+        try:
+            config = json.loads(args.config.read_text())
+            if not isinstance(config, dict):
+                raise ValueError("expected a JSON object")
+            for key, count in (("grid", 3), ("block", 3), ("shape", 4)):
+                value = config[key]
+                if (not isinstance(value, list) or len(value) != count or
+                        any(type(x) is not int or x <= 0 for x in value)):
+                    raise ValueError(f"{key} must contain {count} positive integers")
+                config[key] = tuple(value)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            parser.error(f"Invalid --config: {exc}")
+    for key, default in (("kernel", "Attn_p2"), ("k_layout", "bhsd"),
+                         ("shared_mem", 0), ("shape", (1, 32, 4096, 128)),
+                         ("grid", None), ("block", None)):
+        if getattr(args, key) is None:
+            setattr(args, key, config.get(key, default))
+    if args.grid is None or args.block is None:
+        parser.error("--grid and --block are required unless supplied by --config")
+    if args.k_layout not in ("bhsd", "bhds"):
+        parser.error("Invalid K layout in --config")
+    if type(args.shared_mem) is not int or args.shared_mem < 0:
+        parser.error("--shared-mem must be non-negative")
+    if not isinstance(args.kernel, str) or not args.kernel:
+        parser.error("Invalid kernel name")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
     if args.repeat <= 0:
         parser.error("--repeat must be positive")
+    return args
+
+
+def main(argv=None):
+    args = parse_arguments(argv)
 
     # ========================================================
     # Device
@@ -596,18 +641,11 @@ def main():
     # ========================================================
     # Attention shape
     #
-    # Current Attn_p2:
-    #
-    # Q   [1,32,4096,128]
-    # K   [1,32,4096,128] (legacy --k-layout bhds: [1,32,128,4096])
-    # V   [1,32,4096,128]
-    # OUT [1,32,4096,128]
+    # --config or --shape supplies B,H,S,D; legacy CLI keeps its old defaults.
+    # Q/V/OUT: [B,H,S,D]; K: [B,H,S,D] or legacy [B,H,D,S].
     # ========================================================
 
-    B = 1
-    H = 32
-    S = 4096
-    D = 128
+    B, H, S, D = args.shape
 
     print("")
     print("========================================")
@@ -668,7 +706,7 @@ def main():
     if args.k_layout == "bhds":
         print("SDPA timing excludes legacy K transpose/contiguous conversion.")
 
-    torch.manual_seed(0)
+    torch.manual_seed(args.seed)
 
     q = torch.randn(B,H,S,D,device="cuda",dtype=torch.float16)
 
@@ -716,6 +754,23 @@ def main():
     # ========================================================
 
     passed = compare_results(out,baseline)
+    if args.json_output:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json.dumps({
+            "schema_version": 1, "passed": bool(passed),
+            "hsaco": str(Path(args.hsaco).resolve()), "kernel": args.kernel,
+            "shape": args.shape, "grid": args.grid, "block": args.block,
+            "k_layout": args.k_layout, "shared_mem": args.shared_mem,
+            "seed": args.seed, "warmup": args.warmup, "repeat": args.repeat,
+            "device": torch.cuda.get_device_name(args.device),
+            "pytorch": torch.__version__, "hip": torch.version.hip,
+            "kernel_median_ms": float(time_our_mid),
+            "sdpa_median_ms": float(time_base_mid),
+            "speedup": float(time_base_mid / time_our_mid) if time_our_mid > 0 else None,
+            "kernel_samples_ms": [float(x) for x in time_ours],
+            "sdpa_samples_ms": [float(x) for x in time_base],
+            "atol": 1e-2, "rtol": 1e-2,
+        }, indent=2, allow_nan=False) + "\n")
 
     # Return non-zero so shell scripts can detect failure
     if not passed:

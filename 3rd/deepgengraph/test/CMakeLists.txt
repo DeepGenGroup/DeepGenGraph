@@ -9,6 +9,10 @@ target_link_libraries(MyTestAsync PRIVATE
 add_executable(FragmentOptTest fragment_opt_test.cpp)
 add_executable(ThreadTilingTest thread_tiling_test.cpp)
 add_executable(LowerInfoLayoutTest lower_info_layout_test.cpp)
+add_executable(LowerInfoInferenceTest lower_info_inference_test.cpp)
+llvm_update_compile_flags(LowerInfoInferenceTest)
+target_link_libraries(LowerInfoInferenceTest PRIVATE
+  DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect MLIRParser)
 add_executable(ShmDataIOTest shm_data_io_test.cpp)
 llvm_update_compile_flags(ShmDataIOTest)
 target_link_libraries(ShmDataIOTest PRIVATE

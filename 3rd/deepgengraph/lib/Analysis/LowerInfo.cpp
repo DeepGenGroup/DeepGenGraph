@@ -22,6 +22,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <array>
 #include <cassert>
@@ -1180,7 +1181,8 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   uint64_t dim = reduceOp.getDim();
   auto srcInfo = getNearestInferedInfoEither(buf_info_maps, src, op, preferBefore);
   if (srcInfo == nullptr) {
-    LLVM_OUT_MSG("---- inferError 4");
+    // A destination anchor cannot determine the source's reduced dimension.
+    // Retry after another operation has supplied the full source layout.
     return false;
   }
   // 检查srcInfo
@@ -1316,7 +1318,8 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
   }
 
   if (sourceInfo == nullptr) {
-    LLVM_OUT_MSG("---- inferArithmeticOp error");
+    // This is a deferred dependency, not an unsupported operation. In
+    // particular a broadcast row alone cannot anchor the full output tile.
     return false;
   }
 
@@ -1442,29 +1445,22 @@ bool LowerInfoAnalysis::inferRelyOp(Operation *op, LowerInfoMap &buf_info_maps,
     return false;
   }
 
-  if (inferCopyOp(op, buf_info_maps, preferBefore)) {
-    return true;
-  }
-  if (inferBlockOp(op, buf_info_maps, preferBefore)) {
-    return true;
-  }
-  // notes: 修改infer逻辑后 这里待商榷
-  if (inferRelyGemmOp(op, buf_info_maps, hw, preferBefore)) {
-    return true;
-  }
-  if (inferReduceOp(op, buf_info_maps, preferBefore)) {
-    return true;
-  }
-  if (inferOtherSimpleOp(op, buf_info_maps, preferBefore)) {
-    return true;
-  }
-  if (inferArithmeticOp(op, buf_info_maps, preferBefore)) {
-    return true;
-  }
-  auto name = op->getName().getStringRef();
-  assert(false && "the operation can not be recognized." + name);
-  LLVM_OUT_MSG("---- inferError 6");
-  return false;
+  // Dispatch by operation kind, not inference success. A recognized operation
+  // may still be waiting for a usable anchor; preserve false so the worklist
+  // retries it after forward/backward propagation has made more layouts known.
+  if (isa<CopyOp>(op))
+    return inferCopyOp(op, buf_info_maps, preferBefore);
+  if (isa<BlockOp>(op))
+    return inferBlockOp(op, buf_info_maps, preferBefore);
+  if (isa<GemmOp>(op))
+    return inferRelyGemmOp(op, buf_info_maps, hw, preferBefore);
+  if (isa<ReduceOp>(op))
+    return inferReduceOp(op, buf_info_maps, preferBefore);
+  if (isFriskArithmeticOp(op))
+    return inferArithmeticOp(op, buf_info_maps, preferBefore);
+
+  op->emitError("unsupported operation in LowerInfo inference");
+  llvm::report_fatal_error("LowerInfo inference encountered an unsupported operation");
 }
 
 LowerInfoMap LowerInfoAnalysis::buf_info_maps {};
@@ -1508,7 +1504,7 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
   }
   
   if (old_size == need_infer_ops.size()) {
-    assert(false && "LowerInfo infer failed. No direct infer anchor op");
+    llvm::report_fatal_error("LowerInfo infer failed. No direct infer anchor op");
   }
   
   // 以 gemmOpIds 为锚点，前向/后向推断 LowerInfo。
@@ -1574,7 +1570,8 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
       for (Operation *op : pendingOps) {
         llvm::errs() << "[E] unresolved op: " << *op << "\n";
       }
-      assert(false && "LowerInfo infer failed.");
+      // Do not spin forever in Release builds when no dependency can advance.
+      llvm::report_fatal_error("LowerInfo infer failed: unresolved ops remain");
     }
     need_infer_ops.swap(pendingOps);
   }
