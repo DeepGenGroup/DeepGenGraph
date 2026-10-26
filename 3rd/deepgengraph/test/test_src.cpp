@@ -3,6 +3,7 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -421,12 +422,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   StringRef maskAddBypass = "off";
   StringRef localReduce = "off";
   frisk::LocalReductionOptions localReductionOptions;
+  llvm::StringRef deferLaneSum = "off";
+  frisk::DeferLaneSumOptions deferLaneSumOptions;
   unsigned fragPrefetchWords = 8;
   unsigned retainFragmentWords = 0;
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
     bool consumed = false;
+    if (!frisk::parseDeferLaneSumOption(option, deferLaneSum, deferLaneSumOptions, consumed)) {
+      llvm::errs() << "invalid defer-lane-sum option: " << option << "\n";
+      return 1;
+    }
+    if (consumed) continue;
     if (!frisk::parseLocalReductionOption(option, localReduce, localReductionOptions, consumed)) {
       llvm::errs() << "invalid local-reduce option: " << option << "\n";
       return 1;
@@ -549,6 +557,19 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   StringRef mathMode = argc > 8 ? argv[8] : "strict";
   if (!localReductionOptions.valid()) {
     llvm::errs() << "local-reduce requires chains=2..16, min-inputs>=2*chains and <=2048\n";
+    return 1;
+  }
+  if (deferLaneSum != "off") {
+    // This lowering pipeline uses a wave64 ABI (thread/warp layouts use 64).
+    // A contradictory explicit CLI contract is an error, never an override.
+    if (deferLaneSumOptions.waveSize && deferLaneSumOptions.waveSize != 64) {
+      llvm::errs() << "this lowering pipeline requires defer-lane-sum-wave-size=64\n";
+      return 1;
+    }
+    deferLaneSumOptions.waveSize = 64;
+  }
+  if (deferLaneSum == "approx" && mathMode != "approx") {
+    llvm::errs() << "defer-lane-sum=approx requires math=approx\n";
     return 1;
   }
   if (localReduce == "approx" && mathMode != "approx") {
@@ -946,6 +967,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     frisk::bypassMaskAdds(*llvmModule, maskAddBypass == "approx");
   if (localReduce != "off")
     frisk::optimizeLocalReductions(*llvmModule, localReductionOptions);
+  if (deferLaneSum != "off") {
+    frisk::deferLaneSums(*llvmModule, deferLaneSumOptions);
+  }
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
   if (optimizeLifetimes)

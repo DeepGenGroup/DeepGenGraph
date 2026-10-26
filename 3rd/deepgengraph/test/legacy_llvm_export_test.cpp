@@ -1,5 +1,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -15,10 +16,17 @@ int main(int argc, char **argv) {
   llvm::StringRef maskAddBypass;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
+  llvm::StringRef deferLaneSum;
+  mlir::frisk::DeferLaneSumOptions deferLaneSumOptions;
   llvm::SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     llvm::StringRef option(argv[i]);
     bool consumed = false;
+    if (!mlir::frisk::parseDeferLaneSumOption(option, deferLaneSum, deferLaneSumOptions, consumed)) {
+      llvm::errs() << "invalid defer-lane-sum option: " << option << "\n";
+      return 1;
+    }
+    if (consumed) continue;
     if (!mlir::frisk::parseLocalReductionOption(option, localReduce, localReductionOptions, consumed)) {
       llvm::errs() << "invalid local-reduce option: " << option << "\n";
       return 1;
@@ -59,9 +67,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (!maskAddBypass.empty() || !localReduce.empty()) {
+  if (!maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty()) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -75,6 +83,8 @@ int main(int argc, char **argv) {
       mlir::frisk::bypassMaskAdds(*module, maskAddBypass == "approx");
     if (!localReduce.empty() && localReduce != "off")
       mlir::frisk::optimizeLocalReductions(*module, localReductionOptions);
+    if (!deferLaneSum.empty() && deferLaneSum != "off")
+      mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;
