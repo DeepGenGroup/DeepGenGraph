@@ -1,12 +1,15 @@
 {
   "bm": [
-    64,128
+    64,
+    128
   ],
   "bn": [
-    32,64,128
+    32,
+    64,
+    128
   ],
   "bk": [
-    32,16
+    32
   ],
   "cases": [],
   "set": [
@@ -15,11 +18,8 @@
     "lifetimes=1",
     "masks=1",
     "prefetch=1",
-    "fuse=1",
-    "frag-prefetch=1",
     "reorder=1",
     "simplify-loop-control=1",
-    "coalesce-waits=1",
     "swizzle-v=off"
   ],
   "sweep": [
@@ -28,7 +28,8 @@
     "loop-mark=0;1",
     "pipeline-stages=none;2",
     "swizzle-q=off;on",
-    "swizzle-k=off;on"
+    "swizzle-k=off;on",
+    "frag-prefetch=0;1"
   ],
   "opt_level": 3,
   "device": 0,
@@ -36,5 +37,7 @@
   "repeat": 500,
   "seed": 0,
   "timeout": 300,
-  "output_dir": "results-combinations"
+  "output_dir": "results-combinations",
+  "softmax": "online",
+  "sweep_base": "online-baseline"
 }

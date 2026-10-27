@@ -1983,7 +1983,7 @@ public:
 };
 
 // 将 block 级 exp2 改为 math.exp2 的线程 vector 计算，再桥接回 block 类型。
-// 优先使用输入自己的 LowerInfo 取数；没有输入信息时回退到结果布局。
+// 按结果布局物化输入，保证计算使用的坐标与输出桥接声明的坐标一致。
 class Exp2OpTiling : public OpConversionPattern<frisk::Exp2Op> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -1997,9 +1997,13 @@ public:
     auto type = getFullThreadTileType(op.getResult(), *info);
     if (failed(type))
       return failure();
-    auto inputInfo = findLowerInfoForValue(op.getOperand(), op);
+    // Exp2 preserves element ownership. Materialize the operand in the result
+    // layout before computing: equal thread-vector shapes can still describe
+    // different rows (block_repeat versus warp_inst_unroll). Computing in the
+    // input layout and labelling with *info silently permutes online-softmax
+    // alpha when the two layouts differ.
     auto input = materializeElementwiseOperand(op.getOperand(), adaptor.getOperand(),
-        inputInfo ? *inputInfo : *info, *type, rewriter, op.getLoc());
+        *info, *type, rewriter, op.getLoc());
     if (failed(input))
       return failure();
     Value result = mapFragments(rewriter, op.getLoc(), *type,

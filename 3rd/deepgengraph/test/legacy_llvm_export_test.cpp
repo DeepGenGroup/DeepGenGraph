@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
   else if (approximate)
     mlir::frisk::optimizeApproximateRegisterMath(*module);
   else if (fuseMMAC)
-    mlir::frisk::fuseMMACAccumulators(*module);
+    mlir::frisk::fuseMMACAccumulators(*module, /*simplifyCFG=*/true);
   else if (lifetimes)
     mlir::frisk::optimizeRegisterLifetimes(*module);
   else if (nativeExp2 || reciprocal)

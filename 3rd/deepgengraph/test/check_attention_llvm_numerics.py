@@ -118,12 +118,19 @@ class LLVMWorkgroupModel:
 
     def memory(self, ptr, ty, write=None):
         count = int(np.prod(self.shape(ty))) if self.shape(ty) else 1
-        addresses = ptr[:, None] + np.arange(count)[None, :] * 2
+        # Layout conversions also exchange f32 rows/scores through LDS. Keep
+        # their raw bytes in the same backing store as the f16 DMA operands.
+        element_bytes = 4 if 'float' in ty else 2
+        addresses = ptr[:, None] + np.arange(count)[None, :] * element_bytes
         bases = addresses // (1 << 32) * (1 << 32)
         base = bases[self.active].flat[0]
         assert np.all(bases[self.active] == base)
-        idx = (addresses - bases) // 2
+        assert np.all(addresses[self.active] % element_bytes == 0)
+        idx = (addresses - bases) // element_bytes
         mem = self.mem[int(base)]
+        if element_bytes == 4:
+            assert base == 0, 'only f32 LDS scratch is supported'
+            mem = mem.view(np.float32)
         live = idx[self.active]
         assert live.min() >= 0 and live.max() < len(mem), (live.min(), live.max(), len(mem))
         if write is not None:
@@ -371,7 +378,18 @@ class LLVMWorkgroupModel:
                                     arm, join, mask = no, yes, ~cond
                                 else:
                                     raise AssertionError('unsupported divergent control flow')
-                                assert np.all(mask.reshape(-1, 64) == mask.reshape(-1, 64)[:, :1]), 'partial DMA wave'
+                                if not np.all(mask.reshape(-1, 64) == mask.reshape(-1, 64)[:, :1]):
+                                    # Reduced rows use one leader lane to
+                                    # publish replicated values into LDS.
+                                    # Allow only a straight-line store arm;
+                                    # collective operations still need whole
+                                    # waves and must execute after the join.
+                                    arm_lines = self.blocks[arm]
+                                    stores = [line for line in arm_lines if line.startswith('store ')]
+                                    assert stores and all('ptr addrspace(3)' in line for line in stores), 'partial-wave arm must store only to LDS'
+                                    assert not any('load ' in line or 'fence ' in line or 'atomic' in line or
+                                                   ('call ' in line and 'asm sideeffect "", "=v,0"' not in line)
+                                                   for line in arm_lines), 'unsupported partial-wave arm'
                                 reconverge.append((join, self.active.copy()))
                                 self.active &= mask
                                 target = arm

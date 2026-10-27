@@ -11,9 +11,10 @@
     32
   ],
   "cases": [],
-  "set": [],
+  "set": [
+    "pipeline=0"
+  ],
   "sweep": [
-    "pipeline=0;1",
     "reorder=0;1",
     "pack=0;1",
     "lifetimes=0;1",
@@ -32,5 +33,7 @@
   "repeat": 50,
   "seed": 0,
   "timeout": 300,
-  "output_dir": "results-combinations"
+  "output_dir": "results-combinations",
+  "softmax": "online",
+  "sweep_base": "online-baseline"
 }

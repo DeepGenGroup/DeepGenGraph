@@ -7,6 +7,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 
 namespace mlir::frisk {
 namespace {
@@ -102,7 +103,7 @@ llvm::PreservedAnalyses FuseMMACAccumulatorPass::run(
   return preserved;
 }
 
-void fuseMMACAccumulators(llvm::Module &module) {
+void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG) {
   prepareRegisterMMAForLLVM(module);
   llvm::FunctionAnalysisManager analyses;
   llvm::ModuleAnalysisManager modules;
@@ -115,6 +116,9 @@ void fuseMMACAccumulators(llvm::Module &module) {
   pb.registerFunctionAnalyses(analyses);
   pb.crossRegisterProxies(loops, analyses, cgscc, modules);
   llvm::FunctionPassManager pipeline;
+  // Merge constant-guarded LDS writeback blocks before looking for the
+  // terminal fadd. Fusion deliberately requires a single basic block.
+  if (simplifyCFG) pipeline.addPass(llvm::SimplifyCFGPass());
   pipeline.addPass(llvm::InstCombinePass());
   pipeline.addPass(FuseMMACAccumulatorPass());
   pipeline.addPass(llvm::InstCombinePass());

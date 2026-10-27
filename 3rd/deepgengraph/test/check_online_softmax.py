@@ -2,6 +2,9 @@
 """Execute exported BM=128 online-attention LLVM with delayed DMA checks.
 
 Usage: OPENBLAS_NUM_THREADS=1 python3 check_online_softmax.py kernel.ll --bn 128
+For layout 3.1 without Q retention, add --q-loads per-tile. The random
+multi-tile cases regress Exp2OpTiling's alpha row-layout mismatch: zero initial
+state or row-uniform alpha alone cannot expose that bug.
 The fixture uses BHSD=(1,32,4096,128), grouped reverse, 256 threads. This is a
 CPU execution model of actual LLVM, not a replacement for gfx936 validation.
 """
@@ -53,6 +56,8 @@ def main():
     p.add_argument('--group', type=int, choices=(4, 8, 16), default=8,
                    help='Query grouping used by the exported kernel (reverse=1)')
     p.add_argument('--output', type=Path)
+    p.add_argument('--q-loads', choices=('once', 'per-tile'), default='once',
+                   help='Expected Q loading: retained fragments or reload on each key tile')
     p.add_argument('--legacy', type=Path, help='Optional old IR, expected to fail the overflow case')
     a = p.parse_args()
     text = re.sub(r'\bexact ', '', a.ir.read_text())
@@ -88,12 +93,14 @@ def main():
         written[head, query*128:(query+1)*128] = True
         assert np.isnan(full[~written]).all()
         assert not model.pending
-        want = {(1 << 32) + 2*((head*4096+row)*128+col): 1
+        q_loads = 1 if a.q_loads == 'once' else (query+1)*128//a.bn
+        want = {(1 << 32) + 2*((head*4096+row)*128+col): q_loads
                 for row in range(query*128, (query+1)*128) for col in range(128)}
-        assert model.q_elements == want, 'full Q was not retained exactly once'
+        assert model.q_elements == want, 'unexpected Q load coverage/count'
         record = dict(case=kind, head=head, query=query, bn=a.bn, group=a.group,
                       max_abs_error=float(np.max(np.abs(actual-expected))),
-                      finite=True, full_Q_loaded_once=True, delayed_DMA_passed=True)
+                      finite=True, full_Q_loaded_once=q_loads == 1,
+                      q_loads_per_element=q_loads, delayed_DMA_passed=True)
         records.append(record)
         print('PASS', json.dumps(record), flush=True)
     legacy_failed = None

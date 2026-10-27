@@ -1,6 +1,9 @@
 DeepGenGraph attention 一键调优包
 ================================
 
+完整参数表、MyTest 默认值与调优预设的区别、组合约束见包根目录
+《调优参数说明.md》（源码仓库中也位于根目录）。
+
 1. 快速开始
 
 在兼容的 x86-64 Linux / gfx936 DCU 机器上解压：
@@ -10,9 +13,10 @@ DeepGenGraph attention 一键调优包
   ./run_tuning.sh
 
 默认执行：
-  BM = 64, 128；BN = 32, 64；BK = 32；
+  BM = 64, 128；BN = 32, 64, 128；BK = 32；softmax = online；
   每份输入测试 baseline / nohint-rolled / pipeline-loop-only /
-  group8-reverse / group8-reverse-k128-swizzle，共 20 个候选。
+  group8-reverse / group8-reverse-k128-swizzle / retained32-baseline /
+  online-baseline，共 42 个候选。
   流程为生成 MLIR -> MyTest 导出 LLVM IR -> GenHsaco.sh 生成 HSACO
   -> launchKernel.py 正确性检查和 GPU 计时。
   默认预热 10 次、计时 50 次、种子 0、opt O3、GPU device 0。
@@ -29,6 +33,24 @@ DeepGenGraph attention 一键调优包
 只生成 LLVM IR（不需要 GPU、DTK 或 PyTorch）：
 
   ./run_tuning.sh --mode ir --smoke
+
+零 mask 分支直通 Pass 已提供 MyTest 选项 --mask-add-bypass=off|legal|approx，
+TuneAttention.py 可用 --set mask-add-bypass=approx 或相应 --sweep。
+默认 off；approx 需要 math=approx，允许忽略匹配 mask 加法的零符号；
+legal 只使用 LLVM 能证明合法的加零消除。使用此选项需重新构建/打包的 MyTest。
+
+通用线程内归约 Pass 可用 --set local-reduce=legal|approx 启用，默认 off。
+另有 local-reduce-chains=4、local-reduce-min-inputs=16、local-reduce-ops=all；
+可将 ops 设为 add、max 或 add,max，分别测试求和、最大值或两者。
+approx 需要 math=approx；legal 要求原 IR 已提供相应浮点重排权限。
+Pass 本身支持普通 CPU/GPU 函数的标量与固定向量归约，不依赖 attention。
+这些选项同样需要重新构建/打包 MyTest。
+
+通用跨 lane 求和延迟 Pass 可用 --set defer-lane-sum=approx 启用，默认 off。
+支持零初值的普通/带组内一致缩放的循环累计，自动检查 lane 分组和控制流。
+浮点需 math=approx；legal 目前只处理 i32。支持 AMDGPU 固定 XOR 子组，
+不依赖 attention 名称或形状。使用此项需重新构建/打包 MyTest。
+详见 3rd/deepgengraph/test/defer_lane_sum_README.txt。
 
 只生成 HSACO、不启动 GPU 测试：
 
@@ -92,14 +114,44 @@ LLVM_AS 可选；设置后还会单独检查 LLVM IR 结构合法性，不能替
 
 3. 配置扫描
 
+当前 safe-softmax 由生成器的 online 模式实现：维护跨 key tile 的行最大值，
+并重缩放分母和 O；QK 使用 FP32 累加。MyTest 不需要新增 softmax 开关。
+online-baseline 对齐最新 native PV accumulator 导出配置：
+  group=4、reverse=1、frag-prefetch=0、retain-fragment-words=32；
+  K swizzle=8:6、threads=256、waves=4,1、QK/VO tile=32；
+  async/alignment=16、DMA=asm128、math=approx、pipeline=0；
+  simplify-loop-control=1、coalesce-waits=0、fuse=0。
+baseline 和 retained32-baseline 保留原参数；后者仍为 group=8、frag-prefetch=1。
+预设只控制编译参数，不会把任意已有输入自动转换为 online softmax。
+直接运行 TuneAttention.py 的默认 test_input_spidD.mlir 仍是历史输入；
+复现 safe-softmax 时应使用本入口或先运行生成器，不能只切换 --case。
+
+针对新增行最大值和 O 重缩放带来的寄存器/调度变化，先运行小范围扫描：
+
+  ./run_tuning.sh --config tuning.online.json --mode ir
+  ./run_tuning.sh --config tuning.online.json
+
+此配置为 BM=128、BN=64/128、BK=32，以 online-baseline 为基准，
+扫描 group=4/8/16、frag-prefetch=0/1、retain-fragment-words=0/32，共 24 项。
+新内核的最佳性能参数需重新测量；旧内核的耗时不能直接沿用。
+Q 保留预算是每线程 word 数，不是 softmax 行状态的预算；无需因新增 m/l
+就机械地把 32 加大。必要时再扫描 carrier、qk-tile/vo-tile 和线程布局。
+
+tuning.combinations*.json 也以 online-baseline 为扫描起点。
+pipeline 固定为 0：MyTest 的旧手工 seqLen 调度按两个累加器和固定操作序列
+设计，不能将 pipeline=1 当作已适配 online 的流水开关。
+pipeline-stages 仍扫描 dk 的自动流水提示，两者不同。
+simple 配置固定 BK=32，避免 BK=16 在 QK/VO=32 重分块下重复扫描；
+保留 warmup=100/repeat=500，frag-prefetch 改为 0/1 对照。
+
 新增 swizzle / workgroup 调优（需要同步更新 MyTest 和 TuneAttention.py）：
 
   ./run_tuning.sh --config tuning.swizzle.json --mode ir
   ./run_tuning.sh --config tuning.swizzle.json
 
-此配置生成 BM=128、BN=128、BK=32 的输入，固定 group=8、reverse=1，
+此配置生成 BM=128、BN=128、BK=32 的 online 输入，固定 group=4、reverse=1，
 分别扫描 Q/K/V 的 off/on，共 8 个候选。on 为保持 128-bit DMA 的 8:6
-字节位 XOR。Q/V 开启是实验配置，收益由实测决定。baseline 仍保持历史配置。
+字节位 XOR。其余参数继承 online-baseline；Q/V 开启的收益由实测决定。
 
 只比较 group/reverse 的对照和 K-only：
 
@@ -142,6 +194,10 @@ config.json / result.json / best_by_shape.json 保存优化参数，实际候选
     例如 "bk": [0, 32, 64] 同时生成非 split-D、BK=32、BK=64 三种输入；
     路径统一汇入 inputs.txt。非 split-D 文件名没有 -BK 后缀。
   cases：TuneAttention 的预设名，可用 glob。
+  softmax：online（默认）或 legacy；显式传给生成器，保存到 settings.json。
+    online 文件名增加 -online；legacy 仅用于复现历史非稳定 exp2。
+  sweep_base：sweep 的基准预设，例如 online-baseline；必须与 sweep 一起使用。
+    省略或 null 时沿用 TuneAttention 的历史 baseline；不接受与 cases 混用。
   set：覆盖参数，如 ["math=strict", "threads=128", "waves=2,1"]。
   sweep：扫描轴，如 ["qk-tile=16;32", "vo-tile=16;32"]。
          使用 sweep 时将 cases 设为 []。
@@ -159,7 +215,8 @@ qk-tile/vo-tile 要求 split-D 结构，不宜直接用于 bk=0。
 混合 BK 扫描会对每份输入应用同一套候选参数，编译失败仍会记录到汇总。
 这里的 bk=0 与 set 中 qk-tile=0/vo-tile=0 的含义不同。
 
---smoke 会临时改为一份 64x32x32 输入、baseline、预热 1 次、计时 3 次；
+--smoke 会临时改为一份 online 128x128x32 输入、online-baseline、
+清除 sweep/sweep_base/set、预热 1 次、计时 3 次；
 不会改写 tuning.json。它适合验证环境，不能替代正式性能采样。
 
 4. 实时 JSON 结果：最大加速比、对应配置及中断保留
@@ -217,7 +274,7 @@ best_by_shape.json 的键如 "1x32x4096x128"，表示完整 B,H,S,D，不是 til
   hsaco                                       对应 GPU 内核路径
   ranking_metric                              固定为 speedup
 
-文件名 test_input_BxHxSxD-BM-BN-BK.mlir 给出原始切块。qk-tile/vo-tile
+文件名 test_input_BxHxSxD-BM-BN-BK-online.mlir 给出原始切块。qk-tile/vo-tile
 及 useKPack 可能重新分块，实际效果结合 parameters 和 lowering.log 判断。
 compiler_defaults=true、parameters=null 表示使用 MyTest 自身默认值。
 
@@ -324,8 +381,8 @@ config.json 在编译前写入，其中初始 hardware_tested=false 不代表最
 需要更新排名时，重新运行一键入口生成新 session。旧结果中的命令包含
 绝对路径，移动结果目录后不保证原重放路径仍有效。
 
-数值比较相对 PyTorch SDPA，atol=rtol=1e-2。默认近似数学与模板非稳定
-exp2 softmax 的误差由目标机实测判断。有失败候选时入口最终返回非零，
+数值比较相对 PyTorch SDPA，atol=rtol=1e-2。默认生成稳定 online softmax；
+近似数学与 FP16 概率转换的误差仍由目标机实测判断。有失败候选时入口最终返回非零，
 不会丢弃其他已完成的正确结果。
 
 5. 包内容与验证
@@ -341,6 +398,7 @@ exp2 softmax 的误差由目标机实测判断。有失败候选时入口最终�
                                  默认 split-D 输入
   run_tuning.sh / run_tuning.py   一键入口
   tuning.json / env.sh.example    默认扫描和环境配置
+  tuning.online.json             最新 online 配置的 24 项定向扫描
   script/test_*.py                CPU 和模拟流程回归测试
   BUILD_INFO.json                二进制来源、哈希、ABI 要求
   SHA256SUMS                     打包文件校验清单

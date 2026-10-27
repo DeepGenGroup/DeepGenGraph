@@ -66,6 +66,17 @@ yes:
 no:
   ret <4 x float> %acc
 }}
+define <4 x float> @guarded_store(<4 x half> %a, <4 x half> %b, <4 x float> %acc, i1 %cond, ptr %out) {{
+entry:
+  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+  br i1 %cond, label %yes, label %no
+yes:
+  %result = fadd <4 x float> %x, %acc
+  store volatile <4 x float> %result, ptr %out
+  ret <4 x float> %result
+no:
+  ret <4 x float> %acc
+}}
 define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) {{
   %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
   %result = fadd <4 x float> %acc, %x
@@ -101,6 +112,23 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
   ret <4 x float> %result
 }}
 '''
+    # Layout 3.1 leaves MMACs and their terminal fadd in separate blocks.
+    # Thread-bound simplification proves the LDS writeback guard true only
+    # late in the export pipeline; CFG cleanup must precede the fusion retry.
+    for name, branch in [('constant_guard', 'br i1 true, label %writeback, label %exit'),
+                         ('unconditional_guard', 'br label %writeback')]:
+        source += f'''define <4 x float> @{name}(<4 x half> %a, <4 x half> %b, <4 x float> %acc) {{
+entry:
+  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+  %y = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> %x)
+  {branch}
+writeback:
+  %result = fadd <4 x float> %y, %acc
+  ret <4 x float> %result
+exit:
+  ret <4 x float> %acc
+}}
+'''
     strict = run([tool, '-'], source)
     native_only = run([tool, '--native-exp2', '-'], source)
     reciprocal_only = run([tool, '--reciprocal', '-'], source)
@@ -110,9 +138,14 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
     assert strict.count('fdiv float') == 2 and '@llvm.amdgcn.exp2' not in strict
     fusion = run([tool, '--fuse-mmac-accumulator', '-'], source)
     fused_body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', fusion, re.S)[0]
-    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale'):
+    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale',
+                 'constant_guard', 'unconditional_guard', 'cross_block'):
         assert 'fadd' not in fused_body(name) and '<4 x float> zeroinitializer' not in fused_body(name)
-    for name in ('nonzero', 'multiuse', 'late_load', 'cross_block', 'unknown_asm', 'strict_fp',
+    # SimplifyCFG may safely speculate a bare fadd and replace the branch with
+    # a select. A conditional side effect must still keep its guarded block.
+    assert 'select i1 %cond' in fused_body('cross_block')
+    assert 'br i1 %cond' in fused_body('guarded_store')
+    for name in ('nonzero', 'multiuse', 'late_load', 'guarded_store', 'unknown_asm', 'strict_fp',
                  'strict_scale', 'late_loaded_scale'):
         assert 'fadd' in fused_body(name), name
     assert fused_body('late_load').index('call ') < fused_body('late_load').index('load volatile')
@@ -122,8 +155,11 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
     assert fused_body('normalize').count('fdiv float') == 2
     assert '@__ocml_exp2_f32' in fused_body('normalize')
     assert '@llvm.amdgcn.exp2' not in fusion and ' arcp ' not in fusion
-    assert run([tool, '--fuse-mmac-accumulator', '-'], fusion) == fusion
-    print('PASS independent MMAC pass: both add orders, no load/control-flow motion, idempotence, exp2/div unchanged')
+    # LLVM's parser may reorder predecessor-use lists; these comments do not
+    # describe an IR change when round-tripping a newly merged return block.
+    without_preds = lambda text: re.sub(r'; preds =[^\n]*', '', text)
+    assert without_preds(run([tool, '--fuse-mmac-accumulator', '-'], fusion)) == without_preds(fusion)
+    print('PASS independent MMAC pass: constant/unconditional CFG cleanup, both add orders, no load motion, idempotence, exp2/div unchanged')
     approximate = run([tool, '--approx-register-math', '-'], source)
     body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', approximate, re.S)[0]
     assert 'fadd' not in body('fuse')
@@ -137,6 +173,34 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
     assert not re.search(r'\b(nnan|ninf|fast)\b', approximate)
     assert '@llvm.amdgcn.exp2.f32' in approximate
     print('PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal')
+
+    # Reproduce the ordering dependency, including the pass that proves the
+    # thread guard true. Early CFG cleanup alone cannot expose this fusion.
+    guarded = f'''declare i32 @llvm.amdgcn.workitem.id.x()
+define amdgpu_kernel void @thread_guard(<4 x half> %a, <4 x half> %b, <4 x float> %acc, ptr addrspace(3) %out) !reqd_work_group_size !0 {{
+entry:
+  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+  %y = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> %x)
+  %leader = icmp ult i32 %tid, 256
+  br i1 %leader, label %writeback, label %exit
+writeback:
+  %result = fadd <4 x float> %y, %acc
+  store volatile <4 x float> %result, ptr addrspace(3) %out
+  br label %exit
+exit:
+  ret void
+}}
+!0 = !{{i32 256, i32 1, i32 1}}
+'''
+    early = run([tool, '--approx-register-math', '-'], guarded)
+    assert 'fadd' in run([tool, '--fuse-mmac-accumulator', '-'], early)
+    bounded = run([tool, '--optimize-register-lifetimes', '-'], early)
+    assert 'br i1 true' in bounded and 'fadd' in bounded
+    final = run([tool, '--fuse-mmac-accumulator', '-'], bounded)
+    assert 'fadd' not in final and 'br i1' not in final
+    assert final.count('v_mmac_') == 2 and final.count('store volatile') == 1
+    print('PASS late fusion after lifetime/thread-bound simplification')
 
     # Execute the actual transformed division code on the CPU. Use positive
     # normal row sums and signed numerators; native exp2 is tested separately

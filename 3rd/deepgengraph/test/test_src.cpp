@@ -367,7 +367,8 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
 }
 
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
-                             bool splitPackedDMA, unsigned asmSourceBytes) {
+                             bool splitPackedDMA, unsigned asmSourceBytes,
+                             bool fuseAccumulators) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
@@ -376,6 +377,12 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   mlir::frisk::protectAsyncDMASourceAddresses(module);
   if (!splitPackedDMA && !asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToHCU(module);
+
+  // Lifetime optimization exposes thread bounds and folds LDS leader guards.
+  // After all late rewrites, merge the now-constant branches before retrying
+  // the same-block MMAC accumulator matcher. Keep early math fusion intact.
+  if (fuseAccumulators)
+    mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -994,7 +1001,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes);
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict");
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

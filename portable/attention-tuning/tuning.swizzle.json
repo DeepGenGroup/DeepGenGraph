@@ -10,7 +10,7 @@
   ],
   "cases": [],
   "set": [
-    "workgroup-group-size=8",
+    "workgroup-group-size=4",
     "workgroup-reverse=1"
   ],
   "sweep": [
@@ -24,5 +24,7 @@
   "repeat": 50,
   "seed": 0,
   "timeout": 300,
-  "output_dir": "results-swizzle"
+  "output_dir": "results-swizzle",
+  "softmax": "online",
+  "sweep_base": "online-baseline"
 }

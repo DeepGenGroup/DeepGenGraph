@@ -5,7 +5,8 @@
   ],
   "bn": [
     32,
-    64
+    64,
+    128
   ],
   "bk": [
     32
@@ -15,7 +16,9 @@
     "nohint-rolled",
     "pipeline-loop-only",
     "group8-reverse",
-    "group8-reverse-k128-swizzle"
+    "group8-reverse-k128-swizzle",
+    "retained32-baseline",
+    "online-baseline"
   ],
   "set": [],
   "sweep": [],
@@ -25,5 +28,6 @@
   "repeat": 50,
   "seed": 0,
   "timeout": 300,
-  "output_dir": "results"
+  "output_dir": "results",
+  "softmax": "online"
 }

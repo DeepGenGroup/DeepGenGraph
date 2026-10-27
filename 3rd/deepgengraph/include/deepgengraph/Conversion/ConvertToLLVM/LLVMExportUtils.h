@@ -46,7 +46,9 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
 
 /// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
-void fuseMMACAccumulators(llvm::Module &module);
+/// Enable CFG cleanup on the final retry after thread-bound/lifetime rewrites.
+/// Early math fusion keeps the CFG used by reduction and lifetime matching.
+void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG = false);
 
 /// Bypass score+zero on an existing clear-mask branch. Legal mode requires
 /// LLVM to prove the identity; allowSignedZero explicitly permits ignoring
