@@ -1,3 +1,5 @@
+#include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/NarrowKDMA.h"
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "SplitDAttentionTiles.h"
 #include "deepgengraph/Common.h"
@@ -370,7 +372,8 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
 
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
-                             bool fuseAccumulators, unsigned pvInterleave = 0, bool vDoubleBuffer = false) {
+                             bool fuseAccumulators, unsigned pvInterleave = 0, bool vDoubleBuffer = false,
+                             const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
@@ -391,6 +394,10 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // V ownership and advance DMA into the alternate LDS slot when requested.
   mlir::frisk::interleavePVAccumulators(module, pvInterleave);
   mlir::frisk::doubleBufferV(module, vDoubleBuffer);
+  if (!mlir::frisk::narrowKDMA(module, kDMA))
+    llvm::report_fatal_error("cannot apply requested K DMA configuration");
+  if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
+    llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -434,6 +441,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool fragPrefetch = false;
   unsigned pvInterleave = 0;
   bool vDoubleBuffer = false;
+  frisk::KDMAOptions kDMA;
+  unsigned kLDSPrefetch = 0;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
   StringRef maskAddBypass = "off";
@@ -447,6 +456,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
     bool consumed = false;
+    if (!frisk::parsePairedLDSOption(option, kLDSPrefetch, consumed)) {
+      llvm::errs() << "use --k-lds-prefetch=0..8\n"; return 1;
+    }
+    if (consumed) continue;
+    if (!frisk::parseKDMAOption(option, kDMA, consumed)) {
+      llvm::errs() << "use --k-dma=128|64|64-swizzle and --k-dma-arg=N\n";
+      return 1;
+    }
+    if (consumed) continue;
     if (!frisk::parseVDoubleBufferOption(option, vDoubleBuffer, consumed)) {
       llvm::errs() << "use --v-double-buffer=0|1 (default 0)\n";
       return 1;
@@ -1021,7 +1039,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer);
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
@@ -1307,7 +1325,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

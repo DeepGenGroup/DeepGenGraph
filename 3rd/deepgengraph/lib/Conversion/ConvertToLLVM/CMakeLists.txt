@@ -18,6 +18,8 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   PrefetchMMACFragments.cpp
   InterleavePV.cpp
   DoubleBufferV.cpp
+  NarrowKDMA.cpp
+  PrefetchPairedLDS.cpp
   ReuseLDSFragments.cpp
 
   DEPENDS
