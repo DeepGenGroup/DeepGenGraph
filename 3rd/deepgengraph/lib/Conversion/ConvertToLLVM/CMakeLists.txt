@@ -16,6 +16,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   OptimizeRegisterMath.cpp
   PrefetchGlobalPackets.cpp
   PrefetchMMACFragments.cpp
+  ScheduleSoftmaxFragments.cpp
   InterleavePV.cpp
   DoubleBufferV.cpp
   NarrowKDMA.cpp

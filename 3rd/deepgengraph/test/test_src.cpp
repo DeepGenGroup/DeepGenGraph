@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/NarrowKDMA.h"
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
@@ -373,7 +374,8 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators, unsigned pvInterleave = 0, bool vDoubleBuffer = false,
-                             const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0) {
+                             const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0,
+                             mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
@@ -398,6 +400,7 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
     llvm::report_fatal_error("cannot apply requested K DMA configuration");
   if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
     llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
+  mlir::frisk::scheduleSoftmaxFragments(module, softmaxFragments);
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -439,6 +442,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   std::string swizzleOptions, workgroupOptions;
   bool canonicalizeLDS = false;
   bool fragPrefetch = false;
+  frisk::SoftmaxFragmentMode softmaxFragments = frisk::SoftmaxFragmentMode::Off;
   unsigned pvInterleave = 0;
   bool vDoubleBuffer = false;
   frisk::KDMAOptions kDMA;
@@ -456,6 +460,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
     bool consumed = false;
+    if (!frisk::parseSoftmaxFragmentOption(option, softmaxFragments, consumed)) {
+      llvm::errs() << "use --softmax-fragments=off|fragment|pv\n"; return 1;
+    }
+    if (consumed) continue;
     if (!frisk::parsePairedLDSOption(option, kLDSPrefetch, consumed)) {
       llvm::errs() << "use --k-lds-prefetch=0..8\n"; return 1;
     }
@@ -1039,7 +1047,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch);
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch, softmaxFragments);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
