@@ -1,6 +1,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/InterleavePV.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -13,6 +14,8 @@
 int main(int argc, char **argv) {
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
+  unsigned pvInterleave = 0;
+  bool pvInterleaveSpecified = false;
   llvm::StringRef maskAddBypass;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
@@ -22,6 +25,14 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     llvm::StringRef option(argv[i]);
     bool consumed = false;
+    if (!mlir::frisk::parsePVInterleaveOption(option, pvInterleave, consumed)) {
+      llvm::errs() << "use --pv-interleave=0|1|2|4 (0=off, 1=guarded serial)\n";
+      return 1;
+    }
+    if (consumed) {
+      pvInterleaveSpecified = true;
+      continue;
+    }
     if (!mlir::frisk::parseDeferLaneSumOption(option, deferLaneSum, deferLaneSumOptions, consumed)) {
       llvm::errs() << "invalid defer-lane-sum option: " << option << "\n";
       return 1;
@@ -67,9 +78,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (!maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty()) {
+  if (!maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty() || pvInterleaveSpecified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--pv-interleave=0|1|2|4] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -85,6 +96,7 @@ int main(int argc, char **argv) {
       mlir::frisk::optimizeLocalReductions(*module, localReductionOptions);
     if (!deferLaneSum.empty() && deferLaneSum != "off")
       mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
+    mlir::frisk::interleavePVAccumulators(*module, pvInterleave);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;
@@ -118,7 +130,7 @@ int main(int argc, char **argv) {
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
   if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] <input.ll or ->\n";
+    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;

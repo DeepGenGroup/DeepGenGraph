@@ -981,10 +981,10 @@ struct ConvertOpConversionPattern : public OpConversionPattern<dg::ConvertOp> {
     if (!convertedTy)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    auto inMs = getOpInputMemspaceAttr(op).asArrayRef()[0];
     auto outMs = getOpOutputMemspaceAttr(op).asArrayRef()[0];
     auto operand = adaptor.getOperand();
-    AppendMemspaceToMemrefValue(operand, inMs);
+    // The cast handles both element type and storage changes. Preserve the
+    // producer's actual type instead of rewriting other users' operands.
     convertedTy = ModifyMemrefType(convertedTy, outMs);
 
     rewriter.replaceOpWithNewOp<frisk::CastOp>(op, convertedTy, operand);
@@ -1406,7 +1406,16 @@ struct ReduceOpConversionPattern : public OpConversionPattern<dg::ReduceOp> {
       default: return op.emitOpError("unsupported reduction kind");
     }
     auto operand = adaptor.getOperand();
-    AppendMemspaceToMemrefValue(operand, inMs[0]);
+    // Do not change the type of a loop result in place: dialect conversion
+    // would leave a tensor/materialization chain between the loop and reduce,
+    // disconnecting LowerInfo from the GEMM accumulator. Make the storage
+    // boundary explicit so its layout can propagate through the Frisk cast.
+    if (inMemTy.getMemorySpaceAsInt() != inMs[0]) {
+      auto reduceSrcTy = MemRefType::get(
+          inMemTy.getShape(), inMemTy.getElementType(), inMemTy.getLayout(),
+          rewriter.getI64IntegerAttr(inMs[0]));
+      operand = rewriter.create<frisk::CastOp>(loc, reduceSrcTy, operand);
+    }
     int64_t dim = op.getReduceDimension();
     if (dim < 0) dim += inMemTy.getRank();
     rewriter.create<frisk::ReduceOp>(loc, operand, buffer, rewriter.getStringAttr(kind), dim);
