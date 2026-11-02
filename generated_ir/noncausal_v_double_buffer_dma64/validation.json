@@ -1,0 +1,149 @@
+{
+  "variants": {
+    "k_swizzle64_gep": {
+      "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_banks/k_swizzle32_gep.ll",
+      "source_sha256": "552ac8a008255b5ca22c548ce884d589a7ebca7c19946d1ccffe1252904cf790",
+      "sha256": "983ad04a2cf3f8a3bde7aa895a88ab3b5b2986b7df169b17fcb5c1d3fa185499",
+      "llvm_and_O3_verified": true,
+      "address_validation": {
+        "all_32_heads_32_key_tiles_256_lanes": true,
+        "checked_8byte_packets": 4194304,
+        "source_provenance": true,
+        "exact_coverage": true,
+        "in_bounds_and_aligned": true
+      }
+    },
+    "k_split64_control": {
+      "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_banks/k_split32_control.ll",
+      "source_sha256": "f66b4630b2dae6bb7d12e8fc525a84151d14190ca5d4512d90a3b3a2b18ae0ca",
+      "sha256": "d396b72cd84f6328e4b0792e878c799043c24dd1cb0673dcf6f822ebfc2afe1f",
+      "llvm_and_O3_verified": true,
+      "address_validation": {
+        "all_32_heads_32_key_tiles_256_lanes": true,
+        "checked_8byte_packets": 4194304,
+        "source_provenance": true,
+        "exact_coverage": true,
+        "in_bounds_and_aligned": true
+      }
+    }
+  },
+  "cases": [
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "measured_swizzle32_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_swizzle64_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_split64_control",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_swizzle64_gep.o3",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "measured_swizzle32_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "k_swizzle64_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "k_split64_control",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 31,
+      "variant": "measured_swizzle32_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.00010331936224866611
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 31,
+      "variant": "k_swizzle64_gep",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.00010331936224866611
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 31,
+      "variant": "k_split64_control",
+      "bitwise_equal": true,
+      "identical_LDS_read_values": true,
+      "V_schedule_unchanged": true,
+      "barrier_epoch_ownership": true,
+      "max_abs_error": 0.00010331936224866611
+    }
+  ],
+  "K_DMA_sites_per_iteration": 16,
+  "Q_V_DMA_width_bits": 128,
+  "LDS_bytes": 16384,
+  "gpu_tested": false,
+  "gfx936_codegen_tested": false,
+  "DMA64_semantics": "buffer_load_dwordx2 offen lds: destination=m0+8*lane; supplied hardware support by user; CPU model assumes this lane stride",
+  "independent_wave_timing_simulated": false
+}

@@ -1,0 +1,284 @@
+{
+  "cases": [
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 0.000145755813135362,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 0.000145755813135362,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 0.000145755813135362,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k0_prefetch_pv_tail.o3",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 0.000145755813135362,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k0_late_control.o3",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 0.000145755813135362,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 9.917702902600967e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 9.917702902600967e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 9.917702902600967e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 6.108607249871723e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 6.108607249871723e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 6.108607249871723e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 4.617419446795168e-09,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 4.617419446795168e-09,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 4.617419446795168e-09,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "variant": "control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "variant": "k0_late_control",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 0,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "variant": "k0_prefetch_pv_tail",
+      "bitwise_equal_to_control": true,
+      "global_trace_and_LDS_values_epochs_equal": true,
+      "V_schedule_equal": true,
+      "K0_overlapped_MMAC": 992,
+      "max_abs_error": 1.1494266800582409e-05,
+      "delayed_DMA_and_ownership_passed": true
+    }
+  ],
+  "negative_controls": [
+    {
+      "case": "missing_V3_handoff",
+      "detected": "overwrite without reader barrier"
+    },
+    {
+      "case": "missing_K0_wait",
+      "detected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "case": "missing_final_guard",
+      "detected": "extra K0 DMA past final tile"
+    }
+  ],
+  "source_sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+  "variants": {
+    "control": {
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "o3_sha256": "4156bac17fd7208c320e9a30112378e796c6ee967660929291a6b0d59b6039b3",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 0
+    },
+    "k0_late_control": {
+      "sha256": "8f627de88bb81170e4ae6c0b4c9831b32bfa944969081c8f4235100d56f78988",
+      "o3_sha256": "b7fc3c93e9916a9a95b5e9537af48e2eeab8bc380365a6eb9b1c617934e47b11",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 0
+    },
+    "k0_prefetch_pv_tail": {
+      "sha256": "c8cbe3c1615b4353a620ba1d74b97125c4dd92365afccd22c4126cecb2e906da",
+      "o3_sha256": "de73a4b7278b1dee59bf2d17a2855e8b3b8a270a569902d7617239883983702f",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 32
+    }
+  },
+  "reference_atol": 0.01,
+  "reference_rtol": 0.01,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "independent_wave_timing_simulated": false
+}

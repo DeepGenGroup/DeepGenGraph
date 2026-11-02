@@ -1,0 +1,8 @@
+PASS baseline {"bitwise_equal": true, "ordered_global_and_lds_traces_equal": true, "cross_wave_barrier_epoch_audit_passed": true, "no_pending_dma": true, "vm_waits": 260, "barriers": 389, "overlap_mmac": 0, "max_abs_error": 9.917702902600967e-05}
+PASS k0_late_control {"bitwise_equal": true, "ordered_global_and_lds_traces_equal": true, "cross_wave_barrier_epoch_audit_passed": true, "no_pending_dma": true, "vm_waits": 260, "barriers": 389, "overlap_mmac": 0, "max_abs_error": 9.917702902600967e-05}
+PASS k0_prefetch {"bitwise_equal": true, "ordered_global_and_lds_traces_equal": true, "cross_wave_barrier_epoch_audit_passed": true, "no_pending_dma": true, "vm_waits": 260, "barriers": 389, "overlap_mmac": 992, "max_abs_error": 9.917702902600967e-05}
+FAILED BLOCK k0.issue INSTRUCTION %k0.next.nc.n143 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.next.dma.buffer.lds1374, i32 %k0.next.dma.buffer.offset1372, <4 x i32> %k0.next.dma.buffer.rsrc1373) #10
+PASS negative missing_reader_handoff cross-wave WAR without reader-completion barrier: epoch=16 mma=224 lds_reads=144 wave=0 bytes=[0 1 2 3 4 5 6 7]
+FAILED BLOCK nc.n134 INSTRUCTION %nc.n165 = load <4 x half>, ptr addrspace(3) %address.local559, align 8
+PASS negative missing_k0_wait read or overwrite of a destination whose DMA has not completed
+PASS negative missing_final_guard extra DMA at kernel exit

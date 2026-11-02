@@ -1,0 +1,42 @@
+{
+  "baseline": {
+    "llvm_as": true,
+    "opt_O3_verify": true,
+    "cpu_cases_passed": 6,
+    "max_abs_error": 0.0010615858711160442,
+    "O3_local_sum_scalar_fadds": 62,
+    "O3_local_sum_vector_fadds": 0,
+    "O3_local_sum_vector_reduce_calls": 0,
+    "gpu_tested": false
+  },
+  "max4": {
+    "llvm_as": true,
+    "opt_O3_verify": true,
+    "cpu_cases_passed": 6,
+    "max_abs_error": 0.0010615858711160442,
+    "O3_local_sum_scalar_fadds": 62,
+    "O3_local_sum_vector_fadds": 0,
+    "O3_local_sum_vector_reduce_calls": 0,
+    "gpu_tested": false
+  },
+  "sum4": {
+    "llvm_as": true,
+    "opt_O3_verify": true,
+    "cpu_cases_passed": 6,
+    "max_abs_error": 0.0010615858711160442,
+    "O3_local_sum_scalar_fadds": 20,
+    "O3_local_sum_vector_fadds": 12,
+    "O3_local_sum_vector_reduce_calls": 2,
+    "gpu_tested": false
+  },
+  "max_sum4": {
+    "llvm_as": true,
+    "opt_O3_verify": true,
+    "cpu_cases_passed": 6,
+    "max_abs_error": 0.0010615858711160442,
+    "O3_local_sum_scalar_fadds": 20,
+    "O3_local_sum_vector_fadds": 12,
+    "O3_local_sum_vector_reduce_calls": 2,
+    "gpu_tested": false
+  }
+}

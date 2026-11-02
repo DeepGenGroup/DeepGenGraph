@@ -1,0 +1,33 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_banks/k_swizzle32.ll",
+  "source_sha256": "9605d5eeb763f9a754863e07bc07a4e8560515974a2608f4c4f27b79f2f510ef",
+  "baseline_sha256": "9605d5eeb763f9a754863e07bc07a4e8560515974a2608f4c4f27b79f2f510ef",
+  "optimized_sha256": "c34dfb7cb3e55a518362c857751d7033b6736cace5777c3207d8fba64d856d3e",
+  "pass_name": "CanonicalizeLDSGEPsPass",
+  "export_tool_sha256": "571813cc7a7d35334f93bdd1e339004c3a85374341ba4f8a6640233614c5acbf",
+  "pass_source_sha256": "a2f9ac3df493ab5f771d9ef6a05caa3885b29794a825e6ef17843580409aa9a9",
+  "diagnostics": "",
+  "baseline": {
+    "lds_loads": 80,
+    "lds_load_alignments": {
+      "8": 80
+    },
+    "dma128_sites": 16,
+    "block_barriers": 14,
+    "vm_wait_sites": 12,
+    "mmac_sites": 256
+  },
+  "optimized": {
+    "lds_loads": 80,
+    "lds_load_alignments": {
+      "8": 80
+    },
+    "dma128_sites": 16,
+    "block_barriers": 14,
+    "vm_wait_sites": 12,
+    "mmac_sites": 256
+  },
+  "llvm_assemble_and_O3_verify": true,
+  "gpu_tested": false,
+  "target_gfx936_codegen_tested": false
+}

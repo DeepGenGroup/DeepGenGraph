@@ -1,0 +1,43 @@
+PASS all 16384 score coordinates traced from actual Q/K DMA, LDS and MMAC operands
+PASS group4 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group8 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group16 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group32 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group4.o3 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group8.o3 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group16.o3 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group32.o3 random query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group4 random query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group8 random query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group16 random query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group32 random query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group4 random query=15: causal numerics, bounds, DMA and LDS ownership
+PASS group8 random query=15: causal numerics, bounds, DMA and LDS ownership
+PASS group16 random query=15: causal numerics, bounds, DMA and LDS ownership
+PASS group32 random query=15: causal numerics, bounds, DMA and LDS ownership
+PASS group4 random query=16: causal numerics, bounds, DMA and LDS ownership
+PASS group8 random query=16: causal numerics, bounds, DMA and LDS ownership
+PASS group16 random query=16: causal numerics, bounds, DMA and LDS ownership
+PASS group32 random query=16: causal numerics, bounds, DMA and LDS ownership
+PASS group4 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group8 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group16 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group32 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group4.o3 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group8.o3 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group16.o3 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group32.o3 random query=31: causal numerics, bounds, DMA and LDS ownership
+PASS group4 max_changes query=2: causal numerics, bounds, DMA and LDS ownership
+PASS group8 max_changes query=2: causal numerics, bounds, DMA and LDS ownership
+PASS group16 max_changes query=2: causal numerics, bounds, DMA and LDS ownership
+PASS group32 max_changes query=2: causal numerics, bounds, DMA and LDS ownership
+PASS group4 diagonal_future_dominates query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group8 diagonal_future_dominates query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group16 diagonal_future_dominates query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group32 diagonal_future_dominates query=0: causal numerics, bounds, DMA and LDS ownership
+PASS group32 positive_overflow query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group32.o3 positive_overflow query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group32 negative_underflow query=1: causal numerics, bounds, DMA and LDS ownership
+PASS group32.o3 negative_underflow query=1: causal numerics, bounds, DMA and LDS ownership
+FAILED BLOCK grp.n128 INSTRUCTION %grp.n137 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1374, i32 %dma.buffer.offset1372, <4 x i32> %dma.buffer.rsrc1373) #9
+PASS 40 numerical executions and 2 negative controls

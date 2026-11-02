@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "variant": "control",
+      "sha256": "3dca97e3d3933dbd446326d7ed6f6c1c0b1dececd75c8f57323feb3801f4c84a",
+      "bitwise_equal_to_control": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 0.00011882850483010965
+    },
+    {
+      "variant": "k_tail_prefetch4",
+      "sha256": "72ec38762fae06bc9fb6c4a52db42f062e291c200e0175d9979e7634bf79d573",
+      "bitwise_equal_to_control": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 0.00011882850483010965
+    }
+  ],
+  "gpu_tested": false
+}

@@ -1,0 +1,21 @@
+{
+  "manual": {
+    "sha256": "68410c5a5ad3bc28dda29769d670d05fd6d9421e051833a6b57cf9a8d9eaa863",
+    "o3_vector4_add_blocks": {
+      "638": 16
+    }
+  },
+  "pass": {
+    "sha256": "defa6d3a2b672b52ec8f05e2aa88db8db252d2bc1663bbf39d81dc07f5b1d365",
+    "o3_vector4_add_blocks": {
+      "638": 16
+    }
+  },
+  "bn64": {
+    "sha256": "020bb2bf031b6b2187592caa1bbcae8ec88f6754a0b156d17b70c2dec19de1ad",
+    "o3_vector4_add_blocks": {
+      "483": 8
+    }
+  },
+  "pass_o3_matches_manual": true
+}

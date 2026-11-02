@@ -1,0 +1,11 @@
+{
+  "cases": 18,
+  "modes": [
+    "off",
+    "legal",
+    "approx"
+  ],
+  "cpu_comparisons": 600,
+  "o3_verified": true,
+  "idempotent": true
+}

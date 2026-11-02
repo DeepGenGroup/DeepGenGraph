@@ -1,0 +1,24 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/test_input_spidD_noncasual.ll",
+  "source_sha256": "a3509e3fbef30fe726e8e6bf83a99351c35a6fbae0f34e11825019ff54049fbd",
+  "variants": {
+    "baseline": {
+      "sha256": "a3509e3fbef30fe726e8e6bf83a99351c35a6fbae0f34e11825019ff54049fbd",
+      "llvm_as_and_o3_verified": true,
+      "static_lds_bytes": 16384
+    },
+    "k0_late_control": {
+      "sha256": "1c48aa55a00a0fee30c6f4fb36a222d8e96002b74724839caaba97c1a1f31d74",
+      "llvm_as_and_o3_verified": true,
+      "static_lds_bytes": 16384
+    },
+    "k0_prefetch": {
+      "sha256": "744255f8522af2c1279d56416003d0afd8f361d891d480d47350c977512753c4",
+      "llvm_as_and_o3_verified": true,
+      "static_lds_bytes": 16384
+    }
+  },
+  "gpu_tested": false,
+  "next_k0_overlap_mmac": 992,
+  "key_tiles": 32
+}

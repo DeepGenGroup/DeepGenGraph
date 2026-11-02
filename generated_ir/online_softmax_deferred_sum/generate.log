@@ -1,0 +1,22 @@
+{
+  "baseline": "/data2/xsl/DeepGenGraph/generated_ir/local_reduction_pass/kernel_dtk.ll",
+  "baseline_sha256": "d335c9c97bc82127273b007d53b27b514109ab736f03fcd2ab141fdec0a8532f",
+  "baseline_ir_sha256": "eae651062fe74a3165289a74b26a717e271a53cd875d3ec74e5c9e0f6163895c",
+  "experiment_sha256": "cd185934862b3d8fb817175bf8be9c34f54bbd4d30f9143eaab744dacec0140e",
+  "loop_denominator_shuffles_before": 4,
+  "loop_denominator_shuffles_after": 0,
+  "exit_denominator_shuffles_before": 0,
+  "exit_denominator_shuffles_after": 4,
+  "loop_max_shuffles_before": 4,
+  "loop_max_shuffles_after": 4,
+  "total_static_shuffles": 72,
+  "all_other_ir_unchanged": true,
+  "lane_group_xor": [
+    16,
+    32
+  ],
+  "workgroup_size": 256,
+  "bn": 128,
+  "numerical_scope": "Approximate: change sum/alpha multiplication order; running max and alpha retained",
+  "gpu_tested": false
+}

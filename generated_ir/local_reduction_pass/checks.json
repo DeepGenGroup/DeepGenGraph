@@ -1,0 +1,63 @@
+{
+  "built_targets": [
+    "LegacyLLVMExportTest",
+    "MyTest"
+  ],
+  "general_regression": {
+    "fixtures": 46,
+    "modes": [
+      "off",
+      "legal",
+      "approx"
+    ],
+    "legal_transformed": 29,
+    "approx_transformed": 37,
+    "cpu_comparisons": 920,
+    "idempotent": true,
+    "O3_verified": true,
+    "tested_chain_counts": [
+      2,
+      3,
+      4,
+      5,
+      8,
+      16
+    ]
+  },
+  "experimental_comparison": {
+    "max4": {
+      "experimental_O3_identical": true,
+      "diagnostics": "LocalReduction: Attn_p2: 2 groups, 64 inputs, 4 chains (approx)"
+    },
+    "sum4": {
+      "experimental_O3_identical": true,
+      "diagnostics": "LocalReduction: Attn_p2: 2 groups, 64 inputs, 4 chains (approx)"
+    },
+    "max_sum4": {
+      "experimental_O3_identical": true,
+      "diagnostics": "LocalReduction: Attn_p2: 4 groups, 128 inputs, 4 chains (approx)"
+    }
+  },
+  "python_tests_passed": 32,
+  "mask_bypass_regression_passed": true,
+  "compiler_comparisons": [
+    {
+      "bn": 64,
+      "off_equals_legal": true,
+      "approx_matches_standalone_O3": true,
+      "exports_verified": 3,
+      "dtk_ir": "generated_ir/local_reduction_pass/kernel_bn64_dtk.ll",
+      "dtk_ir_sha256": "04e1b5607a38d5f4298dbb0922b56f86358f0f8886087e08c1c3291efb944c73"
+    },
+    {
+      "bn": 128,
+      "off_equals_legal": true,
+      "approx_matches_standalone_O3": true,
+      "exports_verified": 3,
+      "dtk_ir": "generated_ir/local_reduction_pass/kernel_dtk.ll",
+      "dtk_ir_sha256": "d335c9c97bc82127273b007d53b27b514109ab736f03fcd2ab141fdec0a8532f"
+    }
+  ],
+  "attention_cpu_cases_passed": 12,
+  "gpu_tested": false
+}

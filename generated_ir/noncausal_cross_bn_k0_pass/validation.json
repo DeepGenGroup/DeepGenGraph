@@ -1,0 +1,116 @@
+{
+  "cases": [
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "control",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "cross_bn_k0",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "cross_bn_k0.o3",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "variant": "control",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "variant": "cross_bn_k0",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "control",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 6.108607249871723e-05
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "cross_bn_k0",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 6.108607249871723e-05
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "control",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "variant": "cross_bn_k0",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "MyTest",
+      "variant": "control",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true
+    },
+    {
+      "kind": "MyTest",
+      "variant": "cross_bn_k0",
+      "bitwise_equal": true,
+      "delayed_DMA_and_ownership_passed": true
+    }
+  ],
+  "variants": {
+    "control": {
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "o3_sha256": "eb3df8213a50062bd5762740d2214b7ac847edbf5f87e6d24e2c36a21bfba2cc",
+      "diagnostics": "",
+      "identical_instruction_graph_to_measured": false,
+      "LLVM_and_O3_verified": true
+    },
+    "cross_bn_k0": {
+      "sha256": "ba44c509104e3e751a0ce274f2d9c3ed3050565d615101c379b5d04e5cf8ce73",
+      "o3_sha256": "217f206d10ce532470459c74c282439f33a945894231bf11723c3dbdb06aea79",
+      "diagnostics": "Cross BN K0: packets=4, slot-bytes=8192, overlap-mmac=32, sum-anchors=64, function=Attn_p2",
+      "identical_instruction_graph_to_measured": true,
+      "LLVM_and_O3_verified": true
+    }
+  },
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "independent_wave_timing_simulated": false
+}

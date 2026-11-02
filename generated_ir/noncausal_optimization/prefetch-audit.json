@@ -1,0 +1,49 @@
+{
+  "cases": {
+    "baseline": {
+      "bitwise_equal": true,
+      "ordered_global_and_lds_traces_equal": true,
+      "cross_wave_barrier_epoch_audit_passed": true,
+      "no_pending_dma": true,
+      "vm_waits": 260,
+      "barriers": 389,
+      "overlap_mmac": 0,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    "k0_late_control": {
+      "bitwise_equal": true,
+      "ordered_global_and_lds_traces_equal": true,
+      "cross_wave_barrier_epoch_audit_passed": true,
+      "no_pending_dma": true,
+      "vm_waits": 260,
+      "barriers": 389,
+      "overlap_mmac": 0,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    "k0_prefetch": {
+      "bitwise_equal": true,
+      "ordered_global_and_lds_traces_equal": true,
+      "cross_wave_barrier_epoch_audit_passed": true,
+      "no_pending_dma": true,
+      "vm_waits": 260,
+      "barriers": 389,
+      "overlap_mmac": 992,
+      "max_abs_error": 9.917702902600967e-05
+    }
+  },
+  "negative_controls": [
+    {
+      "case": "missing_reader_handoff",
+      "rejected": "cross-wave WAR without reader-completion barrier: epoch=16 mma=224 lds_reads=144 wave=0 bytes=[0 1 2 3 4 5 6 7]"
+    },
+    {
+      "case": "missing_k0_wait",
+      "rejected": "read or overwrite of a destination whose DMA has not completed"
+    },
+    {
+      "case": "missing_final_guard",
+      "rejected": "extra DMA at kernel exit"
+    }
+  ],
+  "gpu_tested": false
+}

@@ -1,0 +1,12 @@
+FAILED BLOCK 1007 INSTRUCTION br i1 %44, label %1232, label %1233
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/generated_ir/gemm_result_layout_comparison/validate.py", line 86, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/generated_ir/gemm_result_layout_comparison/validate.py", line 65, in main
+    full = model.run().reshape(q.shape)
+           ~~~~~~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_attention_llvm_numerics.py", line 374, in run
+    assert np.all(mask.reshape(-1, 64) == mask.reshape(-1, 64)[:, :1]), 'partial DMA wave'
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: partial DMA wave

@@ -1,0 +1,127 @@
+{
+  "3.1": {
+    "counts": {
+      "mmac": {
+        "loop": 256,
+        "outside": 0
+      },
+      "shuffle": {
+        "loop": 72,
+        "outside": 0
+      },
+      "barrier": {
+        "loop": 31,
+        "outside": 0
+      },
+      "dma128": {
+        "loop": 24,
+        "outside": 0
+      },
+      "float_lds_store": {
+        "loop": 76,
+        "outside": 0
+      },
+      "float_lds_load": {
+        "loop": 76,
+        "outside": 0
+      }
+    },
+    "qk_chains": {
+      "2": 64
+    },
+    "qk_terminal_float_elements": 256,
+    "float_phi_sizes": [
+      16,
+      2,
+      2,
+      16,
+      16,
+      16,
+      64
+    ],
+    "lds_bytes": 65536
+  },
+  "3.3": {
+    "counts": {
+      "mmac": {
+        "loop": 256,
+        "outside": 0
+      },
+      "shuffle": {
+        "loop": 4,
+        "outside": 68
+      },
+      "barrier": {
+        "loop": 12,
+        "outside": 5
+      },
+      "dma128": {
+        "loop": 16,
+        "outside": 8
+      },
+      "float_lds_store": {
+        "loop": 0,
+        "outside": 0
+      },
+      "float_lds_load": {
+        "loop": 0,
+        "outside": 0
+      }
+    },
+    "qk_chains": {
+      "8": 16
+    },
+    "qk_terminal_float_elements": 64,
+    "float_phi_sizes": [
+      16,
+      2,
+      2,
+      16,
+      16,
+      16
+    ],
+    "lds_bytes": 16384
+  },
+  "3.1_cfg_fused": {
+    "counts": {
+      "mmac": {
+        "loop": 256,
+        "outside": 0
+      },
+      "shuffle": {
+        "loop": 72,
+        "outside": 0
+      },
+      "barrier": {
+        "loop": 31,
+        "outside": 0
+      },
+      "dma128": {
+        "loop": 24,
+        "outside": 0
+      },
+      "float_lds_store": {
+        "loop": 76,
+        "outside": 0
+      },
+      "float_lds_load": {
+        "loop": 76,
+        "outside": 0
+      }
+    },
+    "qk_chains": {
+      "8": 16
+    },
+    "qk_terminal_float_elements": 64,
+    "float_phi_sizes": [
+      16,
+      2,
+      2,
+      16,
+      16,
+      16,
+      64
+    ],
+    "lds_bytes": 65536
+  }
+}

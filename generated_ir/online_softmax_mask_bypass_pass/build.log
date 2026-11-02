@@ -1,0 +1,160 @@
+[  0%] Building FriskDialect.h.inc...
+[  2%] Building DeepgengraphOps.h.inc...
+[  5%] Building FriskDialect.cpp.inc...
+[  7%] Building FriskAttributes.h.inc...
+[ 10%] Building DeepgengraphDialect.h.inc...
+[ 10%] Building FriskAttributes.cpp.inc...
+[ 12%] Building DeepgengraphDialect.cpp.inc...
+[ 12%] Building FriskTypes.h.inc...
+[ 15%] Building DeepgengraphTypes.h.inc...
+[ 17%] Building FriskTypes.cpp.inc...
+[ 17%] Building DeepgengraphTypes.cpp.inc...
+[ 20%] Building FriskEnums.h.inc...
+[ 20%] Building DeepgengraphAttrs.h.inc...
+[ 22%] Building FriskEnums.cpp.inc...
+[ 22%] Building DeepgengraphInterfaces.h.inc...
+[ 25%] Built target FriskTableGen
+[ 27%] Building DeepgengraphInterfaces.cpp.inc...
+[ 37%] Built target DeepgengraphTritonTableGen
+[ 45%] Built target DeepgengraphTableGen
+[ 45%] Built target ThreadToLLVMPasseIncGen
+[ 55%] Built target FriskIR
+[ 57%] Built target DeepgengraphIR
+[ 60%] Built target DeepgengraphTritonIR
+[ 62%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/LowerInfo.cpp.o
+[ 70%] Built target DeepgengraphAnalysis
+[ 70%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/TheadlevelIRLegalize.cpp.o
+[ 72%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/GPUToNvvmRocdl.cpp.o
+[ 72%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/TranslateToLLVM.cpp.o
+[ 75%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/LowerPipe.cpp.o
+[ 77%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/LowerFriskAsyncCopy.cpp.o
+[ 77%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/CoalesceWaitsAndBarriers.cpp.o
+[ 80%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/IROptimize.cpp.o
+[ 82%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/FuseFragmentAccumulator.cpp.o
+[ 82%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/FuseMMACAccumulator.cpp.o
+[ 85%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/MaskAddBypass.cpp.o
+[ 87%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/CanonicalizeLDSGEPs.cpp.o
+[ 87%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/OptimizeRegisterLifetimes.cpp.o
+[ 90%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/OptimizeRegisterMath.cpp.o
+[ 90%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/PrefetchGlobalPackets.cpp.o
+[ 92%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/PrefetchMMACFragments.cpp.o
+[ 95%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/ReuseLDSFragments.cpp.o
+[ 95%] Built target ConvertThreadToLLVMIR
+[ 97%] Building CXX object test/CMakeFiles/LegacyLLVMExportTest.dir/legacy_llvm_export_test.cpp.o
+[100%] Linking CXX executable LegacyLLVMExportTest
+[100%] Built target LegacyLLVMExportTest
+[  5%] Built target DeepgengraphTritonTableGen
+[  6%] Building DeepgengraphOps.h.inc...
+[  6%] Building FriskDialect.h.inc...
+[  7%] Building FriskDialect.cpp.inc...
+[  8%] Building DeepgengraphDialect.h.inc...
+[ 10%] Building FriskAttributes.h.inc...
+[ 11%] Building DeepgengraphDialect.cpp.inc...
+[ 11%] Building FriskAttributes.cpp.inc...
+[ 12%] Building DeepgengraphTypes.h.inc...
+[ 12%] Building FriskTypes.h.inc...
+[ 12%] Building DeepgengraphTypes.cpp.inc...
+[ 14%] Building FriskTypes.cpp.inc...
+[ 14%] Building DeepgengraphAttrs.h.inc...
+[ 15%] Building FriskEnums.h.inc...
+[ 15%] Building DeepgengraphInterfaces.h.inc...
+[ 16%] Building FriskEnums.cpp.inc...
+[ 17%] Building DeepgengraphInterfaces.cpp.inc...
+[ 19%] Built target FriskTableGen
+[ 23%] Built target DeepgengraphTableGen
+[ 23%] Built target DeepgengraphConversionPassIncGen
+[ 24%] Built target DeepgengraphToLinalgOnTensorPassIncGen
+[ 25%] Built target FriskToBaseConversionPassIncGen
+[ 25%] Built target ThreadToLLVMPasseIncGen
+[ 26%] Built target DeepgengraphTransformsIncGen
+[ 26%] Built target DeepgengraphTritonTransformsIncGen
+[ 28%] Building TilelangDialect.h.inc...
+[ 29%] Built target TilelangTransformsIncGen
+[ 29%] Built target FriskTransformsIncGen
+[ 30%] Building TilelangTypes.h.inc...
+[ 32%] Building Passes.h.inc...
+[ 33%] Building TilelangTypes.cpp.inc...
+[ 33%] Built target PipelineIncGen
+[ 34%] Building TilelangEnums.h.inc...
+[ 34%] Building TilelangEnums.cpp.inc...
+[ 34%] Building TilelangAttrs.h.inc...
+[ 34%] Building CXX object lib/Dialect/Deepgengraph/IR/CMakeFiles/DeepgengraphIR.dir/DeepgengraphOps.cpp.o
+[ 35%] Building TilelangAttrs.cpp.inc...
+[ 37%] Building TilelangOpInterfaces.h.inc...
+[ 37%] Building TilelangOpInterfaces.cpp.inc...
+[ 39%] Built target TilelangIncGen
+[ 39%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/FriskAttributes.cpp.o
+[ 41%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/FriskEnums.cpp.o
+[ 42%] Building CXX object lib/Dialect/Deepgengraph/IR/CMakeFiles/DeepgengraphIR.dir/DeepgengraphTypes.cpp.o
+[ 43%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/FriskOps.cpp.o
+[ 43%] Built target DeepgengraphIR
+[ 44%] Building CXX object lib/Dialect/TL/IR/CMakeFiles/TilelangIR.dir/TilelangOps.cpp.o
+[ 44%] Built target TilelangIR
+[ 44%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/FriskOps_Reduce.cpp.o
+[ 46%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/FriskTypes.cpp.o
+[ 47%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/__/Utils/LayoutUtils.cpp.o
+[ 47%] Building CXX object lib/Dialect/Frisk/IR/CMakeFiles/FriskIR.dir/__/Utils/Utils.cpp.o
+[ 48%] Building CXX object lib/Translate/CMakeFiles/DeepgengraphTranslate.dir/to_triton.cpp.o
+[ 48%] Built target FriskIR
+[ 50%] Building CXX object lib/Dialect/DeepgengraphTriton/IR/CMakeFiles/DeepgengraphTritonIR.dir/DeepgengraphTritonOps.cpp.o
+[ 50%] Built target DeepgengraphTranslate
+[ 51%] Building CXX object lib/Conversion/DeepgengraphToLinalgOnTensor/CMakeFiles/DeepgengraphToLinalgOnTensor.dir/DeepgengraphToLinalgOnTensorPass.cpp.o
+[ 51%] Building CXX object lib/Dialect/DeepgengraphTriton/IR/CMakeFiles/DeepgengraphTritonIR.dir/DeepgengraphTritonTypes.cpp.o
+[ 51%] Built target DeepgengraphTritonIR
+[ 51%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/Simplify.cpp.o
+[ 51%] Built target DeepgengraphToLinalgOnTensor
+[ 52%] Building CXX object lib/Dialect/DeepgengraphTriton/Transforms/CMakeFiles/DeepgengraphTritonTransforms.dir/SqueezeBlock.cpp.o
+[ 53%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/ReplaceExpAndLog.cpp.o
+[ 55%] Building CXX object lib/Dialect/DeepgengraphTriton/Transforms/CMakeFiles/DeepgengraphTritonTransforms.dir/UserReplicate.cpp.o
+[ 56%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/LowerComplexReduce.cpp.o
+[ 56%] Built target DeepgengraphTritonTransforms
+[ 56%] Building CXX object lib/Dialect/TL/Transforms/CMakeFiles/TilelangTransforms.dir/DeepgengraphToTilelang.cpp.o
+[ 56%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/EraseTypeInKernel.cpp.o
+[ 56%] Built target TilelangTransforms
+[ 57%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/MulScalarHoisting.cpp.o
+[ 58%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/BroadcastTransform.cpp.o
+[ 58%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/EquivalentTransform.cpp.o
+[ 60%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/PermuteHoisting.cpp.o
+[ 60%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/AnnotateParallelism.cpp.o
+[ 61%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/ToMask.cpp.o
+[ 62%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/Parallelize.cpp.o
+[ 62%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/Parallelism.cpp.o
+[ 62%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/Tiling.cpp.o
+[ 64%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/ThreadAnalysis.cpp.o
+[ 64%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/ShmDataIODesc.cpp.o
+[ 65%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/DynamicFor.cpp.o
+[ 66%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/RecoverTypeInKernel.cpp.o
+[ 67%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/HardwareSpecification.cpp.o
+[ 69%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/LivelinessAnalyze.cpp.o
+[ 69%] Building CXX object lib/Dialect/Deepgengraph/Transforms/CMakeFiles/DeepgengraphTransforms.dir/UserReplicate.cpp.o
+[ 69%] Built target DeepgengraphTransforms
+[ 69%] Building CXX object lib/Conversion/DeepgengraphToDeepgengraphTriton/CMakeFiles/DeepgengraphToDeepgengraphTriton.dir/DeepgengraphToDeepgengraphTritonPass.cpp.o
+[ 70%] Built target DeepgengraphAnalysis
+[ 71%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskToBasePass.cpp.o
+[ 71%] Built target DeepgengraphToDeepgengraphTriton
+[ 84%] Built target ConvertThreadToLLVMIR
+[ 85%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DeepgengraphToFrisk.cpp.o
+[ 85%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/ReorderWorkgroups.cpp.o
+[ 87%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/NormalizeAttentionKLayout.cpp.o
+[ 88%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/OptimizeTensorLoops.cpp.o
+[ 88%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/WmmaLayoutConversion.cpp.o
+[ 89%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskBaseToTheadlevelIR_plan2.cpp.o
+[ 89%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DeepgengraphSimplify.cpp.o
+[ 91%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DgMemspaceAnalyze.cpp.o
+[ 91%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/FriskCanonicalize.cpp.o
+[ 92%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/FriskLayoutInfer.cpp.o
+[ 93%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskFragIRReorder.cpp.o
+[ 94%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/overlap.cpp.o
+[ 94%] Built target FriskTransforms
+[ 94%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/PipelineSchedule.cpp.o
+[ 94%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/RetainInvariantFragments.cpp.o
+[ 96%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/AutoPipeline.cpp.o
+[ 97%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/PackSharedMemory.cpp.o
+[ 97%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/SimplifyLoopControl.cpp.o
+[ 98%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/PromoteGlobalToSharedAsync.cpp.o
+[ 98%] Built target FriskPipeline
+[ 98%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/SinkWaitBufferReady.cpp.o
+[ 98%] Built target FriskToBase
+[100%] Building CXX object test/CMakeFiles/MyTest.dir/test_src.cpp.o
+[100%] Linking CXX executable MyTest
+[100%] Built target MyTest

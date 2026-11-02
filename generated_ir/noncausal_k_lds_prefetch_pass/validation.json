@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "kind": "random",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch0.ll",
+      "sha256": "8a12fca9236a83e79cecf0cc1007454e376e45a48dfa9a8d05161077a406f751",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 0.0001350999304853412
+    },
+    {
+      "kind": "random",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch2.ll",
+      "sha256": "2a1e2d325e90be9603b79ef17d9522858cf0eca4fcc3f15505539b4f0687f0d0",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 0.0001350999304853412
+    },
+    {
+      "kind": "random",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch2.o3.ll",
+      "sha256": "4516ebb42cfa9bc76dbbbe755e1c1be996b00dcb1be818a67244ef8e6aa9c758",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 0.0001350999304853412
+    },
+    {
+      "kind": "random",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch1.ll",
+      "sha256": "ae6dc7e8ec8de7f8bc7db0293beb14f080799064bfe1d728634722b2a1815229",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 0.0001350999304853412
+    },
+    {
+      "kind": "random",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch4.ll",
+      "sha256": "f6520f5c6f3b4f7b473586ed84f071bfb72b5355163b7a974a925a3ef5d68af6",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 0.0001350999304853412
+    },
+    {
+      "kind": "future_key_dominates",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch0.ll",
+      "sha256": "8a12fca9236a83e79cecf0cc1007454e376e45a48dfa9a8d05161077a406f751",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/k_lds_prefetch2.ll",
+      "sha256": "2a1e2d325e90be9603b79ef17d9522858cf0eca4fcc3f15505539b4f0687f0d0",
+      "bitwise_equal_to_off": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "mmac": 8192,
+      "max_abs_error": 4.617419446795168e-09
+    }
+  ],
+  "gpu_tested": false,
+  "independent_wave_timing_simulated": false
+}

@@ -1,0 +1,403 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_group_sweep_forward/group32.ll",
+  "source_sha256": "5331d9048af733894568fcf0135dce9409cceab1f8029da8698a3abe72e41af7",
+  "group_size": 32,
+  "reverse": 0,
+  "threads": 256,
+  "BM": 128,
+  "BN": 128,
+  "BK": 32,
+  "lds_bytes": 16384,
+  "gpu_tested": false,
+  "variants": {
+    "baseline": {
+      "sha256": "5331d9048af733894568fcf0135dce9409cceab1f8029da8698a3abe72e41af7",
+      "stages": [],
+      "llvm_and_o3_verified": true,
+      "all_memory_and_sync_order_preserved": true,
+      "all_mmac_order_preserved": true,
+      "o3_v_schedule_preserved": true,
+      "o3_all_k_pairs_protected": true,
+      "o3_all_k_prefetch_anchors_preserved": true,
+      "o3_memory_and_sync_order_preserved": true,
+      "sched_hints": 36
+    },
+    "v_late_dma_control": {
+      "sha256": "8f0bfda5ed515550aba74efe59f1aa804591082fbbb8fd0f46e41a0366151f53",
+      "stages": [
+        {
+          "stage": 0,
+          "reads": [
+            "%grp.n802",
+            "%grp.n804",
+            "%grp.n806",
+            "%grp.n808",
+            "%grp.n810",
+            "%grp.n812",
+            "%grp.n814",
+            "%grp.n816"
+          ],
+          "early_mmacs": [
+            "%grp.n832",
+            "%grp.n834",
+            "%grp.n836",
+            "%grp.n838",
+            "%grp.n840",
+            "%grp.n842",
+            "%grp.n844",
+            "%grp.n846"
+          ],
+          "distance": null,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 1,
+          "reads": [
+            "%grp.n886",
+            "%grp.n888",
+            "%grp.n890",
+            "%grp.n892",
+            "%grp.n894",
+            "%grp.n896",
+            "%grp.n898",
+            "%grp.n900"
+          ],
+          "early_mmacs": [
+            "%grp.n916",
+            "%grp.n918",
+            "%grp.n920",
+            "%grp.n922",
+            "%grp.n924",
+            "%grp.n926",
+            "%grp.n928",
+            "%grp.n930"
+          ],
+          "distance": null,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 2,
+          "reads": [
+            "%grp.n970",
+            "%grp.n972",
+            "%grp.n974",
+            "%grp.n976",
+            "%grp.n978",
+            "%grp.n980",
+            "%grp.n982",
+            "%grp.n984"
+          ],
+          "early_mmacs": [
+            "%grp.n1000",
+            "%grp.n1002",
+            "%grp.n1004",
+            "%grp.n1006",
+            "%grp.n1008",
+            "%grp.n1010",
+            "%grp.n1012",
+            "%grp.n1014"
+          ],
+          "distance": null,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 3,
+          "reads": [
+            "%grp.n1054",
+            "%grp.n1056",
+            "%grp.n1058",
+            "%grp.n1060",
+            "%grp.n1062",
+            "%grp.n1064",
+            "%grp.n1066",
+            "%grp.n1068"
+          ],
+          "early_mmacs": [
+            "%grp.n1074",
+            "%grp.n1076",
+            "%grp.n1078",
+            "%grp.n1080",
+            "%grp.n1082",
+            "%grp.n1084",
+            "%grp.n1086",
+            "%grp.n1088"
+          ],
+          "distance": null,
+          "next_v_dma_overlap_mmac": null
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "all_memory_and_sync_order_preserved": true,
+      "all_mmac_order_preserved": true,
+      "o3_v_schedule_preserved": true,
+      "o3_all_k_pairs_protected": true,
+      "o3_all_k_prefetch_anchors_preserved": true,
+      "o3_memory_and_sync_order_preserved": true,
+      "sched_hints": 100
+    },
+    "v_prefetch2": {
+      "sha256": "8f8fd1360175c755d62db664c3c0e03ddd3c98ce93ce13a0584b05cdb0d5d965",
+      "stages": [
+        {
+          "stage": 0,
+          "reads": [
+            "%grp.n802",
+            "%grp.n804",
+            "%grp.n806",
+            "%grp.n808",
+            "%grp.n810",
+            "%grp.n812",
+            "%grp.n814",
+            "%grp.n816"
+          ],
+          "early_mmacs": [
+            "%grp.n832",
+            "%grp.n834",
+            "%grp.n836",
+            "%grp.n838",
+            "%grp.n840",
+            "%grp.n842",
+            "%grp.n844",
+            "%grp.n846"
+          ],
+          "distance": 2,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 1,
+          "reads": [
+            "%grp.n886",
+            "%grp.n888",
+            "%grp.n890",
+            "%grp.n892",
+            "%grp.n894",
+            "%grp.n896",
+            "%grp.n898",
+            "%grp.n900"
+          ],
+          "early_mmacs": [
+            "%grp.n916",
+            "%grp.n918",
+            "%grp.n920",
+            "%grp.n922",
+            "%grp.n924",
+            "%grp.n926",
+            "%grp.n928",
+            "%grp.n930"
+          ],
+          "distance": 2,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 2,
+          "reads": [
+            "%grp.n970",
+            "%grp.n972",
+            "%grp.n974",
+            "%grp.n976",
+            "%grp.n978",
+            "%grp.n980",
+            "%grp.n982",
+            "%grp.n984"
+          ],
+          "early_mmacs": [
+            "%grp.n1000",
+            "%grp.n1002",
+            "%grp.n1004",
+            "%grp.n1006",
+            "%grp.n1008",
+            "%grp.n1010",
+            "%grp.n1012",
+            "%grp.n1014"
+          ],
+          "distance": 2,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 3,
+          "reads": [
+            "%grp.n1054",
+            "%grp.n1056",
+            "%grp.n1058",
+            "%grp.n1060",
+            "%grp.n1062",
+            "%grp.n1064",
+            "%grp.n1066",
+            "%grp.n1068"
+          ],
+          "early_mmacs": [
+            "%grp.n1074",
+            "%grp.n1076",
+            "%grp.n1078",
+            "%grp.n1080",
+            "%grp.n1082",
+            "%grp.n1084",
+            "%grp.n1086",
+            "%grp.n1088"
+          ],
+          "distance": 2,
+          "next_v_dma_overlap_mmac": null
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "all_memory_and_sync_order_preserved": true,
+      "all_mmac_order_preserved": true,
+      "o3_v_schedule_preserved": true,
+      "o3_all_k_pairs_protected": true,
+      "o3_all_k_prefetch_anchors_preserved": true,
+      "o3_memory_and_sync_order_preserved": true,
+      "sched_hints": 100
+    },
+    "v_prefetch4": {
+      "sha256": "2b475c65b8cae7fee5dc18301c4f395141e5c52ff890d4a3823fa056f967d0e6",
+      "stages": [
+        {
+          "stage": 0,
+          "reads": [
+            "%grp.n802",
+            "%grp.n804",
+            "%grp.n806",
+            "%grp.n808",
+            "%grp.n810",
+            "%grp.n812",
+            "%grp.n814",
+            "%grp.n816"
+          ],
+          "early_mmacs": [
+            "%grp.n832",
+            "%grp.n834",
+            "%grp.n836",
+            "%grp.n838",
+            "%grp.n840",
+            "%grp.n842",
+            "%grp.n844",
+            "%grp.n846"
+          ],
+          "distance": 4,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 1,
+          "reads": [
+            "%grp.n886",
+            "%grp.n888",
+            "%grp.n890",
+            "%grp.n892",
+            "%grp.n894",
+            "%grp.n896",
+            "%grp.n898",
+            "%grp.n900"
+          ],
+          "early_mmacs": [
+            "%grp.n916",
+            "%grp.n918",
+            "%grp.n920",
+            "%grp.n922",
+            "%grp.n924",
+            "%grp.n926",
+            "%grp.n928",
+            "%grp.n930"
+          ],
+          "distance": 4,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 2,
+          "reads": [
+            "%grp.n970",
+            "%grp.n972",
+            "%grp.n974",
+            "%grp.n976",
+            "%grp.n978",
+            "%grp.n980",
+            "%grp.n982",
+            "%grp.n984"
+          ],
+          "early_mmacs": [
+            "%grp.n1000",
+            "%grp.n1002",
+            "%grp.n1004",
+            "%grp.n1006",
+            "%grp.n1008",
+            "%grp.n1010",
+            "%grp.n1012",
+            "%grp.n1014"
+          ],
+          "distance": 4,
+          "next_v_dma_overlap_mmac": 24
+        },
+        {
+          "stage": 3,
+          "reads": [
+            "%grp.n1054",
+            "%grp.n1056",
+            "%grp.n1058",
+            "%grp.n1060",
+            "%grp.n1062",
+            "%grp.n1064",
+            "%grp.n1066",
+            "%grp.n1068"
+          ],
+          "early_mmacs": [
+            "%grp.n1074",
+            "%grp.n1076",
+            "%grp.n1078",
+            "%grp.n1080",
+            "%grp.n1082",
+            "%grp.n1084",
+            "%grp.n1086",
+            "%grp.n1088"
+          ],
+          "distance": 4,
+          "next_v_dma_overlap_mmac": null
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "all_memory_and_sync_order_preserved": true,
+      "all_mmac_order_preserved": true,
+      "o3_v_schedule_preserved": true,
+      "o3_all_k_pairs_protected": true,
+      "o3_all_k_prefetch_anchors_preserved": true,
+      "o3_memory_and_sync_order_preserved": true,
+      "sched_hints": 100
+    },
+    "v_tail_prefetch2": {
+      "sha256": "326f3ad7943b82023ff222d666425701e3666a38721ea1054a008506b889cc78",
+      "stages": [
+        {
+          "stage": 3,
+          "reads": [
+            "%grp.n1054",
+            "%grp.n1056",
+            "%grp.n1058",
+            "%grp.n1060",
+            "%grp.n1062",
+            "%grp.n1064",
+            "%grp.n1066",
+            "%grp.n1068"
+          ],
+          "early_mmacs": [
+            "%grp.n1074",
+            "%grp.n1076",
+            "%grp.n1078",
+            "%grp.n1080",
+            "%grp.n1082",
+            "%grp.n1084",
+            "%grp.n1086",
+            "%grp.n1088"
+          ],
+          "distance": 2,
+          "next_v_dma_overlap_mmac": null
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "all_memory_and_sync_order_preserved": true,
+      "all_mmac_order_preserved": true,
+      "o3_v_schedule_preserved": true,
+      "o3_all_k_pairs_protected": true,
+      "o3_all_k_prefetch_anchors_preserved": true,
+      "o3_memory_and_sync_order_preserved": true,
+      "sched_hints": 52
+    }
+  }
+}

@@ -1,0 +1,4 @@
+PASS off 0 transformed fixtures
+PASS legal 29 transformed fixtures
+PASS approx 37 transformed fixtures
+PASS 920 native CPU comparisons

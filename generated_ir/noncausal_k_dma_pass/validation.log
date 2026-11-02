@@ -1,0 +1,14 @@
+PASS all K DMA operands: 32 heads x 32 key tiles x 16 sites x 256 lanes
+PASS numerical / delayed DMA / ownership random measured
+PASS numerical / delayed DMA / ownership random baseline
+PASS numerical / delayed DMA / ownership random split64
+PASS numerical / delayed DMA / ownership random swizzle64
+PASS numerical / delayed DMA / ownership random swizzle64.o3
+PASS numerical / delayed DMA / ownership future_key_dominates measured
+PASS numerical / delayed DMA / ownership future_key_dominates baseline
+PASS numerical / delayed DMA / ownership future_key_dominates split64
+PASS numerical / delayed DMA / ownership future_key_dominates swizzle64
+PASS numerical / delayed DMA / ownership max_changes measured
+PASS numerical / delayed DMA / ownership max_changes baseline
+PASS numerical / delayed DMA / ownership max_changes split64
+PASS numerical / delayed DMA / ownership max_changes swizzle64

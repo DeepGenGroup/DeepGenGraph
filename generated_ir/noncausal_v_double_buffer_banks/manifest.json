@@ -1,0 +1,24 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_group32/v_double_buffer.ll",
+  "source_sha256": "3b2bde804277d68be2926e1ad35a292164d4688a349bedcefa42ab605322888a",
+  "gpu_tested": false,
+  "gfx936_codegen_tested": false,
+  "variants": {
+    "baseline": {
+      "sha256": "3b2bde804277d68be2926e1ad35a292164d4688a349bedcefa42ab605322888a",
+      "llvm_and_o3_verified": true
+    },
+    "k_split32_control": {
+      "sha256": "f66b4630b2dae6bb7d12e8fc525a84151d14190ca5d4512d90a3b3a2b18ae0ca",
+      "llvm_and_o3_verified": true
+    },
+    "k_swizzle32": {
+      "sha256": "9605d5eeb763f9a754863e07bc07a4e8560515974a2608f4c4f27b79f2f510ef",
+      "llvm_and_o3_verified": true
+    },
+    "qk_swizzle32": {
+      "sha256": "44bb17077874b9b9be56c03eb5b2c482012638f0e1c2e2846740508f596a61a5",
+      "llvm_and_o3_verified": true
+    }
+  }
+}

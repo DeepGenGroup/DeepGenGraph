@@ -1,0 +1,15 @@
+候选数：3；过滤不合法的参数组合：0
+输出目录：/data2/xsl/DeepGenGraph/generated_ir/online_softmax_mask_bypass_pass/compiler/run-20261026-105809-6y9uea1z
+[1/6] input-0001-test_input_1x32x4096x128-128-128-32-online/grid-000001
+  verified
+[2/6] input-0001-test_input_1x32x4096x128-128-128-32-online/grid-000002
+  verified
+[3/6] input-0001-test_input_1x32x4096x128-128-128-32-online/grid-000003
+  verified
+[4/6] input-0002-test_input_1x32x4096x128-128-64-32-online/grid-000001
+  verified
+[5/6] input-0002-test_input_1x32x4096x128-128-64-32-online/grid-000002
+  verified
+[6/6] input-0002-test_input_1x32x4096x128-128-64-32-online/grid-000003
+  verified
+完成：6 成功，0 失败；汇总：/data2/xsl/DeepGenGraph/generated_ir/online_softmax_mask_bypass_pass/compiler/run-20261026-105809-6y9uea1z/manifest.json

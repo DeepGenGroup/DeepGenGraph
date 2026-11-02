@@ -1,0 +1,237 @@
+{
+  "fixtures": 46,
+  "transformed": 20,
+  "llvm_execution_pairs": 100,
+  "records": [
+    {
+      "name": "ordinary_False_False_False",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_False_False_True",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_False_True_False",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_False_True_True",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_True_False_False",
+      "transformed": true,
+      "mode": "legal"
+    },
+    {
+      "name": "ordinary_True_False_True",
+      "transformed": true,
+      "mode": "legal"
+    },
+    {
+      "name": "ordinary_True_True_False",
+      "transformed": true,
+      "mode": "legal"
+    },
+    {
+      "name": "ordinary_True_True_True",
+      "transformed": true,
+      "mode": "legal"
+    },
+    {
+      "name": "group_1",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "group_16_32",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "group_1_2_4_8_16_32",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "group_2_8_32",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "wave32",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "group_uniform_scale",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "changing_scale",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_running_max_recurrence",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "scalar_lcssa",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "aggregate_lcssa_fallback",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "oversized_aggregate",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "float_legal",
+      "transformed": false,
+      "mode": "legal"
+    },
+    {
+      "name": "off",
+      "transformed": false,
+      "mode": "off"
+    },
+    {
+      "name": "nonzero",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "varying_lane_scale",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "nonlinear_state_squared",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "unknown_load_scale",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "escaped_state",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "escaped_sum",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "escaped_update",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "divergent",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "wrong_address",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "duplicate_masks",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "non_power_two_mask",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "partial_wave",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "no_wave_contract",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "strictfp",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "optnone",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "wave_contract_conflict",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "ordinary_non_kernel",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "explicit_exec_change",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "opaque_asm",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "unknown_call",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "non_dedicated_exit",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "wave_from_features",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "wave32_from_features",
+      "transformed": true,
+      "mode": "approx"
+    },
+    {
+      "name": "disabled_wave_contract",
+      "transformed": false,
+      "mode": "approx"
+    },
+    {
+      "name": "integer_flags",
+      "transformed": true,
+      "mode": "legal"
+    }
+  ]
+}

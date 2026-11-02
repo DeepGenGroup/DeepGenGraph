@@ -1,0 +1,3 @@
+PASS fresh MyTest baseline numerics, delayed DMA and barrier epochs
+PASS fresh MyTest kernel numerics, delayed DMA and barrier epochs
+PASS fresh MyTest kernel.o3 numerics, delayed DMA and barrier epochs

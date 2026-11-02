@@ -1,0 +1,3 @@
+control {'P_fragments': 16, 'PV_mmacs': 128, 'fragments_packed_before_first_PV': 16, 'score_subtractions_before_first_pack': 16, 'PV_mmacs_before_last_pack': 0, 'softmax_schedule_hints': 0}
+softmax_fragment {'P_fragments': 16, 'PV_mmacs': 128, 'fragments_packed_before_first_PV': 16, 'score_subtractions_before_first_pack': 1, 'PV_mmacs_before_last_pack': 0, 'softmax_schedule_hints': 16}
+softmax_pv {'P_fragments': 16, 'PV_mmacs': 128, 'fragments_packed_before_first_PV': 1, 'score_subtractions_before_first_pack': 1, 'PV_mmacs_before_last_pack': 30, 'softmax_schedule_hints': 16}

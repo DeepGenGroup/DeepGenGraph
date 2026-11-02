@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_online_softmax.py", line 137, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_online_softmax.py", line 102, in main
+    np.testing.assert_allclose(actual, expected, atol=.01, rtol=.01)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 1768, in assert_allclose
+    assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         verbose=verbose, header=header, equal_nan=equal_nan,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         strict=strict)
+                         ^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 983, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Not equal to tolerance rtol=0.01, atol=0.01
+
+Mismatched elements: 15721 / 16384 (96%)
+First 5 mismatches are at indices:
+ [0, 0]: 0.118896484375 (ACTUAL), -0.011307575511324818 (DESIRED)
+ [0, 1]: 0.356201171875 (ACTUAL), -0.025475545351151836 (DESIRED)
+ [0, 2]: 1.8876953125 (ACTUAL), -0.0006569170709184221 (DESIRED)
+ [0, 3]: 0.354248046875 (ACTUAL), 0.01816333896442282 (DESIRED)
+ [0, 4]: -0.7607421875 (ACTUAL), 0.021500283232379194 (DESIRED)
+Max absolute difference among violations: 2.69713692
+Max relative difference among violations: 15933.75061521
+ ACTUAL: array([[ 0.1189  ,  0.3562  ,  1.888   , ..., -0.738   ,  0.4695  ,
+        -0.8115  ],
+       [ 0.00977 ,  1.159   ,  0.9624  , ..., -0.5234  ,  0.1885  ,...
+ DESIRED: array([[-0.011308, -0.025476, -0.000657, ...,  0.014041,  0.016005,
+        -0.001153],
+       [ 0.016277,  0.033164, -0.014345, ...,  0.051141, -0.020036,...

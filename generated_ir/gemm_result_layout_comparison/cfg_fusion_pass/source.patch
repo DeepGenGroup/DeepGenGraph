@@ -1,0 +1,223 @@
+diff --git a/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/FuseMMACAccumulator.h b/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/FuseMMACAccumulator.h
+index bac5562a..01abe6a2 100644
+--- a/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/FuseMMACAccumulator.h
++++ b/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/FuseMMACAccumulator.h
+@@ -6,8 +6,9 @@
+ namespace mlir::frisk {
+ /// Opt-in floating-point reassociation: seed a zero-initialized, single-use
+ /// register MMAC chain with the accumulator from its terminal fadd.
+-/// Does not approximate exponentials or division. Run InstCombine first to
+-/// expose chains hidden by vector extraction/insertion wrappers.
++/// Does not approximate exponentials or division. Run SimplifyCFG then
++/// InstCombine first to expose chains hidden by constant branches or vector
++/// extraction/insertion wrappers. Revisit after thread-bound simplification.
+ class FuseMMACAccumulatorPass
+     : public llvm::OptionalPassInfoMixin<FuseMMACAccumulatorPass> {
+ public:
+diff --git a/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h b/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h
+index 17f69658..eb3bb87f 100644
+--- a/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h
++++ b/3rd/deepgengraph/include/deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h
+@@ -46,7 +46,9 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
+ 
+ /// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
+ /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
+-void fuseMMACAccumulators(llvm::Module &module);
++/// Enable CFG cleanup on the final retry after thread-bound/lifetime rewrites.
++/// Early math fusion keeps the CFG used by reduction and lifetime matching.
++void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG = false);
+ 
+ /// Bypass score+zero on an existing clear-mask branch. Legal mode requires
+ /// LLVM to prove the identity; allowSignedZero explicitly permits ignoring
+diff --git a/3rd/deepgengraph/lib/Conversion/ConvertToLLVM/FuseMMACAccumulator.cpp b/3rd/deepgengraph/lib/Conversion/ConvertToLLVM/FuseMMACAccumulator.cpp
+index c570d951..bb1f97bd 100644
+--- a/3rd/deepgengraph/lib/Conversion/ConvertToLLVM/FuseMMACAccumulator.cpp
++++ b/3rd/deepgengraph/lib/Conversion/ConvertToLLVM/FuseMMACAccumulator.cpp
+@@ -7,6 +7,7 @@
+ #include "llvm/IR/Module.h"
+ #include "llvm/Passes/PassBuilder.h"
+ #include "llvm/Transforms/InstCombine/InstCombine.h"
++#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+ 
+ namespace mlir::frisk {
+ namespace {
+@@ -102,7 +103,7 @@ llvm::PreservedAnalyses FuseMMACAccumulatorPass::run(
+   return preserved;
+ }
+ 
+-void fuseMMACAccumulators(llvm::Module &module) {
++void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG) {
+   prepareRegisterMMAForLLVM(module);
+   llvm::FunctionAnalysisManager analyses;
+   llvm::ModuleAnalysisManager modules;
+@@ -115,6 +116,9 @@ void fuseMMACAccumulators(llvm::Module &module) {
+   pb.registerFunctionAnalyses(analyses);
+   pb.crossRegisterProxies(loops, analyses, cgscc, modules);
+   llvm::FunctionPassManager pipeline;
++  // Merge constant-guarded LDS writeback blocks before looking for the
++  // terminal fadd. Fusion deliberately requires a single basic block.
++  if (simplifyCFG) pipeline.addPass(llvm::SimplifyCFGPass());
+   pipeline.addPass(llvm::InstCombinePass());
+   pipeline.addPass(FuseMMACAccumulatorPass());
+   pipeline.addPass(llvm::InstCombinePass());
+diff --git a/3rd/deepgengraph/test/check_register_math.py b/3rd/deepgengraph/test/check_register_math.py
+index 93bef408..d5994f50 100644
+--- a/3rd/deepgengraph/test/check_register_math.py
++++ b/3rd/deepgengraph/test/check_register_math.py
+@@ -66,6 +66,17 @@ yes:
+ no:
+   ret <4 x float> %acc
+ }}
++define <4 x float> @guarded_store(<4 x half> %a, <4 x half> %b, <4 x float> %acc, i1 %cond, ptr %out) {{
++entry:
++  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
++  br i1 %cond, label %yes, label %no
++yes:
++  %result = fadd <4 x float> %x, %acc
++  store volatile <4 x float> %result, ptr %out
++  ret <4 x float> %result
++no:
++  ret <4 x float> %acc
++}}
+ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) {{
+   %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
+   %result = fadd <4 x float> %acc, %x
+@@ -100,6 +111,23 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc)
+   %result = fadd <4 x float> %x, %scaled
+   ret <4 x float> %result
+ }}
++'''
++    # Layout 3.1 leaves MMACs and their terminal fadd in separate blocks.
++    # Thread-bound simplification proves the LDS writeback guard true only
++    # late in the export pipeline; CFG cleanup must precede the fusion retry.
++    for name, branch in [('constant_guard', 'br i1 true, label %writeback, label %exit'),
++                         ('unconditional_guard', 'br label %writeback')]:
++        source += f'''define <4 x float> @{name}(<4 x half> %a, <4 x half> %b, <4 x float> %acc) {{
++entry:
++  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
++  %y = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> %x)
++  {branch}
++writeback:
++  %result = fadd <4 x float> %y, %acc
++  ret <4 x float> %result
++exit:
++  ret <4 x float> %acc
++}}
+ '''
+     strict = run([tool, '-'], source)
+     native_only = run([tool, '--native-exp2', '-'], source)
+@@ -110,9 +138,14 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc)
+     assert strict.count('fdiv float') == 2 and '@llvm.amdgcn.exp2' not in strict
+     fusion = run([tool, '--fuse-mmac-accumulator', '-'], source)
+     fused_body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', fusion, re.S)[0]
+-    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale'):
++    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale',
++                 'constant_guard', 'unconditional_guard', 'cross_block'):
+         assert 'fadd' not in fused_body(name) and '<4 x float> zeroinitializer' not in fused_body(name)
+-    for name in ('nonzero', 'multiuse', 'late_load', 'cross_block', 'unknown_asm', 'strict_fp',
++    # SimplifyCFG may safely speculate a bare fadd and replace the branch with
++    # a select. A conditional side effect must still keep its guarded block.
++    assert 'select i1 %cond' in fused_body('cross_block')
++    assert 'br i1 %cond' in fused_body('guarded_store')
++    for name in ('nonzero', 'multiuse', 'late_load', 'guarded_store', 'unknown_asm', 'strict_fp',
+                  'strict_scale', 'late_loaded_scale'):
+         assert 'fadd' in fused_body(name), name
+     assert fused_body('late_load').index('call ') < fused_body('late_load').index('load volatile')
+@@ -122,8 +155,11 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc)
+     assert fused_body('normalize').count('fdiv float') == 2
+     assert '@__ocml_exp2_f32' in fused_body('normalize')
+     assert '@llvm.amdgcn.exp2' not in fusion and ' arcp ' not in fusion
+-    assert run([tool, '--fuse-mmac-accumulator', '-'], fusion) == fusion
+-    print('PASS independent MMAC pass: both add orders, no load/control-flow motion, idempotence, exp2/div unchanged')
++    # LLVM's parser may reorder predecessor-use lists; these comments do not
++    # describe an IR change when round-tripping a newly merged return block.
++    without_preds = lambda text: re.sub(r'; preds =[^\n]*', '', text)
++    assert without_preds(run([tool, '--fuse-mmac-accumulator', '-'], fusion)) == without_preds(fusion)
++    print('PASS independent MMAC pass: constant/unconditional CFG cleanup, both add orders, no load motion, idempotence, exp2/div unchanged')
+     approximate = run([tool, '--approx-register-math', '-'], source)
+     body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', approximate, re.S)[0]
+     assert 'fadd' not in body('fuse')
+@@ -138,6 +174,34 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc)
+     assert '@llvm.amdgcn.exp2.f32' in approximate
+     print('PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal')
+ 
++    # Reproduce the ordering dependency, including the pass that proves the
++    # thread guard true. Early CFG cleanup alone cannot expose this fusion.
++    guarded = f'''declare i32 @llvm.amdgcn.workitem.id.x()
++define amdgpu_kernel void @thread_guard(<4 x half> %a, <4 x half> %b, <4 x float> %acc, ptr addrspace(3) %out) !reqd_work_group_size !0 {{
++entry:
++  %tid = call i32 @llvm.amdgcn.workitem.id.x()
++  %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
++  %y = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> %x)
++  %leader = icmp ult i32 %tid, 256
++  br i1 %leader, label %writeback, label %exit
++writeback:
++  %result = fadd <4 x float> %y, %acc
++  store volatile <4 x float> %result, ptr addrspace(3) %out
++  br label %exit
++exit:
++  ret void
++}}
++!0 = !{{i32 256, i32 1, i32 1}}
++'''
++    early = run([tool, '--approx-register-math', '-'], guarded)
++    assert 'fadd' in run([tool, '--fuse-mmac-accumulator', '-'], early)
++    bounded = run([tool, '--optimize-register-lifetimes', '-'], early)
++    assert 'br i1 true' in bounded and 'fadd' in bounded
++    final = run([tool, '--fuse-mmac-accumulator', '-'], bounded)
++    assert 'fadd' not in final and 'br i1' not in final
++    assert final.count('v_mmac_') == 2 and final.count('store volatile') == 1
++    print('PASS late fusion after lifetime/thread-bound simplification')
++
+     # Execute the actual transformed division code on the CPU. Use positive
+     # normal row sums and signed numerators; native exp2 is tested separately
+     # by codegen below and is deliberately absent from this CPU test.
+diff --git a/3rd/deepgengraph/test/legacy_llvm_export_test.cpp b/3rd/deepgengraph/test/legacy_llvm_export_test.cpp
+index 864431a4..8ce4422b 100644
+--- a/3rd/deepgengraph/test/legacy_llvm_export_test.cpp
++++ b/3rd/deepgengraph/test/legacy_llvm_export_test.cpp
+@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
+   else if (approximate)
+     mlir::frisk::optimizeApproximateRegisterMath(*module);
+   else if (fuseMMAC)
+-    mlir::frisk::fuseMMACAccumulators(*module);
++    mlir::frisk::fuseMMACAccumulators(*module, /*simplifyCFG=*/true);
+   else if (lifetimes)
+     mlir::frisk::optimizeRegisterLifetimes(*module);
+   else if (nativeExp2 || reciprocal)
+diff --git a/3rd/deepgengraph/test/test_src.cpp b/3rd/deepgengraph/test/test_src.cpp
+index 61a5a2fd..4b9efb17 100644
+--- a/3rd/deepgengraph/test/test_src.cpp
++++ b/3rd/deepgengraph/test/test_src.cpp
+@@ -367,7 +367,8 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
+ }
+ 
+ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
+-                             bool splitPackedDMA, unsigned asmSourceBytes) {
++                             bool splitPackedDMA, unsigned asmSourceBytes,
++                             bool fuseAccumulators) {
+   mlir::frisk::prepareRegisterMMAForLLVM(module);
+   if (asmSourceBytes)
+     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
+@@ -377,6 +378,12 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
+   if (!splitPackedDMA && !asmSourceBytes)
+     mlir::frisk::lowerWideAsyncDMAToHCU(module);
+ 
++  // Lifetime optimization exposes thread bounds and folds LDS leader guards.
++  // After all late rewrites, merge the now-constant branches before retrying
++  // the same-block MMAC accumulator matcher. Keep early math fusion intact.
++  if (fuseAccumulators)
++    mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
++
+   std::string text;
+   llvm::raw_string_ostream buffer(text);
+   module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
+@@ -994,7 +1001,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+   // Automatically widened packets and explicit packed modes both preserve
+   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
+   printLLVM22CompatibleIR(*llvmModule, os,
+-      dmaExport == "split32", asmSourceBytes);
++      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict");
+   os.close();
+   if (os.has_error()) {
+     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

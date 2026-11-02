@@ -1,0 +1,15 @@
+PASS random 0 0 baseline bitwise and memory trace equal; V schedule checked
+PASS random 0 0 v_tail_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS random 0 0 v_late_dma_control bitwise and memory trace equal; V schedule checked
+PASS random 0 0 v_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS random 0 0 v_prefetch4 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 baseline bitwise and memory trace equal; V schedule checked
+PASS random 1 31 v_tail_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 v_late_dma_control bitwise and memory trace equal; V schedule checked
+PASS random 1 31 v_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 v_prefetch4 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 baseline bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 v_tail_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 v_late_dma_control bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 v_prefetch2 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 v_prefetch4 bitwise and memory trace equal; V schedule checked

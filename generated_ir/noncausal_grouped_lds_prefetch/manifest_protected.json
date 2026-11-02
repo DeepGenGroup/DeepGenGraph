@@ -1,0 +1,840 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_frag_prefetch_forward/control/kernel.ll",
+  "source_sha256": "70d1db321015d2c90f189e4c3ab802e2a66d3bdf90f8593e6157035909adc7ff",
+  "assembly_sha256": "77c7e4c0a886e3bd4fc63441100186ff022772ebb19b07a381767f759e490aea",
+  "group_size": 4,
+  "reverse": 0,
+  "lookahead_mmac": 2,
+  "groups": [
+    {
+      "assembly": "ds_read2st64_b64 v[105:108], v207 offset1:8",
+      "loads": [
+        "%grp.n159",
+        "%grp.n161"
+      ],
+      "uses": [
+        0,
+        1,
+        16,
+        17
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[115:118], v208 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n165",
+        "%grp.n173"
+      ],
+      "uses": [
+        2,
+        6,
+        18,
+        22
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[119:122], v209 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n168",
+        "%grp.n176"
+      ],
+      "uses": [
+        3,
+        7,
+        19,
+        23
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[123:126], v207 offset0:16 offset1:128",
+      "loads": [
+        "%grp.n169",
+        "%grp.n177"
+      ],
+      "uses": [
+        4,
+        8,
+        20,
+        24
+      ]
+    },
+    {
+      "assembly": "ds_read2st64_b64 v[167:170], v81 offset0:2 offset1:8",
+      "loads": [
+        "%grp.n172",
+        "%grp.n185"
+      ],
+      "uses": [
+        5,
+        12,
+        21,
+        28
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[179:182], v210 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n180",
+        "%grp.n188"
+      ],
+      "uses": [
+        9,
+        13,
+        25,
+        29
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[183:186], v208 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n181",
+        "%grp.n189"
+      ],
+      "uses": [
+        10,
+        14,
+        26,
+        30
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[187:190], v209 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n184",
+        "%grp.n192"
+      ],
+      "uses": [
+        11,
+        15,
+        27,
+        31
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[167:170], v211 offset1:16",
+      "loads": [
+        "%grp.n237",
+        "%grp.n244"
+      ],
+      "uses": [
+        32,
+        36,
+        48,
+        52
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[179:182], v212 offset1:16",
+      "loads": [
+        "%grp.n239",
+        "%grp.n247"
+      ],
+      "uses": [
+        33,
+        37,
+        49,
+        53
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[183:186], v213 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n240",
+        "%grp.n248"
+      ],
+      "uses": [
+        34,
+        38,
+        50,
+        54
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[187:190], v214 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n243",
+        "%grp.n251"
+      ],
+      "uses": [
+        35,
+        39,
+        51,
+        55
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[191:194], v211 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n252",
+        "%grp.n260"
+      ],
+      "uses": [
+        40,
+        44,
+        56,
+        60
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[195:198], v212 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n255",
+        "%grp.n263"
+      ],
+      "uses": [
+        41,
+        45,
+        57,
+        61
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[199:202], v213 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n256",
+        "%grp.n264"
+      ],
+      "uses": [
+        42,
+        46,
+        58,
+        62
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[203:206], v214 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n259",
+        "%grp.n267"
+      ],
+      "uses": [
+        43,
+        47,
+        59,
+        63
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[167:170], v207 offset1:16",
+      "loads": [
+        "%grp.n312",
+        "%grp.n319"
+      ],
+      "uses": [
+        64,
+        68,
+        80,
+        84
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[179:182], v210 offset1:16",
+      "loads": [
+        "%grp.n314",
+        "%grp.n322"
+      ],
+      "uses": [
+        65,
+        69,
+        81,
+        85
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[183:186], v208 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n315",
+        "%grp.n323"
+      ],
+      "uses": [
+        66,
+        70,
+        82,
+        86
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[187:190], v209 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n318",
+        "%grp.n326"
+      ],
+      "uses": [
+        67,
+        71,
+        83,
+        87
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[191:194], v207 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n327",
+        "%grp.n335"
+      ],
+      "uses": [
+        72,
+        76,
+        88,
+        92
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[195:198], v210 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n330",
+        "%grp.n338"
+      ],
+      "uses": [
+        73,
+        77,
+        89,
+        93
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[199:202], v208 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n331",
+        "%grp.n339"
+      ],
+      "uses": [
+        74,
+        78,
+        90,
+        94
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[203:206], v209 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n334",
+        "%grp.n342"
+      ],
+      "uses": [
+        75,
+        79,
+        91,
+        95
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[167:170], v211 offset1:16",
+      "loads": [
+        "%grp.n386",
+        "%grp.n398"
+      ],
+      "uses": [
+        96,
+        100,
+        112,
+        116
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[179:182], v212 offset1:16",
+      "loads": [
+        "%grp.n388",
+        "%grp.n405"
+      ],
+      "uses": [
+        97,
+        101,
+        113,
+        117
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[183:186], v213 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n389",
+        "%grp.n406"
+      ],
+      "uses": [
+        98,
+        102,
+        114,
+        118
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[187:190], v214 offset0:8 offset1:24",
+      "loads": [
+        "%grp.n397",
+        "%grp.n413"
+      ],
+      "uses": [
+        99,
+        103,
+        115,
+        119
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[191:194], v211 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n414",
+        "%grp.n430"
+      ],
+      "uses": [
+        104,
+        108,
+        120,
+        124
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[195:198], v212 offset0:128 offset1:144",
+      "loads": [
+        "%grp.n421",
+        "%grp.n437"
+      ],
+      "uses": [
+        105,
+        109,
+        121,
+        125
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[199:202], v213 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n422",
+        "%grp.n438"
+      ],
+      "uses": [
+        106,
+        110,
+        122,
+        126
+      ]
+    },
+    {
+      "assembly": "ds_read2_b64 v[203:206], v214 offset0:136 offset1:152",
+      "loads": [
+        "%grp.n429",
+        "%grp.n445"
+      ],
+      "uses": [
+        107,
+        111,
+        123,
+        127
+      ]
+    }
+  ],
+  "moved_groups": [
+    {
+      "group": 1,
+      "loads": [
+        "%grp.n165",
+        "%grp.n173"
+      ],
+      "anchor": "%grp.n166",
+      "first_consumer": "%grp.n167",
+      "lookahead_mmac": 1,
+      "moved_definitions": [
+        "%grp.n165",
+        "%lds.const.gep1214",
+        "%grp.n173"
+      ]
+    },
+    {
+      "group": 2,
+      "loads": [
+        "%grp.n168",
+        "%grp.n176"
+      ],
+      "anchor": "%grp.n166",
+      "first_consumer": "%grp.n170",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1211",
+        "%grp.n168",
+        "%lds.const.gep1215",
+        "%grp.n176"
+      ]
+    },
+    {
+      "group": 3,
+      "loads": [
+        "%grp.n169",
+        "%grp.n177"
+      ],
+      "anchor": "%grp.n167",
+      "first_consumer": "%grp.n171",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1212",
+        "%grp.n169",
+        "%lds.const.gep1216",
+        "%grp.n177"
+      ]
+    },
+    {
+      "group": 4,
+      "loads": [
+        "%grp.n172",
+        "%grp.n185"
+      ],
+      "anchor": "%grp.n170",
+      "first_consumer": "%grp.n174",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1213",
+        "%grp.n172",
+        "%lds.const.gep1220",
+        "%grp.n185"
+      ]
+    },
+    {
+      "group": 5,
+      "loads": [
+        "%grp.n180",
+        "%grp.n188"
+      ],
+      "anchor": "%grp.n178",
+      "first_consumer": "%grp.n182",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1217",
+        "%grp.n180",
+        "%lds.const.gep1221",
+        "%grp.n188"
+      ]
+    },
+    {
+      "group": 6,
+      "loads": [
+        "%grp.n181",
+        "%grp.n189"
+      ],
+      "anchor": "%grp.n179",
+      "first_consumer": "%grp.n183",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1218",
+        "%grp.n181",
+        "%lds.const.gep1222",
+        "%grp.n189"
+      ]
+    },
+    {
+      "group": 7,
+      "loads": [
+        "%grp.n184",
+        "%grp.n192"
+      ],
+      "anchor": "%grp.n182",
+      "first_consumer": "%grp.n186",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1219",
+        "%grp.n184",
+        "%lds.const.gep1223",
+        "%grp.n192"
+      ]
+    },
+    {
+      "group": 9,
+      "loads": [
+        "%grp.n239",
+        "%grp.n247"
+      ],
+      "anchor": "%grp.n238",
+      "first_consumer": "%grp.n241",
+      "lookahead_mmac": 1,
+      "moved_definitions": [
+        "%lds.const.gep1239",
+        "%grp.n239",
+        "%lds.const.gep1243",
+        "%grp.n247"
+      ]
+    },
+    {
+      "group": 10,
+      "loads": [
+        "%grp.n240",
+        "%grp.n248"
+      ],
+      "anchor": "%grp.n238",
+      "first_consumer": "%grp.n242",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1240",
+        "%grp.n240",
+        "%lds.const.gep1244",
+        "%grp.n248"
+      ]
+    },
+    {
+      "group": 11,
+      "loads": [
+        "%grp.n243",
+        "%grp.n251"
+      ],
+      "anchor": "%grp.n241",
+      "first_consumer": "%grp.n245",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1241",
+        "%grp.n243",
+        "%lds.const.gep1245",
+        "%grp.n251"
+      ]
+    },
+    {
+      "group": 12,
+      "loads": [
+        "%grp.n252",
+        "%grp.n260"
+      ],
+      "anchor": "%grp.n250",
+      "first_consumer": "%grp.n254",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1246",
+        "%grp.n252",
+        "%lds.const.gep1250",
+        "%grp.n260"
+      ]
+    },
+    {
+      "group": 13,
+      "loads": [
+        "%grp.n255",
+        "%grp.n263"
+      ],
+      "anchor": "%grp.n253",
+      "first_consumer": "%grp.n257",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1247",
+        "%grp.n255",
+        "%lds.const.gep1251",
+        "%grp.n263"
+      ]
+    },
+    {
+      "group": 14,
+      "loads": [
+        "%grp.n256",
+        "%grp.n264"
+      ],
+      "anchor": "%grp.n254",
+      "first_consumer": "%grp.n258",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1248",
+        "%grp.n256",
+        "%lds.const.gep1252",
+        "%grp.n264"
+      ]
+    },
+    {
+      "group": 15,
+      "loads": [
+        "%grp.n259",
+        "%grp.n267"
+      ],
+      "anchor": "%grp.n257",
+      "first_consumer": "%grp.n261",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%lds.const.gep1249",
+        "%grp.n259",
+        "%lds.const.gep1253",
+        "%grp.n267"
+      ]
+    },
+    {
+      "group": 17,
+      "loads": [
+        "%grp.n314",
+        "%grp.n322"
+      ],
+      "anchor": "%grp.n313",
+      "first_consumer": "%grp.n316",
+      "lookahead_mmac": 1,
+      "moved_definitions": [
+        "%grp.n314",
+        "%grp.n322"
+      ]
+    },
+    {
+      "group": 18,
+      "loads": [
+        "%grp.n315",
+        "%grp.n323"
+      ],
+      "anchor": "%grp.n313",
+      "first_consumer": "%grp.n317",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n315",
+        "%grp.n323"
+      ]
+    },
+    {
+      "group": 19,
+      "loads": [
+        "%grp.n318",
+        "%grp.n326"
+      ],
+      "anchor": "%grp.n316",
+      "first_consumer": "%grp.n320",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n318",
+        "%grp.n326"
+      ]
+    },
+    {
+      "group": 20,
+      "loads": [
+        "%grp.n327",
+        "%grp.n335"
+      ],
+      "anchor": "%grp.n325",
+      "first_consumer": "%grp.n329",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n327",
+        "%grp.n335"
+      ]
+    },
+    {
+      "group": 21,
+      "loads": [
+        "%grp.n330",
+        "%grp.n338"
+      ],
+      "anchor": "%grp.n328",
+      "first_consumer": "%grp.n332",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n330",
+        "%grp.n338"
+      ]
+    },
+    {
+      "group": 22,
+      "loads": [
+        "%grp.n331",
+        "%grp.n339"
+      ],
+      "anchor": "%grp.n329",
+      "first_consumer": "%grp.n333",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n331",
+        "%grp.n339"
+      ]
+    },
+    {
+      "group": 23,
+      "loads": [
+        "%grp.n334",
+        "%grp.n342"
+      ],
+      "anchor": "%grp.n332",
+      "first_consumer": "%grp.n336",
+      "lookahead_mmac": 2,
+      "moved_definitions": [
+        "%grp.n334",
+        "%grp.n342"
+      ]
+    }
+  ],
+  "skipped_groups": [
+    {
+      "group": 0,
+      "reason": "first MMAC in BK"
+    },
+    {
+      "group": 8,
+      "reason": "first MMAC in BK"
+    },
+    {
+      "group": 16,
+      "reason": "first MMAC in BK"
+    },
+    {
+      "group": 24,
+      "reason": "first MMAC in BK"
+    },
+    {
+      "group": 25,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 26,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 27,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 28,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 29,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 30,
+      "reason": "address dependency or epoch boundary"
+    },
+    {
+      "group": 31,
+      "reason": "address dependency or epoch boundary"
+    }
+  ],
+  "protected_groups": [
+    {
+      "group": 8,
+      "loads": [
+        "%grp.n237",
+        "%grp.n244"
+      ],
+      "crossed_anchors": [
+        "%grp.n238",
+        "%grp.n241"
+      ],
+      "moved_definitions": [
+        "%lds.const.gep1242",
+        "%grp.n244"
+      ]
+    },
+    {
+      "group": 16,
+      "loads": [
+        "%grp.n312",
+        "%grp.n319"
+      ],
+      "crossed_anchors": [
+        "%grp.n313",
+        "%grp.n316"
+      ],
+      "moved_definitions": [
+        "%grp.n319"
+      ]
+    }
+  ],
+  "all_original_groups_protected": true,
+  "gpu_tested": false,
+  "variants": {
+    "control": {
+      "sha256": "24b4467ed9dba5ea56f868bdc98c5dc739a6da5abaafcc0f13646d6c1f57369f",
+      "llvm_verified": true,
+      "o3_lds_loads": 80
+    },
+    "group_prefetch2_protected": {
+      "sha256": "db8504595594927cf46482508172a082b0608c05173a2557adef77155f3fd268",
+      "llvm_verified": true,
+      "o3_lds_loads": 80
+    }
+  }
+}

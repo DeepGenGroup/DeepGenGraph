@@ -1,0 +1,47 @@
+{
+  "source": "pmc_test.log",
+  "source_sha256": "541eaafabf358975a3ec27df5262fd2ac6d39039c299dedc42069525699a12d1",
+  "measured": {
+    "v_double_buffer": {
+      "median_ms": 1.767583966255188,
+      "relative_to_SDPA": 0.8977143522313065,
+      "SHM_operations": 9224192,
+      "bank_conflict_percent": 15.9071193589,
+      "VGPR": 216,
+      "scratch_bytes": 0
+    },
+    "k_split32_control": {
+      "median_ms": 1.8404635190963745,
+      "relative_to_SDPA": 0.8628179600823296,
+      "SHM_operations": 9224192,
+      "bank_conflict_percent": 15.2048355373,
+      "VGPR": 220,
+      "scratch_bytes": 0
+    },
+    "k_swizzle32": {
+      "median_ms": 1.902783989906311,
+      "relative_to_SDPA": 0.8348535548417779,
+      "SHM_operations": 13418496,
+      "bank_conflict_percent": 0.1144442966,
+      "VGPR": 244,
+      "scratch_bytes": 0
+    },
+    "k_swizzle32_gep": {
+      "median_ms": 1.7870244979858398,
+      "SDPA_median_ms": 1.5894264578819275,
+      "relative_to_SDPA": 0.889426227605371,
+      "SHM_operations": 9224192,
+      "bank_conflict_percent": 0.1216602646,
+      "VGPR": 220,
+      "scratch_bytes": 0
+    }
+  },
+  "SHM_delta": 4194304,
+  "wave_iterations": 131072,
+  "extra_SHM_per_wave_iteration": 32,
+  "interpretation": "K swizzle strongly reduces measured conflicts, but this implementation is slower. The SHM increase exactly matches replacing 32 paired K b64 reads with 64 singles per iteration. Target disassembly not supplied, so this is a counter-based inference, supported separately by the local gfx900 pointer-DAG probe. split32 overhead remains even after read2 repair.",
+  "selected_performance_baseline": "noncausal_v_double_buffer_group32/v_double_buffer.ll",
+  "new_candidate": "k_swizzle32_gep.ll",
+  "new_candidate_gpu_tested": true,
+  "latest_interpretation": "GEP repair restores measured SHM operation count to baseline and reduces VGPR from 244 to 220, while preserving near-zero bank conflicts. Median latency is 1.10% above original baseline and 2.90% below split32 control across these runs. Keep original V double-buffer as selected performance baseline; remaining split32/address overhead is a candidate cause, not a measured per-component decomposition."
+}

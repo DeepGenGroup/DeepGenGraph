@@ -1,0 +1,2 @@
+PASS MyTest control
+PASS MyTest k_tail_prefetch4

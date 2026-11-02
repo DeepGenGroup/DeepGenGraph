@@ -1,0 +1,409 @@
+{
+  "gpu_tested": false,
+  "gfx936_codegen_tested": false,
+  "model": "32 banks x 4 bytes; b64 evaluated per contiguous 16-lane phase; V excluded by assumption",
+  "addresses": {
+    "baseline": {
+      "banks": {
+        "Q": {
+          "multiplicity": {
+            "2": 16
+          },
+          "first_16_bytes": [
+            0,
+            16,
+            32,
+            48,
+            64,
+            80,
+            96,
+            112,
+            128,
+            144,
+            160,
+            176,
+            192,
+            208,
+            224,
+            240
+          ]
+        },
+        "K": {
+          "multiplicity": {
+            "2": 64
+          },
+          "first_16_bytes": [
+            0,
+            320,
+            512,
+            832,
+            16,
+            336,
+            528,
+            848,
+            32,
+            352,
+            544,
+            864,
+            48,
+            368,
+            560,
+            880
+          ]
+        },
+        "K_packet_preserving_single_xor_sweep": {
+          "4:5": 4,
+          "4:6": 4,
+          "4:7": 4,
+          "4:8": 4,
+          "4:9": 4,
+          "5:4": 4,
+          "5:6": 4,
+          "5:7": 4,
+          "5:8": 4,
+          "5:9": 4,
+          "6:4": 4,
+          "6:5": 4,
+          "6:7": 4,
+          "6:8": 4,
+          "6:9": 4,
+          "7:4": 4,
+          "7:5": 4,
+          "7:6": 4,
+          "7:8": 4,
+          "7:9": 4,
+          "8:4": 4,
+          "8:5": 4,
+          "8:6": 2,
+          "8:7": 4,
+          "8:9": 4,
+          "9:4": 4,
+          "9:5": 4,
+          "9:6": 2,
+          "9:7": 4,
+          "9:8": 4
+        }
+      },
+      "checked_dword_packets": 0,
+      "source_provenance_and_coverage": true
+    },
+    "k_split32_control": {
+      "banks": {
+        "Q": {
+          "multiplicity": {
+            "2": 16
+          },
+          "first_16_bytes": [
+            0,
+            16,
+            32,
+            48,
+            64,
+            80,
+            96,
+            112,
+            128,
+            144,
+            160,
+            176,
+            192,
+            208,
+            224,
+            240
+          ]
+        },
+        "K": {
+          "multiplicity": {
+            "2": 64
+          },
+          "first_16_bytes": [
+            0,
+            320,
+            512,
+            832,
+            16,
+            336,
+            528,
+            848,
+            32,
+            352,
+            544,
+            864,
+            48,
+            368,
+            560,
+            880
+          ]
+        }
+      },
+      "checked_dword_packets": 8388608,
+      "source_provenance_and_coverage": true
+    },
+    "k_swizzle32": {
+      "banks": {
+        "Q": {
+          "multiplicity": {
+            "2": 16
+          },
+          "first_16_bytes": [
+            0,
+            16,
+            32,
+            48,
+            64,
+            80,
+            96,
+            112,
+            128,
+            144,
+            160,
+            176,
+            192,
+            208,
+            224,
+            240
+          ]
+        },
+        "K": {
+          "multiplicity": {
+            "1": 64
+          },
+          "first_16_bytes": [
+            0,
+            320,
+            520,
+            840,
+            16,
+            336,
+            536,
+            856,
+            32,
+            352,
+            552,
+            872,
+            48,
+            368,
+            568,
+            888
+          ]
+        }
+      },
+      "checked_dword_packets": 8388608,
+      "source_provenance_and_coverage": true
+    },
+    "qk_swizzle32": {
+      "banks": {
+        "Q": {
+          "multiplicity": {
+            "1": 16
+          },
+          "first_16_bytes": [
+            0,
+            16,
+            32,
+            48,
+            64,
+            80,
+            96,
+            112,
+            136,
+            152,
+            168,
+            184,
+            200,
+            216,
+            232,
+            248
+          ]
+        },
+        "K": {
+          "multiplicity": {
+            "1": 64
+          },
+          "first_16_bytes": [
+            0,
+            320,
+            520,
+            840,
+            16,
+            336,
+            536,
+            856,
+            32,
+            352,
+            552,
+            872,
+            48,
+            368,
+            568,
+            888
+          ]
+        }
+      },
+      "checked_dword_packets": 16777216,
+      "source_provenance_and_coverage": true
+    }
+  },
+  "cases": [
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "baseline",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_split32_control",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "qk_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "k_swizzle32.o3",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "variant": "qk_swizzle32.o3",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 0.000145755813135362
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 31,
+      "variant": "baseline",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 31,
+      "variant": "k_split32_control",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 31,
+      "variant": "k_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "future_key_dominates",
+      "head": 1,
+      "query": 31,
+      "variant": "qk_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 4.617419446795168e-09
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "baseline",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 6.108607249871723e-05
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "k_split32_control",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 6.108607249871723e-05
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "k_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 6.108607249871723e-05
+    },
+    {
+      "kind": "max_changes",
+      "head": 1,
+      "query": 2,
+      "variant": "qk_swizzle32",
+      "bitwise_equal": true,
+      "identical_lds_read_values": true,
+      "barrier_epoch_ownership": true,
+      "v_schedule_unchanged": true,
+      "max_abs_error": 6.108607249871723e-05
+    }
+  ],
+  "sha256": {
+    "baseline": "3b2bde804277d68be2926e1ad35a292164d4688a349bedcefa42ab605322888a",
+    "k_split32_control": "f66b4630b2dae6bb7d12e8fc525a84151d14190ca5d4512d90a3b3a2b18ae0ca",
+    "k_swizzle32": "9605d5eeb763f9a754863e07bc07a4e8560515974a2608f4c4f27b79f2f510ef",
+    "qk_swizzle32": "44bb17077874b9b9be56c03eb5b2c482012638f0e1c2e2846740508f596a61a5"
+  }
+}

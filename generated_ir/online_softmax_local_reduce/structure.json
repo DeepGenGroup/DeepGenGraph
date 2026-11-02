@@ -1,0 +1,118 @@
+{
+  "baseline": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_mask_bypass/kernel.ll",
+  "baseline_sha256": "68410c5a5ad3bc28dda29769d670d05fd6d9421e051833a6b57cf9a8d9eaa863",
+  "gpu_tested": false,
+  "variants": {
+    "baseline": {
+      "sha256": "68410c5a5ad3bc28dda29769d670d05fd6d9421e051833a6b57cf9a8d9eaa863",
+      "reductions": [],
+      "all_other_ir_lines_unchanged": true
+    },
+    "max4": {
+      "sha256": "9a3465422a91e579a6f3ca10008b151b6ec96ad2fc7164d49c7a61afa1ad60e4",
+      "reductions": [
+        {
+          "kind": "max",
+          "row": 0,
+          "root": "%v978",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 32,
+          "operations_after": 32,
+          "depth_before": 32,
+          "depth_after": 10
+        },
+        {
+          "kind": "max",
+          "row": 1,
+          "root": "%v1033",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 32,
+          "operations_after": 32,
+          "depth_before": 32,
+          "depth_after": 10
+        }
+      ],
+      "all_other_ir_lines_unchanged": true
+    },
+    "sum4": {
+      "sha256": "1ec425fc7795cdc871bcbd7c05ff071c585ce7a0933b8b4079cf0c55500ddad2",
+      "reductions": [
+        {
+          "kind": "sum",
+          "row": 0,
+          "root": "%v1213",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 31,
+          "operations_after": 31,
+          "depth_before": 31,
+          "depth_after": 9
+        },
+        {
+          "kind": "sum",
+          "row": 1,
+          "root": "%v1348",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 31,
+          "operations_after": 31,
+          "depth_before": 31,
+          "depth_after": 9
+        }
+      ],
+      "all_other_ir_lines_unchanged": true
+    },
+    "max_sum4": {
+      "sha256": "e7007ead8d8e040eb57a5c6c7a433472d148f8a7ce1ff95822eb5006a53847ae",
+      "reductions": [
+        {
+          "kind": "max",
+          "row": 0,
+          "root": "%v978",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 32,
+          "operations_after": 32,
+          "depth_before": 32,
+          "depth_after": 10
+        },
+        {
+          "kind": "max",
+          "row": 1,
+          "root": "%v1033",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 32,
+          "operations_after": 32,
+          "depth_before": 32,
+          "depth_after": 10
+        },
+        {
+          "kind": "sum",
+          "row": 0,
+          "root": "%v1213",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 31,
+          "operations_after": 31,
+          "depth_before": 31,
+          "depth_after": 9
+        },
+        {
+          "kind": "sum",
+          "row": 1,
+          "root": "%v1348",
+          "inputs": 32,
+          "chains": 4,
+          "operations_before": 31,
+          "operations_after": 31,
+          "depth_before": 31,
+          "depth_after": 9
+        }
+      ],
+      "all_other_ir_lines_unchanged": true
+    }
+  }
+}

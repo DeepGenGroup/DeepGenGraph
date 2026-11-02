@@ -1,0 +1,8 @@
+{
+  "tool": "/data2/xsl/install/bin/llc",
+  "target": "gfx900",
+  "probe": "generated_ir/dma_inlineasm_probe/buffer_dwordx2_lds.ll",
+  "success": false,
+  "diagnostic": "buffer_load_dwordx2 v0, s[0:3], 0 offen lds: invalid operand for instruction",
+  "scope": "Available upstream gfx900 assembler only; not the user-confirmed gfx936/DTK DMA64 implementation. Target compilation remains untested."
+}

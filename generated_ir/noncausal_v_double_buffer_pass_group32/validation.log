@@ -1,0 +1,7 @@
+PASS random 0 0 experiment bitwise, memory values, slots, barrier ownership
+PASS random 0 0 compiled_pass bitwise, memory values, slots, barrier ownership
+PASS random 0 0 compiled_pass_o3 bitwise, memory values, slots, barrier ownership
+PASS random 1 31 experiment bitwise, memory values, slots, barrier ownership
+PASS random 1 31 compiled_pass bitwise, memory values, slots, barrier ownership
+PASS max_changes 1 2 experiment bitwise, memory values, slots, barrier ownership
+PASS max_changes 1 2 compiled_pass bitwise, memory values, slots, barrier ownership

@@ -1,0 +1,255 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll",
+  "source_sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+  "exporter_sha256": "98c1fd5fa3dd3455d625ca6b28d3e5e10ba9e4c62dcffa142b94eb15afeae9a3",
+  "variants": {
+    "control": {
+      "distance": 0,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-tail-prefetch=0",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll"
+      ],
+      "sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+      "llvm_and_O3_verified": true,
+      "identical_instructions_to_measured_experiment": true,
+      "measured_experiment": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch/control.ll",
+      "measured_sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+      "diagnostics": "",
+      "schedule": {
+        "pairs": [],
+        "pair_count": 0,
+        "added_schedule_hints": 0
+      }
+    },
+    "k_tail_prefetch2": {
+      "distance": 2,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-tail-prefetch=2",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll"
+      ],
+      "sha256": "720700ef0b66475eed8225451010497a72d3936d180f4289c72cf354b1819185",
+      "llvm_and_O3_verified": true,
+      "identical_instructions_to_measured_experiment": true,
+      "measured_experiment": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch/k_tail_prefetch2.ll",
+      "measured_sha256": "980ddf22d52988b0dce943278dab9c6e4f0ff0d0b045c46102401d5a87d51de9",
+      "diagnostics": "K tail LDS prefetch: distance=2, regions=1, pairs=8, moved=7, anchors=6, unpaired=0, reduction-regions=65, function=Attn_p2",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 2
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 12
+      }
+    },
+    "k_tail_prefetch4": {
+      "distance": 4,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-tail-prefetch=4",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll"
+      ],
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "llvm_and_O3_verified": true,
+      "identical_instructions_to_measured_experiment": true,
+      "measured_experiment": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch/k_tail_prefetch4.ll",
+      "measured_sha256": "fb0655792f573a02e08cbd6a320d1ad5e8b075d83142fadf1a4ccbb206c6f0b0",
+      "diagnostics": "K tail LDS prefetch: distance=4, regions=1, pairs=8, moved=7, anchors=5, unpaired=0, reduction-regions=65, function=Attn_p2",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 4
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 10
+      }
+    },
+    "k_tail_prefetch8": {
+      "distance": 8,
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-tail-prefetch=8",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll"
+      ],
+      "sha256": "2422867e9fb62dd2cfe910991a08bc5a42e5d5b15fab4452095d65edab9c3d7e",
+      "llvm_and_O3_verified": true,
+      "identical_instructions_to_measured_experiment": true,
+      "measured_experiment": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch/k_tail_prefetch8.ll",
+      "measured_sha256": "4b7150ffe9cdb2b1caa76a4dadbf7ad9eb95ec9982b692057d7270c8664fcd04",
+      "diagnostics": "K tail LDS prefetch: distance=8, regions=1, pairs=8, moved=7, anchors=4, unpaired=0, reduction-regions=65, function=Attn_p2",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 8
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 8
+      }
+    }
+  },
+  "gpu_tested": false
+}

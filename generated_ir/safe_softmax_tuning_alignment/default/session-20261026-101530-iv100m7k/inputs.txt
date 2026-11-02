@@ -1,0 +1,6 @@
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-32-32-online.mlir
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-64-32-online.mlir
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-128-32-online.mlir
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-32-32-online.mlir
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-64-32-online.mlir
+/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-128-32-online.mlir

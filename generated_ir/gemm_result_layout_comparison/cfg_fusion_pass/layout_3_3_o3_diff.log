@@ -1,0 +1,208 @@
+in function Attn_p2:
+  in block %4 / %4:
+    >   %29 = shl nsw i64 %26, 7, !dbg !104
+    >   %30 = add i64 %28, %29, !dbg !104
+        %29 = tail call i32 @llvm.amdgcn.workitem.id.x(), !dbg !41, !range !42
+    >   %32 = zext nneg i32 %31 to i64, !dbg !104
+    <   %.idx = shl i64 %26, 8, !dbg !41
+        %address.thread = tail call i32 asm sideeffect "", "=v,0"(i32 %29) #8, !dbg !41, !range !42, !frisk.register_lifetimes !38
+        %address.local = zext nneg i32 %address.thread to i64, !dbg !41
+        %address.local505 = shl nuw nsw i64 %address.local, 3, !dbg !41
+        %address.local506 = and i64 %address.local505, 1536, !dbg !41
+        %address.local507 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local506, !dbg !41
+        %address.local510 = shl nuw nsw i64 %address.local, 7, !dbg !41
+        %address.local511 = and i64 %address.local510, 16256, !dbg !41
+        %address.local512 = lshr i64 %address.local, 4, !dbg !41
+        %address.local513 = and i64 %address.local512, 8, !dbg !41
+        %address.local514 = or disjoint i64 %address.local511, %address.local513, !dbg !41
+        %30 = ptrtoint ptr addrspace(1) %0 to i64, !dbg !41
+    >   %.idx1781 = or disjoint i64 %address.local514, %30, !dbg !104
+    >   %.idx1781.tr = trunc i64 %.idx1781 to i32, !dbg !104
+    >   %dma.buffer.offset1778 = shl i32 %.idx1781.tr, 1, !dbg !104
+    <   %31 = or disjoint i64 %address.local514, %28, !dbg !41
+    <   %32 = shl nuw nsw i64 %31, 1, !dbg !41
+    <   %33 = add i64 %32, %.idx, !dbg !41
+    <   %dma.buffer.offset1778 = trunc i64 %33 to i32, !dbg !41
+        %34 = insertelement <2 x i64> poison, i64 %30, i64 0, !dbg !41
+        %35 = bitcast <2 x i64> %34 to <4 x i32>, !dbg !41
+        %dma.buffer.rsrc1779 = shufflevector <4 x i32> %35, <4 x i32> <i32 poison, i32 poison, i32 33554432, i32 131072>, <4 x i32> <i32 0, i32 1, i32 6, i32 7>, !dbg !41
+        %address.local516 = or disjoint i64 %address.local, 256, !dbg !41
+        %address.local517 = shl nuw nsw i64 %address.local516, 3, !dbg !41
+        %address.local518 = and i64 %address.local517, 3584, !dbg !41
+        %address.local519 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local518, !dbg !41
+        %address.local524 = lshr i64 %address.local516, 4, !dbg !41
+        %address.local525 = and i64 %address.local524, 24, !dbg !41
+        %address.local526 = or disjoint i64 %address.local525, %address.local511, !dbg !41
+    >   %.idx1782 = or disjoint i64 %address.local526, %30, !dbg !104
+    >   %.idx1782.tr = trunc i64 %.idx1782 to i32, !dbg !104
+    >   %dma.buffer.offset1775 = shl i32 %.idx1782.tr, 1, !dbg !104
+    <   %36 = or disjoint i64 %address.local526, %28, !dbg !41
+    <   %37 = shl nuw nsw i64 %36, 1, !dbg !41
+    <   %38 = add i64 %37, %.idx, !dbg !41
+    <   %dma.buffer.offset1775 = trunc i64 %38 to i32, !dbg !41
+        %39 = tail call i32 @llvm.amdgcn.workgroup.id.z(), !dbg !40
+        %40 = sext i32 %39 to i64, !dbg !40
+        %address.local528 = getelementptr [2 x i8], ptr addrspace(3) getelementptr inbounds nuw (i8, ptr addrspace(3) @shm_0, i64 8192), i64 %address.local506, !dbg !41
+    >   %38 = or disjoint i64 %30, 32, !dbg !104
+    >   %39 = or disjoint i64 %address.local514, %38, !dbg !104
+    >   %.tr = trunc i64 %39 to i32, !dbg !104
+    >   %dma.buffer.offset1772 = shl i32 %.tr, 1, !dbg !104
+    <   %.idx3 = shl nuw nsw i64 %28, 1, !dbg !41
+    <   %41 = add i64 %.idx3, %.idx, !dbg !41
+    <   %address.local531.idx = shl nuw nsw i64 %address.local514, 1, !dbg !41
+    <   %42 = or disjoint i64 %address.local531.idx, %41, !dbg !41
+    <   %43 = trunc i64 %42 to i32, !dbg !41
+    <   %dma.buffer.offset1772 = or disjoint i32 %43, 64, !dbg !41
+        %address.local532 = getelementptr [2 x i8], ptr addrspace(3) getelementptr inbounds nuw (i8, ptr addrspace(3) @shm_0, i64 8192), i64 %address.local518, !dbg !41
+        %44 = insertelement <4 x ptr addrspace(3)> poison, ptr addrspace(3) %address.local507, i64 0, !dbg !41
+        %45 = insertelement <4 x ptr addrspace(3)> %44, ptr addrspace(3) %address.local519, i64 1, !dbg !41
+        %46 = insertelement <4 x ptr addrspace(3)> %45, ptr addrspace(3) %address.local528, i64 2, !dbg !41
+        %47 = insertelement <4 x ptr addrspace(3)> %46, ptr addrspace(3) %address.local532, i64 3, !dbg !41
+        %48 = ptrtoint <4 x ptr addrspace(3)> %47 to <4 x i64>, !dbg !41
+        %49 = trunc <4 x i64> %48 to <4 x i32>, !dbg !41
+        %50 = extractelement <4 x i32> %49, i64 0, !dbg !41
+        %51 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %50), !dbg !41
+        %dma.buffer.lds1780 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %51), !dbg !41
+    >   %48 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1780, i32 %dma.buffer.offset1778, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %52 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1780, i32 %dma.buffer.offset1778, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        %53 = extractelement <4 x i32> %49, i64 1, !dbg !41
+        %54 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %53), !dbg !41
+        %dma.buffer.lds1777 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %54), !dbg !41
+    >   %51 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1777, i32 %dma.buffer.offset1775, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %55 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1777, i32 %dma.buffer.offset1775, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        tail call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #9, !dbg !41
+        fence syncscope("workgroup") release, !dbg !41
+        tail call void @llvm.amdgcn.s.barrier(), !dbg !41
+        fence syncscope("workgroup") acquire, !dbg !41
+        %56 = extractelement <4 x i32> %49, i64 2, !dbg !41
+        %57 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %56), !dbg !41
+        %dma.buffer.lds1774 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %57), !dbg !41
+    >   %54 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1774, i32 %dma.buffer.offset1772, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %58 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1774, i32 %dma.buffer.offset1772, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        %59 = extractelement <4 x i32> %49, i64 3, !dbg !41
+        %60 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %59), !dbg !41
+    >   %57 = or disjoint i64 %address.local526, %38, !dbg !104
+    >   %.tr1783 = trunc i64 %57 to i32, !dbg !104
+    >   %dma.buffer.offset1769 = shl i32 %.tr1783, 1, !dbg !104
+    <   %address.local535.idx = shl nuw nsw i64 %address.local526, 1, !dbg !41
+    <   %61 = or disjoint i64 %address.local535.idx, %41, !dbg !41
+    <   %62 = trunc i64 %61 to i32, !dbg !41
+    <   %dma.buffer.offset1769 = or disjoint i32 %62, 64, !dbg !41
+        %dma.buffer.lds1771 = tail call i32 @llvm.amdgcn.readfirstlane.i32(i32 %60), !dbg !41
+    >   %58 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1771, i32 %dma.buffer.offset1769, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %63 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1771, i32 %dma.buffer.offset1769, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        %address.local536 = lshr i32 %address.thread, 2, !dbg !43
+        %address.local537 = and i32 %address.local536, 4, !dbg !43
+        %address.local538 = shl nuw nsw i32 %address.thread, 1, !dbg !43
+        %address.local539 = and i32 %address.local538, 384, !dbg !43
+        %address.local540 = or disjoint i32 %address.local537, %address.local539, !dbg !43
+        %address.local541 = shl nuw nsw i32 %address.thread, 3, !dbg !43
+        %address.local542 = and i32 %address.local541, 120, !dbg !43
+        %address.local543 = or disjoint i32 %address.local540, %address.local542, !dbg !43
+        %address.local544 = shl nuw nsw i32 %address.thread, 5, !dbg !43
+        %address.local545 = and i32 %address.local544, 1024, !dbg !43
+        %address.local546 = or disjoint i32 %address.local543, %address.local545, !dbg !43
+        %address.local547 = zext nneg i32 %address.local546 to i64, !dbg !43
+        %address.local548 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local547, !dbg !43
+        %64 = load <4 x half>, ptr addrspace(3) %address.local548, align 8, !dbg !43
+        %lds.const.gep = getelementptr i8, ptr addrspace(3) %address.local548, i64 4096, !dbg !43
+        %65 = load <4 x half>, ptr addrspace(3) %lds.const.gep, align 8, !dbg !43
+        %66 = fmul <4 x half> %64, splat (half 1.275630e-01), !dbg !43
+        %lds.const.gep1579 = getelementptr i8, ptr addrspace(3) %address.local548, i64 1024, !dbg !43
+        %67 = load <4 x half>, ptr addrspace(3) %lds.const.gep1579, align 8, !dbg !43
+        %68 = fmul <4 x half> %65, splat (half 1.275630e-01), !dbg !43
+        %lds.const.gep1580 = getelementptr i8, ptr addrspace(3) %address.local548, i64 5120, !dbg !43
+        %69 = load <4 x half>, ptr addrspace(3) %lds.const.gep1580, align 8, !dbg !43
+        %70 = fmul <4 x half> %67, splat (half 1.275630e-01), !dbg !43
+        %71 = fmul <4 x half> %69, splat (half 1.275630e-01), !dbg !43
+        tail call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #9, !dbg !41
+        fence syncscope("workgroup") release, !dbg !41
+        tail call void @llvm.amdgcn.s.barrier(), !dbg !41
+        fence syncscope("workgroup") acquire, !dbg !41
+    >   %67 = or disjoint i64 %30, 64, !dbg !104
+    >   %68 = or disjoint i64 %address.local514, %67, !dbg !104
+    >   %.tr1784 = trunc i64 %68 to i32, !dbg !104
+    >   %dma.buffer.offset1766 = shl i32 %.tr1784, 1, !dbg !104
+    >   %69 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1780, i32 %dma.buffer.offset1766, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    >   %70 = or disjoint i64 %address.local526, %67, !dbg !104
+    >   %.tr1785 = trunc i64 %70 to i32, !dbg !104
+    >   %dma.buffer.offset1763 = shl i32 %.tr1785, 1, !dbg !104
+    >   %71 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1777, i32 %dma.buffer.offset1763, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %dma.buffer.offset1766 = or disjoint i32 %43, 128, !dbg !41
+    <   %72 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1780, i32 %dma.buffer.offset1766, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+    <   %dma.buffer.offset1763 = or disjoint i32 %62, 128, !dbg !41
+    <   %73 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1777, i32 %dma.buffer.offset1763, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        %lds.const.gep1581 = getelementptr i8, ptr addrspace(3) %address.local548, i64 8192, !dbg !43
+        %74 = load <4 x half>, ptr addrspace(3) %lds.const.gep1581, align 8, !dbg !43
+        %lds.const.gep1582 = getelementptr i8, ptr addrspace(3) %address.local548, i64 12288, !dbg !43
+        %75 = load <4 x half>, ptr addrspace(3) %lds.const.gep1582, align 8, !dbg !43
+        %lds.const.gep1583 = getelementptr i8, ptr addrspace(3) %address.local548, i64 9216, !dbg !43
+        %76 = load <4 x half>, ptr addrspace(3) %lds.const.gep1583, align 8, !dbg !43
+        %77 = fmul <4 x half> %74, splat (half 1.275630e-01), !dbg !43
+        %lds.const.gep1584 = getelementptr i8, ptr addrspace(3) %address.local548, i64 13312, !dbg !43
+        %78 = load <4 x half>, ptr addrspace(3) %lds.const.gep1584, align 8, !dbg !43
+        %79 = fmul <4 x half> %75, splat (half 1.275630e-01), !dbg !43
+        %80 = fmul <4 x half> %76, splat (half 1.275630e-01), !dbg !43
+        %81 = fmul <4 x half> %78, splat (half 1.275630e-01), !dbg !43
+        tail call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #9, !dbg !41
+        fence syncscope("workgroup") release, !dbg !41
+        tail call void @llvm.amdgcn.s.barrier(), !dbg !41
+        fence syncscope("workgroup") acquire, !dbg !41
+    >   %80 = or disjoint i64 %30, 96, !dbg !104
+    >   %81 = or disjoint i64 %address.local514, %80, !dbg !104
+    >   %.tr1786 = trunc i64 %81 to i32, !dbg !104
+    >   %dma.buffer.offset1760 = shl i32 %.tr1786, 1, !dbg !104
+    >   %82 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1774, i32 %dma.buffer.offset1760, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    >   %83 = or disjoint i64 %address.local526, %80, !dbg !104
+    >   %.tr1787 = trunc i64 %83 to i32, !dbg !104
+    >   %dma.buffer.offset1757 = shl i32 %.tr1787, 1, !dbg !104
+    >   %84 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1771, i32 %dma.buffer.offset1757, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !104
+    <   %dma.buffer.offset1760 = or disjoint i32 %43, 192, !dbg !41
+    <   %82 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1774, i32 %dma.buffer.offset1760, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+    <   %dma.buffer.offset1757 = or disjoint i32 %62, 192, !dbg !41
+    <   %83 = tail call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1771, i32 %dma.buffer.offset1757, <4 x i32> %dma.buffer.rsrc1779) #9, !dbg !41
+        %84 = load <4 x half>, ptr addrspace(3) %address.local548, align 8, !dbg !43
+        %85 = load <4 x half>, ptr addrspace(3) %lds.const.gep, align 8, !dbg !43
+        %86 = load <4 x half>, ptr addrspace(3) %lds.const.gep1579, align 8, !dbg !43
+        %87 = fmul <4 x half> %84, splat (half 1.275630e-01), !dbg !43
+        %88 = load <4 x half>, ptr addrspace(3) %lds.const.gep1580, align 8, !dbg !43
+        %89 = fmul <4 x half> %85, splat (half 1.275630e-01), !dbg !43
+        %90 = fmul <4 x half> %86, splat (half 1.275630e-01), !dbg !43
+        %91 = fmul <4 x half> %88, splat (half 1.275630e-01), !dbg !43
+        tail call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #9, !dbg !41
+        fence syncscope("workgroup") release, !dbg !41
+        tail call void @llvm.amdgcn.s.barrier(), !dbg !41
+        fence syncscope("workgroup") acquire, !dbg !41
+        %92 = load <4 x half>, ptr addrspace(3) %lds.const.gep1581, align 8, !dbg !43
+        %93 = load <4 x half>, ptr addrspace(3) %lds.const.gep1582, align 8, !dbg !43
+        %94 = load <4 x half>, ptr addrspace(3) %lds.const.gep1583, align 8, !dbg !43
+        %95 = fmul <4 x half> %92, splat (half 1.275630e-01), !dbg !43
+        %96 = load <4 x half>, ptr addrspace(3) %lds.const.gep1584, align 8, !dbg !43
+        %97 = fmul <4 x half> %93, splat (half 1.275630e-01), !dbg !43
+        %98 = fmul <4 x half> %94, splat (half 1.275630e-01), !dbg !43
+        %99 = fmul <4 x half> %96, splat (half 1.275630e-01), !dbg !43
+        fence syncscope("workgroup") release, !dbg !44
+        tail call void @llvm.amdgcn.s.barrier(), !dbg !44
+        fence syncscope("workgroup") acquire, !dbg !44
+        %100 = or disjoint i64 %24, 127, !dbg !45
+        %101 = add i64 %24, 128, !dbg !45
+        %102 = icmp uge i64 %101, %100, !dbg !45
+        %103 = sub nsw i64 32, %14, !dbg !46
+        %104 = shl i64 %16, 7, !dbg !47
+        %105 = and i64 %104, 3968, !dbg !47
+        %106 = shl nsw i64 %40, 12, !dbg !47
+        %107 = or disjoint i64 %105, %106, !dbg !47
+    >   %109 = shl nuw nsw i64 %32, 2, !dbg !110
+    >   %110 = and i64 %109, 12, !dbg !110
+    <   %108 = shl nuw nsw i32 %29, 2, !dbg !48
+    <   %109 = and i32 %108, 12, !dbg !48
+        %110 = and i32 %29, 1, !dbg !48
+    >   %narrow = add nuw nsw i32 %111, 1, !dbg !110
+    >   %112 = zext nneg i32 %narrow to i64, !dbg !110
+    >   %113 = or disjoint i64 %110, %112, !dbg !110
+    >   %114 = lshr i64 %113, 1, !dbg !110
+    <   %111 = or disjoint i32 %109, %110, !dbg !48
+    <   %112 = trunc nuw nsw i32 %111 to i16, !dbg !48
+    <   %.lhs.trunc = add nuw nsw i16 %112, 1, !dbg !48
+    <   %113 = lshr i16 %.lhs.trunc, 1, !dbg !48
+    <   %.sext = zext nneg i16 %113 to i64, !dbg !48

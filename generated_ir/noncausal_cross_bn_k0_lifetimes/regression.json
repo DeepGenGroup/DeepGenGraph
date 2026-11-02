@@ -1,0 +1,20 @@
+{
+  "assembly": "/data2/xsl/DeepGenGraph/ktest.hsaco (2).amdgcn",
+  "assembly_sha256": "cedd12f68144b79e2a18b6bfda735ab8b2696c61cd8796e2a7b6e4752680ba22",
+  "pmc_sha256": "7ef752fe6c06296b757a799dcde752f94797f9086d969a69f6487c3606ddeda7",
+  "baseline_ms": 1.691345989704132,
+  "prefetch_ms": 1.751744031906128,
+  "slowdown_percent": 3.571004547245904,
+  "reported_VGPR": 256,
+  "reported_scratch_bytes": 20,
+  "vgpr_spill_count": 4,
+  "static_scratch_stores": 4,
+  "static_scratch_reloads": 4,
+  "FP32_adds_in_k0_join": 64,
+  "observations": [
+    "64 softmax denominator FP32 adds appear after the K0 conditional branch in k0.join.",
+    "v208 and v209 are computed at the QK loop start and consumed again in k0.issue.",
+    "Scratch reloads are followed by vmcnt(0) waits during QK setup."
+  ],
+  "limitations": "No target compiler locally. New IR resource usage and speedup are unmeasured. Earlier ktest.hsaco.amdgcn is not the supplied spill assembly."
+}

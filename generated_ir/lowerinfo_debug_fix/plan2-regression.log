@@ -1,0 +1,19 @@
+PASS bridge cancellation, multiple users, chains, type/layout guards
+PASS memref bridge loads, write ordering, live users and guards
+PASS computed-store-32-32-32-64-64 cast, alias, intervening write and A/B consumers
+PASS computed-store-64-64-32-32-128 cast, alias, intervening write and A/B consumers
+PASS computed-store-32-64-64-32-128 cast, alias, intervening write and A/B consumers
+PASS gemm-16-16-16-64
+PASS gemm-64-32-128-64
+PASS gemm-64-128-32-128
+PASS gemm-64-128-32-256
+PASS combined-add
+PASS combined-mul
+PASS combined-min
+PASS combined-max
+PASS block, zero and loop-carried block-vector update
+PASS pipeline slot layout propagation and whole-tile copy_to_reg
+PASS direct shared copy, zero offsets, possible aliases and live results
+PASS reduction forwarding: four kinds, escaped storage and multiple writers
+PASS copy-to-reg, tiled guard and attention/idempotence
+PASS partial-copy aliases, rank4-copy-result and attention-debug/idempotence

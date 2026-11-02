@@ -1,0 +1,13 @@
+{
+  "regressions": {
+    "cross_bn": "......\n----------------------------------------------------------------------\nRan 6 tests in 1.864s\n\nOK",
+    "v_double_buffer": "PASS 28 V double-buffer cases (sizes, packet/stage counts, reverse slot, renaming, safety, idempotence, CLI)",
+    "softmax": "PASS softmax fragment scheduling: both modes, exact DAG, sum-before-pack, PV order, idempotence, renaming, 8 rejection cases, live external use, invalid CLI",
+    "paired_lds": ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.449s\n\nOK",
+    "paired_tail": ".......\n----------------------------------------------------------------------\nRan 7 tests in 1.876s\n\nOK",
+    "tuning": "...........................\n----------------------------------------------------------------------\nRan 27 tests in 3.103s\n\nOK"
+  },
+  "actual_IR_cases": 11,
+  "identical_instruction_graph_to_measured": true,
+  "gpu_tested": false
+}

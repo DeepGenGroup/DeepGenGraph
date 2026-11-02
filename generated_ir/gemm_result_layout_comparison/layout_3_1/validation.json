@@ -1,0 +1,74 @@
+{
+  "sha256": "eebb622e7db989f092e57e293311db9ba534967f8a2273ba273dab34eb95d2ff",
+  "llvm_o3_verified": true,
+  "cases": [
+    {
+      "case": "random",
+      "query": 0,
+      "max_abs_error": 0.0010615858711160442,
+      "q_load_count_min": 1,
+      "q_load_count_max": 1,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": true,
+      "mismatches": 0
+    },
+    {
+      "case": "random",
+      "query": 1,
+      "max_abs_error": 0.4730803177497691,
+      "q_load_count_min": 2,
+      "q_load_count_max": 2,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": false,
+      "mismatches": 3023
+    },
+    {
+      "case": "random",
+      "query": 31,
+      "max_abs_error": 0.05241151099698456,
+      "q_load_count_min": 32,
+      "q_load_count_max": 32,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": false,
+      "mismatches": 2356
+    },
+    {
+      "case": "positive_overflow",
+      "query": 1,
+      "max_abs_error": 6.103118260700202e-05,
+      "q_load_count_min": 2,
+      "q_load_count_max": 2,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": true,
+      "mismatches": 0
+    },
+    {
+      "case": "negative_underflow",
+      "query": 1,
+      "max_abs_error": 6.103118260700202e-05,
+      "q_load_count_min": 2,
+      "q_load_count_max": 2,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": true,
+      "mismatches": 0
+    },
+    {
+      "case": "max_changes",
+      "query": 2,
+      "max_abs_error": 6.461916055056083e-05,
+      "q_load_count_min": 3,
+      "q_load_count_max": 3,
+      "delayed_DMA_passed": true,
+      "finite": true,
+      "passed": true,
+      "mismatches": 0
+    }
+  ],
+  "gpu_tested": false,
+  "numerical_passed": false
+}

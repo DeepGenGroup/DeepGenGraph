@@ -1,0 +1,77 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_grouped_lds_prefetch/group_prefetch2_protected.ll",
+  "source_sha256": "db8504595594927cf46482508172a082b0608c05173a2557adef77155f3fd268",
+  "reverse": 0,
+  "shape": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "grid": [
+    32,
+    32,
+    1
+  ],
+  "block": [
+    256,
+    1,
+    1
+  ],
+  "tiles": {
+    "BM": 128,
+    "BN": 128,
+    "BK": 32
+  },
+  "gpu_tested": false,
+  "variants": {
+    "group4": {
+      "group_size": 4,
+      "sha256": "db8504595594927cf46482508172a082b0608c05173a2557adef77155f3fd268",
+      "mapping": {
+        "blocks_checked": 1024,
+        "bijective": true,
+        "q_o_and_k_v_bases_checked": true
+      },
+      "llvm_verified": true,
+      "o3_all_32_groups_protected": true,
+      "o3_all_21_prefetch_anchors_preserved": true
+    },
+    "group8": {
+      "group_size": 8,
+      "sha256": "9ffa5d3c40f13abdbf6604f6ce812973f0d4df109ce2fae3637c8b52f048f857",
+      "mapping": {
+        "blocks_checked": 1024,
+        "bijective": true,
+        "q_o_and_k_v_bases_checked": true
+      },
+      "llvm_verified": true,
+      "o3_all_32_groups_protected": true,
+      "o3_all_21_prefetch_anchors_preserved": true
+    },
+    "group16": {
+      "group_size": 16,
+      "sha256": "c7f9cae011a85e08baaec15695f26098c6e913aaaead31e91babf176fc3c9371",
+      "mapping": {
+        "blocks_checked": 1024,
+        "bijective": true,
+        "q_o_and_k_v_bases_checked": true
+      },
+      "llvm_verified": true,
+      "o3_all_32_groups_protected": true,
+      "o3_all_21_prefetch_anchors_preserved": true
+    },
+    "group32": {
+      "group_size": 32,
+      "sha256": "5331d9048af733894568fcf0135dce9409cceab1f8029da8698a3abe72e41af7",
+      "mapping": {
+        "blocks_checked": 1024,
+        "bijective": true,
+        "q_o_and_k_v_bases_checked": true
+      },
+      "llvm_verified": true,
+      "o3_all_32_groups_protected": true,
+      "o3_all_21_prefetch_anchors_preserved": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning/run-20261026-101601-inpooz4_/input-0001-test_input_1x32x4096x128-128-64-32-online/grid-000002/kernel.ll",
+  "sha256": "d8353e021c8b86004c3ec259872b42fd7ff11e2029356533f966e5709f439eec",
+  "bn": 64,
+  "shuffle_sites": {
+    "outside_loop": 64,
+    "inside_loop": 8
+  },
+  "zero_seed_mmac": 8,
+  "vector4_fadds": 8,
+  "mmac_instructions": 128,
+  "gpu_tested": false
+}

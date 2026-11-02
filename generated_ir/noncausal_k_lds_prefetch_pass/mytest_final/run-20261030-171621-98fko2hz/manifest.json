@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-30T09:17:12Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz",
+  "total_candidates": 1,
+  "completed_candidates": 1,
+  "failed_candidates": 0,
+  "successful_candidates": 1,
+  "status_counts": {
+    "verified": 1
+  },
+  "last_result": {
+    "case": "online-vdb-k64-lds2",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/online-vdb-k64-lds2",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/online-vdb-k64-lds2/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/**/result.json",
+  "best_by_shape": {}
+}

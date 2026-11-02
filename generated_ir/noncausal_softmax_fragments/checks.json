@@ -1,0 +1,16 @@
+{
+  "build_targets": [
+    "LegacyLLVMExportTest",
+    "MyTest"
+  ],
+  "new_pass_regression_passed": true,
+  "existing_regressions": {
+    "PV_interleave": 20,
+    "paired_LDS": 5,
+    "V_double_buffer": 28
+  },
+  "numerical_executions_passed": 21,
+  "fresh_MyTest_O3_llvm_diff_equal": true,
+  "llvm_assembly_and_O3_verification_passed": true,
+  "gpu_tested": false
+}

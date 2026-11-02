@@ -1,0 +1,16 @@
+{
+  "ir": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0006-test_input_1x32x4096x128-128-128-32-online/online-baseline/kernel.ll",
+  "sha256": "1a12514dd24fc54576827d493f07cb01704c1acb63770d004985b75f34c164f4",
+  "bn": 128,
+  "shuffle_sites": {
+    "outside_loop": 64,
+    "inside_loop": 8
+  },
+  "zero_seed_mmac": 16,
+  "vector4_fadds": 16,
+  "mmac_instructions": 256,
+  "gpu_tested": false,
+  "estimated_shared_ops": 5160960,
+  "previous_measured_shared_ops": 9224192,
+  "shared_ops_note": "Fixed causal 1x32x4096x128, BM=BN=128. Assumes unchanged QKV LDS codegen; requires GPU PMC validation."
+}

@@ -1,0 +1,118 @@
+--- control.ll
++++ k_tail_prefetch4.ll
+@@ -644,10 +644,17 @@
+   %.idx14211422.tr = trunc nuw i64 %.idx14211422 to i32, !dbg !90
+   %dma.buffer.offset1345 = shl nuw nsw i32 %.idx14211422.tr, 1, !dbg !90
+   %i299 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1371, i32 %dma.buffer.offset1345, <4 x i32> %dma.buffer.rsrc1349) #10, !dbg !90
+-  %i300 = load <4 x half>, ptr addrspace(3) %kdma.gep1797, align 8, !dbg !65
++  %i300 = load <4 x half>, ptr addrspace(3) %kdma.gep1797, align 8, !dbg !65, !frisk.k_tail_pair !106
++  %i312 = load <4 x half>, ptr addrspace(3) %kdma.gep1801, align 8, !dbg !65, !frisk.k_tail_pair !106
++  %i302 = load <4 x half>, ptr addrspace(3) %kdma.gep1798, align 8, !dbg !65, !frisk.k_tail_pair !107
++  %i319 = load <4 x half>, ptr addrspace(3) %kdma.gep1802, align 8, !dbg !65, !frisk.k_tail_pair !107
++  %i303 = load <4 x half>, ptr addrspace(3) %kdma.gep1799, align 8, !dbg !65, !frisk.k_tail_pair !108
++  %i320 = load <4 x half>, ptr addrspace(3) %kdma.gep1803, align 8, !dbg !65, !frisk.k_tail_pair !108
++  %i311 = load <4 x half>, ptr addrspace(3) %kdma.gep1800, align 8, !dbg !65, !frisk.k_tail_pair !109
++  %i327 = load <4 x half>, ptr addrspace(3) %kdma.gep1804, align 8, !dbg !65, !frisk.k_tail_pair !109
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i301 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i300, <4 x float> %i260) #9, !dbg !65
+-  %i302 = load <4 x half>, ptr addrspace(3) %kdma.gep1798, align 8, !dbg !65
+-  %i303 = load <4 x half>, ptr addrspace(3) %kdma.gep1799, align 8, !dbg !65
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i304 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i302, <4 x float> %i301) #9, !dbg !65
+   %i305 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i303, <4 x float> %i266) #9, !dbg !65
+   %i306 = extractelement <4 x float> %i304, i64 0, !dbg !91
+@@ -655,10 +662,12 @@
+   %i308 = extractelement <4 x float> %i304, i64 1, !dbg !91
+   %i309 = extractelement <4 x float> %i304, i64 2, !dbg !91
+   %i310 = extractelement <4 x float> %i304, i64 3, !dbg !91
+-  %i311 = load <4 x half>, ptr addrspace(3) %kdma.gep1800, align 8, !dbg !65
+-  %i312 = load <4 x half>, ptr addrspace(3) %kdma.gep1801, align 8, !dbg !65
+   %i313 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i311, <4 x float> %i305) #9, !dbg !65
++  %i328 = load <4 x half>, ptr addrspace(3) %kdma.gep1805, align 8, !dbg !65, !frisk.k_tail_pair !110
++  %i344 = load <4 x half>, ptr addrspace(3) %kdma.gep1809, align 8, !dbg !65, !frisk.k_tail_pair !110
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i314 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i312, <4 x float> %i268) #9, !dbg !65
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i315 = extractelement <4 x float> %i313, i64 0, !dbg !91
+   %local.reduce151 = call float @llvm.maxnum.f32(float %i307, float %i315), !dbg !92, !frisk.local_reduction !58
+   %i316 = extractelement <4 x float> %i313, i64 1, !dbg !91
+@@ -667,10 +676,16 @@
+   %local.reduce153 = call float @llvm.maxnum.f32(float %i309, float %i317), !dbg !92, !frisk.local_reduction !58
+   %i318 = extractelement <4 x float> %i313, i64 3, !dbg !91
+   %local.reduce154 = call float @llvm.maxnum.f32(float %i310, float %i318), !dbg !92, !frisk.local_reduction !58
+-  %i319 = load <4 x half>, ptr addrspace(3) %kdma.gep1802, align 8, !dbg !65
+-  %i320 = load <4 x half>, ptr addrspace(3) %kdma.gep1803, align 8, !dbg !65
++  %i335 = load <4 x half>, ptr addrspace(3) %kdma.gep1806, align 8, !dbg !65, !frisk.k_tail_pair !111
++  %i351 = load <4 x half>, ptr addrspace(3) %kdma.gep1810, align 8, !dbg !65, !frisk.k_tail_pair !111
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i321 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i319, <4 x float> %i314) #9, !dbg !65
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
++  %i336 = load <4 x half>, ptr addrspace(3) %kdma.gep1807, align 8, !dbg !65, !frisk.k_tail_pair !112
++  %i352 = load <4 x half>, ptr addrspace(3) %kdma.gep1811, align 8, !dbg !65, !frisk.k_tail_pair !112
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i322 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i320, <4 x float> %i270) #9, !dbg !65
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i323 = extractelement <4 x float> %i321, i64 0, !dbg !91
+   %local.reduce155 = call float @llvm.maxnum.f32(float %local.reduce151, float %i323), !dbg !92, !frisk.local_reduction !58
+   %i324 = extractelement <4 x float> %i321, i64 1, !dbg !91
+@@ -679,9 +694,11 @@
+   %local.reduce157 = call float @llvm.maxnum.f32(float %local.reduce153, float %i325), !dbg !92, !frisk.local_reduction !58
+   %i326 = extractelement <4 x float> %i321, i64 3, !dbg !91
+   %local.reduce158 = call float @llvm.maxnum.f32(float %local.reduce154, float %i326), !dbg !92, !frisk.local_reduction !58
+-  %i327 = load <4 x half>, ptr addrspace(3) %kdma.gep1804, align 8, !dbg !65
+-  %i328 = load <4 x half>, ptr addrspace(3) %kdma.gep1805, align 8, !dbg !65
++  %i343 = load <4 x half>, ptr addrspace(3) %kdma.gep1808, align 8, !dbg !65, !frisk.k_tail_pair !113
++  %i359 = load <4 x half>, ptr addrspace(3) %kdma.gep1812, align 8, !dbg !65, !frisk.k_tail_pair !113
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i329 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i327, <4 x float> %i322) #9, !dbg !65
++  call void @llvm.amdgcn.sched.barrier(i32 0) #11, !dbg !65, !frisk.k_tail_prefetch !58
+   %i330 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i328, <4 x float> %i272) #9, !dbg !65
+   %i331 = extractelement <4 x float> %i329, i64 0, !dbg !91
+   %local.reduce159 = call float @llvm.maxnum.f32(float %local.reduce155, float %i331), !dbg !92, !frisk.local_reduction !58
+@@ -691,8 +708,6 @@
+   %local.reduce161 = call float @llvm.maxnum.f32(float %local.reduce157, float %i333), !dbg !92, !frisk.local_reduction !58
+   %i334 = extractelement <4 x float> %i329, i64 3, !dbg !91
+   %local.reduce162 = call float @llvm.maxnum.f32(float %local.reduce158, float %i334), !dbg !92, !frisk.local_reduction !58
+-  %i335 = load <4 x half>, ptr addrspace(3) %kdma.gep1806, align 8, !dbg !65
+-  %i336 = load <4 x half>, ptr addrspace(3) %kdma.gep1807, align 8, !dbg !65
+   %i337 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i335, <4 x float> %i330) #9, !dbg !65
+   %i338 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i336, <4 x float> %i274) #9, !dbg !65
+   %i339 = extractelement <4 x float> %i337, i64 0, !dbg !91
+@@ -703,8 +718,6 @@
+   %local.reduce165 = call float @llvm.maxnum.f32(float %local.reduce161, float %i341), !dbg !92, !frisk.local_reduction !58
+   %i342 = extractelement <4 x float> %i337, i64 3, !dbg !91
+   %local.reduce166 = call float @llvm.maxnum.f32(float %local.reduce162, float %i342), !dbg !92, !frisk.local_reduction !58
+-  %i343 = load <4 x half>, ptr addrspace(3) %kdma.gep1808, align 8, !dbg !65
+-  %i344 = load <4 x half>, ptr addrspace(3) %kdma.gep1809, align 8, !dbg !65
+   %i345 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i343, <4 x float> %i338) #9, !dbg !65
+   %i346 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i344, <4 x float> %i276) #9, !dbg !65
+   %i347 = extractelement <4 x float> %i345, i64 0, !dbg !91
+@@ -715,8 +728,6 @@
+   %local.reduce169 = call float @llvm.maxnum.f32(float %local.reduce165, float %i349), !dbg !92, !frisk.local_reduction !58
+   %i350 = extractelement <4 x float> %i345, i64 3, !dbg !91
+   %local.reduce170 = call float @llvm.maxnum.f32(float %local.reduce166, float %i350), !dbg !92, !frisk.local_reduction !58
+-  %i351 = load <4 x half>, ptr addrspace(3) %kdma.gep1810, align 8, !dbg !65
+-  %i352 = load <4 x half>, ptr addrspace(3) %kdma.gep1811, align 8, !dbg !65
+   %i353 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i351, <4 x float> %i346) #9, !dbg !65
+   %i354 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i75, <4 x half> %i352, <4 x float> %i278) #9, !dbg !65
+   %i355 = extractelement <4 x float> %i353, i64 0, !dbg !91
+@@ -727,7 +738,6 @@
+   %local.reduce173 = call float @llvm.maxnum.f32(float %local.reduce169, float %i357), !dbg !92, !frisk.local_reduction !58
+   %i358 = extractelement <4 x float> %i353, i64 3, !dbg !91
+   %local.reduce174 = call float @llvm.maxnum.f32(float %local.reduce170, float %i358), !dbg !92, !frisk.local_reduction !58
+-  %i359 = load <4 x half>, ptr addrspace(3) %kdma.gep1812, align 8, !dbg !65
+   %i360 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i77, <4 x half> %i359, <4 x float> %i354) #9, !dbg !65
+   %i361 = call <4 x float> asm "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\0A\09", "=v,v,v,0"(<4 x half> %i78, <4 x half> %i300, <4 x float> %i280) #9, !dbg !65
+   %i362 = extractelement <4 x float> %i360, i64 0, !dbg !91
+@@ -2813,3 +2823,11 @@
+ !103 = !DILocation(line: 92, column: 23, scope: !56)
+ !104 = !DILocation(line: 93, column: 19, scope: !56)
+ !105 = !DILocation(line: 94, column: 9, scope: !56)
++!106 = !{i32 0}
++!107 = !{i32 1}
++!108 = !{i32 2}
++!109 = !{i32 3}
++!110 = !{i32 4}
++!111 = !{i32 5}
++!112 = !{i32 6}
++!113 = !{i32 7}

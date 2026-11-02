@@ -1,0 +1,47 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch_pass/k_tail_prefetch4.ll",
+  "source_sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+  "variants": {
+    "control": {
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "o3_sha256": "4156bac17fd7208c320e9a30112378e796c6ee967660929291a6b0d59b6039b3",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 0
+    },
+    "k0_late_control": {
+      "sha256": "8f627de88bb81170e4ae6c0b4c9831b32bfa944969081c8f4235100d56f78988",
+      "o3_sha256": "b7fc3c93e9916a9a95b5e9537af48e2eeab8bc380365a6eb9b1c617934e47b11",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 0
+    },
+    "k0_prefetch_pv_tail": {
+      "sha256": "c8cbe3c1615b4353a620ba1d74b97125c4dd92365afccd22c4126cecb2e906da",
+      "o3_sha256": "de73a4b7278b1dee59bf2d17a2855e8b3b8a270a569902d7617239883983702f",
+      "LLVM_and_O3_verified": true,
+      "overlap_PV_MMAC_per_nonfinal_tile": 32
+    }
+  },
+  "target": "gfx936",
+  "shape": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "threads": 256,
+  "BM": 128,
+  "BN": 128,
+  "BK": 32,
+  "static_LDS_bytes": 16384,
+  "inherited_k_tail_prefetch": 4,
+  "algorithm": "Prime K0(0); guard next tile <32; issue K0 into low LDS after V3-ready barrier; retain final reader barrier and next K0 wait/publication.",
+  "expected_dynamic_counts": {
+    "K_DMA64": 512,
+    "V_DMA128": 256,
+    "Q_DMA128": 8,
+    "vm_waits": 260,
+    "hardware_barriers": 293,
+    "MMAC": 8192
+  },
+  "gpu_tested": false
+}

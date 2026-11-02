@@ -1,0 +1,3289 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll",
+  "source_sha256": "c68ccd0b339b49be26ae245ac16e4580c592b527f4e38a01c6cd8d0d7b8cf135",
+  "exporter_sha256": "94b89861b5891e17f34921538701479ad8d08c8cfbc536513324e621d5bcecb5",
+  "variants": {
+    "0": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-lds-prefetch=0",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll"
+      ],
+      "sha256": "8a12fca9236a83e79cecf0cc1007454e376e45a48dfa9a8d05161077a406f751",
+      "diagnostics": "",
+      "optimized": {
+        "instructions": 2635,
+        "opcodes": {
+          "call": 867,
+          "and": 50,
+          "lshr": 18,
+          "or": 109,
+          "shl": 68,
+          "xor": 7,
+          "sext": 2,
+          "add": 25,
+          "sub": 5,
+          "zext": 10,
+          "getelementptr": 144,
+          "ptrtoint": 5,
+          "trunc": 34,
+          "insertelement": 212,
+          "bitcast": 179,
+          "shufflevector": 98,
+          "extractelement": 268,
+          "fence": 28,
+          "load": 80,
+          "fmul": 50,
+          "br": 2,
+          "phi": 7,
+          "ashr": 1,
+          "mul": 6,
+          "icmp": 5,
+          "select": 146,
+          "extractvalue": 12,
+          "fsub": 18,
+          "fptrunc": 32,
+          "fadd": 68,
+          "insertvalue": 12,
+          "fdiv": 2,
+          "store": 64,
+          "ret": 1
+        },
+        "memory_schedule": [
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "s_waitcnt"
+          ],
+          [
+            32,
+            "s.barrier"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "s_waitcnt"
+          ],
+          [
+            64,
+            "s.barrier"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            96,
+            "s_waitcnt"
+          ],
+          [
+            96,
+            "s.barrier"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "s_waitcnt"
+          ],
+          [
+            128,
+            "s.barrier"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "s_waitcnt"
+          ],
+          [
+            160,
+            "s.barrier"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "s_waitcnt"
+          ],
+          [
+            192,
+            "s.barrier"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "s_waitcnt"
+          ],
+          [
+            224,
+            "s.barrier"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            256,
+            "s.barrier"
+          ]
+        ],
+        "qk_sched_barriers": [],
+        "total_sched_barriers": 256,
+        "k_reads": {
+          "0,16": {
+            "value": "%154",
+            "line": 348,
+            "after_mmac_count": 0,
+            "pointer": "%kdma.swizzled"
+          },
+          "1,17": {
+            "value": "%156",
+            "line": 351,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep"
+          },
+          "2,18": {
+            "value": "%167",
+            "line": 381,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "3,19": {
+            "value": "%170",
+            "line": 385,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1768"
+          },
+          "4,20": {
+            "value": "%171",
+            "line": 387,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1769"
+          },
+          "5,21": {
+            "value": "%174",
+            "line": 391,
+            "after_mmac_count": 5,
+            "pointer": "%kdma.gep1770"
+          },
+          "6,22": {
+            "value": "%175",
+            "line": 393,
+            "after_mmac_count": 5,
+            "pointer": "%kdma.gep1771"
+          },
+          "7,23": {
+            "value": "%178",
+            "line": 397,
+            "after_mmac_count": 7,
+            "pointer": "%kdma.gep1772"
+          },
+          "8,24": {
+            "value": "%179",
+            "line": 399,
+            "after_mmac_count": 7,
+            "pointer": "%kdma.gep1773"
+          },
+          "9,25": {
+            "value": "%182",
+            "line": 403,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1774"
+          },
+          "10,26": {
+            "value": "%183",
+            "line": 405,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1775"
+          },
+          "11,27": {
+            "value": "%186",
+            "line": 409,
+            "after_mmac_count": 11,
+            "pointer": "%kdma.gep1776"
+          },
+          "12,28": {
+            "value": "%187",
+            "line": 411,
+            "after_mmac_count": 11,
+            "pointer": "%kdma.gep1777"
+          },
+          "13,29": {
+            "value": "%190",
+            "line": 415,
+            "after_mmac_count": 13,
+            "pointer": "%kdma.gep1778"
+          },
+          "14,30": {
+            "value": "%191",
+            "line": 417,
+            "after_mmac_count": 13,
+            "pointer": "%kdma.gep1779"
+          },
+          "15,31": {
+            "value": "%194",
+            "line": 421,
+            "after_mmac_count": 15,
+            "pointer": "%kdma.gep1780"
+          },
+          "32,48": {
+            "value": "%217",
+            "line": 465,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1797"
+          },
+          "33,49": {
+            "value": "%219",
+            "line": 468,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1798"
+          },
+          "34,50": {
+            "value": "%220",
+            "line": 470,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1799"
+          },
+          "35,51": {
+            "value": "%223",
+            "line": 474,
+            "after_mmac_count": 35,
+            "pointer": "%kdma.gep1800"
+          },
+          "36,52": {
+            "value": "%224",
+            "line": 476,
+            "after_mmac_count": 35,
+            "pointer": "%kdma.gep1801"
+          },
+          "37,53": {
+            "value": "%227",
+            "line": 480,
+            "after_mmac_count": 37,
+            "pointer": "%kdma.gep1802"
+          },
+          "38,54": {
+            "value": "%228",
+            "line": 482,
+            "after_mmac_count": 37,
+            "pointer": "%kdma.gep1803"
+          },
+          "39,55": {
+            "value": "%231",
+            "line": 486,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1804"
+          },
+          "40,56": {
+            "value": "%232",
+            "line": 488,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1805"
+          },
+          "41,57": {
+            "value": "%235",
+            "line": 492,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1806"
+          },
+          "42,58": {
+            "value": "%236",
+            "line": 494,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1807"
+          },
+          "43,59": {
+            "value": "%239",
+            "line": 498,
+            "after_mmac_count": 43,
+            "pointer": "%kdma.gep1808"
+          },
+          "44,60": {
+            "value": "%240",
+            "line": 500,
+            "after_mmac_count": 43,
+            "pointer": "%kdma.gep1809"
+          },
+          "45,61": {
+            "value": "%243",
+            "line": 504,
+            "after_mmac_count": 45,
+            "pointer": "%kdma.gep1810"
+          },
+          "46,62": {
+            "value": "%244",
+            "line": 506,
+            "after_mmac_count": 45,
+            "pointer": "%kdma.gep1811"
+          },
+          "47,63": {
+            "value": "%247",
+            "line": 510,
+            "after_mmac_count": 47,
+            "pointer": "%kdma.gep1812"
+          },
+          "64,80": {
+            "value": "%270",
+            "line": 553,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled"
+          },
+          "65,81": {
+            "value": "%272",
+            "line": 555,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.gep"
+          },
+          "66,82": {
+            "value": "%273",
+            "line": 556,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "67,83": {
+            "value": "%276",
+            "line": 559,
+            "after_mmac_count": 67,
+            "pointer": "%kdma.gep1768"
+          },
+          "68,84": {
+            "value": "%277",
+            "line": 560,
+            "after_mmac_count": 67,
+            "pointer": "%kdma.gep1769"
+          },
+          "69,85": {
+            "value": "%280",
+            "line": 563,
+            "after_mmac_count": 69,
+            "pointer": "%kdma.gep1770"
+          },
+          "70,86": {
+            "value": "%281",
+            "line": 564,
+            "after_mmac_count": 69,
+            "pointer": "%kdma.gep1771"
+          },
+          "71,87": {
+            "value": "%284",
+            "line": 567,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1772"
+          },
+          "72,88": {
+            "value": "%285",
+            "line": 568,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1773"
+          },
+          "73,89": {
+            "value": "%288",
+            "line": 571,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1774"
+          },
+          "74,90": {
+            "value": "%289",
+            "line": 572,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1775"
+          },
+          "75,91": {
+            "value": "%292",
+            "line": 575,
+            "after_mmac_count": 75,
+            "pointer": "%kdma.gep1776"
+          },
+          "76,92": {
+            "value": "%293",
+            "line": 576,
+            "after_mmac_count": 75,
+            "pointer": "%kdma.gep1777"
+          },
+          "77,93": {
+            "value": "%296",
+            "line": 579,
+            "after_mmac_count": 77,
+            "pointer": "%kdma.gep1778"
+          },
+          "78,94": {
+            "value": "%297",
+            "line": 580,
+            "after_mmac_count": 77,
+            "pointer": "%kdma.gep1779"
+          },
+          "79,95": {
+            "value": "%300",
+            "line": 583,
+            "after_mmac_count": 79,
+            "pointer": "%kdma.gep1780"
+          },
+          "96,112": {
+            "value": "%320",
+            "line": 620,
+            "after_mmac_count": 96,
+            "pointer": "%kdma.gep1797"
+          },
+          "97,113": {
+            "value": "%322",
+            "line": 622,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1798"
+          },
+          "98,114": {
+            "value": "%323",
+            "line": 623,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1799"
+          },
+          "99,115": {
+            "value": "%331",
+            "line": 631,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1800"
+          },
+          "100,116": {
+            "value": "%332",
+            "line": 632,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1801"
+          },
+          "101,117": {
+            "value": "%339",
+            "line": 643,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1802"
+          },
+          "102,118": {
+            "value": "%340",
+            "line": 644,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1803"
+          },
+          "103,119": {
+            "value": "%347",
+            "line": 655,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1804"
+          },
+          "104,120": {
+            "value": "%348",
+            "line": 656,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1805"
+          },
+          "105,121": {
+            "value": "%355",
+            "line": 667,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1806"
+          },
+          "106,122": {
+            "value": "%356",
+            "line": 668,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1807"
+          },
+          "107,123": {
+            "value": "%363",
+            "line": 679,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1808"
+          },
+          "108,124": {
+            "value": "%364",
+            "line": 680,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1809"
+          },
+          "109,125": {
+            "value": "%371",
+            "line": 691,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1810"
+          },
+          "110,126": {
+            "value": "%372",
+            "line": 692,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1811"
+          },
+          "111,127": {
+            "value": "%379",
+            "line": 703,
+            "after_mmac_count": 111,
+            "pointer": "%kdma.gep1812"
+          }
+        }
+      }
+    },
+    "1": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-lds-prefetch=1",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll"
+      ],
+      "sha256": "ae6dc7e8ec8de7f8bc7db0293beb14f080799064bfe1d728634722b2a1815229",
+      "diagnostics": "K LDS prefetch: distance=1, regions=3, pairs=23, moved=11, anchors=11, unpaired=3, function=Attn_p2",
+      "optimized": {
+        "instructions": 2657,
+        "opcodes": {
+          "call": 889,
+          "and": 50,
+          "lshr": 18,
+          "or": 109,
+          "shl": 68,
+          "xor": 7,
+          "sext": 2,
+          "add": 25,
+          "sub": 5,
+          "zext": 10,
+          "getelementptr": 144,
+          "ptrtoint": 5,
+          "trunc": 34,
+          "insertelement": 212,
+          "bitcast": 179,
+          "shufflevector": 98,
+          "extractelement": 268,
+          "fence": 28,
+          "load": 80,
+          "fmul": 50,
+          "br": 2,
+          "phi": 7,
+          "ashr": 1,
+          "mul": 6,
+          "icmp": 5,
+          "select": 146,
+          "extractvalue": 12,
+          "fsub": 18,
+          "fptrunc": 32,
+          "fadd": 68,
+          "insertvalue": 12,
+          "fdiv": 2,
+          "store": 64,
+          "ret": 1
+        },
+        "memory_schedule": [
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "s_waitcnt"
+          ],
+          [
+            32,
+            "s.barrier"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "s_waitcnt"
+          ],
+          [
+            64,
+            "s.barrier"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            96,
+            "s_waitcnt"
+          ],
+          [
+            96,
+            "s.barrier"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "s_waitcnt"
+          ],
+          [
+            128,
+            "s.barrier"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "s_waitcnt"
+          ],
+          [
+            160,
+            "s.barrier"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "s_waitcnt"
+          ],
+          [
+            192,
+            "s.barrier"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "s_waitcnt"
+          ],
+          [
+            224,
+            "s.barrier"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            256,
+            "s.barrier"
+          ]
+        ],
+        "qk_sched_barriers": [
+          2,
+          3,
+          4,
+          5,
+          10,
+          11,
+          32,
+          33,
+          34,
+          35,
+          40,
+          41,
+          42,
+          43,
+          64,
+          65,
+          66,
+          67,
+          72,
+          73,
+          74,
+          75
+        ],
+        "total_sched_barriers": 278,
+        "k_reads": {
+          "0,16": {
+            "value": "%154",
+            "line": 348,
+            "after_mmac_count": 0,
+            "pointer": "%kdma.swizzled"
+          },
+          "1,17": {
+            "value": "%156",
+            "line": 351,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep"
+          },
+          "2,18": {
+            "value": "%167",
+            "line": 381,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "3,19": {
+            "value": "%170",
+            "line": 386,
+            "after_mmac_count": 2,
+            "pointer": "%kdma.gep1768"
+          },
+          "4,20": {
+            "value": "%173",
+            "line": 393,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1769"
+          },
+          "5,21": {
+            "value": "%176",
+            "line": 398,
+            "after_mmac_count": 4,
+            "pointer": "%kdma.gep1770"
+          },
+          "6,22": {
+            "value": "%168",
+            "line": 383,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1771"
+          },
+          "7,23": {
+            "value": "%171",
+            "line": 388,
+            "after_mmac_count": 2,
+            "pointer": "%kdma.gep1772"
+          },
+          "8,24": {
+            "value": "%174",
+            "line": 395,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1773"
+          },
+          "9,25": {
+            "value": "%177",
+            "line": 400,
+            "after_mmac_count": 4,
+            "pointer": "%kdma.gep1774"
+          },
+          "10,26": {
+            "value": "%183",
+            "line": 409,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1775"
+          },
+          "11,27": {
+            "value": "%186",
+            "line": 414,
+            "after_mmac_count": 10,
+            "pointer": "%kdma.gep1776"
+          },
+          "12,28": {
+            "value": "%189",
+            "line": 421,
+            "after_mmac_count": 11,
+            "pointer": "%kdma.gep1777"
+          },
+          "13,29": {
+            "value": "%190",
+            "line": 423,
+            "after_mmac_count": 11,
+            "pointer": "%kdma.gep1778"
+          },
+          "14,30": {
+            "value": "%184",
+            "line": 411,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1779"
+          },
+          "15,31": {
+            "value": "%187",
+            "line": 416,
+            "after_mmac_count": 10,
+            "pointer": "%kdma.gep1780"
+          },
+          "32,48": {
+            "value": "%217",
+            "line": 471,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1797"
+          },
+          "33,49": {
+            "value": "%219",
+            "line": 475,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1798"
+          },
+          "34,50": {
+            "value": "%222",
+            "line": 482,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1799"
+          },
+          "35,51": {
+            "value": "%225",
+            "line": 487,
+            "after_mmac_count": 34,
+            "pointer": "%kdma.gep1800"
+          },
+          "36,52": {
+            "value": "%218",
+            "line": 473,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1801"
+          },
+          "37,53": {
+            "value": "%220",
+            "line": 477,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1802"
+          },
+          "38,54": {
+            "value": "%223",
+            "line": 484,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1803"
+          },
+          "39,55": {
+            "value": "%226",
+            "line": 489,
+            "after_mmac_count": 34,
+            "pointer": "%kdma.gep1804"
+          },
+          "40,56": {
+            "value": "%232",
+            "line": 498,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1805"
+          },
+          "41,57": {
+            "value": "%235",
+            "line": 503,
+            "after_mmac_count": 40,
+            "pointer": "%kdma.gep1806"
+          },
+          "42,58": {
+            "value": "%238",
+            "line": 510,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1807"
+          },
+          "43,59": {
+            "value": "%241",
+            "line": 515,
+            "after_mmac_count": 42,
+            "pointer": "%kdma.gep1808"
+          },
+          "44,60": {
+            "value": "%233",
+            "line": 500,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1809"
+          },
+          "45,61": {
+            "value": "%236",
+            "line": 505,
+            "after_mmac_count": 40,
+            "pointer": "%kdma.gep1810"
+          },
+          "46,62": {
+            "value": "%239",
+            "line": 512,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1811"
+          },
+          "47,63": {
+            "value": "%242",
+            "line": 517,
+            "after_mmac_count": 42,
+            "pointer": "%kdma.gep1812"
+          },
+          "64,80": {
+            "value": "%270",
+            "line": 567,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled"
+          },
+          "65,81": {
+            "value": "%272",
+            "line": 569,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep"
+          },
+          "66,82": {
+            "value": "%275",
+            "line": 574,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "67,83": {
+            "value": "%278",
+            "line": 577,
+            "after_mmac_count": 66,
+            "pointer": "%kdma.gep1768"
+          },
+          "68,84": {
+            "value": "%271",
+            "line": 568,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1769"
+          },
+          "69,85": {
+            "value": "%273",
+            "line": 570,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1770"
+          },
+          "70,86": {
+            "value": "%276",
+            "line": 575,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.gep1771"
+          },
+          "71,87": {
+            "value": "%279",
+            "line": 578,
+            "after_mmac_count": 66,
+            "pointer": "%kdma.gep1772"
+          },
+          "72,88": {
+            "value": "%285",
+            "line": 586,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1773"
+          },
+          "73,89": {
+            "value": "%288",
+            "line": 589,
+            "after_mmac_count": 72,
+            "pointer": "%kdma.gep1774"
+          },
+          "74,90": {
+            "value": "%291",
+            "line": 594,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1775"
+          },
+          "75,91": {
+            "value": "%294",
+            "line": 597,
+            "after_mmac_count": 74,
+            "pointer": "%kdma.gep1776"
+          },
+          "76,92": {
+            "value": "%286",
+            "line": 587,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1777"
+          },
+          "77,93": {
+            "value": "%289",
+            "line": 590,
+            "after_mmac_count": 72,
+            "pointer": "%kdma.gep1778"
+          },
+          "78,94": {
+            "value": "%292",
+            "line": 595,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1779"
+          },
+          "79,95": {
+            "value": "%295",
+            "line": 598,
+            "after_mmac_count": 74,
+            "pointer": "%kdma.gep1780"
+          },
+          "96,112": {
+            "value": "%320",
+            "line": 642,
+            "after_mmac_count": 96,
+            "pointer": "%kdma.gep1797"
+          },
+          "97,113": {
+            "value": "%322",
+            "line": 644,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1798"
+          },
+          "98,114": {
+            "value": "%323",
+            "line": 645,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1799"
+          },
+          "99,115": {
+            "value": "%331",
+            "line": 653,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1800"
+          },
+          "100,116": {
+            "value": "%332",
+            "line": 654,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1801"
+          },
+          "101,117": {
+            "value": "%339",
+            "line": 665,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1802"
+          },
+          "102,118": {
+            "value": "%340",
+            "line": 666,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1803"
+          },
+          "103,119": {
+            "value": "%347",
+            "line": 677,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1804"
+          },
+          "104,120": {
+            "value": "%348",
+            "line": 678,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1805"
+          },
+          "105,121": {
+            "value": "%355",
+            "line": 689,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1806"
+          },
+          "106,122": {
+            "value": "%356",
+            "line": 690,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1807"
+          },
+          "107,123": {
+            "value": "%363",
+            "line": 701,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1808"
+          },
+          "108,124": {
+            "value": "%364",
+            "line": 702,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1809"
+          },
+          "109,125": {
+            "value": "%371",
+            "line": 713,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1810"
+          },
+          "110,126": {
+            "value": "%372",
+            "line": 714,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1811"
+          },
+          "111,127": {
+            "value": "%379",
+            "line": 725,
+            "after_mmac_count": 111,
+            "pointer": "%kdma.gep1812"
+          }
+        }
+      }
+    },
+    "2": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-lds-prefetch=2",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll"
+      ],
+      "sha256": "2a1e2d325e90be9603b79ef17d9522858cf0eca4fcc3f15505539b4f0687f0d0",
+      "diagnostics": "K LDS prefetch: distance=2, regions=3, pairs=23, moved=20, anchors=18, unpaired=3, function=Attn_p2",
+      "optimized": {
+        "instructions": 2671,
+        "opcodes": {
+          "call": 903,
+          "and": 50,
+          "lshr": 18,
+          "or": 109,
+          "shl": 68,
+          "xor": 7,
+          "sext": 2,
+          "add": 25,
+          "sub": 5,
+          "zext": 10,
+          "getelementptr": 144,
+          "ptrtoint": 5,
+          "trunc": 34,
+          "insertelement": 212,
+          "bitcast": 179,
+          "shufflevector": 98,
+          "extractelement": 268,
+          "fence": 28,
+          "load": 80,
+          "fmul": 50,
+          "br": 2,
+          "phi": 7,
+          "ashr": 1,
+          "mul": 6,
+          "icmp": 5,
+          "select": 146,
+          "extractvalue": 12,
+          "fsub": 18,
+          "fptrunc": 32,
+          "fadd": 68,
+          "insertvalue": 12,
+          "fdiv": 2,
+          "store": 64,
+          "ret": 1
+        },
+        "memory_schedule": [
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "s_waitcnt"
+          ],
+          [
+            32,
+            "s.barrier"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "s_waitcnt"
+          ],
+          [
+            64,
+            "s.barrier"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            96,
+            "s_waitcnt"
+          ],
+          [
+            96,
+            "s.barrier"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "s_waitcnt"
+          ],
+          [
+            128,
+            "s.barrier"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "s_waitcnt"
+          ],
+          [
+            160,
+            "s.barrier"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "s_waitcnt"
+          ],
+          [
+            192,
+            "s.barrier"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "s_waitcnt"
+          ],
+          [
+            224,
+            "s.barrier"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            256,
+            "s.barrier"
+          ]
+        ],
+        "qk_sched_barriers": [
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          8,
+          9,
+          9,
+          10,
+          10,
+          11,
+          32,
+          33,
+          33,
+          34,
+          38,
+          39,
+          39,
+          40,
+          40,
+          41,
+          41,
+          42,
+          64,
+          65,
+          65,
+          66,
+          70,
+          71,
+          71,
+          72,
+          72,
+          73,
+          73,
+          74
+        ],
+        "total_sched_barriers": 292,
+        "k_reads": {
+          "0,16": {
+            "value": "%154",
+            "line": 348,
+            "after_mmac_count": 0,
+            "pointer": "%kdma.swizzled"
+          },
+          "1,17": {
+            "value": "%156",
+            "line": 351,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep"
+          },
+          "2,18": {
+            "value": "%167",
+            "line": 381,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "3,19": {
+            "value": "%169",
+            "line": 385,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1768"
+          },
+          "4,20": {
+            "value": "%172",
+            "line": 392,
+            "after_mmac_count": 2,
+            "pointer": "%kdma.gep1769"
+          },
+          "5,21": {
+            "value": "%175",
+            "line": 399,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1770"
+          },
+          "6,22": {
+            "value": "%168",
+            "line": 383,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1771"
+          },
+          "7,23": {
+            "value": "%170",
+            "line": 387,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1772"
+          },
+          "8,24": {
+            "value": "%173",
+            "line": 394,
+            "after_mmac_count": 2,
+            "pointer": "%kdma.gep1773"
+          },
+          "9,25": {
+            "value": "%176",
+            "line": 401,
+            "after_mmac_count": 3,
+            "pointer": "%kdma.gep1774"
+          },
+          "10,26": {
+            "value": "%182",
+            "line": 410,
+            "after_mmac_count": 8,
+            "pointer": "%kdma.gep1775"
+          },
+          "11,27": {
+            "value": "%185",
+            "line": 417,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1776"
+          },
+          "12,28": {
+            "value": "%188",
+            "line": 424,
+            "after_mmac_count": 10,
+            "pointer": "%kdma.gep1777"
+          },
+          "13,29": {
+            "value": "%189",
+            "line": 426,
+            "after_mmac_count": 10,
+            "pointer": "%kdma.gep1778"
+          },
+          "14,30": {
+            "value": "%183",
+            "line": 412,
+            "after_mmac_count": 8,
+            "pointer": "%kdma.gep1779"
+          },
+          "15,31": {
+            "value": "%186",
+            "line": 419,
+            "after_mmac_count": 9,
+            "pointer": "%kdma.gep1780"
+          },
+          "32,48": {
+            "value": "%217",
+            "line": 477,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1797"
+          },
+          "33,49": {
+            "value": "%219",
+            "line": 481,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1798"
+          },
+          "34,50": {
+            "value": "%221",
+            "line": 485,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1799"
+          },
+          "35,51": {
+            "value": "%224",
+            "line": 492,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1800"
+          },
+          "36,52": {
+            "value": "%218",
+            "line": 479,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1801"
+          },
+          "37,53": {
+            "value": "%220",
+            "line": 483,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1802"
+          },
+          "38,54": {
+            "value": "%222",
+            "line": 487,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1803"
+          },
+          "39,55": {
+            "value": "%225",
+            "line": 494,
+            "after_mmac_count": 33,
+            "pointer": "%kdma.gep1804"
+          },
+          "40,56": {
+            "value": "%231",
+            "line": 503,
+            "after_mmac_count": 38,
+            "pointer": "%kdma.gep1805"
+          },
+          "41,57": {
+            "value": "%234",
+            "line": 510,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1806"
+          },
+          "42,58": {
+            "value": "%237",
+            "line": 517,
+            "after_mmac_count": 40,
+            "pointer": "%kdma.gep1807"
+          },
+          "43,59": {
+            "value": "%240",
+            "line": 524,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1808"
+          },
+          "44,60": {
+            "value": "%232",
+            "line": 505,
+            "after_mmac_count": 38,
+            "pointer": "%kdma.gep1809"
+          },
+          "45,61": {
+            "value": "%235",
+            "line": 512,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1810"
+          },
+          "46,62": {
+            "value": "%238",
+            "line": 519,
+            "after_mmac_count": 40,
+            "pointer": "%kdma.gep1811"
+          },
+          "47,63": {
+            "value": "%241",
+            "line": 526,
+            "after_mmac_count": 41,
+            "pointer": "%kdma.gep1812"
+          },
+          "64,80": {
+            "value": "%270",
+            "line": 577,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled"
+          },
+          "65,81": {
+            "value": "%272",
+            "line": 579,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep"
+          },
+          "66,82": {
+            "value": "%274",
+            "line": 581,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "67,83": {
+            "value": "%277",
+            "line": 586,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.gep1768"
+          },
+          "68,84": {
+            "value": "%271",
+            "line": 578,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1769"
+          },
+          "69,85": {
+            "value": "%273",
+            "line": 580,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1770"
+          },
+          "70,86": {
+            "value": "%275",
+            "line": 582,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1771"
+          },
+          "71,87": {
+            "value": "%278",
+            "line": 587,
+            "after_mmac_count": 65,
+            "pointer": "%kdma.gep1772"
+          },
+          "72,88": {
+            "value": "%284",
+            "line": 595,
+            "after_mmac_count": 70,
+            "pointer": "%kdma.gep1773"
+          },
+          "73,89": {
+            "value": "%287",
+            "line": 600,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1774"
+          },
+          "74,90": {
+            "value": "%290",
+            "line": 605,
+            "after_mmac_count": 72,
+            "pointer": "%kdma.gep1775"
+          },
+          "75,91": {
+            "value": "%293",
+            "line": 610,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1776"
+          },
+          "76,92": {
+            "value": "%285",
+            "line": 596,
+            "after_mmac_count": 70,
+            "pointer": "%kdma.gep1777"
+          },
+          "77,93": {
+            "value": "%288",
+            "line": 601,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1778"
+          },
+          "78,94": {
+            "value": "%291",
+            "line": 606,
+            "after_mmac_count": 72,
+            "pointer": "%kdma.gep1779"
+          },
+          "79,95": {
+            "value": "%294",
+            "line": 611,
+            "after_mmac_count": 73,
+            "pointer": "%kdma.gep1780"
+          },
+          "96,112": {
+            "value": "%320",
+            "line": 656,
+            "after_mmac_count": 96,
+            "pointer": "%kdma.gep1797"
+          },
+          "97,113": {
+            "value": "%322",
+            "line": 658,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1798"
+          },
+          "98,114": {
+            "value": "%323",
+            "line": 659,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1799"
+          },
+          "99,115": {
+            "value": "%331",
+            "line": 667,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1800"
+          },
+          "100,116": {
+            "value": "%332",
+            "line": 668,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1801"
+          },
+          "101,117": {
+            "value": "%339",
+            "line": 679,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1802"
+          },
+          "102,118": {
+            "value": "%340",
+            "line": 680,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1803"
+          },
+          "103,119": {
+            "value": "%347",
+            "line": 691,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1804"
+          },
+          "104,120": {
+            "value": "%348",
+            "line": 692,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1805"
+          },
+          "105,121": {
+            "value": "%355",
+            "line": 703,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1806"
+          },
+          "106,122": {
+            "value": "%356",
+            "line": 704,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1807"
+          },
+          "107,123": {
+            "value": "%363",
+            "line": 715,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1808"
+          },
+          "108,124": {
+            "value": "%364",
+            "line": 716,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1809"
+          },
+          "109,125": {
+            "value": "%371",
+            "line": 727,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1810"
+          },
+          "110,126": {
+            "value": "%372",
+            "line": 728,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1811"
+          },
+          "111,127": {
+            "value": "%379",
+            "line": 739,
+            "after_mmac_count": 111,
+            "pointer": "%kdma.gep1812"
+          }
+        }
+      }
+    },
+    "4": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-lds-prefetch=4",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll"
+      ],
+      "sha256": "f6520f5c6f3b4f7b473586ed84f071bfb72b5355163b7a974a925a3ef5d68af6",
+      "diagnostics": "K LDS prefetch: distance=4, regions=3, pairs=23, moved=20, anchors=14, unpaired=3, function=Attn_p2",
+      "optimized": {
+        "instructions": 2663,
+        "opcodes": {
+          "call": 895,
+          "and": 50,
+          "lshr": 18,
+          "or": 109,
+          "shl": 68,
+          "xor": 7,
+          "sext": 2,
+          "add": 25,
+          "sub": 5,
+          "zext": 10,
+          "getelementptr": 144,
+          "ptrtoint": 5,
+          "trunc": 34,
+          "insertelement": 212,
+          "bitcast": 179,
+          "shufflevector": 98,
+          "extractelement": 268,
+          "fence": 28,
+          "load": 80,
+          "fmul": 50,
+          "br": 2,
+          "phi": 7,
+          "ashr": 1,
+          "mul": 6,
+          "icmp": 5,
+          "select": 146,
+          "extractvalue": 12,
+          "fsub": 18,
+          "fptrunc": 32,
+          "fadd": 68,
+          "insertvalue": 12,
+          "fdiv": 2,
+          "store": 64,
+          "ret": 1
+        },
+        "memory_schedule": [
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "buffer_load_dwordx4"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "s_waitcnt"
+          ],
+          [
+            0,
+            "s.barrier"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            0,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "s_waitcnt"
+          ],
+          [
+            32,
+            "s.barrier"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            32,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "s_waitcnt"
+          ],
+          [
+            64,
+            "s.barrier"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            64,
+            "buffer_load_dwordx2"
+          ],
+          [
+            96,
+            "s_waitcnt"
+          ],
+          [
+            96,
+            "s.barrier"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            96,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "s_waitcnt"
+          ],
+          [
+            128,
+            "s.barrier"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "buffer_load_dwordx4"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            128,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "s_waitcnt"
+          ],
+          [
+            160,
+            "s.barrier"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "buffer_load_dwordx4"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            160,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "s_waitcnt"
+          ],
+          [
+            192,
+            "s.barrier"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "buffer_load_dwordx4"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            192,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "s_waitcnt"
+          ],
+          [
+            224,
+            "s.barrier"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            224,
+            "ds.read.m32"
+          ],
+          [
+            256,
+            "s.barrier"
+          ]
+        ],
+        "qk_sched_barriers": [
+          1,
+          2,
+          6,
+          7,
+          7,
+          8,
+          8,
+          9,
+          32,
+          33,
+          36,
+          37,
+          37,
+          38,
+          38,
+          39,
+          39,
+          40,
+          64,
+          65,
+          68,
+          69,
+          69,
+          70,
+          70,
+          71,
+          71,
+          72
+        ],
+        "total_sched_barriers": 284,
+        "k_reads": {
+          "0,16": {
+            "value": "%154",
+            "line": 348,
+            "after_mmac_count": 0,
+            "pointer": "%kdma.swizzled"
+          },
+          "1,17": {
+            "value": "%156",
+            "line": 351,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep"
+          },
+          "2,18": {
+            "value": "%167",
+            "line": 381,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "3,19": {
+            "value": "%169",
+            "line": 385,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1768"
+          },
+          "4,20": {
+            "value": "%171",
+            "line": 389,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1769"
+          },
+          "5,21": {
+            "value": "%173",
+            "line": 393,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1770"
+          },
+          "6,22": {
+            "value": "%168",
+            "line": 383,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1771"
+          },
+          "7,23": {
+            "value": "%170",
+            "line": 387,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1772"
+          },
+          "8,24": {
+            "value": "%172",
+            "line": 391,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1773"
+          },
+          "9,25": {
+            "value": "%174",
+            "line": 395,
+            "after_mmac_count": 1,
+            "pointer": "%kdma.gep1774"
+          },
+          "10,26": {
+            "value": "%180",
+            "line": 404,
+            "after_mmac_count": 6,
+            "pointer": "%kdma.gep1775"
+          },
+          "11,27": {
+            "value": "%183",
+            "line": 411,
+            "after_mmac_count": 7,
+            "pointer": "%kdma.gep1776"
+          },
+          "12,28": {
+            "value": "%186",
+            "line": 418,
+            "after_mmac_count": 8,
+            "pointer": "%kdma.gep1777"
+          },
+          "13,29": {
+            "value": "%187",
+            "line": 420,
+            "after_mmac_count": 8,
+            "pointer": "%kdma.gep1778"
+          },
+          "14,30": {
+            "value": "%181",
+            "line": 406,
+            "after_mmac_count": 6,
+            "pointer": "%kdma.gep1779"
+          },
+          "15,31": {
+            "value": "%184",
+            "line": 413,
+            "after_mmac_count": 7,
+            "pointer": "%kdma.gep1780"
+          },
+          "32,48": {
+            "value": "%217",
+            "line": 473,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1797"
+          },
+          "33,49": {
+            "value": "%219",
+            "line": 477,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1798"
+          },
+          "34,50": {
+            "value": "%221",
+            "line": 481,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1799"
+          },
+          "35,51": {
+            "value": "%223",
+            "line": 485,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1800"
+          },
+          "36,52": {
+            "value": "%218",
+            "line": 475,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1801"
+          },
+          "37,53": {
+            "value": "%220",
+            "line": 479,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1802"
+          },
+          "38,54": {
+            "value": "%222",
+            "line": 483,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1803"
+          },
+          "39,55": {
+            "value": "%224",
+            "line": 487,
+            "after_mmac_count": 32,
+            "pointer": "%kdma.gep1804"
+          },
+          "40,56": {
+            "value": "%229",
+            "line": 495,
+            "after_mmac_count": 36,
+            "pointer": "%kdma.gep1805"
+          },
+          "41,57": {
+            "value": "%232",
+            "line": 502,
+            "after_mmac_count": 37,
+            "pointer": "%kdma.gep1806"
+          },
+          "42,58": {
+            "value": "%235",
+            "line": 509,
+            "after_mmac_count": 38,
+            "pointer": "%kdma.gep1807"
+          },
+          "43,59": {
+            "value": "%238",
+            "line": 516,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1808"
+          },
+          "44,60": {
+            "value": "%230",
+            "line": 497,
+            "after_mmac_count": 36,
+            "pointer": "%kdma.gep1809"
+          },
+          "45,61": {
+            "value": "%233",
+            "line": 504,
+            "after_mmac_count": 37,
+            "pointer": "%kdma.gep1810"
+          },
+          "46,62": {
+            "value": "%236",
+            "line": 511,
+            "after_mmac_count": 38,
+            "pointer": "%kdma.gep1811"
+          },
+          "47,63": {
+            "value": "%239",
+            "line": 518,
+            "after_mmac_count": 39,
+            "pointer": "%kdma.gep1812"
+          },
+          "64,80": {
+            "value": "%270",
+            "line": 571,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled"
+          },
+          "65,81": {
+            "value": "%272",
+            "line": 573,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep"
+          },
+          "66,82": {
+            "value": "%274",
+            "line": 575,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.swizzled1767"
+          },
+          "67,83": {
+            "value": "%276",
+            "line": 577,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1768"
+          },
+          "68,84": {
+            "value": "%271",
+            "line": 572,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1769"
+          },
+          "69,85": {
+            "value": "%273",
+            "line": 574,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1770"
+          },
+          "70,86": {
+            "value": "%275",
+            "line": 576,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1771"
+          },
+          "71,87": {
+            "value": "%277",
+            "line": 578,
+            "after_mmac_count": 64,
+            "pointer": "%kdma.gep1772"
+          },
+          "72,88": {
+            "value": "%282",
+            "line": 585,
+            "after_mmac_count": 68,
+            "pointer": "%kdma.gep1773"
+          },
+          "73,89": {
+            "value": "%285",
+            "line": 590,
+            "after_mmac_count": 69,
+            "pointer": "%kdma.gep1774"
+          },
+          "74,90": {
+            "value": "%288",
+            "line": 595,
+            "after_mmac_count": 70,
+            "pointer": "%kdma.gep1775"
+          },
+          "75,91": {
+            "value": "%291",
+            "line": 600,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1776"
+          },
+          "76,92": {
+            "value": "%283",
+            "line": 586,
+            "after_mmac_count": 68,
+            "pointer": "%kdma.gep1777"
+          },
+          "77,93": {
+            "value": "%286",
+            "line": 591,
+            "after_mmac_count": 69,
+            "pointer": "%kdma.gep1778"
+          },
+          "78,94": {
+            "value": "%289",
+            "line": 596,
+            "after_mmac_count": 70,
+            "pointer": "%kdma.gep1779"
+          },
+          "79,95": {
+            "value": "%292",
+            "line": 601,
+            "after_mmac_count": 71,
+            "pointer": "%kdma.gep1780"
+          },
+          "96,112": {
+            "value": "%320",
+            "line": 648,
+            "after_mmac_count": 96,
+            "pointer": "%kdma.gep1797"
+          },
+          "97,113": {
+            "value": "%322",
+            "line": 650,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1798"
+          },
+          "98,114": {
+            "value": "%323",
+            "line": 651,
+            "after_mmac_count": 97,
+            "pointer": "%kdma.gep1799"
+          },
+          "99,115": {
+            "value": "%331",
+            "line": 659,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1800"
+          },
+          "100,116": {
+            "value": "%332",
+            "line": 660,
+            "after_mmac_count": 99,
+            "pointer": "%kdma.gep1801"
+          },
+          "101,117": {
+            "value": "%339",
+            "line": 671,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1802"
+          },
+          "102,118": {
+            "value": "%340",
+            "line": 672,
+            "after_mmac_count": 101,
+            "pointer": "%kdma.gep1803"
+          },
+          "103,119": {
+            "value": "%347",
+            "line": 683,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1804"
+          },
+          "104,120": {
+            "value": "%348",
+            "line": 684,
+            "after_mmac_count": 103,
+            "pointer": "%kdma.gep1805"
+          },
+          "105,121": {
+            "value": "%355",
+            "line": 695,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1806"
+          },
+          "106,122": {
+            "value": "%356",
+            "line": 696,
+            "after_mmac_count": 105,
+            "pointer": "%kdma.gep1807"
+          },
+          "107,123": {
+            "value": "%363",
+            "line": 707,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1808"
+          },
+          "108,124": {
+            "value": "%364",
+            "line": 708,
+            "after_mmac_count": 107,
+            "pointer": "%kdma.gep1809"
+          },
+          "109,125": {
+            "value": "%371",
+            "line": 719,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1810"
+          },
+          "110,126": {
+            "value": "%372",
+            "line": 720,
+            "after_mmac_count": 109,
+            "pointer": "%kdma.gep1811"
+          },
+          "111,127": {
+            "value": "%379",
+            "line": 731,
+            "after_mmac_count": 111,
+            "pointer": "%kdma.gep1812"
+          }
+        }
+      }
+    }
+  },
+  "gpu_tested": false
+}

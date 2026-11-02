@@ -1,0 +1,67 @@
+[  0%] Built target DeepgengraphConversionPassIncGen
+[  0%] Built target DeepgengraphToLinalgOnTensorPassIncGen
+[ 12%] Built target DeepgengraphTritonTableGen
+[ 12%] Built target DeepgengraphTableGen
+[ 12%] Built target DeepgengraphTransformsIncGen
+[ 23%] Built target TilelangIncGen
+[ 28%] Built target ThreadToLLVMPasseIncGen
+[ 31%] Built target FriskTableGen
+[ 31%] Built target FriskToBaseConversionPassIncGen
+[ 31%] Built target DeepgengraphTritonTransformsIncGen
+[ 32%] Built target FriskTransformsIncGen
+[ 33%] Built target TilelangTransformsIncGen
+[ 35%] Built target PipelineIncGen
+[ 35%] Built target TilelangIR
+[ 37%] Built target DeepgengraphIR
+[ 42%] Built target FriskIR
+[ 43%] Built target DeepgengraphTritonIR
+[ 43%] Built target TilelangTransforms
+[ 45%] Built target DeepgengraphToLinalgOnTensor
+[ 46%] Built target DeepgengraphTranslate
+[ 47%] Built target DeepgengraphToDeepgengraphTriton
+[ 48%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/LowerInfo.cpp.o
+[ 51%] Built target DeepgengraphTritonTransforms
+[ 63%] Built target DeepgengraphTransforms
+[ 67%] Built target DeepgengraphAnalysis
+[ 70%] Built target FriskPipeline
+[ 78%] Built target FriskToBase
+[ 92%] Built target ConvertThreadToLLVMIR
+[ 97%] Built target FriskTransforms
+[ 98%] Linking CXX executable MyTest
+[100%] Built target MyTest
+[ 21%] Built target FriskTableGen
+[ 46%] Built target DeepgengraphTableGen
+[ 57%] Built target DeepgengraphTritonTableGen
+[ 64%] Built target DeepgengraphIR
+[ 78%] Built target FriskIR
+[ 82%] Built target DeepgengraphTritonIR
+[ 96%] Built target DeepgengraphAnalysis
+[ 96%] Linking CXX executable LowerInfoLayoutTest
+[100%] Built target LowerInfoLayoutTest
+[ 25%] Built target DeepgengraphTableGen
+[ 46%] Built target FriskTableGen
+[ 57%] Built target DeepgengraphTritonTableGen
+[ 64%] Built target DeepgengraphIR
+[ 78%] Built target FriskIR
+[ 82%] Built target DeepgengraphTritonIR
+[ 96%] Built target DeepgengraphAnalysis
+[100%] Building CXX object test/CMakeFiles/LowerInfoInferenceTest.dir/lower_info_inference_test.cpp.o
+[100%] Linking CXX executable LowerInfoInferenceTest
+[100%] Built target LowerInfoInferenceTest
+[  0%] Built target FriskToBaseConversionPassIncGen
+[ 13%] Built target DeepgengraphTableGen
+[ 36%] Built target TilelangIncGen
+[ 36%] Built target FriskTableGen
+[ 37%] Built target PipelineIncGen
+[ 39%] Built target ThreadToLLVMPasseIncGen
+[ 44%] Built target DeepgengraphTritonTableGen
+[ 48%] Built target TilelangIR
+[ 48%] Built target DeepgengraphIR
+[ 55%] Built target FriskIR
+[ 56%] Built target DeepgengraphTritonIR
+[ 63%] Built target DeepgengraphAnalysis
+[ 67%] Built target FriskPipeline
+[ 79%] Built target FriskToBase
+[ 98%] Built target ConvertThreadToLLVMIR
+[100%] Linking CXX executable ThreadTilingTest
+[100%] Built target ThreadTilingTest

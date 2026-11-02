@@ -1,0 +1,12 @@
+PASS random 0 0 baseline_after4 bitwise and memory trace equal; V schedule checked
+PASS random 0 0 pv_serial_guarded bitwise and memory trace equal; V schedule checked
+PASS random 0 0 pv_interleave2 bitwise and memory trace equal; V schedule checked
+PASS random 0 0 pv_interleave4 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 baseline_after4 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 pv_serial_guarded bitwise and memory trace equal; V schedule checked
+PASS random 1 31 pv_interleave2 bitwise and memory trace equal; V schedule checked
+PASS random 1 31 pv_interleave4 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 baseline_after4 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 pv_serial_guarded bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 pv_interleave2 bitwise and memory trace equal; V schedule checked
+PASS max_changes 1 2 pv_interleave4 bitwise and memory trace equal; V schedule checked

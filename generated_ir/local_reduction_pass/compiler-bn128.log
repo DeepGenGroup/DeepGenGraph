@@ -1,0 +1,9 @@
+候选数：3；过滤不合法的参数组合：0
+输出目录：/data2/xsl/DeepGenGraph/generated_ir/local_reduction_pass/compiler-bn128/run-20261026-112711-jne7_i1s
+[1/3] grid-000001
+  verified
+[2/3] grid-000002
+  verified
+[3/3] grid-000003
+  verified
+完成：3 成功，0 失败；汇总：/data2/xsl/DeepGenGraph/generated_ir/local_reduction_pass/compiler-bn128/run-20261026-112711-jne7_i1s/manifest.json

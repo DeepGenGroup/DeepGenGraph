@@ -1,0 +1,4 @@
+PASS fresh MyTest 128 bitwise / reference / delayed DMA / epochs
+PASS fresh MyTest 64 bitwise / reference / delayed DMA / epochs
+PASS fresh MyTest 64-swizzle bitwise / reference / delayed DMA / epochs
+PASS fresh MyTest 64-swizzle.o3 bitwise / reference / delayed DMA / epochs

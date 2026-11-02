@@ -1,0 +1,12 @@
+{
+  "mytest_full_exports_verified": true,
+  "transformed_regions": 4,
+  "transformed_mmacs": 128,
+  "all_operand_dags_and_recurrences_preserved": true,
+  "read_dma_barrier_mmac_positions_preserved": true,
+  "mytest_sha256": "39c957e765ae9e702a7550c0130bcff6e20d98979919a04732e67e77f6fe972b",
+  "ir_sha256": {
+    "0": "85dcf010fecb27c9d3ee9fda90389b1794d6cb29f7ec4e6a112111240949d400",
+    "4": "4d50f23c11bd3b71d6671ad88521703839c1a32dfbe3aa9c481e8fbef29489ad"
+  }
+}

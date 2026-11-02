@@ -1,0 +1,4 @@
+ generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/online-vdb-k64-lds2/kernel.ll  k-prefetch 8
+HSACO (ms): min=1.729744, median=1.735664, p90=1.741584, max=1.744146
+PyTorch SDPA (ms): min=1.555986, median=1.586947, p90=1.592788, max=1.596628
+time_our_mid=1.7356640100479126, time_base_mid=1.5869470238685608, speedup=0.9143169499866242x

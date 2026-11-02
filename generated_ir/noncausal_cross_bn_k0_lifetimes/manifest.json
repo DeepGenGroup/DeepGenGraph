@@ -1,0 +1,60 @@
+{
+  "variants": {
+    "control": {
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "o3_sha256": "8310067172c8698673e2e3425e56981e62fd4b592983299cdc5a8dd30a3a7aef",
+      "overlap": 0,
+      "LLVM_and_O3_verified": true,
+      "checks": {}
+    },
+    "k0_sum_anchor": {
+      "sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "o3_sha256": "33648d95942c04a58f0c158c4b4d86a84f6df8d035a440039f4a62f230205086",
+      "overlap": 32,
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "anchored_FP32_adds": 64,
+        "anchors_before_K0_guard": true,
+        "remaining_PV_MMAC": 32,
+        "next_K0_addresses_rematerialized": false
+      }
+    },
+    "k0_sum_anchor_remat": {
+      "sha256": "04a50a9594d38dc659c4a3df337994701ee109c0c11fdac37281568c5b5a0359",
+      "o3_sha256": "bfaedb7de8e8d3463ec358cd8881460e3dee9f5b20082c85c764c0fdb10d02f4",
+      "overlap": 32,
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "anchored_FP32_adds": 64,
+        "anchors_before_K0_guard": true,
+        "remaining_PV_MMAC": 32,
+        "next_K0_addresses_rematerialized": true
+      }
+    },
+    "k0_sum_anchor_remat_after16": {
+      "sha256": "63d58cb8fbc8856f21c60b29404fd29edea9bc2513183146d7141f613e241678",
+      "o3_sha256": "d68d4466721d6e86edfef8fa68557a9a98cd610cf38583ccce62742e19cea808",
+      "overlap": 16,
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "anchored_FP32_adds": 64,
+        "anchors_before_K0_guard": true,
+        "remaining_PV_MMAC": 16,
+        "next_K0_addresses_rematerialized": true
+      }
+    }
+  },
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cross_bn_k0/k0_prefetch_pv_tail.ll",
+  "source_sha256": "c8cbe3c1615b4353a620ba1d74b97125c4dd92365afccd22c4126cecb2e906da",
+  "target": "gfx936",
+  "shape": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "static_LDS_bytes": 16384,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "note": "Candidates only: absence of spill must be verified with DTK assembly."
+}

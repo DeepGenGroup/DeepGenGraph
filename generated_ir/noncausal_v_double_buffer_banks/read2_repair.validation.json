@@ -1,0 +1,65 @@
+{
+  "source_sha256": "9605d5eeb763f9a754863e07bc07a4e8560515974a2608f4c4f27b79f2f510ef",
+  "candidate_sha256": "552ac8a008255b5ca22c548ce884d589a7ebca7c19946d1ccffe1252904cf790",
+  "address_audit": {
+    "unique_K_pointers": 32,
+    "common_bases": 2,
+    "rewritten_pointers": 30,
+    "all_256_lanes_identical": true,
+    "independent_of_head_query_and_key_iteration": true
+  },
+  "local_gfx900_isolated_read_probe": {
+    "k_swizzle32": {
+      "ds_read_b64": 32
+    },
+    "k_swizzle32_gep": {
+      "ds_read2_b64": 16
+    }
+  },
+  "cases": [
+    {
+      "head": 0,
+      "query": 0,
+      "variant": "measured",
+      "bitwise_equal": true,
+      "identical_LDS_values_and_V_schedule": true,
+      "barrier_epoch_ownership": true
+    },
+    {
+      "head": 0,
+      "query": 0,
+      "variant": "gep",
+      "bitwise_equal": true,
+      "identical_LDS_values_and_V_schedule": true,
+      "barrier_epoch_ownership": true
+    },
+    {
+      "head": 0,
+      "query": 0,
+      "variant": "gep_o3",
+      "bitwise_equal": true,
+      "identical_LDS_values_and_V_schedule": true,
+      "barrier_epoch_ownership": true
+    },
+    {
+      "head": 1,
+      "query": 31,
+      "variant": "measured",
+      "bitwise_equal": true,
+      "identical_LDS_values_and_V_schedule": true,
+      "barrier_epoch_ownership": true
+    },
+    {
+      "head": 1,
+      "query": 31,
+      "variant": "gep",
+      "bitwise_equal": true,
+      "identical_LDS_values_and_V_schedule": true,
+      "barrier_epoch_ownership": true
+    }
+  ],
+  "llvm_and_O3_verified": true,
+  "gpu_tested": false,
+  "gfx936_full_kernel_codegen_tested": false,
+  "limitation": "DWORD DMA cost remains; restored read2 and VGPR count require gfx936 full-kernel measurement."
+}

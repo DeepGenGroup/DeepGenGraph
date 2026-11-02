@@ -1,0 +1,81 @@
+{
+  "cases": [
+    {
+      "kind": "random",
+      "head": 0,
+      "query": 0,
+      "bitwise_equal": true,
+      "reference_atol": 0.01,
+      "reference_rtol": 0.01,
+      "reference_tolerance_passed": true,
+      "reference_mismatch_elements": 0,
+      "baseline_has_identical_reference_error": true,
+      "max_abs_error": 0.000145755813135362,
+      "counts": {
+        "control": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        },
+        "group_prefetch2": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        }
+      }
+    },
+    {
+      "kind": "random",
+      "head": 1,
+      "query": 31,
+      "bitwise_equal": true,
+      "reference_atol": 0.01,
+      "reference_rtol": 0.01,
+      "reference_tolerance_passed": true,
+      "reference_mismatch_elements": 0,
+      "baseline_has_identical_reference_error": true,
+      "max_abs_error": 9.917702902600967e-05,
+      "counts": {
+        "control": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        },
+        "group_prefetch2": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        }
+      }
+    },
+    {
+      "kind": "large_scores",
+      "head": 1,
+      "query": 1,
+      "bitwise_equal": true,
+      "reference_atol": 0.01,
+      "reference_rtol": 0.01,
+      "reference_tolerance_passed": false,
+      "reference_mismatch_elements": 25,
+      "baseline_has_identical_reference_error": true,
+      "max_abs_error": 0.023974902912743623,
+      "counts": {
+        "control": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        },
+        "group_prefetch2": {
+          "vm_waits": 260,
+          "barriers": 389,
+          "q_elements": 16384
+        }
+      }
+    }
+  ],
+  "all_cases_bitwise_equal_to_control": true,
+  "reference_limitations": [
+    "large_scores"
+  ],
+  "gpu_tested": false
+}

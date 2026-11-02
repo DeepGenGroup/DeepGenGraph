@@ -1,0 +1,31 @@
+{
+  "final_run": "run-20261027-152102-801zvuny",
+  "pass_regressions_passed": true,
+  "diagnostic_3_1_gpu": {
+    "median_ms": 5.346875,
+    "scratch": 0,
+    "vgpr": 256,
+    "lds_bytes": 65536,
+    "source": "pmc_test.log lines 2-30; user hardware test"
+  },
+  "exports": {
+    "layout_3_1": {
+      "sha256": "7ce43558cb7564a9a1c942b4c15db74c42d102f19725e4e2790ad72540d89e1d",
+      "llvm_as_verified": true,
+      "llvm_o3_verified": true,
+      "numerical_cases_passed": 6,
+      "max_abs_error": 0.0010615858711160442,
+      "hardware_tested": false,
+      "llvm_diff_after_o3_vs_measured_diagnostic": 0
+    },
+    "layout_3_3": {
+      "sha256": "68d958d4586c4d85fd8f67394899ac4bfc4ef1e0b6d7e4be0f9b4a2a20b8a566",
+      "llvm_as_verified": true,
+      "llvm_o3_verified": true,
+      "numerical_cases_passed": 6,
+      "max_abs_error": 0.0010615858711160442,
+      "hardware_tested": false,
+      "llvm_diff_after_o3_vs_previous_3_3": 1
+    }
+  }
+}

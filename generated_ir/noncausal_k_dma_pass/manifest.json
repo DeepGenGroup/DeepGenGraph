@@ -1,0 +1,46 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_group32/v_double_buffer.ll",
+  "source_sha256": "3b2bde804277d68be2926e1ad35a292164d4688a349bedcefa42ab605322888a",
+  "measured_reference": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_dma64/k_swizzle64_gep.ll",
+  "measured_reference_sha256": "983ad04a2cf3f8a3bde7aa895a88ab3b5b2986b7df169b17fcb5c1d3fa185499",
+  "exporter_sha256": "28bb6cb51cb617b6d58fe6aa7349fcc5ff42f031f29c889f38af4a117b940dba",
+  "variants": {
+    "baseline": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-dma=128",
+        "--k-dma-arg=1",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_group32/v_double_buffer.ll"
+      ],
+      "sha256": "b3e5f63abdfc5329ba706bcd0ee969259a729870ecee1c30a031543fa19afdab",
+      "mode": "128",
+      "llvm_and_O3_verified": true,
+      "diagnostics": ""
+    },
+    "k_split64": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-dma=64",
+        "--k-dma-arg=1",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_group32/v_double_buffer.ll"
+      ],
+      "sha256": "c92214146dd427018487651259491107cdb3e5d9c84c3be33685bfe86d7f1ed4",
+      "mode": "64",
+      "llvm_and_O3_verified": true,
+      "diagnostics": "K DMA: mode=64, argument=1, packets=8->16, reads=64, bases=0, function=Attn_p2"
+    },
+    "k_swizzle64": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--k-dma=64-swizzle",
+        "--k-dma-arg=1",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_double_buffer_group32/v_double_buffer.ll"
+      ],
+      "sha256": "42d847afc654004f13330dc1ee0f4dab6d3dd76696ec0082cf435120c0d54e69",
+      "mode": "64-swizzle",
+      "llvm_and_O3_verified": true,
+      "diagnostics": "K DMA: mode=64-swizzle, argument=1, packets=8->16, reads=64, bases=2, function=Attn_p2"
+    }
+  },
+  "gpu_tested": false
+}

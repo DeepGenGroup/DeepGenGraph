@@ -1,0 +1,108 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/online-vdb-k64-lds2/kernel.ll",
+  "source_sha256": "8e87a498add706bf36bb4222ca4ca163d74291e51652c9bb512c86d1683fd023",
+  "pmc_sha256": "bc8c5bf1da3834d0c5aecdf9b689ba71dc67635110734b1bc8f2268aa8f90e51",
+  "recorded_median_ms": 1.735664,
+  "exporter_sha256": "d75f36a73c707748c1deed9a542df4e126dc8c1f2e47ae196e2385db6a87daa4",
+  "baseline_note": "Actual IR and PMC both use K LDS prefetch=8; archived config says 2 and is stale",
+  "actual_k_lds_prefetch": 8,
+  "variants": {
+    "control": {
+      "mode": "off",
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--softmax-fragments=off",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/control.named.ll"
+      ],
+      "sha256": "8e87a498add706bf36bb4222ca4ca163d74291e51652c9bb512c86d1683fd023",
+      "diagnostics": "",
+      "audit": {
+        "identical_instruction_multiset": true,
+        "identical_memory_sync_mmac_order": true
+      },
+      "schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 16,
+        "score_subtractions_before_first_pack": 16,
+        "PV_mmacs_before_last_pack": 0,
+        "softmax_schedule_hints": 0
+      },
+      "O3_schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 16,
+        "score_subtractions_before_first_pack": 16,
+        "PV_mmacs_before_last_pack": 0,
+        "softmax_schedule_hints": 0
+      },
+      "llvm_verified": true,
+      "O3_verified": true
+    },
+    "softmax_fragment": {
+      "mode": "fragment",
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--softmax-fragments=fragment",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/control.named.ll"
+      ],
+      "sha256": "498ceb7dba16d9b1003e56d139fa0fdfc8c7b00f08359fbc5caf07d8af843678",
+      "diagnostics": "SoftmaxFragments: Attn_p2: 16 fragments, mode=fragment; original FP32 sum DAG and memory/MMAC order retained",
+      "audit": {
+        "identical_instruction_multiset": true,
+        "identical_memory_sync_mmac_order": true
+      },
+      "schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 16,
+        "score_subtractions_before_first_pack": 1,
+        "PV_mmacs_before_last_pack": 0,
+        "softmax_schedule_hints": 16
+      },
+      "O3_schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 16,
+        "score_subtractions_before_first_pack": 1,
+        "PV_mmacs_before_last_pack": 0,
+        "softmax_schedule_hints": 16
+      },
+      "llvm_verified": true,
+      "O3_verified": true
+    },
+    "softmax_pv": {
+      "mode": "pv",
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--softmax-fragments=pv",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/control.named.ll"
+      ],
+      "sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+      "diagnostics": "SoftmaxFragments: Attn_p2: 16 fragments, mode=pv; original FP32 sum DAG and memory/MMAC order retained",
+      "audit": {
+        "identical_instruction_multiset": true,
+        "identical_memory_sync_mmac_order": true
+      },
+      "schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 1,
+        "score_subtractions_before_first_pack": 1,
+        "PV_mmacs_before_last_pack": 30,
+        "softmax_schedule_hints": 16
+      },
+      "O3_schedule": {
+        "P_fragments": 16,
+        "PV_mmacs": 128,
+        "fragments_packed_before_first_PV": 1,
+        "score_subtractions_before_first_pack": 1,
+        "PV_mmacs_before_last_pack": 30,
+        "softmax_schedule_hints": 16
+      },
+      "llvm_verified": true,
+      "O3_verified": true
+    }
+  },
+  "gpu_tested": false
+}

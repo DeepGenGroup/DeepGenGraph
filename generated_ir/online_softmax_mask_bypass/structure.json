@@ -1,0 +1,15 @@
+{
+  "baseline": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/kernel.ll",
+  "baseline_sha256": "2ebae1fa1f4366d3c4072d0aec4bd2fe2bcec623cc667bf154a409de0d358b1e",
+  "experiment": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_mask_bypass/kernel.ll",
+  "experiment_sha256": "68410c5a5ad3bc28dda29769d670d05fd6d9421e051833a6b57cf9a8d9eaa863",
+  "transformation": "Move 16 vector4 score+mask adds into masked arm; PHI raw QK on fully visible arm",
+  "condition_unchanged": true,
+  "call_sequence_unchanged": true,
+  "masked_vector4_adds": 16,
+  "unmasked_vector4_adds": 0,
+  "common_vector4_adds": 0,
+  "static_lds_bytes": 16384,
+  "semantic_scope": "Approximate attention experiment: bypassing +0 may preserve negative zero; no global fast-math flags added",
+  "gpu_tested": false
+}

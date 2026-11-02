@@ -1,0 +1,16 @@
+{
+  "debug_build_dir": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build-debug-lowerinfo",
+  "original_debug_build": "failed: assert bool && llvm::Twine",
+  "debug_reproduction_after_assert_syntax_fix": "SIGABRT at frisk.mul vector<128x32xf32>, memref<128x1xf32>",
+  "fixed_debug_original_input": "passed, exit 0; no inference errors or assertions",
+  "llvm_verifier": "passed",
+  "llvm_byte_identical_to_previous_binary": true,
+  "llvm_sha256": "93425f6b3aeb905d4af5b91fd8281fc50549a5912566f2f2793de0f3579b570f",
+  "inference_debug_cases": 3,
+  "inference_ndebug_cases": 3,
+  "ndebug_scope": "LowerInfo.cpp compiled with -O2 -DNDEBUG and linked to regression executable; dependencies remain Debug",
+  "layout_unit_test": "passed",
+  "plan2_regression_pass_groups": 19,
+  "existing_loop_regression": "constant_fill assertion at check_loop_thread_tiles.py:74 fails identically before and after; not modified",
+  "gpu_execution": "not run"
+}

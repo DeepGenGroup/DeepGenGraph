@@ -1,0 +1,4 @@
+PASS independent MMAC pass: both add orders, no load/control-flow motion, idempotence, exp2/div unchanged
+PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal
+PASS fused MMAC seed wiring CPU emulation
+PASS reciprocal CPU numerics and native exp2 codegen (gfx90a structural check only)

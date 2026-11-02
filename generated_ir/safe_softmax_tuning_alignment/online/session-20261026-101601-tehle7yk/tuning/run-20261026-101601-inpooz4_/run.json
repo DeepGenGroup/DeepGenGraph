@@ -1,0 +1,71 @@
+{
+  "argv": [
+    "--input-list",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/inputs.txt",
+    "--tool",
+    "/tmp/attention-alignment-package/attention-tuning/MyTest",
+    "--output-dir",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning",
+    "--summary-dir",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk",
+    "--launch-python",
+    "/data2/xsl/miniconda3/bin/python3",
+    "--gen-hsaco",
+    "/tmp/attention-alignment-package/attention-tuning/GenHsaco.sh",
+    "--launcher",
+    "/tmp/attention-alignment-package/attention-tuning/launchKernel.py",
+    "--sweep",
+    "workgroup-group-size=4;8;16",
+    "--sweep",
+    "frag-prefetch=0;1",
+    "--sweep",
+    "retain-fragment-words=0;32",
+    "--sweep-base",
+    "online-baseline",
+    "--opt-level",
+    "3",
+    "--device",
+    "0",
+    "--warmup",
+    "10",
+    "--repeat",
+    "50",
+    "--seed",
+    "0",
+    "--timeout",
+    "300",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as"
+  ],
+  "input": null,
+  "loop_iv": "auto",
+  "sweep_base": "online-baseline",
+  "input_sha256": null,
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/inputs/test_input_1x32x4096x128-128-64-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning/run-20261026-101601-inpooz4_/input-0001-test_input_1x32x4096x128-128-64-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "9c6115e792731053e8bc30160e948a65b0cbcbd5cf4ba24b019865bcc5537922"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/inputs/test_input_1x32x4096x128-128-128-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning/run-20261026-101601-inpooz4_/input-0002-test_input_1x32x4096x128-128-128-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "412e5a6671f8dcd37f86112790b558d43ffd50741861b605982b5a96dbb6b78c"
+    }
+  ],
+  "tool": "/tmp/attention-alignment-package/attention-tuning/MyTest",
+  "tool_mtime_ns": 1792751141314037322,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

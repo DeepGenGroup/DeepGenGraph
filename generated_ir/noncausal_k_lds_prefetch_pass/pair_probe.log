@@ -1,0 +1,2 @@
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.00-amd-amdhsa' instead
+PASS isolated pair codegen: {'ds_read2_b64': 22, 'ds_read2st64_b64': 1}

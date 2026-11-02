@@ -1,0 +1,30 @@
+{
+  "group4": {
+    "original": {
+      "sha256": "913689d49044a67a76e5d5cf6ec473e92d0c33211c8a6598dedba75135a9ddaa",
+      "sum_anchors": 64,
+      "all_sum_anchors_before_join": true
+    },
+    "o3": {
+      "sha256": "b6d270ddda090e939835b4b81a3e26c93c66627992397d797817f35f70b685a5",
+      "sum_anchors": 64,
+      "all_sum_anchors_before_join": true
+    }
+  },
+  "group8": {
+    "original": {
+      "sha256": "9a57b528b2b2de72559460a949c3bd9f97e23074c3e7533fcdc1b7193aa9de1d",
+      "sum_anchors": 64,
+      "all_sum_anchors_before_join": true
+    },
+    "o3": {
+      "sha256": "17670c62938f6868c9cb6622dc27c58d6c842baf0a8fdb4d228ae1add880f3cb",
+      "sum_anchors": 64,
+      "all_sum_anchors_before_join": true
+    }
+  },
+  "input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a",
+  "mytest_sha256": "45f4b6a16da44b7811ea50d27f26a092138b8b6b15cafac00b46ec5efd67ad9b",
+  "noncausal_graph_regression": "PASS unchanged complete instruction graph against measured k0_sum_anchor.ll\nCross BN K0: packets=4, slot-bytes=8192, overlap-mmac=32, sum-anchors=64, function=Attn_p2\n",
+  "pass_regression": "........\n----------------------------------------------------------------------\nRan 8 tests in 2.502s\n\nOK\n"
+}

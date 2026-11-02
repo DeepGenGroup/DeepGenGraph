@@ -1,0 +1,14 @@
+{
+  "max4": {
+    "experimental_O3_identical": true,
+    "diagnostics": "LocalReduction: Attn_p2: 2 groups, 64 inputs, 4 chains (approx)"
+  },
+  "sum4": {
+    "experimental_O3_identical": true,
+    "diagnostics": "LocalReduction: Attn_p2: 2 groups, 64 inputs, 4 chains (approx)"
+  },
+  "max_sum4": {
+    "experimental_O3_identical": true,
+    "diagnostics": "LocalReduction: Attn_p2: 4 groups, 128 inputs, 4 chains (approx)"
+  }
+}

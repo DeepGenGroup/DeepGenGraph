@@ -1,0 +1,24 @@
+{
+  "variants": [
+    {
+      "mode": "128",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_baseline.ll",
+      "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-163658-kcakvj_l/grid-000001/kernel.ll",
+      "sha256": "c3d1b4eee96a78754a545585b1ce55b0f6d08e16042e6ad649b6cd370c9121a7"
+    },
+    {
+      "mode": "64",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_split64.ll",
+      "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-163658-kcakvj_l/grid-000002/kernel.ll",
+      "sha256": "cac61af0a95a9fa1fc723ae316d1d743b977ebdccb1d2a81e47a4c0b18e4efda"
+    },
+    {
+      "mode": "64-swizzle",
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest_k_swizzle64.ll",
+      "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-163658-kcakvj_l/grid-000003/kernel.ll",
+      "sha256": "c68ccd0b339b49be26ae245ac16e4580c592b527f4e38a01c6cd8d0d7b8cf135"
+    }
+  ],
+  "validation": "fresh_validation.json",
+  "gpu_tested": false
+}

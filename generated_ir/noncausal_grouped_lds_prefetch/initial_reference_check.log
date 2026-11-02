@@ -1,0 +1,42 @@
+Executed random h=0 q=0 control
+Executed random h=0 q=0 group_prefetch2
+PASS {'kind': 'random', 'head': 0, 'query': 0, 'bitwise_equal': True, 'max_abs_error': 0.000145755813135362, 'counts': {'control': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}, 'group_prefetch2': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}}}
+Executed random h=1 q=31 control
+Executed random h=1 q=31 group_prefetch2
+PASS {'kind': 'random', 'head': 1, 'query': 31, 'bitwise_equal': True, 'max_abs_error': 9.917702902600967e-05, 'counts': {'control': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}, 'group_prefetch2': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}}}
+Executed large_scores h=1 q=1 control
+Executed large_scores h=1 q=1 group_prefetch2
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/generated_ir/noncausal_grouped_lds_prefetch/verify.py", line 52, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/generated_ir/noncausal_grouped_lds_prefetch/verify.py", line 44, in main
+    np.testing.assert_allclose(actual, expected, atol=.01, rtol=.01)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 1768, in assert_allclose
+    assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         verbose=verbose, header=header, equal_nan=equal_nan,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         strict=strict)
+                         ^^^^^^^^^^^^^^
+  File "/data2/xsl/miniconda3/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 983, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Not equal to tolerance rtol=0.01, atol=0.01
+
+Mismatched elements: 25 / 16384 (0.153%)
+First 5 mismatches are at indices:
+ [63, 4]: 0.0156402587890625 (ACTUAL), -0.002858011092603003 (DESIRED)
+ [63, 7]: 0.70654296875 (ACTUAL), 0.7282518124592748 (DESIRED)
+ [63, 13]: -0.313720703125 (ACTUAL), -0.32821967479419367 (DESIRED)
+ [63, 14]: -0.6533203125 (ACTUAL), -0.6344137732391782 (DESIRED)
+ [63, 18]: 0.7158203125 (ACTUAL), 0.6919433018611626 (DESIRED)
+Max absolute difference among violations: 0.0239749
+Max relative difference among violations: 6.4724276
+ ACTUAL: array([[ 0.8877 , -0.3008 , -0.01019, ..., -0.4812 , -0.8247 ,  0.1301 ],
+       [ 0.3818 , -0.2058 , -0.1559 , ...,  0.922  , -1.254  , -1.383  ],
+       [ 1.68   ,  1.316  ,  0.1842 , ..., -0.1866 ,  1.836  , -0.909  ],...
+ DESIRED: array([[ 0.887695, -0.300781, -0.010193, ..., -0.481201, -0.824707,
+         0.130127],
+       [ 0.382281, -0.206985, -0.156634, ...,  0.921578, -1.254647,...

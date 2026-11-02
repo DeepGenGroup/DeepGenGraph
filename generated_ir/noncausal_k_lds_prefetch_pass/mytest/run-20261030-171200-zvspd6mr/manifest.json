@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-30T09:13:38Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest/run-20261030-171200-zvspd6mr",
+  "total_candidates": 2,
+  "completed_candidates": 2,
+  "failed_candidates": 0,
+  "successful_candidates": 2,
+  "status_counts": {
+    "verified": 2
+  },
+  "last_result": {
+    "case": "grid-000002",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest/run-20261030-171200-zvspd6mr/grid-000002",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest/run-20261030-171200-zvspd6mr/grid-000002/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest/run-20261030-171200-zvspd6mr/**/result.json",
+  "best_by_shape": {}
+}

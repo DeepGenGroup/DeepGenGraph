@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "variant": "baseline",
+      "sha256": "4d50f23c11bd3b71d6671ad88521703839c1a32dfbe3aa9c481e8fbef29489ad",
+      "bitwise_equal_to_fresh_baseline": true,
+      "barrier_epoch_ownership_passed": true,
+      "vm_waits": 260,
+      "barriers": 389,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    {
+      "variant": "kernel",
+      "sha256": "6444b4bb3929609a1fff284f6b8056289137c087a4e3c8a9f0f4198feb06c5e7",
+      "bitwise_equal_to_fresh_baseline": true,
+      "barrier_epoch_ownership_passed": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "max_abs_error": 9.917702902600967e-05
+    },
+    {
+      "variant": "kernel.o3",
+      "sha256": "db63500201e93510c0e24f057423fea4b2e255f5b65aefc65310f889394d4fce",
+      "bitwise_equal_to_fresh_baseline": true,
+      "barrier_epoch_ownership_passed": true,
+      "vm_waits": 260,
+      "barriers": 293,
+      "max_abs_error": 9.917702902600967e-05
+    }
+  ],
+  "gpu_tested": false,
+  "independent_wave_timing_simulated": false
+}

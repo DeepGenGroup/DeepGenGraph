@@ -1,0 +1,1016 @@
+{
+  "v_prefetch4": {
+    "source": "/data2/xsl/DeepGenGraph/v_prefetch4.amdgcn",
+    "sha256": "efe0a70cb59a6cd8c6b27dcc0738fa83107ca8f0c7db15e5561a8879899ffdee",
+    "loop_line_bounds": [
+      297,
+      2969
+    ],
+    "instruction_count": 1002,
+    "opcode_counts": {
+      "v_mov_b32_e32": 5,
+      "v_lshrrev_b32_e32": 3,
+      "v_and_b32_e32": 14,
+      "v_add_lshl_u32": 5,
+      "v_lshlrev_b32_e32": 11,
+      "v_add_co_u32_e32": 1,
+      "v_and_or_b32": 3,
+      "v_addc_co_u32_e64": 1,
+      "v_alignbit_b32": 1,
+      "v_add_u32_e32": 32,
+      "s_add_i32": 1,
+      "v_or_b32_e32": 5,
+      "v_lshl_add_u32": 5,
+      "v_readfirstlane_b32": 4,
+      "s_mov_b32": 16,
+      "buffer_load_dwordx4": 16,
+      "s_waitcnt": 76,
+      "s_barrier": 12,
+      "v_mul_lo_u32": 1,
+      "v_ashrrev_i32_e32": 1,
+      "v_mad_u32_u24": 1,
+      "v_bfe_u32": 2,
+      "v_mul_u32_u24_e32": 2,
+      "v_add3_u32": 2,
+      "ds_read2st64_b64": 2,
+      "v_mov_b64_e32": 65,
+      "s_nop": 4,
+      "v_mmac_f32_16x16x16_f16": 256,
+      "v_bfe_i32": 1,
+      "v_sub_u32_e32": 2,
+      "v_or3_b32": 1,
+      "ds_read2_b64": 30,
+      "v_lshl_or_b32": 1,
+      "v_max_f32_e32": 16,
+      "v_max3_f32": 32,
+      "v_xor_b32_e32": 2,
+      "v_cmp_lt_u32_e32": 2,
+      "v_cndmask_b32_e32": 2,
+      "ds_bpermute_b32": 4,
+      "v_sub_f32_e32": 66,
+      "v_exp_f32_e32": 66,
+      "v_mul_f32_e32": 2,
+      "v_cvt_f16_f32_e32": 64,
+      "v_pack_b32_f16": 32,
+      "v_add_f32_e32": 64,
+      "ds_read_m32x16_b16": 32,
+      "v_pk_mul_f32": 32,
+      "s_add_u32": 1,
+      "s_addc_u32": 1,
+      "s_cmp_lg_u64": 1,
+      "s_cbranch_scc1": 1
+    },
+    "wait_counts": {
+      "s_waitcnt vmcnt(0)": 8,
+      "s_waitcnt lgkmcnt(0)": 22,
+      "s_waitcnt lgkmcnt(2)": 15,
+      "s_waitcnt lgkmcnt(1)": 11,
+      "s_waitcnt lgkmcnt(4)": 16,
+      "s_waitcnt lgkmcnt(3)": 4
+    },
+    "stages": [
+      {
+        "stage": 0,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          2,
+          3
+        ],
+        "reads": [
+          {
+            "line": 2005,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 128
+          },
+          {
+            "line": 2006,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 128
+          },
+          {
+            "line": 2008,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 128
+          },
+          {
+            "line": 2009,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 128
+          },
+          {
+            "line": 2011,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 128
+          },
+          {
+            "line": 2027,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 129
+          },
+          {
+            "line": 2037,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 130
+          },
+          {
+            "line": 2047,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 131
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2022,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[70:71], v[109:110], v[33:36]",
+            "mmac_before": 128
+          },
+          {
+            "line": 2032,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[72:73], v[113:114], v[33:36]",
+            "mmac_before": 129
+          },
+          {
+            "line": 2042,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[74:75], v[117:118], v[33:36]",
+            "mmac_before": 130
+          },
+          {
+            "line": 2052,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[76:77], v[121:122], v[33:36]",
+            "mmac_before": 131
+          },
+          {
+            "line": 2060,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[78:79], v[125:126], v[33:36]",
+            "mmac_before": 132
+          },
+          {
+            "line": 2068,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[80:81], v[171:172], v[33:36]",
+            "mmac_before": 133
+          },
+          {
+            "line": 2076,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[82:83], v[177:178], v[33:36]",
+            "mmac_before": 134
+          },
+          {
+            "line": 2084,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[86:87], v[181:182], v[33:36]",
+            "mmac_before": 135
+          }
+        ]
+      },
+      {
+        "stage": 1,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          2,
+          3
+        ],
+        "reads": [
+          {
+            "line": 2262,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 160
+          },
+          {
+            "line": 2263,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 160
+          },
+          {
+            "line": 2264,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 160
+          },
+          {
+            "line": 2265,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 160
+          },
+          {
+            "line": 2266,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 160
+          },
+          {
+            "line": 2279,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 161
+          },
+          {
+            "line": 2288,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 162
+          },
+          {
+            "line": 2297,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 163
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2275,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[70:71], v[109:110], v[41:44]",
+            "mmac_before": 160
+          },
+          {
+            "line": 2284,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[72:73], v[113:114], v[41:44]",
+            "mmac_before": 161
+          },
+          {
+            "line": 2293,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[74:75], v[117:118], v[41:44]",
+            "mmac_before": 162
+          },
+          {
+            "line": 2302,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[76:77], v[121:122], v[41:44]",
+            "mmac_before": 163
+          },
+          {
+            "line": 2310,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[78:79], v[125:126], v[41:44]",
+            "mmac_before": 164
+          },
+          {
+            "line": 2318,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[80:81], v[171:172], v[41:44]",
+            "mmac_before": 165
+          },
+          {
+            "line": 2326,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[82:83], v[177:178], v[41:44]",
+            "mmac_before": 166
+          },
+          {
+            "line": 2334,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[86:87], v[181:182], v[41:44]",
+            "mmac_before": 167
+          }
+        ]
+      },
+      {
+        "stage": 2,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          2,
+          3
+        ],
+        "reads": [
+          {
+            "line": 2503,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 192
+          },
+          {
+            "line": 2504,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 192
+          },
+          {
+            "line": 2505,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 192
+          },
+          {
+            "line": 2506,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 192
+          },
+          {
+            "line": 2507,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 192
+          },
+          {
+            "line": 2520,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 193
+          },
+          {
+            "line": 2529,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 194
+          },
+          {
+            "line": 2538,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 195
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2516,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[70:71], v[109:110], v[57:60]",
+            "mmac_before": 192
+          },
+          {
+            "line": 2525,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[72:73], v[113:114], v[57:60]",
+            "mmac_before": 193
+          },
+          {
+            "line": 2534,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[74:75], v[117:118], v[57:60]",
+            "mmac_before": 194
+          },
+          {
+            "line": 2543,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[76:77], v[121:122], v[57:60]",
+            "mmac_before": 195
+          },
+          {
+            "line": 2551,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[78:79], v[125:126], v[57:60]",
+            "mmac_before": 196
+          },
+          {
+            "line": 2559,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[80:81], v[171:172], v[57:60]",
+            "mmac_before": 197
+          },
+          {
+            "line": 2567,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[82:83], v[177:178], v[57:60]",
+            "mmac_before": 198
+          },
+          {
+            "line": 2575,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[86:87], v[181:182], v[57:60]",
+            "mmac_before": 199
+          }
+        ]
+      },
+      {
+        "stage": 3,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          2,
+          3
+        ],
+        "reads": [
+          {
+            "line": 2744,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 224
+          },
+          {
+            "line": 2745,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 224
+          },
+          {
+            "line": 2746,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 224
+          },
+          {
+            "line": 2747,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 224
+          },
+          {
+            "line": 2748,
+            "op": "ds_read_m32x16_b16 v[102:105], v105",
+            "mmac_before": 224
+          },
+          {
+            "line": 2761,
+            "op": "ds_read_m32x16_b16 v[125:128], v106",
+            "mmac_before": 225
+          },
+          {
+            "line": 2770,
+            "op": "ds_read_m32x16_b16 v[171:174], v107",
+            "mmac_before": 226
+          },
+          {
+            "line": 2779,
+            "op": "ds_read_m32x16_b16 v[175:178], v108",
+            "mmac_before": 227
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2757,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[70:71], v[109:110], v[49:52]",
+            "mmac_before": 224
+          },
+          {
+            "line": 2766,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[72:73], v[113:114], v[49:52]",
+            "mmac_before": 225
+          },
+          {
+            "line": 2775,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[74:75], v[117:118], v[49:52]",
+            "mmac_before": 226
+          },
+          {
+            "line": 2784,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[76:77], v[121:122], v[49:52]",
+            "mmac_before": 227
+          },
+          {
+            "line": 2792,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[78:79], v[102:103], v[49:52]",
+            "mmac_before": 228
+          },
+          {
+            "line": 2800,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[80:81], v[125:126], v[49:52]",
+            "mmac_before": 229
+          },
+          {
+            "line": 2808,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[82:83], v[171:172], v[49:52]",
+            "mmac_before": 230
+          },
+          {
+            "line": 2816,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[86:87], v[175:176], v[49:52]",
+            "mmac_before": 231
+          }
+        ]
+      }
+    ],
+    "v_dma": [
+      {
+        "line": 1149,
+        "op": "buffer_load_dwordx4 v179, s[4:7], 0 offen lds",
+        "mmac_before": 96
+      },
+      {
+        "line": 1159,
+        "op": "buffer_load_dwordx4 v179, s[4:7], 0 offen lds",
+        "mmac_before": 96
+      },
+      {
+        "line": 2094,
+        "op": "buffer_load_dwordx4 v67, s[4:7], 0 offen lds",
+        "mmac_before": 136
+      },
+      {
+        "line": 2101,
+        "op": "buffer_load_dwordx4 v67, s[4:7], 0 offen lds",
+        "mmac_before": 136
+      },
+      {
+        "line": 2344,
+        "op": "buffer_load_dwordx4 v185, s[4:7], 0 offen lds",
+        "mmac_before": 168
+      },
+      {
+        "line": 2351,
+        "op": "buffer_load_dwordx4 v185, s[4:7], 0 offen lds",
+        "mmac_before": 168
+      },
+      {
+        "line": 2585,
+        "op": "buffer_load_dwordx4 v175, s[4:7], 0 offen lds",
+        "mmac_before": 200
+      },
+      {
+        "line": 2592,
+        "op": "buffer_load_dwordx4 v175, s[4:7], 0 offen lds",
+        "mmac_before": 200
+      }
+    ],
+    "all_32_k_pairs_preserved": true,
+    "all_128_pv_operand_fragments_matched_to_ir": true,
+    "mmac_accumulator_chains_match_ir": true
+  },
+  "v_late_dma_control": {
+    "source": "/data2/xsl/DeepGenGraph/v_late_dma_control.amdgcn",
+    "sha256": "caf07cbe5ae7c3d41a44ca917049d7d61d7f6f4eed352d59f0979a08983066eb",
+    "loop_line_bounds": [
+      297,
+      2969
+    ],
+    "instruction_count": 1002,
+    "opcode_counts": {
+      "v_mov_b32_e32": 5,
+      "v_lshrrev_b32_e32": 3,
+      "v_and_b32_e32": 14,
+      "v_add_lshl_u32": 5,
+      "v_lshlrev_b32_e32": 11,
+      "v_add_co_u32_e32": 1,
+      "v_and_or_b32": 3,
+      "v_addc_co_u32_e64": 1,
+      "v_alignbit_b32": 1,
+      "v_add_u32_e32": 32,
+      "s_add_i32": 1,
+      "v_or_b32_e32": 5,
+      "v_lshl_add_u32": 5,
+      "v_readfirstlane_b32": 4,
+      "s_mov_b32": 16,
+      "buffer_load_dwordx4": 16,
+      "s_waitcnt": 76,
+      "s_barrier": 12,
+      "v_mul_lo_u32": 1,
+      "v_ashrrev_i32_e32": 1,
+      "v_mad_u32_u24": 1,
+      "v_bfe_u32": 2,
+      "v_mul_u32_u24_e32": 2,
+      "v_add3_u32": 2,
+      "ds_read2st64_b64": 2,
+      "v_mov_b64_e32": 65,
+      "s_nop": 4,
+      "v_mmac_f32_16x16x16_f16": 256,
+      "v_bfe_i32": 1,
+      "v_sub_u32_e32": 2,
+      "v_or3_b32": 1,
+      "ds_read2_b64": 30,
+      "v_lshl_or_b32": 1,
+      "v_max_f32_e32": 16,
+      "v_max3_f32": 32,
+      "v_xor_b32_e32": 2,
+      "v_cmp_lt_u32_e32": 2,
+      "v_cndmask_b32_e32": 2,
+      "ds_bpermute_b32": 4,
+      "v_sub_f32_e32": 66,
+      "v_exp_f32_e32": 66,
+      "v_mul_f32_e32": 2,
+      "v_cvt_f16_f32_e32": 64,
+      "v_pack_b32_f16": 32,
+      "v_add_f32_e32": 64,
+      "ds_read_m32x16_b16": 32,
+      "v_pk_mul_f32": 32,
+      "s_add_u32": 1,
+      "s_addc_u32": 1,
+      "s_cmp_lg_u64": 1,
+      "s_cbranch_scc1": 1
+    },
+    "wait_counts": {
+      "s_waitcnt vmcnt(0)": 8,
+      "s_waitcnt lgkmcnt(0)": 22,
+      "s_waitcnt lgkmcnt(2)": 15,
+      "s_waitcnt lgkmcnt(1)": 11,
+      "s_waitcnt lgkmcnt(7)": 4,
+      "s_waitcnt lgkmcnt(6)": 4,
+      "s_waitcnt lgkmcnt(5)": 4,
+      "s_waitcnt lgkmcnt(4)": 4,
+      "s_waitcnt lgkmcnt(3)": 4
+    },
+    "stages": [
+      {
+        "stage": 0,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "reads": [
+          {
+            "line": 2007,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 128
+          },
+          {
+            "line": 2008,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 128
+          },
+          {
+            "line": 2010,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 128
+          },
+          {
+            "line": 2011,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 128
+          },
+          {
+            "line": 2013,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 128
+          },
+          {
+            "line": 2014,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 128
+          },
+          {
+            "line": 2016,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 128
+          },
+          {
+            "line": 2017,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 128
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2028,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[70:71], v[109:110], v[33:36]",
+            "mmac_before": 128
+          },
+          {
+            "line": 2036,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[72:73], v[113:114], v[33:36]",
+            "mmac_before": 129
+          },
+          {
+            "line": 2044,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[74:75], v[117:118], v[33:36]",
+            "mmac_before": 130
+          },
+          {
+            "line": 2052,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[76:77], v[121:122], v[33:36]",
+            "mmac_before": 131
+          },
+          {
+            "line": 2060,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[78:79], v[125:126], v[33:36]",
+            "mmac_before": 132
+          },
+          {
+            "line": 2068,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[80:81], v[171:172], v[33:36]",
+            "mmac_before": 133
+          },
+          {
+            "line": 2076,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[82:83], v[177:178], v[33:36]",
+            "mmac_before": 134
+          },
+          {
+            "line": 2084,
+            "op": "v_mmac_f32_16x16x16_f16 v[33:36], v[86:87], v[181:182], v[33:36]",
+            "mmac_before": 135
+          }
+        ]
+      },
+      {
+        "stage": 1,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "reads": [
+          {
+            "line": 2262,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 160
+          },
+          {
+            "line": 2263,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 160
+          },
+          {
+            "line": 2264,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 160
+          },
+          {
+            "line": 2265,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 160
+          },
+          {
+            "line": 2266,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 160
+          },
+          {
+            "line": 2267,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 160
+          },
+          {
+            "line": 2268,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 160
+          },
+          {
+            "line": 2269,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 160
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2278,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[70:71], v[109:110], v[41:44]",
+            "mmac_before": 160
+          },
+          {
+            "line": 2286,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[72:73], v[113:114], v[41:44]",
+            "mmac_before": 161
+          },
+          {
+            "line": 2294,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[74:75], v[117:118], v[41:44]",
+            "mmac_before": 162
+          },
+          {
+            "line": 2302,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[76:77], v[121:122], v[41:44]",
+            "mmac_before": 163
+          },
+          {
+            "line": 2310,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[78:79], v[125:126], v[41:44]",
+            "mmac_before": 164
+          },
+          {
+            "line": 2318,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[80:81], v[171:172], v[41:44]",
+            "mmac_before": 165
+          },
+          {
+            "line": 2326,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[82:83], v[177:178], v[41:44]",
+            "mmac_before": 166
+          },
+          {
+            "line": 2334,
+            "op": "v_mmac_f32_16x16x16_f16 v[41:44], v[86:87], v[181:182], v[41:44]",
+            "mmac_before": 167
+          }
+        ]
+      },
+      {
+        "stage": 2,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "reads": [
+          {
+            "line": 2503,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 192
+          },
+          {
+            "line": 2504,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 192
+          },
+          {
+            "line": 2505,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 192
+          },
+          {
+            "line": 2506,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 192
+          },
+          {
+            "line": 2507,
+            "op": "ds_read_m32x16_b16 v[125:128], v105",
+            "mmac_before": 192
+          },
+          {
+            "line": 2508,
+            "op": "ds_read_m32x16_b16 v[171:174], v106",
+            "mmac_before": 192
+          },
+          {
+            "line": 2509,
+            "op": "ds_read_m32x16_b16 v[177:180], v107",
+            "mmac_before": 192
+          },
+          {
+            "line": 2510,
+            "op": "ds_read_m32x16_b16 v[181:184], v108",
+            "mmac_before": 192
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2519,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[70:71], v[109:110], v[57:60]",
+            "mmac_before": 192
+          },
+          {
+            "line": 2527,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[72:73], v[113:114], v[57:60]",
+            "mmac_before": 193
+          },
+          {
+            "line": 2535,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[74:75], v[117:118], v[57:60]",
+            "mmac_before": 194
+          },
+          {
+            "line": 2543,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[76:77], v[121:122], v[57:60]",
+            "mmac_before": 195
+          },
+          {
+            "line": 2551,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[78:79], v[125:126], v[57:60]",
+            "mmac_before": 196
+          },
+          {
+            "line": 2559,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[80:81], v[171:172], v[57:60]",
+            "mmac_before": 197
+          },
+          {
+            "line": 2567,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[82:83], v[177:178], v[57:60]",
+            "mmac_before": 198
+          },
+          {
+            "line": 2575,
+            "op": "v_mmac_f32_16x16x16_f16 v[57:60], v[86:87], v[181:182], v[57:60]",
+            "mmac_before": 199
+          }
+        ]
+      },
+      {
+        "stage": 3,
+        "read_mmac_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "reads": [
+          {
+            "line": 2744,
+            "op": "ds_read_m32x16_b16 v[109:112], v65",
+            "mmac_before": 224
+          },
+          {
+            "line": 2745,
+            "op": "ds_read_m32x16_b16 v[113:116], v102",
+            "mmac_before": 224
+          },
+          {
+            "line": 2746,
+            "op": "ds_read_m32x16_b16 v[117:120], v103",
+            "mmac_before": 224
+          },
+          {
+            "line": 2747,
+            "op": "ds_read_m32x16_b16 v[121:124], v104",
+            "mmac_before": 224
+          },
+          {
+            "line": 2748,
+            "op": "ds_read_m32x16_b16 v[102:105], v105",
+            "mmac_before": 224
+          },
+          {
+            "line": 2749,
+            "op": "ds_read_m32x16_b16 v[125:128], v106",
+            "mmac_before": 224
+          },
+          {
+            "line": 2750,
+            "op": "ds_read_m32x16_b16 v[171:174], v107",
+            "mmac_before": 224
+          },
+          {
+            "line": 2751,
+            "op": "ds_read_m32x16_b16 v[175:178], v108",
+            "mmac_before": 224
+          }
+        ],
+        "first_eight_mmacs": [
+          {
+            "line": 2760,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[70:71], v[109:110], v[49:52]",
+            "mmac_before": 224
+          },
+          {
+            "line": 2768,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[72:73], v[113:114], v[49:52]",
+            "mmac_before": 225
+          },
+          {
+            "line": 2776,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[74:75], v[117:118], v[49:52]",
+            "mmac_before": 226
+          },
+          {
+            "line": 2784,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[76:77], v[121:122], v[49:52]",
+            "mmac_before": 227
+          },
+          {
+            "line": 2792,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[78:79], v[102:103], v[49:52]",
+            "mmac_before": 228
+          },
+          {
+            "line": 2800,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[80:81], v[125:126], v[49:52]",
+            "mmac_before": 229
+          },
+          {
+            "line": 2808,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[82:83], v[171:172], v[49:52]",
+            "mmac_before": 230
+          },
+          {
+            "line": 2816,
+            "op": "v_mmac_f32_16x16x16_f16 v[49:52], v[86:87], v[175:176], v[49:52]",
+            "mmac_before": 231
+          }
+        ]
+      }
+    ],
+    "v_dma": [
+      {
+        "line": 1149,
+        "op": "buffer_load_dwordx4 v179, s[4:7], 0 offen lds",
+        "mmac_before": 96
+      },
+      {
+        "line": 1159,
+        "op": "buffer_load_dwordx4 v179, s[4:7], 0 offen lds",
+        "mmac_before": 96
+      },
+      {
+        "line": 2094,
+        "op": "buffer_load_dwordx4 v67, s[4:7], 0 offen lds",
+        "mmac_before": 136
+      },
+      {
+        "line": 2101,
+        "op": "buffer_load_dwordx4 v67, s[4:7], 0 offen lds",
+        "mmac_before": 136
+      },
+      {
+        "line": 2344,
+        "op": "buffer_load_dwordx4 v185, s[4:7], 0 offen lds",
+        "mmac_before": 168
+      },
+      {
+        "line": 2351,
+        "op": "buffer_load_dwordx4 v185, s[4:7], 0 offen lds",
+        "mmac_before": 168
+      },
+      {
+        "line": 2585,
+        "op": "buffer_load_dwordx4 v175, s[4:7], 0 offen lds",
+        "mmac_before": 200
+      },
+      {
+        "line": 2592,
+        "op": "buffer_load_dwordx4 v175, s[4:7], 0 offen lds",
+        "mmac_before": 200
+      }
+    ],
+    "all_32_k_pairs_preserved": true,
+    "all_128_pv_operand_fragments_matched_to_ir": true,
+    "mmac_accumulator_chains_match_ir": true
+  },
+  "baseline_note": "Prior protected group4 assembly has 981 loop instructions and 55 waits; group32 only changes workgroup mapping. No new group32 baseline assembly supplied with these two experiments."
+}

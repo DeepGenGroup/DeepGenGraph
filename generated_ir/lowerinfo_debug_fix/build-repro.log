@@ -1,0 +1,114 @@
+[ 10%] Built target DeepgengraphTableGen
+[ 15%] Built target DeepgengraphTritonTableGen
+[ 15%] Built target DeepgengraphConversionPassIncGen
+[ 16%] Built target ThreadToLLVMPasseIncGen
+[ 23%] Built target FriskTableGen
+[ 26%] Built target FriskTransformsIncGen
+[ 26%] Built target DeepgengraphToLinalgOnTensorPassIncGen
+[ 26%] Built target FriskToBaseConversionPassIncGen
+[ 28%] Built target DeepgengraphTransformsIncGen
+[ 37%] Built target TilelangIncGen
+[ 38%] Built target TilelangTransformsIncGen
+[ 40%] Built target DeepgengraphTritonTransformsIncGen
+[ 40%] Built target PipelineIncGen
+[ 41%] Built target DeepgengraphIR
+[ 42%] Built target TilelangIR
+[ 48%] Built target FriskIR
+[ 48%] Built target DeepgengraphTranslate
+[ 48%] Built target TilelangTransforms
+[ 50%] Built target DeepgengraphTritonIR
+[ 51%] Built target DeepgengraphToLinalgOnTensor
+[ 51%] Built target DeepgengraphToDeepgengraphTriton
+[ 52%] Built target DeepgengraphTritonTransforms
+[ 53%] Building CXX object lib/Analysis/CMakeFiles/DeepgengraphAnalysis.dir/LowerInfo.cpp.o
+[ 65%] Built target DeepgengraphTransforms
+[ 68%] Built target DeepgengraphAnalysis
+[ 68%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskToBasePass.cpp.o
+[ 68%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DeepgengraphSimplify.cpp.o
+[ 70%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DeepgengraphToFrisk.cpp.o
+[ 70%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/NormalizeAttentionKLayout.cpp.o
+[ 72%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/PipelineSchedule.cpp.o
+[ 72%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/DgMemspaceAnalyze.cpp.o
+[ 72%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/AutoPipeline.cpp.o
+[ 75%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/FriskCanonicalize.cpp.o
+[ 75%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/ReorderWorkgroups.cpp.o
+[ 76%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/FriskLayoutInfer.cpp.o
+[ 76%] Building CXX object lib/Pipeline/CMakeFiles/FriskPipeline.dir/SimplifyLoopControl.cpp.o
+[ 76%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/TheadlevelIRLegalize.cpp.o
+[ 77%] Building CXX object lib/Dialect/Frisk/Transforms/CMakeFiles/FriskTransforms.dir/overlap.cpp.o
+[ 78%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/OptimizeTensorLoops.cpp.o
+[ 80%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/WmmaLayoutConversion.cpp.o
+[ 80%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskBaseToTheadlevelIR_plan2.cpp.o
+[ 81%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/FriskFragIRReorder.cpp.o
+[ 82%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/RetainInvariantFragments.cpp.o
+[ 82%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/PackSharedMemory.cpp.o
+[ 82%] Built target FriskPipeline
+[ 83%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/GPUToNvvmRocdl.cpp.o
+[ 83%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/TranslateToLLVM.cpp.o
+[ 85%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/PromoteGlobalToSharedAsync.cpp.o
+[ 86%] Building CXX object lib/Conversion/FriskToBase/CMakeFiles/FriskToBase.dir/SinkWaitBufferReady.cpp.o
+[ 87%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/LowerPipe.cpp.o
+[ 88%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/LowerFriskAsyncCopy.cpp.o
+[ 88%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/CoalesceWaitsAndBarriers.cpp.o
+[ 90%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/IROptimize.cpp.o
+[ 91%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/FuseFragmentAccumulator.cpp.o
+[ 91%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/FuseMMACAccumulator.cpp.o
+[ 92%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/MaskAddBypass.cpp.o
+[ 92%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/LocalReduction.cpp.o
+[ 93%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/DeferLaneSum.cpp.o
+[ 95%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/CanonicalizeLDSGEPs.cpp.o
+[ 95%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/OptimizeRegisterLifetimes.cpp.o
+[ 96%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/OptimizeRegisterMath.cpp.o
+[ 97%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/PrefetchGlobalPackets.cpp.o
+[ 97%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/PrefetchMMACFragments.cpp.o
+[ 98%] Building CXX object lib/Conversion/ConvertToLLVM/CMakeFiles/ConvertThreadToLLVMIR.dir/ReuseLDSFragments.cpp.o
+[ 98%] Built target FriskTransforms
+[ 98%] Built target FriskToBase
+[ 98%] Built target ConvertThreadToLLVMIR
+[100%] Building CXX object test/CMakeFiles/MyTest.dir/test_src.cpp.o
+[100%] Linking CXX executable MyTest
+[100%] Built target MyTest
+CMake Deprecation Warning at CMakeLists.txt:5 (cmake_policy):
+  The OLD behavior for policy CMP0116 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+
+
+-- MLIR_DIR=/data2/xsl/install/lib/cmake/mlir
+-- LLVM_DIR=/data2/xsl/install/lib/cmake/llvm
+-- Found pybind11: /data2/xsl/miniconda3/lib/python3.13/site-packages/pybind11/include (found version "3.0.4")
+-- Configuring done (0.3s)
+-- Generating done (0.2s)
+-- Build files have been written to: /data2/xsl/DeepGenGraph/3rd/deepgengraph/build-debug-lowerinfo
+[ 22%] Built target DeepgengraphTableGen
+[ 41%] Built target DeepgengraphTritonTableGen
+[ 51%] Built target FriskTableGen
+[ 58%] Built target DeepgengraphIR
+[ 70%] Built target FriskIR
+[ 74%] Built target DeepgengraphTritonIR
+[ 87%] Built target DeepgengraphAnalysis
+[ 90%] Building CXX object test/CMakeFiles/LowerInfoLayoutTest.dir/lower_info_layout_test.cpp.o
+[ 90%] Linking CXX executable LowerInfoLayoutTest
+[ 90%] Built target LowerInfoLayoutTest
+[  1%] Built target PipelineIncGen
+[ 17%] Built target TilelangIncGen
+[ 25%] Built target FriskTableGen
+[ 25%] Built target FriskToBaseConversionPassIncGen
+[ 27%] Built target ThreadToLLVMPasseIncGen
+[ 32%] Built target DeepgengraphTritonTableGen
+[ 44%] Built target DeepgengraphTableGen
+[ 51%] Built target FriskIR
+[ 55%] Built target TilelangIR
+[ 55%] Built target DeepgengraphIR
+[ 56%] Built target DeepgengraphTritonIR
+[ 63%] Built target DeepgengraphAnalysis
+[ 67%] Built target FriskPipeline
+[ 79%] Built target FriskToBase
+[ 98%] Built target ConvertThreadToLLVMIR
+[ 98%] Building CXX object test/CMakeFiles/ThreadTilingTest.dir/thread_tiling_test.cpp.o
+[100%] Linking CXX executable ThreadTilingTest
+[100%] Built target ThreadTilingTest

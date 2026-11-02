@@ -1,0 +1,41 @@
+{
+  "layout_3_1": {
+    "qk_chain_lengths": {
+      "8": 16
+    },
+    "qk_terminal_fp32_elements": 64,
+    "mmac_calls": 256,
+    "lds_bytes": 65536,
+    "barrier_calls": 31,
+    "dma128_calls": 24,
+    "bpermute_calls": 72,
+    "float_lds_stores": 76,
+    "float_lds_loads": 76
+  },
+  "layout_3_3": {
+    "qk_chain_lengths": {
+      "8": 16
+    },
+    "qk_terminal_fp32_elements": 64,
+    "mmac_calls": 256,
+    "lds_bytes": 16384,
+    "barrier_calls": 17,
+    "dma128_calls": 24,
+    "bpermute_calls": 72,
+    "float_lds_stores": 0,
+    "float_lds_loads": 0
+  },
+  "diagnostic_3_1": {
+    "qk_chain_lengths": {
+      "8": 16
+    },
+    "qk_terminal_fp32_elements": 64,
+    "mmac_calls": 256,
+    "lds_bytes": 65536,
+    "barrier_calls": 31,
+    "dma128_calls": 24,
+    "bpermute_calls": 72,
+    "float_lds_stores": 76,
+    "float_lds_loads": 76
+  }
+}

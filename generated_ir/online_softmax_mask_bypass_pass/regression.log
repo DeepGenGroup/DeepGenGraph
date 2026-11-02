@@ -1,0 +1,4 @@
+PASS off transformed []
+PASS legal transformed ['aggregate4', 'aggregate8', 'double', 'half', 'known_positive', 'lhs', 'nsz']
+PASS approx transformed ['aggregate4', 'aggregate8', 'double', 'half', 'known_positive', 'lhs', 'nsz', 'plain']
+PASS 600 native CPU FP edge comparisons

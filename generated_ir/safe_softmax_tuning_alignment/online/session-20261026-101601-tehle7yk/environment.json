@@ -1,0 +1,6 @@
+{
+  "mode": "ir",
+  "mytest": "/tmp/attention-alignment-package/attention-tuning/MyTest",
+  "python": "/data2/xsl/miniconda3/bin/python3",
+  "gpu_python": "/data2/xsl/miniconda3/bin/python3"
+}

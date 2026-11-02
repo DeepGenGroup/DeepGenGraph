@@ -1,0 +1,1908 @@
+useKPack: DMA=16B, MMAC input=8B, kpack=2, BK=32 -> 32
+split-D tiles: BM=128, BN=128, Dqk=128, Dvo=128, QK=32 -> 32, VO=32 -> 32, kpack=2
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  deepgengraph.kernel @Attn_p2(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> attributes {parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 128 : i64, unit_num = 32 : i64}]} {
+    %0 = deepgengraph_triton.ptr_of %arg0 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %1 = deepgengraph_triton.ptr_of %arg2 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %2 = deepgengraph_triton.ptr_of %arg1 : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %3 = deepgengraph_triton.empty_ptr type = tensor<1x4096x32x128xf16> : <tensor<1x4096x32x128xf16>>
+    deepgengraph_triton.device_kernel args = [%0, %1, %2, %3], grid = [1, 32, 32] {
+    ^bb0(%arg3: index, %arg4: index, %arg5: index, %arg6: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg7: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg8: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, %arg9: !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>):
+      %cst = arith.constant dense<0.127531052> : tensor<1xf32>
+      %5 = deepgengraph.convert %cst, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
+      %cst_0 = arith.constant 0xFF800000 : f32
+      %cst_1 = arith.constant 0.000000e+00 : f32
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c128 = arith.constant 128 : index
+      %c128_2 = arith.constant 128 : index
+      %c32 = arith.constant 32 : index
+      %c128_3 = arith.constant 128 : index
+      %c4096 = arith.constant 4096 : index
+      %c524288 = arith.constant 524288 : index
+      %c16777216 = arith.constant 16777216 : index
+      %6 = arith.muli %arg3, %c16777216 : index
+      %7 = arith.muli %arg4, %c524288 : index
+      %8 = arith.addi %6, %7 : index
+      %9 = arith.muli %arg5, %c128 : index
+      %10 = arith.muli %9, %c128_3 : index
+      %11 = arith.addi %8, %10 : index
+      %12 = arith.addi %9, %c128 : index
+      affine.for %arg10 = 0 to 128 step 32 {
+        %13 = arith.addi %11, %arg10 : index
+        %14 = deepgengraph_triton.block_ptr_of base = %arg9, base_offset = %13, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %15 = deepgengraph.zero shape = [128, 32], type = f32 : () -> tensor<128x32xf32>
+        %16 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
+        %cst_4 = arith.constant dense<0xFF800000> : tensor<1xf32>
+        %17 = deepgengraph.add %16, %cst_4 : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+        %18:3 = scf.for %arg11 = %c0 to %12 step %c128_2 iter_args(%arg12 = %15, %arg13 = %16, %arg14 = %17) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>) {
+          %21 = deepgengraph.zero shape = [128, 128], type = f32 : () -> tensor<128x128xf32>
+          %c32_5 = arith.constant 32 : index
+          %22 = scf.for %arg15 = %c0 to %c128_3 step %c32_5 iter_args(%arg16 = %21) -> (tensor<128x128xf32>) {
+            %41 = arith.addi %11, %arg15 : index
+            %42 = arith.muli %arg15, %c4096 : index
+            %43 = arith.addi %8, %42 : index
+            %44 = arith.addi %43, %arg11 : index
+            %45 = deepgengraph_triton.block_ptr_of base = %arg6, base_offset = %41, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+            %46 = deepgengraph_triton.block_ptr_of base = %arg8, base_offset = %44, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 128], order = [0, 1] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+            %47 = deepgengraph_triton.block_load %45 : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+            %48 = deepgengraph_triton.block_load %46 : (!deepgengraph_triton<block_ptr{tensor<32x128xf16>}>) -> tensor<32x128xf16>
+            %49 = deepgengraph.mul %47, %5 : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+            %50 = deepgengraph.precise_dot_op %49, %48, acc = f32 {frisk.split_d_qk} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+            %51 = deepgengraph.add %arg16, %50 : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+            scf.yield %51 : tensor<128x128xf32>
+          } {frisk.simplify_loop}
+          %23 = deepgengraph.mask starts = [%9, %arg11], sizes = [128, 128], type = f32 {
+          ^bb0(%arg15: index, %arg16: index):
+            %41 = arith.addi %arg15, %c1 : index
+            %42 = arith.cmpi ule, %41, %arg16 : index
+            %43 = scf.if %42 -> (f32) {
+              scf.yield %cst_0 : f32
+            } else {
+              scf.yield %cst_1 : f32
+            }
+            deepgengraph.mask_yield %43 : f32
+          } : (index, index) -> tensor<128x128xf32>
+          %24 = deepgengraph.add %22, %23 : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+          %25 = deepgengraph.reduce(%24, init = %arg14), dim = 1, op = MAX, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %26 = deepgengraph.sub %24, %25 : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+          %27 = deepgengraph.sub %arg14, %25 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %28 = deepgengraph.exp2 %27 : (tensor<128x1xf32>) -> tensor<128x1xf32>
+          %29 = deepgengraph.mul %arg13, %28 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %30 = deepgengraph.exp2 %26 {frisk.split_d_exp} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+          %31 = deepgengraph.reduce(%30, init = %29), dim = 1, op = ADD, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+          %32 = deepgengraph.convert %30, type = f16 : (tensor<128x128xf32>) -> tensor<128x128xf16>
+          %33 = arith.muli %arg11, %c128_3 : index
+          %34 = arith.addi %8, %33 : index
+          %35 = arith.addi %34, %arg10 : index
+          %36 = deepgengraph_triton.block_ptr_of base = %arg7, base_offset = %35, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+          %37 = deepgengraph_triton.block_load %36 : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+          %38 = deepgengraph.precise_dot_op %32, %37, acc = f32 : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+          %39 = deepgengraph.mul %arg12, %28 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+          %40 = deepgengraph.add %39, %38 : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+          scf.yield %40, %31, %25 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>
+        }
+        %19 = deepgengraph.div %18#0, %18#1 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %20 = deepgengraph.convert %19, type = f16 : (tensor<128x32xf32>) -> tensor<128x32xf16>
+        deepgengraph_triton.block_store %14, %20 : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+      } {frisk.split_d_output}
+    } : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> ()
+    %4 = deepgengraph_triton.tensor_from %3 : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>) -> tensor<1x4096x32x128xf16>
+    deepgengraph.return %4 : tensor<1x4096x32x128xf16>
+  }
+}
+
+---------- after simplifyPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  deepgengraph.kernel @Attn_p2(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>, %arg3: tensor<1x4096x32x128xf16>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>, out_idx = [3 : i32], parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 128 : i64, unit_num = 32 : i64}]} {
+    %cst = arith.constant dense<0.127531052> : tensor<1xf32>
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %c32 = arith.constant 32 : index
+    %c4096 = arith.constant 4096 : index
+    %c524288 = arith.constant 524288 : index
+    %c16777216 = arith.constant 16777216 : index
+    %cst_2 = arith.constant dense<0xFF800000> : tensor<1xf32>
+    %0 = deepgengraph_triton.ptr_of %arg0 {argId = 0 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %1 = deepgengraph_triton.ptr_of %arg2 {argId = 2 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %2 = deepgengraph_triton.ptr_of %arg1 {argId = 1 : i32} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %3 = deepgengraph_triton.ptr_of %arg3 {argId = 3 : i32, frisk.fresh_output} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %block_id_x = gpu.block_id x
+    %block_id_y = gpu.block_id y
+    %block_id_z = gpu.block_id z
+    %4 = deepgengraph.convert %cst, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
+    %5 = arith.muli %block_id_z, %c16777216 : index
+    %6 = arith.muli %block_id_y, %c524288 : index
+    %7 = arith.addi %5, %6 : index
+    %8 = arith.muli %block_id_x, %c128 : index
+    %9 = arith.muli %8, %c128 : index
+    %10 = arith.addi %7, %9 : index
+    %11 = arith.addi %8, %c128 : index
+    affine.for %arg4 = 0 to 128 step 32 {
+      %12 = arith.addi %10, %arg4 : index
+      %13 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %12, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %14 = deepgengraph.zero shape = [128, 32], type = f32 : () -> tensor<128x32xf32>
+      %15 = deepgengraph.zero shape = [128, 1], type = f32 : () -> tensor<128x1xf32>
+      %16 = deepgengraph.add %15, %cst_2 : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+      %17:3 = scf.for %arg5 = %c0 to %11 step %c128 iter_args(%arg6 = %14, %arg7 = %15, %arg8 = %16) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>) {
+        %20 = deepgengraph.zero shape = [128, 128], type = f32 : () -> tensor<128x128xf32>
+        %21 = scf.for %arg9 = %c0 to %c128 step %c32 iter_args(%arg10 = %20) -> (tensor<128x128xf32>) {
+          %40 = arith.addi %10, %arg9 : index
+          %41 = arith.muli %arg9, %c4096 : index
+          %42 = arith.addi %7, %41 : index
+          %43 = arith.addi %42, %arg5 : index
+          %44 = deepgengraph_triton.block_ptr_of base = %0, base_offset = %40, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 0 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+          %45 = deepgengraph_triton.block_ptr_of base = %2, base_offset = %43, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 128], order = [0, 1] {argId = 1 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+          %46 = deepgengraph_triton.block_load %44 {argId = 0 : i32, block_shape = array<i64: 128, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+          %47 = deepgengraph_triton.block_load %45 {argId = 1 : i32, block_shape = array<i64: 32, 128>, offset = array<i64: 0, 0>, order = array<i64: 0, 1>, stride = array<i64: 1, 4096>} : (!deepgengraph_triton<block_ptr{tensor<32x128xf16>}>) -> tensor<32x128xf16>
+          %48 = deepgengraph.mul %46, %4 : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+          %49 = deepgengraph.precise_dot_op %48, %47, acc = f32 {frisk.split_d_qk} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+          %50 = deepgengraph.add %arg10, %49 : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+          scf.yield %50 : tensor<128x128xf32>
+        } {frisk.simplify_loop}
+        %22 = deepgengraph.mask starts = [%8, %arg5], sizes = [128, 128], type = f32 {
+        ^bb0(%arg9: index, %arg10: index):
+          %40 = arith.addi %arg9, %c1 : index
+          %41 = arith.cmpi ule, %40, %arg10 : index
+          %42 = scf.if %41 -> (f32) {
+            scf.yield %cst_0 : f32
+          } else {
+            scf.yield %cst_1 : f32
+          }
+          deepgengraph.mask_yield %42 : f32
+        } : (index, index) -> tensor<128x128xf32>
+        %23 = deepgengraph.add %21, %22 : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+        %24 = deepgengraph.reduce(%23, init = %arg8), dim = 1, op = MAX, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %25 = deepgengraph.sub %23, %24 : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+        %26 = deepgengraph.sub %arg8, %24 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %27 = deepgengraph.exp2 %26 : (tensor<128x1xf32>) -> tensor<128x1xf32>
+        %28 = deepgengraph.mul %arg7, %27 : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %29 = deepgengraph.exp2 %25 {frisk.split_d_exp} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+        %30 = deepgengraph.reduce(%29, init = %28), dim = 1, op = ADD, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %31 = deepgengraph.convert %29, type = f16 : (tensor<128x128xf32>) -> tensor<128x128xf16>
+        %32 = arith.muli %arg5, %c128 : index
+        %33 = arith.addi %7, %32 : index
+        %34 = arith.addi %33, %arg4 : index
+        %35 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %34, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %36 = deepgengraph_triton.block_load %35 {argId = 2 : i32, block_shape = array<i64: 128, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %37 = deepgengraph.precise_dot_op %31, %36, acc = f32 : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+        %38 = deepgengraph.mul %arg6, %27 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %39 = deepgengraph.add %38, %37 : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        scf.yield %39, %30, %24 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>
+      }
+      %18 = deepgengraph.div %17#0, %17#1 : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %19 = deepgengraph.convert %18, type = f16 : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %13, %19 {argId = 3 : i32, block_shape = array<i64: 128, 32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    } {frisk.split_d_output}
+    deepgengraph.return
+  }
+}
+[def] arith.constant
+[def] arith.addi
+[def] arith.constant
+[def] arith.muli
+[def] arith.constant
+[def] gpu.block_id
+[def] arith.constant
+[def] arith.constant
+split-D sharing: QK copies=1, softmax copies=1 per key tile
+
+---------- after scfForConversion ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  deepgengraph.kernel @Attn_p2(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>, %arg3: tensor<1x4096x32x128xf16>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>, out_idx = [3 : i32], parallel_map = [{arg_dims = [0, 0, 0], res_dims = [0], size_per_unit = 1 : i64, unit_num = 1 : i64}, {arg_dims = [2, 2, 2], res_dims = [2], size_per_unit = 1 : i64, unit_num = 32 : i64}, {arg_dims = [1, -1, -1], res_dims = [1], size_per_unit = 128 : i64, unit_num = 32 : i64}]} {
+    %c96 = arith.constant 96 : index
+    %c64 = arith.constant 64 : index
+    %c32 = arith.constant 32 : index
+    %c16384 = arith.constant 16384 : index
+    %cst = arith.constant {inMs = array<i32>, outMs = array<i32: 0>} dense<0.127531052> : tensor<1xf32>
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %c4096 = arith.constant 4096 : index
+    %c524288 = arith.constant 524288 : index
+    %c16777216 = arith.constant 16777216 : index
+    %cst_2 = arith.constant {inMs = array<i32>, outMs = array<i32: 0>} dense<0xFF800000> : tensor<1xf32>
+    %0 = deepgengraph_triton.ptr_of %arg0 {argId = 0 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %1 = deepgengraph_triton.ptr_of %arg2 {argId = 2 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %2 = deepgengraph_triton.ptr_of %arg1 {argId = 1 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %3 = deepgengraph_triton.ptr_of %arg3 {argId = 3 : i32, frisk.fresh_output, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+    %block_id_x = gpu.block_id x
+    %block_id_y = gpu.block_id y
+    %block_id_z = gpu.block_id z
+    %4 = deepgengraph.convert %cst, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<1xf32>) -> tensor<1xf16>
+    %5 = arith.muli %block_id_z, %c16777216 : index
+    %6 = arith.muli %block_id_y, %c524288 : index
+    %7 = arith.addi %5, %6 : index
+    %8 = arith.muli %block_id_x, %c128 : index
+    %9 = arith.muli %block_id_x, %c16384 : index
+    %10 = arith.addi %7, %9 : index
+    %11 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %10, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+    %12 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+    %13 = deepgengraph.zero shape = [128, 1], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x1xf32>
+    %14 = deepgengraph.add %13, %cst_2 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+    %15 = arith.addi %10, %c32 : index
+    %16 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %15, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+    %17 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+    %18 = arith.addi %10, %c64 : index
+    %19 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %18, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+    %20 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+    %21 = arith.addi %10, %c96 : index
+    %22 = deepgengraph_triton.block_ptr_of base = %3, base_offset = %21, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+    %23 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+    %24:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%block_id_x] step 128 iter_args(%arg5 = %12, %arg6 = %13, %arg7 = %14, %arg8 = %17, %arg9 = %20, %arg10 = %23) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>, tensor<128x32xf32>, tensor<128x32xf32>, tensor<128x32xf32>) {
+      %33 = deepgengraph.zero shape = [128, 128], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x128xf32>
+      %34 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %33) -> (tensor<128x128xf32>) {
+        %70 = arith.addi %10, %arg11 : index
+        %71 = arith.muli %arg11, %c4096 : index
+        %72 = arith.addi %7, %71 : index
+        %73 = arith.addi %72, %arg4 : index
+        %74 = deepgengraph_triton.block_ptr_of base = %0, base_offset = %70, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 0 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %75 = deepgengraph_triton.block_ptr_of base = %2, base_offset = %73, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 128], order = [0, 1] {argId = 1 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+        %76 = deepgengraph_triton.block_load %74 {argId = 0 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %77 = deepgengraph_triton.block_load %75 {argId = 1 : i32, block_shape = array<i64: 32, 128>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 0, 1>, outMs = array<i32: 3>, stride = array<i64: 1, 4096>} : (!deepgengraph_triton<block_ptr{tensor<32x128xf16>}>) -> tensor<32x128xf16>
+        %78 = deepgengraph.mul %76, %4 {inMs = array<i32: 3, 0>, outMs = array<i32: 3>} : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+        %79 = deepgengraph.precise_dot_op %78, %77, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+        %80 = deepgengraph.add %arg12, %79 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+        affine.yield {inMs = array<i32>} %80 : tensor<128x128xf32>
+      } {frisk.simplify_loop, inMs = array<i32>, outMs = array<i32: 0>}
+      %35 = deepgengraph.mask starts = [%8, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %70 = arith.addi %arg11, %c1 : index
+        %71 = arith.cmpi ule, %70, %arg12 : index
+        %72 = arith.select %71, %cst_0, %cst_1 : f32
+        deepgengraph.mask_yield %72 : f32
+      } {inMs = array<i32>, outMs = array<i32: 0>} : (index, index) -> tensor<128x128xf32>
+      %36 = deepgengraph.add %34, %35 {inMs = array<i32: 0, 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+      %37 = deepgengraph.reduce(%36, init = %arg7), dim = 1, op = MAX {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %38 = deepgengraph.sub %36, %37 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+      %39 = deepgengraph.sub %arg7, %37 {inMs = array<i32: 0, 3>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %40 = deepgengraph.exp2 %39 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+      %41 = deepgengraph.mul %arg6, %40 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %42 = deepgengraph.exp2 %38 {inMs = array<i32: 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+      %43 = deepgengraph.reduce(%42, init = %41), dim = 1, op = ADD {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %44 = deepgengraph.convert %42, type = f16 {inMs = array<i32: 3>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf16>
+      %45 = arith.muli %arg4, %c128 : index
+      %46 = arith.addi %7, %45 : index
+      %47 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %46, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %48 = deepgengraph_triton.block_load %47 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+      %49 = deepgengraph.precise_dot_op %44, %48, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %50 = deepgengraph.mul %arg5, %40 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %51 = deepgengraph.add %50, %49 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %52 = arith.addi %46, %c32 : index
+      %53 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %52, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %54 = deepgengraph_triton.block_load %53 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+      %55 = deepgengraph.precise_dot_op %44, %54, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %56 = deepgengraph.mul %arg8, %40 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %57 = deepgengraph.add %56, %55 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %58 = arith.addi %46, %c64 : index
+      %59 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %58, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %60 = deepgengraph_triton.block_load %59 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+      %61 = deepgengraph.precise_dot_op %44, %60, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %62 = deepgengraph.mul %arg9, %40 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %63 = deepgengraph.add %62, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %64 = arith.addi %46, %c96 : index
+      %65 = deepgengraph_triton.block_ptr_of base = %1, base_offset = %64, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %66 = deepgengraph_triton.block_load %65 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+      %67 = deepgengraph.precise_dot_op %44, %66, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %68 = deepgengraph.mul %arg10, %40 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %69 = deepgengraph.add %68, %67 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      affine.yield {inMs = array<i32>} %51, %43, %37, %57, %63, %69 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>, tensor<128x32xf32>, tensor<128x32xf32>, tensor<128x32xf32>
+    } {inMs = array<i32>, outMs = array<i32: 0, 0, 0, 0, 0, 0>}
+    %25 = deepgengraph.div %24#0, %24#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %26 = deepgengraph.convert %25, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+    deepgengraph_triton.block_store %11, %26 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    %27 = deepgengraph.div %24#3, %24#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %28 = deepgengraph.convert %27, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+    deepgengraph_triton.block_store %16, %28 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    %29 = deepgengraph.div %24#4, %24#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %30 = deepgengraph.convert %29, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+    deepgengraph_triton.block_store %19, %30 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    %31 = deepgengraph.div %24#5, %24#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %32 = deepgengraph.convert %31, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+    deepgengraph_triton.block_store %22, %32 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    deepgengraph.return
+  }
+}
+
+---------- after createConvertKernelOpToFriskPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  frisk.kernel @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>} {
+    %0 = builtin.unrealized_conversion_cast %arg3 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+    %1 = builtin.unrealized_conversion_cast %arg2 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+    %2 = builtin.unrealized_conversion_cast %arg1 : memref<1x32x128x4096xf16, 1> to tensor<1x4096x32x128xf16>
+    %3 = builtin.unrealized_conversion_cast %arg0 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+    frisk.parallel (%bz, %by, %bx) = (1, 32, 32), threads = 256 {
+      %c96 = arith.constant 96 : index
+      %c64 = arith.constant 64 : index
+      %c32 = arith.constant 32 : index
+      %c16384 = arith.constant 16384 : index
+      %cst = arith.constant {inMs = array<i32>, outMs = array<i32: 0>} dense<0.127531052> : tensor<1xf32>
+      %cst_0 = arith.constant 0xFF800000 : f32
+      %cst_1 = arith.constant 0.000000e+00 : f32
+      %c1 = arith.constant 1 : index
+      %c128 = arith.constant 128 : index
+      %c4096 = arith.constant 4096 : index
+      %c524288 = arith.constant 524288 : index
+      %c16777216 = arith.constant 16777216 : index
+      %cst_2 = arith.constant {inMs = array<i32>, outMs = array<i32: 0>} dense<0xFF800000> : tensor<1xf32>
+      %4 = deepgengraph_triton.ptr_of %3 {argId = 0 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+      %5 = deepgengraph_triton.ptr_of %1 {argId = 2 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+      %6 = deepgengraph_triton.ptr_of %2 {argId = 1 : i32, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+      %7 = deepgengraph_triton.ptr_of %0 {argId = 3 : i32, frisk.fresh_output, inMs = array<i32>} : (tensor<1x4096x32x128xf16>) -> !deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>
+      %8 = deepgengraph.convert %cst, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<1xf32>) -> tensor<1xf16>
+      %9 = arith.muli %bz, %c16777216 : index
+      %10 = arith.muli %by, %c524288 : index
+      %11 = arith.addi %9, %10 : index
+      %12 = arith.muli %bx, %c128 : index
+      %13 = arith.muli %bx, %c16384 : index
+      %14 = arith.addi %11, %13 : index
+      %15 = deepgengraph_triton.block_ptr_of base = %7, base_offset = %14, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %16 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+      %17 = deepgengraph.zero shape = [128, 1], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x1xf32>
+      %18 = deepgengraph.add %17, %cst_2 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+      %19 = arith.addi %14, %c32 : index
+      %20 = deepgengraph_triton.block_ptr_of base = %7, base_offset = %19, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %21 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+      %22 = arith.addi %14, %c64 : index
+      %23 = deepgengraph_triton.block_ptr_of base = %7, base_offset = %22, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %24 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+      %25 = arith.addi %14, %c96 : index
+      %26 = deepgengraph_triton.block_ptr_of base = %7, base_offset = %25, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 3 : i32, write = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %27 = deepgengraph.zero shape = [128, 32], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x32xf32>
+      %28:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%bx] step 128 iter_args(%arg5 = %16, %arg6 = %17, %arg7 = %18, %arg8 = %21, %arg9 = %24, %arg10 = %27) -> (tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>, tensor<128x32xf32>, tensor<128x32xf32>, tensor<128x32xf32>) {
+        %37 = deepgengraph.zero shape = [128, 128], type = f32 {inMs = array<i32>, outMs = array<i32: 0>} : () -> tensor<128x128xf32>
+        %38 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %37) -> (tensor<128x128xf32>) {
+          %74 = arith.addi %14, %arg11 : index
+          %75 = arith.muli %arg11, %c4096 : index
+          %76 = arith.addi %11, %75 : index
+          %77 = arith.addi %76, %arg4 : index
+          %78 = deepgengraph_triton.block_ptr_of base = %4, base_offset = %74, shape = [128, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 0 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+          %79 = deepgengraph_triton.block_ptr_of base = %6, base_offset = %77, shape = [128, 4096], stride = [1, 4096], offset = [0, 0], block_shape = [32, 128], order = [0, 1] {argId = 1 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+          %80 = deepgengraph_triton.block_load %78 {argId = 0 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+          %81 = deepgengraph_triton.block_load %79 {argId = 1 : i32, block_shape = array<i64: 32, 128>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 0, 1>, outMs = array<i32: 3>, stride = array<i64: 1, 4096>} : (!deepgengraph_triton<block_ptr{tensor<32x128xf16>}>) -> tensor<32x128xf16>
+          %82 = deepgengraph.mul %80, %8 {inMs = array<i32: 3, 0>, outMs = array<i32: 3>} : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+          %83 = deepgengraph.precise_dot_op %82, %81, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+          %84 = deepgengraph.add %arg12, %83 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+          affine.yield {inMs = array<i32>} %84 : tensor<128x128xf32>
+        } {frisk.simplify_loop, inMs = array<i32>, outMs = array<i32: 0>}
+        %39 = deepgengraph.mask starts = [%12, %arg4], sizes = [128, 128], type = f32 {
+        ^bb0(%arg11: index, %arg12: index):
+          %74 = arith.addi %arg11, %c1 : index
+          %75 = arith.cmpi ule, %74, %arg12 : index
+          %76 = arith.select %75, %cst_0, %cst_1 : f32
+          deepgengraph.mask_yield %76 : f32
+        } {inMs = array<i32>, outMs = array<i32: 0>} : (index, index) -> tensor<128x128xf32>
+        %40 = deepgengraph.add %38, %39 {inMs = array<i32: 0, 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+        %41 = deepgengraph.reduce(%40, init = %arg7), dim = 1, op = MAX {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %42 = deepgengraph.sub %40, %41 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+        %43 = deepgengraph.sub %arg7, %41 {inMs = array<i32: 0, 3>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %44 = deepgengraph.exp2 %43 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+        %45 = deepgengraph.mul %arg6, %44 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %46 = deepgengraph.exp2 %42 {inMs = array<i32: 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+        %47 = deepgengraph.reduce(%46, init = %45), dim = 1, op = ADD {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+        %48 = deepgengraph.convert %46, type = f16 {inMs = array<i32: 3>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf16>
+        %49 = arith.muli %arg4, %c128 : index
+        %50 = arith.addi %11, %49 : index
+        %51 = deepgengraph_triton.block_ptr_of base = %5, base_offset = %50, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %52 = deepgengraph_triton.block_load %51 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %53 = deepgengraph.precise_dot_op %48, %52, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+        %54 = deepgengraph.mul %arg5, %44 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %55 = deepgengraph.add %54, %53 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        %56 = arith.addi %50, %c32 : index
+        %57 = deepgengraph_triton.block_ptr_of base = %5, base_offset = %56, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %58 = deepgengraph_triton.block_load %57 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %59 = deepgengraph.precise_dot_op %48, %58, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+        %60 = deepgengraph.mul %arg8, %44 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %61 = deepgengraph.add %60, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        %62 = arith.addi %50, %c64 : index
+        %63 = deepgengraph_triton.block_ptr_of base = %5, base_offset = %62, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %64 = deepgengraph_triton.block_load %63 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %65 = deepgengraph.precise_dot_op %48, %64, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+        %66 = deepgengraph.mul %arg9, %44 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %67 = deepgengraph.add %66, %65 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        %68 = arith.addi %50, %c96 : index
+        %69 = deepgengraph_triton.block_ptr_of base = %5, base_offset = %68, shape = [4096, 128], stride = [4096, 1], offset = [0, 0], block_shape = [128, 32], order = [1, 0] {argId = 2 : i32, read = true} : (!deepgengraph_triton.ptr<tensor<1x4096x32x128xf16>>, index) -> !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %70 = deepgengraph_triton.block_load %69 {argId = 2 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, outMs = array<i32: 3>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>) -> tensor<128x32xf16>
+        %71 = deepgengraph.precise_dot_op %48, %70, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+        %72 = deepgengraph.mul %arg10, %44 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+        %73 = deepgengraph.add %72, %71 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+        affine.yield {inMs = array<i32>} %55, %47, %41, %61, %67, %73 : tensor<128x32xf32>, tensor<128x1xf32>, tensor<128x1xf32>, tensor<128x32xf32>, tensor<128x32xf32>, tensor<128x32xf32>
+      } {inMs = array<i32>, outMs = array<i32: 0, 0, 0, 0, 0, 0>}
+      %29 = deepgengraph.div %28#0, %28#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %30 = deepgengraph.convert %29, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %15, %30 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+      %31 = deepgengraph.div %28#3, %28#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %32 = deepgengraph.convert %31, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %20, %32 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+      %33 = deepgengraph.div %28#4, %28#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %34 = deepgengraph.convert %33, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %23, %34 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+      %35 = deepgengraph.div %28#5, %28#1 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %36 = deepgengraph.convert %35, type = f16 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>) -> tensor<128x32xf16>
+      deepgengraph_triton.block_store %26, %36 {argId = 3 : i32, block_shape = array<i64: 128, 32>, inMs = array<i32>, offset = array<i64: 0, 0>, order = array<i64: 1, 0>, stride = array<i64: 4096, 1>} : (!deepgengraph_triton<block_ptr{tensor<128x32xf16>}>, tensor<128x32xf16>) -> ()
+    }
+    frisk.end
+  }
+}
+argId[3] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 16384
+argId[3] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32
+argId[3] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64
+argId[3] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96
+argId[0] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d3 * 16777216 + d2 * 524288 + d1 * 16384 + d0
+argId[1] permuted : 1,32,128,4096;
+[def] arith.addi
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,4096,1
+expr_baseOffset:d3 * 16777216 + d2 * 524288 + d1 * 4096 + d0
+argId[2] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 128
+argId[2] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 128 + 32
+argId[2] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 128 + 64
+argId[2] permuted : 1,32,4096,128;
+[def] arith.addi
+[def] arith.constant
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.addi
+[def] arith.muli
+[def] arith.constant
+[def] null
+[def] arith.muli
+[def] arith.constant
+[def] null
+sourceStrides:16777216,524288,128,1
+expr_baseOffset:d2 * 16777216 + d1 * 524288 + d0 * 128 + 96
+ ---- before AffineForEmptyInitsAndYieldPattern :
+frisk.kernel @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>} {
+  %0 = builtin.unrealized_conversion_cast %arg3 : memref<1x32x4096x128xf16, 1> to memref<1x4096x32x128xf16>
+  %1 = builtin.unrealized_conversion_cast %0 : memref<1x4096x32x128xf16> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+  %2 = builtin.unrealized_conversion_cast %arg3 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  %3 = builtin.unrealized_conversion_cast %arg2 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  %4 = builtin.unrealized_conversion_cast %arg1 : memref<1x32x128x4096xf16, 1> to tensor<1x4096x32x128xf16>
+  %5 = builtin.unrealized_conversion_cast %arg0 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  frisk.parallel (%bz, %by, %bx) = (1, 32, 32), threads = 256 {
+    %c96 = arith.constant 96 : index
+    %c64 = arith.constant 64 : index
+    %c32 = arith.constant 32 : index
+    %c16384 = arith.constant 16384 : index
+    %cst = arith.constant 0.127531052 : f32
+    %6 = builtin.unrealized_conversion_cast %cst : f32 to tensor<1xf32>
+    %7 = builtin.unrealized_conversion_cast %6 : tensor<1xf32> to f32
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %c4096 = arith.constant 4096 : index
+    %c524288 = arith.constant 524288 : index
+    %c16777216 = arith.constant 16777216 : index
+    %cst_2 = arith.constant 0xFF800000 : f32
+    %8 = builtin.unrealized_conversion_cast %cst_2 : f32 to tensor<1xf32>
+    %9 = frisk.cast %7 : f32 -> f16
+    %10 = builtin.unrealized_conversion_cast %9 : f16 to tensor<1xf16>
+    %11 = arith.muli %bz, %c16777216 : index
+    %12 = arith.muli %by, %c524288 : index
+    %13 = arith.addi %11, %12 : index
+    %14 = arith.muli %bx, %c128 : index
+    %15 = arith.muli %bx, %c16384 : index
+    %16 = arith.addi %13, %15 : index
+    %17 = frisk.zero : memref<128x32xf32>
+    %18 = frisk.zero : memref<128x1xf32>
+    %19 = builtin.unrealized_conversion_cast %18 : memref<128x1xf32> to tensor<128x1xf32>
+    %20 = deepgengraph.add %19, %8 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+    %21 = builtin.unrealized_conversion_cast %20 : tensor<128x1xf32> to memref<128x1xf32>
+    %22 = arith.addi %16, %c32 : index
+    %23 = frisk.zero : memref<128x32xf32>
+    %24 = arith.addi %16, %c64 : index
+    %25 = frisk.zero : memref<128x32xf32>
+    %26 = arith.addi %16, %c96 : index
+    %27 = frisk.zero : memref<128x32xf32>
+    %28:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%bx] step 128 iter_args(%arg5 = %17, %arg6 = %18, %arg7 = %21, %arg8 = %23, %arg9 = %25, %arg10 = %27) -> (memref<128x32xf32>, memref<128x1xf32>, memref<128x1xf32>, memref<128x32xf32>, memref<128x32xf32>, memref<128x32xf32>) {
+      %46 = builtin.unrealized_conversion_cast %arg10 : memref<128x32xf32> to tensor<128x32xf32>
+      %47 = builtin.unrealized_conversion_cast %arg9 : memref<128x32xf32> to tensor<128x32xf32>
+      %48 = builtin.unrealized_conversion_cast %arg8 : memref<128x32xf32> to tensor<128x32xf32>
+      %49 = builtin.unrealized_conversion_cast %arg7 : memref<128x1xf32> to tensor<128x1xf32>
+      %50 = builtin.unrealized_conversion_cast %arg6 : memref<128x1xf32> to tensor<128x1xf32>
+      %51 = builtin.unrealized_conversion_cast %arg5 : memref<128x32xf32> to tensor<128x32xf32>
+      %52 = frisk.zero : memref<128x128xf32>
+      %53 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %52) -> (memref<128x128xf32>) {
+        %106 = builtin.unrealized_conversion_cast %arg12 : memref<128x128xf32> to tensor<128x128xf32>
+        %107 = arith.addi %16, %arg11 : index
+        %108 = arith.muli %arg11, %c4096 : index
+        %109 = arith.addi %13, %108 : index
+        %110 = arith.addi %109, %arg4 : index
+        %111 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %112 = builtin.unrealized_conversion_cast %111 : memref<128x32xf16, 3> to tensor<128x32xf16>
+        %113 = builtin.unrealized_conversion_cast %111 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %114 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %115 = builtin.unrealized_conversion_cast %114 : memref<32x128xf16, 3> to tensor<32x128xf16>
+        %116 = builtin.unrealized_conversion_cast %114 : memref<32x128xf16, 3> to !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+        %117 = frisk.buffer_view %arg0[0, ((%bz * 16777216 + %by * 524288 + %bx * 16384 + %arg11) floordiv 524288) mod 32, (%bz * 131072 + %by * 4096 + %bx * 128 + %arg11 floordiv 128) mod 4096, %arg11 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %117 to %111 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %118 = frisk.buffer_view %arg1[0, ((%bz * 16777216 + %by * 524288 + %arg11 * 4096 + %arg4) floordiv 524288) mod 32, (%bz * 4096 + %by * 128 + %arg11 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, 1> -> memref<32x128xf16, 1>
+        frisk.copy %118 to %114 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        %119 = deepgengraph.mul %112, %10 {inMs = array<i32: 3, 0>, outMs = array<i32: 3>} : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+        %120 = deepgengraph.precise_dot_op %119, %115, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+        %121 = deepgengraph.add %106, %120 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+        %122 = builtin.unrealized_conversion_cast %121 : tensor<128x128xf32> to memref<128x128xf32>
+        affine.yield %122 : memref<128x128xf32>
+      } {frisk.simplify_loop, inMs = array<i32>, outMs = array<i32: 0>}
+      %54 = builtin.unrealized_conversion_cast %53 : memref<128x128xf32> to tensor<128x128xf32>
+      %55 = deepgengraph.mask starts = [%14, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %106 = arith.addi %arg11, %c1 : index
+        %107 = arith.cmpi ule, %106, %arg12 : index
+        %108 = arith.select %107, %cst_0, %cst_1 : f32
+        deepgengraph.mask_yield %108 : f32
+      } {inMs = array<i32>, outMs = array<i32: 0>} : (index, index) -> tensor<128x128xf32>
+      %56 = deepgengraph.add %54, %55 {inMs = array<i32: 0, 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+      %57 = deepgengraph.reduce(%56, init = %49), dim = 1, op = MAX {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %58 = builtin.unrealized_conversion_cast %57 : tensor<128x1xf32> to memref<128x1xf32>
+      %59 = deepgengraph.sub %56, %57 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+      %60 = deepgengraph.sub %49, %57 {inMs = array<i32: 0, 3>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %61 = deepgengraph.exp2 %60 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+      %62 = deepgengraph.mul %50, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %63 = deepgengraph.exp2 %59 {inMs = array<i32: 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+      %64 = builtin.unrealized_conversion_cast %63 : tensor<128x128xf32> to memref<128x128xf32, 3>
+      %65 = deepgengraph.reduce(%63, init = %62), dim = 1, op = ADD {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %66 = builtin.unrealized_conversion_cast %65 : tensor<128x1xf32> to memref<128x1xf32>
+      %67 = frisk.cast %64 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %68 = builtin.unrealized_conversion_cast %67 : memref<128x128xf16, 3> to tensor<128x128xf16>
+      %69 = arith.muli %arg4, %c128 : index
+      %70 = arith.addi %13, %69 : index
+      %71 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %72 = builtin.unrealized_conversion_cast %71 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %73 = builtin.unrealized_conversion_cast %71 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %74 = frisk.buffer_view %arg2[0, (%bz * 32 + %by + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %74 to %71 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %75 = deepgengraph.precise_dot_op %68, %72, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %76 = deepgengraph.mul %51, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %77 = deepgengraph.add %76, %75 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %78 = builtin.unrealized_conversion_cast %77 : tensor<128x32xf32> to memref<128x32xf32>
+      %79 = arith.addi %70, %c32 : index
+      %80 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %81 = builtin.unrealized_conversion_cast %80 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %82 = builtin.unrealized_conversion_cast %80 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %83 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %83 to %80 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %84 = deepgengraph.precise_dot_op %68, %81, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %85 = deepgengraph.mul %48, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %86 = deepgengraph.add %85, %84 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %87 = builtin.unrealized_conversion_cast %86 : tensor<128x32xf32> to memref<128x32xf32>
+      %88 = arith.addi %70, %c64 : index
+      %89 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %90 = builtin.unrealized_conversion_cast %89 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %91 = builtin.unrealized_conversion_cast %89 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %92 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %92 to %89 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %93 = deepgengraph.precise_dot_op %68, %90, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %94 = deepgengraph.mul %47, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %95 = deepgengraph.add %94, %93 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %96 = builtin.unrealized_conversion_cast %95 : tensor<128x32xf32> to memref<128x32xf32>
+      %97 = arith.addi %70, %c96 : index
+      %98 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %99 = builtin.unrealized_conversion_cast %98 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %100 = builtin.unrealized_conversion_cast %98 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %101 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %101 to %98 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %102 = deepgengraph.precise_dot_op %68, %99, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %103 = deepgengraph.mul %46, %61 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %104 = deepgengraph.add %103, %102 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %105 = builtin.unrealized_conversion_cast %104 : tensor<128x32xf32> to memref<128x32xf32>
+      affine.yield %78, %66, %58, %87, %96, %105 : memref<128x32xf32>, memref<128x1xf32>, memref<128x1xf32>, memref<128x32xf32>, memref<128x32xf32>, memref<128x32xf32>
+    } {inMs = array<i32>, outMs = array<i32: 0, 0, 0, 0, 0, 0>}
+    %29 = builtin.unrealized_conversion_cast %28#5 : memref<128x32xf32> to tensor<128x32xf32>
+    %30 = builtin.unrealized_conversion_cast %28#4 : memref<128x32xf32> to tensor<128x32xf32>
+    %31 = builtin.unrealized_conversion_cast %28#3 : memref<128x32xf32> to tensor<128x32xf32>
+    %32 = builtin.unrealized_conversion_cast %28#1 : memref<128x1xf32> to tensor<128x1xf32>
+    %33 = builtin.unrealized_conversion_cast %28#0 : memref<128x32xf32> to tensor<128x32xf32>
+    %34 = deepgengraph.div %33, %32 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %35 = builtin.unrealized_conversion_cast %34 : tensor<128x32xf32> to memref<128x32xf32>
+    %36 = frisk.cast %35 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %36 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %37 = deepgengraph.div %31, %32 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %38 = builtin.unrealized_conversion_cast %37 : tensor<128x32xf32> to memref<128x32xf32>
+    %39 = frisk.cast %38 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %39 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %40 = deepgengraph.div %30, %32 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %41 = builtin.unrealized_conversion_cast %40 : tensor<128x32xf32> to memref<128x32xf32>
+    %42 = frisk.cast %41 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %42 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %43 = deepgengraph.div %29, %32 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %44 = builtin.unrealized_conversion_cast %43 : tensor<128x32xf32> to memref<128x32xf32>
+    %45 = frisk.cast %44 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %45 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+  }
+  frisk.end
+}
+op.getNumIterOperands() = 6
+op.getNumIterOperands() = 1
+ ---- after lower memref Op :
+frisk.kernel @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>} {
+  %0 = builtin.unrealized_conversion_cast %arg3 : memref<1x32x4096x128xf16, 1> to memref<1x4096x32x128xf16>
+  %1 = builtin.unrealized_conversion_cast %0 : memref<1x4096x32x128xf16> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+  %2 = builtin.unrealized_conversion_cast %arg3 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  %3 = builtin.unrealized_conversion_cast %arg2 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  %4 = builtin.unrealized_conversion_cast %arg1 : memref<1x32x128x4096xf16, 1> to tensor<1x4096x32x128xf16>
+  %5 = builtin.unrealized_conversion_cast %arg0 : memref<1x32x4096x128xf16, 1> to tensor<1x4096x32x128xf16>
+  frisk.parallel (%bz, %by, %bx) = (1, 32, 32), threads = 256 {
+    %c96 = arith.constant 96 : index
+    %c64 = arith.constant 64 : index
+    %c32 = arith.constant 32 : index
+    %c16384 = arith.constant 16384 : index
+    %cst = arith.constant 0.127531052 : f32
+    %6 = builtin.unrealized_conversion_cast %cst : f32 to tensor<1xf32>
+    %7 = builtin.unrealized_conversion_cast %6 : tensor<1xf32> to f32
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %c4096 = arith.constant 4096 : index
+    %c524288 = arith.constant 524288 : index
+    %c16777216 = arith.constant 16777216 : index
+    %cst_2 = arith.constant 0xFF800000 : f32
+    %8 = builtin.unrealized_conversion_cast %cst_2 : f32 to tensor<1xf32>
+    %9 = frisk.cast %7 : f32 -> f16
+    %10 = builtin.unrealized_conversion_cast %9 : f16 to tensor<1xf16>
+    %11 = arith.muli %bz, %c16777216 : index
+    %12 = arith.muli %by, %c524288 : index
+    %13 = arith.addi %11, %12 : index
+    %14 = arith.muli %bx, %c128 : index
+    %15 = arith.muli %bx, %c16384 : index
+    %16 = arith.addi %13, %15 : index
+    %17 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+    %18 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+    %19 = builtin.unrealized_conversion_cast %18 : memref<128x1xf32> to tensor<128x1xf32> {initIdx = 1 : index}
+    %20 = deepgengraph.add %19, %8 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<1xf32>) -> tensor<128x1xf32>
+    %21 = builtin.unrealized_conversion_cast %20 : tensor<128x1xf32> to memref<128x1xf32> {initIdx = 2 : index}
+    %22 = arith.addi %16, %c32 : index
+    %23 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+    %24 = arith.addi %16, %c64 : index
+    %25 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+    %26 = arith.addi %16, %c96 : index
+    %27 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+    affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%bx] step 128 {
+      %45 = builtin.unrealized_conversion_cast %27 : memref<128x32xf32> to tensor<128x32xf32>
+      %46 = builtin.unrealized_conversion_cast %25 : memref<128x32xf32> to tensor<128x32xf32>
+      %47 = builtin.unrealized_conversion_cast %23 : memref<128x32xf32> to tensor<128x32xf32>
+      %48 = builtin.unrealized_conversion_cast %21 : memref<128x1xf32> to tensor<128x1xf32>
+      %49 = builtin.unrealized_conversion_cast %18 : memref<128x1xf32> to tensor<128x1xf32>
+      %50 = builtin.unrealized_conversion_cast %17 : memref<128x32xf32> to tensor<128x32xf32>
+      %51 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+      affine.for %arg5 = 0 to 128 step 32 {
+        %104 = builtin.unrealized_conversion_cast %51 : memref<128x128xf32> to tensor<128x128xf32>
+        %105 = arith.addi %16, %arg5 : index
+        %106 = arith.muli %arg5, %c4096 : index
+        %107 = arith.addi %13, %106 : index
+        %108 = arith.addi %107, %arg4 : index
+        %109 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %110 = builtin.unrealized_conversion_cast %109 : memref<128x32xf16, 3> to tensor<128x32xf16>
+        %111 = builtin.unrealized_conversion_cast %109 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+        %112 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %113 = builtin.unrealized_conversion_cast %112 : memref<32x128xf16, 3> to tensor<32x128xf16>
+        %114 = builtin.unrealized_conversion_cast %112 : memref<32x128xf16, 3> to !deepgengraph_triton<block_ptr{tensor<32x128xf16>}>
+        %115 = frisk.buffer_view %arg0[0, ((%bz * 16777216 + %by * 524288 + %bx * 16384 + %arg5) floordiv 524288) mod 32, (%bz * 131072 + %by * 4096 + %bx * 128 + %arg5 floordiv 128) mod 4096, %arg5 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %115 to %109 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %116 = frisk.buffer_view %arg1[0, ((%bz * 16777216 + %by * 524288 + %arg5 * 4096 + %arg4) floordiv 524288) mod 32, (%bz * 4096 + %by * 128 + %arg5 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, 1> -> memref<32x128xf16, 1>
+        frisk.copy %116 to %112 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        %117 = deepgengraph.mul %110, %10 {inMs = array<i32: 3, 0>, outMs = array<i32: 3>} : (tensor<128x32xf16>, tensor<1xf16>) -> tensor<128x32xf16>
+        %118 = deepgengraph.precise_dot_op %117, %113, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x32xf16>, tensor<32x128xf16>) -> tensor<128x128xf32>
+        %119 = deepgengraph.add %104, %118 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+        %120 = builtin.unrealized_conversion_cast %119 : tensor<128x128xf32> to memref<128x128xf32>
+        frisk.copy %120 to %51 [affine_map<() -> (2)>] : memref<128x128xf32>, memref<128x128xf32>
+      } {frisk.simplify_loop}
+      %52 = builtin.unrealized_conversion_cast %51 : memref<128x128xf32> to tensor<128x128xf32> {initIdx = 0 : index}
+      %53 = deepgengraph.mask starts = [%14, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg5: index, %arg6: index):
+        %104 = arith.addi %arg5, %c1 : index
+        %105 = arith.cmpi ule, %104, %arg6 : index
+        %106 = arith.select %105, %cst_0, %cst_1 : f32
+        deepgengraph.mask_yield %106 : f32
+      } {inMs = array<i32>, outMs = array<i32: 0>} : (index, index) -> tensor<128x128xf32>
+      %54 = deepgengraph.add %52, %53 {inMs = array<i32: 0, 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>, tensor<128x128xf32>) -> tensor<128x128xf32>
+      %55 = deepgengraph.reduce(%54, init = %48), dim = 1, op = MAX {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %56 = builtin.unrealized_conversion_cast %55 : tensor<128x1xf32> to memref<128x1xf32, 3>
+      %57 = deepgengraph.sub %54, %55 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x128xf32>
+      %58 = deepgengraph.sub %48, %55 {inMs = array<i32: 0, 3>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %59 = deepgengraph.exp2 %58 {inMs = array<i32: 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>) -> tensor<128x1xf32>
+      %60 = deepgengraph.mul %49, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x1xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %61 = deepgengraph.exp2 %57 {inMs = array<i32: 0>, outMs = array<i32: 3>} : (tensor<128x128xf32>) -> tensor<128x128xf32>
+      %62 = builtin.unrealized_conversion_cast %61 : tensor<128x128xf32> to memref<128x128xf32, 3>
+      %63 = deepgengraph.reduce(%61, init = %60), dim = 1, op = ADD {inMs = array<i32: 3, 0>, outMs = array<i32: 3>}, keep_dim = true : (tensor<128x128xf32>, tensor<128x1xf32>) -> tensor<128x1xf32>
+      %64 = builtin.unrealized_conversion_cast %63 : tensor<128x1xf32> to memref<128x1xf32, 3>
+      %65 = frisk.cast %62 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %66 = builtin.unrealized_conversion_cast %65 : memref<128x128xf16, 3> to tensor<128x128xf16>
+      %67 = arith.muli %arg4, %c128 : index
+      %68 = arith.addi %13, %67 : index
+      %69 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %70 = builtin.unrealized_conversion_cast %69 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %71 = builtin.unrealized_conversion_cast %69 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %72 = frisk.buffer_view %arg2[0, (%bz * 32 + %by + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %72 to %69 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %73 = deepgengraph.precise_dot_op %66, %70, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %74 = deepgengraph.mul %50, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %75 = deepgengraph.add %74, %73 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %76 = builtin.unrealized_conversion_cast %75 : tensor<128x32xf32> to memref<128x32xf32>
+      %77 = arith.addi %68, %c32 : index
+      %78 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %79 = builtin.unrealized_conversion_cast %78 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %80 = builtin.unrealized_conversion_cast %78 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %81 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %81 to %78 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %82 = deepgengraph.precise_dot_op %66, %79, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %83 = deepgengraph.mul %47, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %84 = deepgengraph.add %83, %82 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %85 = builtin.unrealized_conversion_cast %84 : tensor<128x32xf32> to memref<128x32xf32>
+      %86 = arith.addi %68, %c64 : index
+      %87 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %88 = builtin.unrealized_conversion_cast %87 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %89 = builtin.unrealized_conversion_cast %87 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %90 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %90 to %87 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %91 = deepgengraph.precise_dot_op %66, %88, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %92 = deepgengraph.mul %46, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %93 = deepgengraph.add %92, %91 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %94 = builtin.unrealized_conversion_cast %93 : tensor<128x32xf32> to memref<128x32xf32>
+      %95 = arith.addi %68, %c96 : index
+      %96 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %97 = builtin.unrealized_conversion_cast %96 : memref<128x32xf16, 3> to tensor<128x32xf16>
+      %98 = builtin.unrealized_conversion_cast %96 : memref<128x32xf16, 3> to !deepgengraph_triton<block_ptr{tensor<128x32xf16>}>
+      %99 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %99 to %96 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %100 = deepgengraph.precise_dot_op %66, %97, acc = f32 {inMs = array<i32: 3, 3>, outMs = array<i32: 0>} : (tensor<128x128xf16>, tensor<128x32xf16>) -> tensor<128x32xf32>
+      %101 = deepgengraph.mul %45, %59 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+      %102 = deepgengraph.add %101, %100 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x32xf32>) -> tensor<128x32xf32>
+      %103 = builtin.unrealized_conversion_cast %102 : tensor<128x32xf32> to memref<128x32xf32>
+      frisk.copy %76 to %17 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+      frisk.copy %64 to %18 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+      frisk.copy %56 to %21 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+      frisk.copy %85 to %23 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+      frisk.copy %94 to %25 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+      frisk.copy %103 to %27 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+    }
+    %28 = builtin.unrealized_conversion_cast %27 : memref<128x32xf32> to tensor<128x32xf32> {initIdx = 5 : index}
+    %29 = builtin.unrealized_conversion_cast %25 : memref<128x32xf32> to tensor<128x32xf32> {initIdx = 4 : index}
+    %30 = builtin.unrealized_conversion_cast %23 : memref<128x32xf32> to tensor<128x32xf32> {initIdx = 3 : index}
+    %31 = builtin.unrealized_conversion_cast %18 : memref<128x1xf32> to tensor<128x1xf32> {initIdx = 1 : index}
+    %32 = builtin.unrealized_conversion_cast %17 : memref<128x32xf32> to tensor<128x32xf32> {initIdx = 0 : index}
+    %33 = deepgengraph.div %32, %31 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %34 = builtin.unrealized_conversion_cast %33 : tensor<128x32xf32> to memref<128x32xf32>
+    %35 = frisk.cast %34 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %35 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %36 = deepgengraph.div %30, %31 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %37 = builtin.unrealized_conversion_cast %36 : tensor<128x32xf32> to memref<128x32xf32>
+    %38 = frisk.cast %37 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %38 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %39 = deepgengraph.div %29, %31 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %40 = builtin.unrealized_conversion_cast %39 : tensor<128x32xf32> to memref<128x32xf32>
+    %41 = frisk.cast %40 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %41 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %42 = deepgengraph.div %28, %31 {inMs = array<i32: 0, 0>, outMs = array<i32: 0>} : (tensor<128x32xf32>, tensor<128x1xf32>) -> tensor<128x32xf32>
+    %43 = builtin.unrealized_conversion_cast %42 : tensor<128x32xf32> to memref<128x32xf32>
+    %44 = frisk.cast %43 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %44 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+  }
+  frisk.end
+}
+
+---------- after createConvertMemAndCalcOpPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  frisk.kernel @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>} {
+    frisk.parallel (%bz, %by, %bx) = (1, 32, 32), threads = 256 {
+      %cst = arith.constant 0.127531052 : f32
+      %cst_0 = arith.constant 0xFF800000 : f32
+      %cst_1 = arith.constant 0.000000e+00 : f32
+      %c1 = arith.constant 1 : index
+      %c128 = arith.constant 128 : index
+      %cst_2 = arith.constant 0xFF800000 : f32
+      %0 = frisk.cast %cst : f32 -> f16
+      %1 = arith.muli %bx, %c128 : index
+      %2 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+      %3 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+      %4 = frisk.add %3, %cst_2 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+      %5 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+      %6 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+      %7 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+      affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%bx] step 128 {
+        %16 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+        affine.for %arg5 = 0 to 128 step 32 {
+          %49 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+          %50 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+          %51 = frisk.buffer_view %arg0[0, ((%bz * 16777216 + %by * 524288 + %bx * 16384 + %arg5) floordiv 524288) mod 32, (%bz * 131072 + %by * 4096 + %bx * 128 + %arg5 floordiv 128) mod 4096, %arg5 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+          frisk.copy %51 to %49 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+          %52 = frisk.buffer_view %arg1[0, ((%bz * 16777216 + %by * 524288 + %arg5 * 4096 + %arg4) floordiv 524288) mod 32, (%bz * 4096 + %by * 128 + %arg5 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, 1> -> memref<32x128xf16, 1>
+          frisk.copy %52 to %50 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+          %53 = frisk.mul %49, %0 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+          %54 = frisk.gemm(%53, %50) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+          %55 = frisk.add %16, %54 : memref<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+          frisk.copy %55 to %16 [affine_map<() -> (2)>] : memref<128x128xf32>, memref<128x128xf32>
+        } {frisk.simplify_loop}
+        %17 = frisk.mask starts = [%1, %arg4], sizes = [128, 128], type = f32 {
+        ^bb0(%arg5: index, %arg6: index):
+          %49 = arith.addi %arg5, %c1 : index
+          %50 = arith.cmpi ule, %49, %arg6 : index
+          %51 = arith.select %50, %cst_0, %cst_1 : f32
+          frisk.mask_yield %51 : f32
+        } : (index, index) -> memref<128x128xf32>
+        %18 = frisk.add %16, %17 : memref<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+        %19 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+        frisk.reduce %18, %19 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+        %20 = frisk.max %19, %4 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+        %21 = frisk.sub %18, %20 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+        %22 = frisk.sub %4, %20 : memref<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+        %23 = frisk.exp2 %22 : memref<128x1xf32> -> memref<128x1xf32>
+        %24 = frisk.mul %3, %23 : memref<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+        %25 = frisk.exp2 %21 : memref<128x128xf32> -> memref<128x128xf32, 3>
+        %26 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+        frisk.reduce %25, %26 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+        %27 = frisk.add %26, %24 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+        %28 = frisk.cast %25 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+        %29 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %30 = frisk.buffer_view %arg2[0, (%bz * 32 + %by + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %30 to %29 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %31 = frisk.gemm(%28, %29) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %32 = frisk.mul %2, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %33 = frisk.add %32, %31 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %34 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %35 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %35 to %34 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %36 = frisk.gemm(%28, %34) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %37 = frisk.mul %5, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %38 = frisk.add %37, %36 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %39 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %40 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %40 to %39 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %41 = frisk.gemm(%28, %39) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %42 = frisk.mul %6, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %43 = frisk.add %42, %41 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %44 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %45 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %45 to %44 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %46 = frisk.gemm(%28, %44) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %47 = frisk.mul %7, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %48 = frisk.add %47, %46 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        frisk.copy %33 to %2 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %27 to %3 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+        frisk.copy %20 to %4 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+        frisk.copy %38 to %5 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %43 to %6 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %48 to %7 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+      }
+      %8 = frisk.div %2, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %9 = frisk.cast %8 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %9 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %10 = frisk.div %5, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %11 = frisk.cast %10 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %11 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %12 = frisk.div %6, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %13 = frisk.cast %12 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %13 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %14 = frisk.div %7, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %15 = frisk.cast %14 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %15 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    }
+    frisk.end
+  }
+}
+
+---------- after createFriskFuseBlockOpsPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  frisk.kernel @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {arg_permutes = [array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 3, 1>, array<i64: 0, 2, 1, 3>, array<i64: 0, 2, 1, 3>], grid = array<i64: 1, 32, 32>} {
+    frisk.parallel (%bz, %by, %bx) = (1, 32, 32), threads = 256 {
+      %cst = arith.constant 0.127531052 : f32
+      %cst_0 = arith.constant 0xFF800000 : f32
+      %cst_1 = arith.constant 0.000000e+00 : f32
+      %c1 = arith.constant 1 : index
+      %c128 = arith.constant 128 : index
+      %cst_2 = arith.constant 0xFF800000 : f32
+      %0 = frisk.cast %cst : f32 -> f16
+      %1 = arith.muli %bx, %c128 : index
+      %2 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+      %3 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+      %4 = frisk.add %3, %cst_2 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+      %5 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+      %6 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+      %7 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+      affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%bx] step 128 {
+        %16 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+        affine.for %arg5 = 0 to 128 step 32 {
+          %49 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+          %50 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+          %51 = frisk.buffer_view %arg0[0, ((%bz * 16777216 + %by * 524288 + %bx * 16384 + %arg5) floordiv 524288) mod 32, (%bz * 131072 + %by * 4096 + %bx * 128 + %arg5 floordiv 128) mod 4096, %arg5 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+          frisk.copy %51 to %49 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+          %52 = frisk.buffer_view %arg1[0, ((%bz * 16777216 + %by * 524288 + %arg5 * 4096 + %arg4) floordiv 524288) mod 32, (%bz * 4096 + %by * 128 + %arg5 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, 1> -> memref<32x128xf16, 1>
+          frisk.copy %52 to %50 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+          %53 = frisk.mul %49, %0 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+          %54 = frisk.gemm(%53, %50) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+          %55 = frisk.add %16, %54 : memref<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+          frisk.copy %55 to %16 [affine_map<() -> (2)>] : memref<128x128xf32>, memref<128x128xf32>
+        } {frisk.simplify_loop}
+        %17 = frisk.mask starts = [%1, %arg4], sizes = [128, 128], type = f32 {
+        ^bb0(%arg5: index, %arg6: index):
+          %49 = arith.addi %arg5, %c1 : index
+          %50 = arith.cmpi ule, %49, %arg6 : index
+          %51 = arith.select %50, %cst_0, %cst_1 : f32
+          frisk.mask_yield %51 : f32
+        } : (index, index) -> memref<128x128xf32>
+        %18 = frisk.add %16, %17 : memref<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+        %19 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+        frisk.reduce %18, %19 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+        %20 = frisk.max %19, %4 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+        %21 = frisk.sub %18, %20 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+        %22 = frisk.sub %4, %20 : memref<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+        %23 = frisk.exp2 %22 : memref<128x1xf32> -> memref<128x1xf32>
+        %24 = frisk.mul %3, %23 : memref<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+        %25 = frisk.exp2 %21 : memref<128x128xf32> -> memref<128x128xf32, 3>
+        %26 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+        frisk.reduce %25, %26 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+        %27 = frisk.add %26, %24 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+        %28 = frisk.cast %25 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+        %29 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %30 = frisk.buffer_view %arg2[0, (%bz * 32 + %by + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %30 to %29 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %31 = frisk.gemm(%28, %29) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %32 = frisk.mul %2, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %33 = frisk.add %32, %31 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %34 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %35 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %35 to %34 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %36 = frisk.gemm(%28, %34) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %37 = frisk.mul %5, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %38 = frisk.add %37, %36 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %39 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %40 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %40 to %39 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %41 = frisk.gemm(%28, %39) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %42 = frisk.mul %6, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %43 = frisk.add %42, %41 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        %44 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %45 = frisk.buffer_view %arg2[0, ((%bz * 16777216 + %by * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %45 to %44 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %46 = frisk.gemm(%28, %44) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %47 = frisk.mul %7, %23 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+        %48 = frisk.add %47, %46 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+        frisk.copy %33 to %2 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %27 to %3 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+        frisk.copy %20 to %4 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, memref<128x1xf32>
+        frisk.copy %38 to %5 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %43 to %6 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+        frisk.copy %48 to %7 [affine_map<() -> (2)>] : memref<128x32xf32>, memref<128x32xf32>
+      }
+      %8 = frisk.div %2, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %9 = frisk.cast %8 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %9 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %10 = frisk.div %5, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %11 = frisk.cast %10 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %11 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %12 = frisk.div %6, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %13 = frisk.cast %12 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %13 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+      %14 = frisk.div %7, %3 : memref<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %15 = frisk.cast %14 : memref<128x32xf32> -> memref<128x32xf16, 3>
+      frisk.copy %15 to %arg3 at (%bx, %by, %bz) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    }
+    frisk.end
+  }
+}
+
+---------- after createConvertFriskToBasePass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  func.func @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x128x4096xf16, 1>, %arg2: memref<1x32x4096x128xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {frisk.block_warps = array<i64: 4, 1>, thread_num = 256 : i32} {
+    %block_id_z = gpu.block_id z {range = 1 : index}
+    %block_id_y = gpu.block_id y {range = 32 : index}
+    %block_id_x = gpu.block_id x {range = 32 : index}
+    %thread_id_x = gpu.thread_id x {range = 256 : index}
+    %cst = arith.constant 0.127531052 : f32
+    %cst_0 = arith.constant 0xFF800000 : f32
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    %cst_2 = arith.constant 0xFF800000 : f32
+    %0 = frisk.cast %cst : f32 -> f16
+    %1 = arith.muli %block_id_x, %c128 : index
+    %2 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+    %3 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+    %4 = frisk.add %3, %cst_2 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+    %5 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+    %6 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+    %7 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+    %cst_3 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_4 = arith.constant dense<0.000000e+00> : vector<128x1xf32>
+    %8 = frisk.cast %4 : memref<128x1xf32> -> vector<128x1xf32>
+    %cst_5 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_6 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_7 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %9:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%block_id_x] step 128 iter_args(%arg5 = %cst_3, %arg6 = %cst_4, %arg7 = %8, %arg8 = %cst_5, %arg9 = %cst_6, %arg10 = %cst_7) -> (vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>) {
+      %18 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+      %cst_8 = arith.constant dense<0.000000e+00> : vector<128x128xf32>
+      %19 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %cst_8) -> (vector<128x128xf32>) {
+        %52 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %53 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %54 = frisk.buffer_view %arg0[0, ((%block_id_z * 16777216 + %block_id_y * 524288 + %block_id_x * 16384 + %arg11) floordiv 524288) mod 32, (%block_id_z * 131072 + %block_id_y * 4096 + %block_id_x * 128 + %arg11 floordiv 128) mod 4096, %arg11 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %54 to %52 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %55 = frisk.buffer_view %arg1[0, ((%block_id_z * 16777216 + %block_id_y * 524288 + %arg11 * 4096 + %arg4) floordiv 524288) mod 32, (%block_id_z * 4096 + %block_id_y * 128 + %arg11 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, 1> -> memref<32x128xf16, 1>
+        frisk.copy %55 to %53 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        %56 = frisk.mul %52, %0 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+        %57 = frisk.gemm(%56, %53) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %58 = frisk.add %arg12, %57 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+        frisk.copy %58 to %arg12 [affine_map<() -> (2)>] : memref<128x128xf32>, vector<128x128xf32>
+        affine.yield %arg12 : vector<128x128xf32>
+      } {frisk.simplify_loop, local_yield_transformed = true}
+      %20 = frisk.mask starts = [%1, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %52 = arith.addi %arg11, %c1 : index
+        %53 = arith.cmpi ule, %52, %arg12 : index
+        %54 = arith.select %53, %cst_0, %cst_1 : f32
+        frisk.mask_yield %54 : f32
+      } : (index, index) -> memref<128x128xf32>
+      %21 = frisk.add %19, %20 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+      %22 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %21, %22 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %23 = frisk.max %22, %arg7 : memref<128x1xf32, 3>, vector<128x1xf32> -> memref<128x1xf32, 3>
+      %24 = frisk.sub %21, %23 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+      %25 = frisk.sub %arg7, %23 : vector<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+      %26 = frisk.exp2 %25 : memref<128x1xf32> -> memref<128x1xf32>
+      %27 = frisk.mul %arg6, %26 : vector<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+      %28 = frisk.exp2 %24 : memref<128x128xf32> -> memref<128x128xf32, 3>
+      %29 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %28, %29 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %30 = frisk.add %29, %27 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+      %31 = frisk.cast %28 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %32 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %33 = frisk.buffer_view %arg2[0, (%block_id_z * 32 + %block_id_y + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %33 to %32 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %34 = frisk.gemm(%31, %32) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %35 = frisk.mul %arg5, %26 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %36 = frisk.add %35, %34 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %37 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %38 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %block_id_y * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %38 to %37 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %39 = frisk.gemm(%31, %37) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %40 = frisk.mul %arg8, %26 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %41 = frisk.add %40, %39 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %42 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %43 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %block_id_y * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %43 to %42 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %44 = frisk.gemm(%31, %42) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %45 = frisk.mul %arg9, %26 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %46 = frisk.add %45, %44 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %47 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %48 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %block_id_y * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %48 to %47 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %49 = frisk.gemm(%31, %47) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %50 = frisk.mul %arg10, %26 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %51 = frisk.add %50, %49 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      frisk.copy %36 to %arg5 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %30 to %arg6 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %23 to %arg7 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %41 to %arg8 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %46 to %arg9 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %51 to %arg10 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      affine.yield %arg5, %arg6, %arg7, %arg8, %arg9, %arg10 : vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>
+    } {local_yield_transformed = true}
+    %10 = frisk.div %9#0, %9#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %11 = frisk.cast %10 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %11 to %arg3 at (%block_id_x, %block_id_y, %block_id_z) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %12 = frisk.div %9#3, %9#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %13 = frisk.cast %12 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %13 to %arg3 at (%block_id_x, %block_id_y, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %14 = frisk.div %9#4, %9#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %15 = frisk.cast %14 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %15 to %arg3 at (%block_id_x, %block_id_y, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %16 = frisk.div %9#5, %9#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %17 = frisk.cast %16 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %17 to %arg3 at (%block_id_x, %block_id_y, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    return
+  }
+}
+
+---------- after createNormalizeAttentionKLayoutPass ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  func.func @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "q"}, %arg1: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "k"}, %arg2: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "v"}, %arg3: memref<1x32x4096x128xf16, 1>) attributes {frisk.block_warps = array<i64: 4, 1>, frisk.k_layout_bhsd, frisk.workgroup_order = array<i64: 4, 0, 1, 1>, thread_num = 256 : i32} {
+    %transpose = memref.transpose %arg1 (d0, d1, d2, d3) -> (d0, d1, d3, d2) : memref<1x32x4096x128xf16, 1> to memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1>
+    %block_id_x = gpu.block_id x {range = 32 : index}
+    %block_id_y = gpu.block_id y {range = 32 : index}
+    %c32 = arith.constant 32 : index
+    %0 = arith.muli %block_id_y, %c32 : index
+    %1 = arith.addi %block_id_x, %0 : index
+    %c128 = arith.constant 128 : index
+    %c4 = arith.constant 4 : index
+    %2 = arith.divui %1, %c128 : index
+    %3 = arith.muli %2, %c4 : index
+    %c4_0 = arith.constant 4 : index
+    %4 = arith.remui %1, %c128 : index
+    %5 = arith.remui %4, %c4_0 : index
+    %6 = arith.addi %3, %5 : index
+    %7 = arith.divui %4, %c4_0 : index
+    %c31 = arith.constant 31 : index
+    %8 = arith.subi %c31, %6 : index
+    %block_id_z = gpu.block_id z {range = 1 : index}
+    %thread_id_x = gpu.thread_id x {range = 256 : index}
+    %cst = arith.constant 0.127531052 : f32
+    %cst_1 = arith.constant 0xFF800000 : f32
+    %cst_2 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128_3 = arith.constant 128 : index
+    %cst_4 = arith.constant 0xFF800000 : f32
+    %9 = frisk.cast %cst : f32 -> f16
+    %10 = arith.muli %8, %c128_3 : index
+    %11 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+    %12 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+    %13 = frisk.add %12, %cst_4 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+    %14 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+    %15 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+    %16 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+    %cst_5 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_6 = arith.constant dense<0.000000e+00> : vector<128x1xf32>
+    %17 = frisk.cast %13 : memref<128x1xf32> -> vector<128x1xf32>
+    %cst_7 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_8 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_9 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %18:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%8] step 128 iter_args(%arg5 = %cst_5, %arg6 = %cst_6, %arg7 = %17, %arg8 = %cst_7, %arg9 = %cst_8, %arg10 = %cst_9) -> (vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>) {
+      %27 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+      %cst_10 = arith.constant dense<0.000000e+00> : vector<128x128xf32>
+      %28 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %cst_10) -> (vector<128x128xf32>) {
+        %61 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %62 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %63 = frisk.buffer_view %arg0[0, ((%block_id_z * 16777216 + %7 * 524288 + %8 * 16384 + %arg11) floordiv 524288) mod 32, (%block_id_z * 131072 + %7 * 4096 + %8 * 128 + %arg11 floordiv 128) mod 4096, %arg11 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.copy %63 to %61 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        %64 = frisk.buffer_view %transpose[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg11 * 4096 + %arg4) floordiv 524288) mod 32, (%block_id_z * 4096 + %7 * 128 + %arg11 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1> -> memref<32x128xf16, 1>
+        frisk.copy %64 to %62 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        %65 = frisk.mul %61, %9 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+        %66 = frisk.gemm(%65, %62) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %67 = frisk.add %arg12, %66 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+        frisk.copy %67 to %arg12 [affine_map<() -> (2)>] : memref<128x128xf32>, vector<128x128xf32>
+        affine.yield %arg12 : vector<128x128xf32>
+      } {frisk.simplify_loop, local_yield_transformed = true}
+      %29 = frisk.mask starts = [%10, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %61 = arith.addi %arg11, %c1 : index
+        %62 = arith.cmpi ule, %61, %arg12 : index
+        %63 = arith.select %62, %cst_1, %cst_2 : f32
+        frisk.mask_yield %63 : f32
+      } : (index, index) -> memref<128x128xf32>
+      %30 = frisk.add %28, %29 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+      %31 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %30, %31 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %32 = frisk.max %31, %arg7 : memref<128x1xf32, 3>, vector<128x1xf32> -> memref<128x1xf32, 3>
+      %33 = frisk.sub %30, %32 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+      %34 = frisk.sub %arg7, %32 : vector<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+      %35 = frisk.exp2 %34 : memref<128x1xf32> -> memref<128x1xf32>
+      %36 = frisk.mul %arg6, %35 : vector<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+      %37 = frisk.exp2 %33 : memref<128x128xf32> -> memref<128x128xf32, 3>
+      %38 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %37, %38 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %39 = frisk.add %38, %36 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+      %40 = frisk.cast %37 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %41 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %42 = frisk.buffer_view %arg2[0, (%block_id_z * 32 + %7 + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %42 to %41 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %43 = frisk.gemm(%40, %41) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %44 = frisk.mul %arg5, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %45 = frisk.add %44, %43 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %46 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %47 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %47 to %46 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %48 = frisk.gemm(%40, %46) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %49 = frisk.mul %arg8, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %50 = frisk.add %49, %48 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %51 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %52 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %52 to %51 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %53 = frisk.gemm(%40, %51) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %54 = frisk.mul %arg9, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %55 = frisk.add %54, %53 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %56 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %57 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.copy %57 to %56 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      %58 = frisk.gemm(%40, %56) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %59 = frisk.mul %arg10, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %60 = frisk.add %59, %58 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      frisk.copy %45 to %arg5 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %39 to %arg6 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %32 to %arg7 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %50 to %arg8 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %55 to %arg9 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %60 to %arg10 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      affine.yield %arg5, %arg6, %arg7, %arg8, %arg9, %arg10 : vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>
+    } {local_yield_transformed = true}
+    %19 = frisk.div %18#0, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %20 = frisk.cast %19 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %20 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %21 = frisk.div %18#3, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %22 = frisk.cast %21 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %22 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %23 = frisk.div %18#4, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %24 = frisk.cast %23 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %24 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %25 = frisk.div %18#5, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %26 = frisk.cast %25 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %26 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    return
+  }
+}
+
+---------- after promote-gm-to-shm-async ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  func.func @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "q"}, %arg1: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "k"}, %arg2: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "v"}, %arg3: memref<1x32x4096x128xf16, 1>) attributes {frisk.block_warps = array<i64: 4, 1>, frisk.k_layout_bhsd, frisk.workgroup_order = array<i64: 4, 0, 1, 1>, thread_num = 256 : i32} {
+    %transpose = memref.transpose %arg1 (d0, d1, d2, d3) -> (d0, d1, d3, d2) : memref<1x32x4096x128xf16, 1> to memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1>
+    %block_id_x = gpu.block_id x {range = 32 : index}
+    %block_id_y = gpu.block_id y {range = 32 : index}
+    %c32 = arith.constant 32 : index
+    %0 = arith.muli %block_id_y, %c32 : index
+    %1 = arith.addi %block_id_x, %0 : index
+    %c128 = arith.constant 128 : index
+    %c4 = arith.constant 4 : index
+    %2 = arith.divui %1, %c128 : index
+    %3 = arith.muli %2, %c4 : index
+    %c4_0 = arith.constant 4 : index
+    %4 = arith.remui %1, %c128 : index
+    %5 = arith.remui %4, %c4_0 : index
+    %6 = arith.addi %3, %5 : index
+    %7 = arith.divui %4, %c4_0 : index
+    %c31 = arith.constant 31 : index
+    %8 = arith.subi %c31, %6 : index
+    %block_id_z = gpu.block_id z {range = 1 : index}
+    %thread_id_x = gpu.thread_id x {range = 256 : index}
+    %cst = arith.constant 0.127531052 : f32
+    %cst_1 = arith.constant 0xFF800000 : f32
+    %cst_2 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128_3 = arith.constant 128 : index
+    %cst_4 = arith.constant 0xFF800000 : f32
+    %9 = frisk.cast %cst : f32 -> f16
+    %10 = arith.muli %8, %c128_3 : index
+    %11 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+    %12 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+    %13 = frisk.add %12, %cst_4 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+    %14 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+    %15 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+    %16 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+    %cst_5 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_6 = arith.constant dense<0.000000e+00> : vector<128x1xf32>
+    %17 = frisk.cast %13 : memref<128x1xf32> -> vector<128x1xf32>
+    %cst_7 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_8 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_9 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %18:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%8] step 128 iter_args(%arg5 = %cst_5, %arg6 = %cst_6, %arg7 = %17, %arg8 = %cst_7, %arg9 = %cst_8, %arg10 = %cst_9) -> (vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>) {
+      %27 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+      %cst_10 = arith.constant dense<0.000000e+00> : vector<128x128xf32>
+      %28 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %cst_10) -> (vector<128x128xf32>) {
+        %61 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %62 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %63 = frisk.buffer_view %arg0[0, ((%block_id_z * 16777216 + %7 * 524288 + %8 * 16384 + %arg11) floordiv 524288) mod 32, (%block_id_z * 131072 + %7 * 4096 + %8 * 128 + %arg11 floordiv 128) mod 4096, %arg11 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.async_copy_gm_to_shm %63 to %61 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        frisk.wait_buffer_ready %61 : memref<128x32xf16, 3>
+        %64 = frisk.buffer_view %transpose[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg11 * 4096 + %arg4) floordiv 524288) mod 32, (%block_id_z * 4096 + %7 * 128 + %arg11 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1> -> memref<32x128xf16, 1>
+        frisk.async_copy_gm_to_shm %64 to %62 {alignment = 16 : i64} : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        frisk.wait_buffer_ready %62 : memref<32x128xf16, 3>
+        %65 = frisk.mul %61, %9 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+        %66 = frisk.gemm(%65, %62) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %67 = frisk.add %arg12, %66 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+        frisk.copy %67 to %arg12 [affine_map<() -> (2)>] : memref<128x128xf32>, vector<128x128xf32>
+        affine.yield %arg12 : vector<128x128xf32>
+      } {frisk.simplify_loop, local_yield_transformed = true}
+      %29 = frisk.mask starts = [%10, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %61 = arith.addi %arg11, %c1 : index
+        %62 = arith.cmpi ule, %61, %arg12 : index
+        %63 = arith.select %62, %cst_1, %cst_2 : f32
+        frisk.mask_yield %63 : f32
+      } : (index, index) -> memref<128x128xf32>
+      %30 = frisk.add %28, %29 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+      %31 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %30, %31 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %32 = frisk.max %31, %arg7 : memref<128x1xf32, 3>, vector<128x1xf32> -> memref<128x1xf32, 3>
+      %33 = frisk.sub %30, %32 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+      %34 = frisk.sub %arg7, %32 : vector<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+      %35 = frisk.exp2 %34 : memref<128x1xf32> -> memref<128x1xf32>
+      %36 = frisk.mul %arg6, %35 : vector<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+      %37 = frisk.exp2 %33 : memref<128x128xf32> -> memref<128x128xf32, 3>
+      %38 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %37, %38 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %39 = frisk.add %38, %36 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+      %40 = frisk.cast %37 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %41 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %42 = frisk.buffer_view %arg2[0, (%block_id_z * 32 + %7 + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %42 to %41 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %41 : memref<128x32xf16, 3>
+      %43 = frisk.gemm(%40, %41) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %44 = frisk.mul %arg5, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %45 = frisk.add %44, %43 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %46 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %47 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %47 to %46 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %46 : memref<128x32xf16, 3>
+      %48 = frisk.gemm(%40, %46) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %49 = frisk.mul %arg8, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %50 = frisk.add %49, %48 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %51 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %52 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %52 to %51 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %51 : memref<128x32xf16, 3>
+      %53 = frisk.gemm(%40, %51) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %54 = frisk.mul %arg9, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %55 = frisk.add %54, %53 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %56 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %57 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %57 to %56 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %56 : memref<128x32xf16, 3>
+      %58 = frisk.gemm(%40, %56) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %59 = frisk.mul %arg10, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %60 = frisk.add %59, %58 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      frisk.copy %45 to %arg5 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %39 to %arg6 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %32 to %arg7 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %50 to %arg8 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %55 to %arg9 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %60 to %arg10 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      affine.yield %arg5, %arg6, %arg7, %arg8, %arg9, %arg10 : vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>
+    } {local_yield_transformed = true}
+    %19 = frisk.div %18#0, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %20 = frisk.cast %19 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %20 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %21 = frisk.div %18#3, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %22 = frisk.cast %21 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %22 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %23 = frisk.div %18#4, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %24 = frisk.cast %23 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %24 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %25 = frisk.div %18#5, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %26 = frisk.cast %25 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %26 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    return
+  }
+}
+
+---------- after frisk-auto-pipeline ---------
+module {
+  func.func @Attn(%arg0: tensor<1x4096x32x128xf16>, %arg1: tensor<1x4096x32x128xf16>, %arg2: tensor<1x4096x32x128xf16>) -> tensor<1x4096x32x128xf16> {
+    %cst = arith.constant dense<1.131250e+01> : tensor<1xf32>
+    %0 = deepgengraph.trilu diagonal = 1, is_upper = true, shape = [4096, 4096], val = 0xFF800000 : f32
+    %1 = deepgengraph.permute %arg0, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %2 = deepgengraph.permute %arg2, dims = [0, 2, 1, 3] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x4096x128xf16>
+    %3 = deepgengraph.permute %arg1, dims = [0, 2, 3, 1] : (tensor<1x4096x32x128xf16>) -> tensor<1x32x128x4096xf16>
+    %4 = deepgengraph.precise_dot_op %1, %3, acc = f32 : (tensor<1x32x4096x128xf16>, tensor<1x32x128x4096xf16>) -> tensor<1x32x4096x4096xf32>
+    %5 = deepgengraph.div %4, %cst : (tensor<1x32x4096x4096xf32>, tensor<1xf32>) -> tensor<1x32x4096x4096xf32>
+    %6 = deepgengraph.add %5, %0 : (tensor<1x32x4096x4096xf32>, tensor<4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %7 = deepgengraph.reduce(%6), dim = -1, op = MAX, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %8 = deepgengraph.sub %6, %7 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %9 = deepgengraph.exp %8 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf32>
+    %10 = deepgengraph.reduce(%9), dim = -1, op = ADD, keep_dim = true : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x1xf32>
+    %11 = deepgengraph.div %9, %10 : (tensor<1x32x4096x4096xf32>, tensor<1x32x4096x1xf32>) -> tensor<1x32x4096x4096xf32>
+    %12 = deepgengraph.convert %11, type = f16 : (tensor<1x32x4096x4096xf32>) -> tensor<1x32x4096x4096xf16>
+    %13 = deepgengraph.dot %12, %2 : (tensor<1x32x4096x4096xf16>, tensor<1x32x4096x128xf16>) -> tensor<1x32x4096x128xf16>
+    %14 = deepgengraph.permute %13, dims = [0, 2, 1, 3] : (tensor<1x32x4096x128xf16>) -> tensor<1x4096x32x128xf16>
+    return %14 : tensor<1x4096x32x128xf16>
+  }
+  func.func @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "q"}, %arg1: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "k"}, %arg2: memref<1x32x4096x128xf16, 1> {frisk.shared_role = "v"}, %arg3: memref<1x32x4096x128xf16, 1>) attributes {frisk.block_warps = array<i64: 4, 1>, frisk.k_layout_bhsd, frisk.workgroup_order = array<i64: 4, 0, 1, 1>, thread_num = 256 : i32} {
+    %transpose = memref.transpose %arg1 (d0, d1, d2, d3) -> (d0, d1, d3, d2) : memref<1x32x4096x128xf16, 1> to memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1>
+    %block_id_x = gpu.block_id x {range = 32 : index}
+    %block_id_y = gpu.block_id y {range = 32 : index}
+    %c32 = arith.constant 32 : index
+    %0 = arith.muli %block_id_y, %c32 : index
+    %1 = arith.addi %block_id_x, %0 : index
+    %c128 = arith.constant 128 : index
+    %c4 = arith.constant 4 : index
+    %2 = arith.divui %1, %c128 : index
+    %3 = arith.muli %2, %c4 : index
+    %c4_0 = arith.constant 4 : index
+    %4 = arith.remui %1, %c128 : index
+    %5 = arith.remui %4, %c4_0 : index
+    %6 = arith.addi %3, %5 : index
+    %7 = arith.divui %4, %c4_0 : index
+    %c31 = arith.constant 31 : index
+    %8 = arith.subi %c31, %6 : index
+    %block_id_z = gpu.block_id z {range = 1 : index}
+    %thread_id_x = gpu.thread_id x {range = 256 : index}
+    %cst = arith.constant 0.127531052 : f32
+    %cst_1 = arith.constant 0xFF800000 : f32
+    %cst_2 = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c128_3 = arith.constant 128 : index
+    %cst_4 = arith.constant 0xFF800000 : f32
+    %9 = frisk.cast %cst : f32 -> f16
+    %10 = arith.muli %8, %c128_3 : index
+    %11 = frisk.zero {initIdx = 0 : index} : memref<128x32xf32>
+    %12 = frisk.zero {initIdx = 1 : index} : memref<128x1xf32>
+    %13 = frisk.add %12, %cst_4 : memref<128x1xf32>, f32 -> memref<128x1xf32>
+    %14 = frisk.zero {initIdx = 3 : index} : memref<128x32xf32>
+    %15 = frisk.zero {initIdx = 4 : index} : memref<128x32xf32>
+    %16 = frisk.zero {initIdx = 5 : index} : memref<128x32xf32>
+    %cst_5 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_6 = arith.constant dense<0.000000e+00> : vector<128x1xf32>
+    %17 = frisk.cast %13 : memref<128x1xf32> -> vector<128x1xf32>
+    %cst_7 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_8 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %cst_9 = arith.constant dense<0.000000e+00> : vector<128x32xf32>
+    %18:6 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 128 + 128)>()[%8] step 128 iter_args(%arg5 = %cst_5, %arg6 = %cst_6, %arg7 = %17, %arg8 = %cst_7, %arg9 = %cst_8, %arg10 = %cst_9) -> (vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>) {
+      %27 = frisk.zero {initIdx = 0 : index} : memref<128x128xf32>
+      %cst_10 = arith.constant dense<0.000000e+00> : vector<128x128xf32>
+      %28 = affine.for %arg11 = 0 to 128 step 32 iter_args(%arg12 = %cst_10) -> (vector<128x128xf32>) {
+        %61 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+        %62 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+        %63 = frisk.buffer_view %arg0[0, ((%block_id_z * 16777216 + %7 * 524288 + %8 * 16384 + %arg11) floordiv 524288) mod 32, (%block_id_z * 131072 + %7 * 4096 + %8 * 128 + %arg11 floordiv 128) mod 4096, %arg11 mod 128], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+        frisk.async_copy_gm_to_shm %63 to %61 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+        frisk.wait_buffer_ready %61 : memref<128x32xf16, 3>
+        %64 = frisk.buffer_view %transpose[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg11 * 4096 + %arg4) floordiv 524288) mod 32, (%block_id_z * 4096 + %7 * 128 + %arg11 + %arg4 floordiv 4096) mod 128, %arg4 mod 4096], ranges = [32, 128] : memref<1x32x128x4096xf16, strided<[16777216, 524288, 1, 128]>, 1> -> memref<32x128xf16, 1>
+        frisk.async_copy_gm_to_shm %64 to %62 {alignment = 16 : i64} : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+        frisk.wait_buffer_ready %62 : memref<32x128xf16, 3>
+        %65 = frisk.mul %61, %9 : memref<128x32xf16, 3>, f16 -> memref<128x32xf16, 3>
+        %66 = frisk.gemm(%65, %62) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %67 = frisk.add %arg12, %66 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32>
+        frisk.copy %67 to %arg12 [affine_map<() -> (2)>] : memref<128x128xf32>, vector<128x128xf32>
+        affine.yield %arg12 : vector<128x128xf32>
+      } {frisk.simplify_loop, local_yield_transformed = true}
+      %29 = frisk.mask starts = [%10, %arg4], sizes = [128, 128], type = f32 {
+      ^bb0(%arg11: index, %arg12: index):
+        %61 = arith.addi %arg11, %c1 : index
+        %62 = arith.cmpi ule, %61, %arg12 : index
+        %63 = arith.select %62, %cst_1, %cst_2 : f32
+        frisk.mask_yield %63 : f32
+      } : (index, index) -> memref<128x128xf32>
+      %30 = frisk.add %28, %29 : vector<128x128xf32>, memref<128x128xf32> -> memref<128x128xf32, 3>
+      %31 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %30, %31 {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %32 = frisk.max %31, %arg7 : memref<128x1xf32, 3>, vector<128x1xf32> -> memref<128x1xf32, 3>
+      %33 = frisk.sub %30, %32 : memref<128x128xf32, 3>, memref<128x1xf32, 3> -> memref<128x128xf32>
+      %34 = frisk.sub %arg7, %32 : vector<128x1xf32>, memref<128x1xf32, 3> -> memref<128x1xf32>
+      %35 = frisk.exp2 %34 : memref<128x1xf32> -> memref<128x1xf32>
+      %36 = frisk.mul %arg6, %35 : vector<128x1xf32>, memref<128x1xf32> -> memref<128x1xf32>
+      %37 = frisk.exp2 %33 : memref<128x128xf32> -> memref<128x128xf32, 3>
+      %38 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
+      frisk.reduce %37, %38 {dim = 1 : i64, kind = "add"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
+      %39 = frisk.add %38, %36 : memref<128x1xf32, 3>, memref<128x1xf32> -> memref<128x1xf32, 3>
+      %40 = frisk.cast %37 : memref<128x128xf32, 3> -> memref<128x128xf16, 3>
+      %41 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %42 = frisk.buffer_view %arg2[0, (%block_id_z * 32 + %7 + (%arg4 * 128) floordiv 524288) mod 32, %arg4 mod 4096, 0], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %42 to %41 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %41 : memref<128x32xf16, 3>
+      %43 = frisk.gemm(%40, %41) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %44 = frisk.mul %arg5, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %45 = frisk.add %44, %43 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %46 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %47 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 32) floordiv 524288) mod 32, %arg4 mod 4096, 32], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %47 to %46 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %46 : memref<128x32xf16, 3>
+      %48 = frisk.gemm(%40, %46) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %49 = frisk.mul %arg8, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %50 = frisk.add %49, %48 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %51 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %52 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 64) floordiv 524288) mod 32, %arg4 mod 4096, 64], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %52 to %51 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %51 : memref<128x32xf16, 3>
+      %53 = frisk.gemm(%40, %51) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %54 = frisk.mul %arg9, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %55 = frisk.add %54, %53 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      %56 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+      %57 = frisk.buffer_view %arg2[0, ((%block_id_z * 16777216 + %7 * 524288 + %arg4 * 128 + 96) floordiv 524288) mod 32, %arg4 mod 4096, 96], ranges = [128, 32] : memref<1x32x4096x128xf16, 1> -> memref<128x32xf16, 1>
+      frisk.async_copy_gm_to_shm %57 to %56 {alignment = 16 : i64} : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+      frisk.wait_buffer_ready %56 : memref<128x32xf16, 3>
+      %58 = frisk.gemm(%40, %56) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+      %59 = frisk.mul %arg10, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+      %60 = frisk.add %59, %58 : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
+      frisk.copy %45 to %arg5 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %39 to %arg6 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %32 to %arg7 [affine_map<() -> (2)>] : memref<128x1xf32, 3>, vector<128x1xf32>
+      frisk.copy %50 to %arg8 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %55 to %arg9 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      frisk.copy %60 to %arg10 [affine_map<() -> (2)>] : memref<128x32xf32>, vector<128x32xf32>
+      affine.yield %arg5, %arg6, %arg7, %arg8, %arg9, %arg10 : vector<128x32xf32>, vector<128x1xf32>, vector<128x1xf32>, vector<128x32xf32>, vector<128x32xf32>, vector<128x32xf32>
+    } {local_yield_transformed = true}
+    %19 = frisk.div %18#0, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %20 = frisk.cast %19 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %20 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, (d2 * 32 + d1 + (d0 * 16384) floordiv 524288) mod 32, (d0 * 128) mod 4096, 0)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %21 = frisk.div %18#3, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %22 = frisk.cast %21 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %22 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 32) floordiv 524288) mod 32, (d0 * 128) mod 4096, 32)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %23 = frisk.div %18#4, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %24 = frisk.cast %23 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %24 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 64) floordiv 524288) mod 32, (d0 * 128) mod 4096, 64)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    %25 = frisk.div %18#5, %18#1 : vector<128x32xf32>, vector<128x1xf32> -> memref<128x32xf32>
+    %26 = frisk.cast %25 : memref<128x32xf32> -> memref<128x32xf16, 3>
+    frisk.copy %26 to %arg3 at (%8, %7, %block_id_z) [affine_map<(d0, d1, d2) -> (0, ((d2 * 16777216 + d1 * 524288 + d0 * 16384 + 96) floordiv 524288) mod 32, (d0 * 128) mod 4096, 96)>] : memref<128x32xf16, 3>, memref<1x32x4096x128xf16, 1>
+    return
+  }
+}
+LowerInfoAnalysis::block_threads = 256
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+
+
+
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+
+
+
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+
+
+
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+
+
+
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+
+
+
+
+
+无已推断buf, 需要gemmOp做锚点
+无已推断buf, 需要gemmOp做锚点
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---- inferArithmeticOp error
+[LowerInfo] inference stopped at: %44 = frisk.mul %arg5, %35 : vector<128x32xf32>, memref<128x1xf32> -> memref<128x32xf32>
+MyTest: /data2/xsl/DeepGenGraph/3rd/deepgengraph/lib/Analysis/LowerInfo.cpp:1466: static bool mlir::frisk::LowerInfoAnalysis::inferRelyOp(mlir::Operation*, mlir::frisk::LowerInfoMap&, HWSpecification*, bool, bool): Assertion `false && "the operation can not be recognized."' failed.

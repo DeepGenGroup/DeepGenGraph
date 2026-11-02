@@ -1,0 +1,32 @@
+{
+  "variants": {
+    "baseline": {
+      "sha256": "a3509e3fbef30fe726e8e6bf83a99351c35a6fbae0f34e11825019ff54049fbd",
+      "llvm_verified": true,
+      "threads": 256
+    },
+    "k0_prefetch": {
+      "sha256": "744255f8522af2c1279d56416003d0afd8f361d891d480d47350c977512753c4",
+      "llvm_verified": true,
+      "threads": 256,
+      "numerical_cases_passed": 7,
+      "max_abs_error": 0.00014457321854609295
+    },
+    "k0_late_control": {
+      "sha256": "1c48aa55a00a0fee30c6f4fb36a222d8e96002b74724839caaba97c1a1f31d74",
+      "llvm_verified": true,
+      "threads": 256
+    },
+    "threads512": {
+      "sha256": "0b7edf1b629b4a4b9478f018b4df5127a1cacdd9a3612209db6b3cfdaff5f1a3",
+      "llvm_verified": true,
+      "threads": 512,
+      "numerical_cases_passed": 7,
+      "max_abs_error": 0.00014457321854609295
+    }
+  },
+  "prefetch_cross_wave_audit_passed": true,
+  "negative_controls_rejected": 3,
+  "gpu_tested": false,
+  "target_codegen_tested": false
+}

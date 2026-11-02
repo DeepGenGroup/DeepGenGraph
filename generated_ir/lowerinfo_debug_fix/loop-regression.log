@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_loop_thread_tiles.py", line 89, in <module>
+    main()
+    ~~~~^^
+  File "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_loop_thread_tiles.py", line 74, in main
+    assert not re.search(r"affine\.yield[^\n]*vector<64x(?:1|128)xf32>", stage), name
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: constant_fill

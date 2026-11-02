@@ -1,0 +1,7 @@
+{
+  "unique_K_pointers": 32,
+  "gfx900_isolated_reads": {
+    "ds_read2_b64": 16
+  },
+  "gfx936_full_kernel_tested": false
+}

@@ -1,0 +1,4 @@
+PASS group4: physical=(7, 28), logical=(head=1, query=31), bitwise equal
+PASS group8: physical=(15, 24), logical=(head=1, query=31), bitwise equal
+PASS group16: physical=(31, 16), logical=(head=1, query=31), bitwise equal
+PASS group32: physical=(31, 1), logical=(head=1, query=31), bitwise equal

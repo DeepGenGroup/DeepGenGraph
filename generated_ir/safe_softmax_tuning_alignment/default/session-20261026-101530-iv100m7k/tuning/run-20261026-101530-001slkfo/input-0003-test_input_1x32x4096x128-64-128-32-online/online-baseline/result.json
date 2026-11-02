@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "candidate_index": 17,
+  "case": "online-baseline",
+  "directory": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0003-test_input_1x32x4096x128-64-128-32-online/online-baseline",
+  "source_input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-128-32-online.mlir",
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0003-test_input_1x32x4096x128-64-128-32-online/online-baseline/input.mlir",
+  "llvm_ir": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0003-test_input_1x32x4096x128-64-128-32-online/online-baseline/kernel.ll",
+  "log": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0003-test_input_1x32x4096x128-64-128-32-online/online-baseline/lowering.log",
+  "parameters": {
+    "pipeline": "0",
+    "reorder": "1",
+    "pack": "1",
+    "layout": "3.3",
+    "carrier": "34816",
+    "math": "approx",
+    "threads": "256",
+    "waves": "4,1",
+    "lifetimes": "1",
+    "masks": "1",
+    "prefetch": "1",
+    "fuse": "0",
+    "reuse": "0",
+    "copy": "async",
+    "alignment": "16",
+    "dma-pack": "useKPack",
+    "dma-export": "asm128",
+    "qk-tile": "32",
+    "vo-tile": "32",
+    "frag-prefetch": "0",
+    "frag-prefetch-words": "4",
+    "retain-fragment-words": "32",
+    "pipeline-stages": "none",
+    "loop-mark": "1",
+    "simplify-loop-control": "1",
+    "coalesce-waits": "0",
+    "lds-bytes": "0",
+    "swizzle-q": "off",
+    "swizzle-k": "8:6",
+    "swizzle-v": "off",
+    "swizzle-q-arg": "-1",
+    "swizzle-k-arg": "-1",
+    "swizzle-v-arg": "-1",
+    "workgroup-group-size": "4",
+    "workgroup-reverse": "1",
+    "workgroup-query-axis": "x",
+    "workgroup-head-axis": "y"
+  },
+  "compiler_defaults": false,
+  "launch": null,
+  "loop_iv": "dk",
+  "status": "verified",
+  "seconds": 21.716567925992422,
+  "sha256": "71cec2d1f9dfae50365d7267ea68bae2b51185b7740d2126e1a8d10f2892d6ef",
+  "normalized_sha256": "0924943829975ed36f8440cb27ff15a4c67b230301f02062cc798b0180d4d4e9",
+  "input_sha256": "90c67e64a184259801dcc21ecbec48c72a86308a73ea965d3873acfbc107c89e",
+  "native_lds_bytes": 16384,
+  "static_lds_bytes": 16384,
+  "scheduled_loops": 0,
+  "simplified_loops": 1,
+  "buffer_dma128_sites": 20,
+  "buffer_dma32_sites": 0,
+  "lds_b64_half_load_sites": 72,
+  "retention_reports": [
+    {
+      "operand_tiles": 4,
+      "budget_words_per_thread": 32
+    }
+  ],
+  "retained_loop_words_observed": [
+    32
+  ],
+  "shared_swizzle_plans": [
+    {
+      "argument": 1,
+      "source_bit": 8,
+      "target_bit": 6,
+      "dma_bytes": 16,
+      "aliases": 1
+    }
+  ],
+  "lds_gep_reported_offsets": 66,
+  "workgroup_orders": [
+    [
+      4,
+      0,
+      1,
+      1
+    ]
+  ],
+  "hardware_tested": false,
+  "benchmark_attempted": false
+}

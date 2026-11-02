@@ -1,0 +1,424 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_softmax_fragments/softmax_pv.ll",
+  "source_sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+  "generator_sha256": "288661582dd278cc91a6532f06d3d3197b6f048f22d9be86eecc390d7d75de3e",
+  "transformation": "Artifact-specific Python IR schedule experiment; not a compiler pass",
+  "variants": {
+    "control": {
+      "distance": 0,
+      "sha256": "5183329f5984b2d841ccb1a1b1561cde44708c17123f1a23a192ecbf20c4dc4a",
+      "schedule": {
+        "pairs": [],
+        "pair_count": 0,
+        "added_schedule_hints": 0
+      },
+      "O3_schedule": {
+        "pairs": [],
+        "pair_count": 0,
+        "added_schedule_hints": 0
+      },
+      "llvm_verified": true,
+      "O3_verified": true,
+      "identical_original_instruction_multiset": true,
+      "identical_order_except_16_tail_K_loads": true
+    },
+    "k_tail_prefetch2": {
+      "distance": 2,
+      "sha256": "980ddf22d52988b0dce943278dab9c6e4f0ff0d0b045c46102401d5a87d51de9",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 2
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 12
+      },
+      "O3_schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 2
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 12
+      },
+      "llvm_verified": true,
+      "O3_verified": true,
+      "identical_original_instruction_multiset": true,
+      "identical_order_except_16_tail_K_loads": true
+    },
+    "k_tail_prefetch4": {
+      "distance": 4,
+      "sha256": "fb0655792f573a02e08cbd6a320d1ad5e8b075d83142fadf1a4ccbb206c6f0b0",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 4
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 10
+      },
+      "O3_schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 4
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 4
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 10
+      },
+      "llvm_verified": true,
+      "O3_verified": true,
+      "identical_original_instruction_multiset": true,
+      "identical_order_except_16_tail_K_loads": true
+    },
+    "k_tail_prefetch8": {
+      "distance": 8,
+      "sha256": "4b7150ffe9cdb2b1caa76a4dadbf7ad9eb95ec9982b692057d7270c8664fcd04",
+      "schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 8
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 8
+      },
+      "O3_schedule": {
+        "pairs": [
+          {
+            "loads": [
+              "%i300",
+              "%i312"
+            ],
+            "independent_mmacs_before_first_use": 0
+          },
+          {
+            "loads": [
+              "%i302",
+              "%i319"
+            ],
+            "independent_mmacs_before_first_use": 1
+          },
+          {
+            "loads": [
+              "%i303",
+              "%i320"
+            ],
+            "independent_mmacs_before_first_use": 2
+          },
+          {
+            "loads": [
+              "%i311",
+              "%i327"
+            ],
+            "independent_mmacs_before_first_use": 3
+          },
+          {
+            "loads": [
+              "%i328",
+              "%i344"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i335",
+              "%i351"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i336",
+              "%i352"
+            ],
+            "independent_mmacs_before_first_use": 8
+          },
+          {
+            "loads": [
+              "%i343",
+              "%i359"
+            ],
+            "independent_mmacs_before_first_use": 8
+          }
+        ],
+        "pair_count": 8,
+        "added_schedule_hints": 8
+      },
+      "llvm_verified": true,
+      "O3_verified": true,
+      "identical_original_instruction_multiset": true,
+      "identical_order_except_16_tail_K_loads": true
+    }
+  },
+  "gpu_tested": false,
+  "gfx936_codegen_tested": false
+}

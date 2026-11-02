@@ -1,0 +1,9 @@
+PASS random h=0 q=0 after8: bitwise/memory trace equal; DMA schedule verified
+PASS random h=0 q=0 after2: bitwise/memory trace equal; DMA schedule verified
+PASS random h=0 q=0 after4: bitwise/memory trace equal; DMA schedule verified
+PASS random h=1 q=31 after8: bitwise/memory trace equal; DMA schedule verified
+PASS random h=1 q=31 after2: bitwise/memory trace equal; DMA schedule verified
+PASS random h=1 q=31 after4: bitwise/memory trace equal; DMA schedule verified
+PASS max_changes h=1 q=2 after8: bitwise/memory trace equal; DMA schedule verified
+PASS max_changes h=1 q=2 after2: bitwise/memory trace equal; DMA schedule verified
+PASS max_changes h=1 q=2 after4: bitwise/memory trace equal; DMA schedule verified

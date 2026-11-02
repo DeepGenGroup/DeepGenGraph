@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "state": "completed",
+  "ranking_metric": "speedup",
+  "sdpa_baseline": "remeasured_per_candidate",
+  "updated_at": "2026-10-26T02:22:30Z",
+  "run_directory": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo",
+  "total_candidates": 42,
+  "completed_candidates": 42,
+  "failed_candidates": 0,
+  "successful_candidates": 42,
+  "status_counts": {
+    "verified": 42
+  },
+  "last_result": {
+    "case": "pipeline-loop-only",
+    "status": "verified",
+    "directory": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0006-test_input_1x32x4096x128-128-128-32-online/pipeline-loop-only",
+    "result_json": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0006-test_input_1x32x4096x128-128-128-32-online/pipeline-loop-only/result.json"
+  },
+  "result_files_glob": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/**/result.json",
+  "best_by_shape": {}
+}

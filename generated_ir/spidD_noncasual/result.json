@@ -1,0 +1,17 @@
+{
+  "input": "3rd/deepgengraph/test/test_input_spidD_noncasual.mlir",
+  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "llvm_ir": "generated_ir/test_input_spidD_noncasual.ll",
+  "llvm_sha256": "a3509e3fbef30fe726e8e6bf83a99351c35a6fbae0f34e11825019ff54049fbd",
+  "llvm_as_verified": true,
+  "llvm_o3_verified": true,
+  "non_causal_cases_passed": 7,
+  "max_abs_error": 0.00014457321854609295,
+  "causal_regression_cases_passed": 6,
+  "causal_negative_control_rejected": true,
+  "launcher_tests_passed": 4,
+  "static_lds_bytes": 16384,
+  "retained_q_words_per_thread": 32,
+  "deferred_loop_sum_shuffles": 4,
+  "gpu_tested": false
+}

@@ -1,0 +1,18 @@
+PASS addresses baseline 0
+PASS addresses k_split32_control 8388608
+PASS addresses k_swizzle32 8388608
+PASS addresses qk_swizzle32 16777216
+PASS numerical / LDS epochs / V schedule random baseline
+PASS numerical / LDS epochs / V schedule random k_split32_control
+PASS numerical / LDS epochs / V schedule random k_swizzle32
+PASS numerical / LDS epochs / V schedule random qk_swizzle32
+PASS numerical / LDS epochs / V schedule random k_swizzle32.o3
+PASS numerical / LDS epochs / V schedule random qk_swizzle32.o3
+PASS numerical / LDS epochs / V schedule future_key_dominates baseline
+PASS numerical / LDS epochs / V schedule future_key_dominates k_split32_control
+PASS numerical / LDS epochs / V schedule future_key_dominates k_swizzle32
+PASS numerical / LDS epochs / V schedule future_key_dominates qk_swizzle32
+PASS numerical / LDS epochs / V schedule max_changes baseline
+PASS numerical / LDS epochs / V schedule max_changes k_split32_control
+PASS numerical / LDS epochs / V schedule max_changes k_swizzle32
+PASS numerical / LDS epochs / V schedule max_changes qk_swizzle32

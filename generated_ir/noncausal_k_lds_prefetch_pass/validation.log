@@ -1,0 +1,8 @@
+PASS 0/1/2/4: LLVM O3, identical K addresses and DMA/V-read/wait/barrier positions
+PASS numerical / delayed DMA / LDS epochs: random k_lds_prefetch0.ll
+PASS numerical / delayed DMA / LDS epochs: random k_lds_prefetch2.ll
+PASS numerical / delayed DMA / LDS epochs: random k_lds_prefetch2.o3.ll
+PASS numerical / delayed DMA / LDS epochs: random k_lds_prefetch1.ll
+PASS numerical / delayed DMA / LDS epochs: random k_lds_prefetch4.ll
+PASS numerical / delayed DMA / LDS epochs: future_key_dominates k_lds_prefetch0.ll
+PASS numerical / delayed DMA / LDS epochs: future_key_dominates k_lds_prefetch2.ll

@@ -1,0 +1,41 @@
+{
+  "gpu_tested": false,
+  "runs": {
+    "default": {
+      "summary": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/summary.json",
+      "verified": 42
+    },
+    "online": {
+      "summary": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/summary.json",
+      "verified": 24
+    }
+  },
+  "latest_artifact_comparisons": [
+    {
+      "bn": 64,
+      "new": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning/run-20261026-101601-inpooz4_/input-0001-test_input_1x32x4096x128-128-64-32-online/grid-000002/result.json",
+      "previous": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0002-test_input_1x32x4096x128-128-64-32-online/retained32-baseline/result.json",
+      "matches": {
+        "parameters": true,
+        "input_sha256": true,
+        "normalized_sha256": true
+      }
+    },
+    {
+      "bn": 128,
+      "new": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/online/session-20261026-101601-tehle7yk/tuning/run-20261026-101601-inpooz4_/input-0002-test_input_1x32x4096x128-128-128-32-online/grid-000002/result.json",
+      "previous": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/final-export/run-20261023-182556-l6_z6lbl/input-0001-test_input_1x32x4096x128-128-128-32-online/retained32-baseline/result.json",
+      "matches": {
+        "parameters": true,
+        "input_sha256": true,
+        "normalized_sha256": true
+      }
+    }
+  ],
+  "archive": "/data2/xsl/DeepGenGraph/dist/attention-tuning-20261026-021505.tar.gz",
+  "archive_sha256": "fa0dfecb2271cf3be08088d2d08e4dc322f9153c04f0bf2d68e0b5124e20e68a",
+  "unittest_counts": {
+    "source": 33,
+    "extracted_package": 33
+  }
+}

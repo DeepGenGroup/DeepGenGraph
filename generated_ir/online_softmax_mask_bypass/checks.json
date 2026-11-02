@@ -1,0 +1,10 @@
+{
+  "llvm_as_passed": true,
+  "llvm_o3_verify_passed": true,
+  "o3_mask_add_blocks": {
+    "v702": 16
+  },
+  "cpu_cases_passed": 6,
+  "cpu_case_metrics_match_baseline": true,
+  "gpu_tested": false
+}

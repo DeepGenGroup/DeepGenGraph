@@ -1,0 +1,329 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_v_lds_overlap_group32/v_late_dma_control.ll",
+  "source_sha256": "8f0bfda5ed515550aba74efe59f1aa804591082fbbb8fd0f46e41a0366151f53",
+  "group_size": 32,
+  "reverse": 0,
+  "threads": 256,
+  "BM": 128,
+  "BN": 128,
+  "BK": 32,
+  "lds_bytes": 16384,
+  "gpu_tested": false,
+  "variants": {
+    "dma_after8": {
+      "sha256": "8f0bfda5ed515550aba74efe59f1aa804591082fbbb8fd0f46e41a0366151f53",
+      "after_mmac_count": 8,
+      "next_v_dma_overlap_mmac": 24,
+      "changed_stages": [
+        {
+          "stage": 0,
+          "after_mmac_count": 8,
+          "next_v_dma_overlap_mmac": 24,
+          "dma_results": [
+            "%grp.n822",
+            "%grp.n827"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 1,
+          "after_mmac_count": 8,
+          "next_v_dma_overlap_mmac": 24,
+          "dma_results": [
+            "%grp.n906",
+            "%grp.n911"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 2,
+          "after_mmac_count": 8,
+          "next_v_dma_overlap_mmac": 24,
+          "dma_results": [
+            "%grp.n990",
+            "%grp.n995"
+          ],
+          "block_lines": 11
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "memory_sync_and_mmac_orders_preserved": true,
+      "k_pairs_and_prefetch_preserved": true,
+      "o3_schedule": {
+        "v_read_mmac_positions": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224
+        ],
+        "v_dma_mmac_positions": [
+          96,
+          96,
+          136,
+          136,
+          168,
+          168,
+          200,
+          200
+        ],
+        "hardware_barrier_mmac_positions": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          32,
+          64,
+          96,
+          128,
+          136,
+          160,
+          168,
+          192,
+          200,
+          224,
+          256
+        ]
+      }
+    },
+    "dma_after2": {
+      "sha256": "049b556514e4850e8f5f47af56fcf7c221e2fbb0da6da9a54688860f3d1ccd3e",
+      "after_mmac_count": 2,
+      "next_v_dma_overlap_mmac": 30,
+      "changed_stages": [
+        {
+          "stage": 0,
+          "after_mmac_count": 2,
+          "next_v_dma_overlap_mmac": 30,
+          "dma_results": [
+            "%grp.n822",
+            "%grp.n827"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 1,
+          "after_mmac_count": 2,
+          "next_v_dma_overlap_mmac": 30,
+          "dma_results": [
+            "%grp.n906",
+            "%grp.n911"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 2,
+          "after_mmac_count": 2,
+          "next_v_dma_overlap_mmac": 30,
+          "dma_results": [
+            "%grp.n990",
+            "%grp.n995"
+          ],
+          "block_lines": 11
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "memory_sync_and_mmac_orders_preserved": true,
+      "k_pairs_and_prefetch_preserved": true,
+      "o3_schedule": {
+        "v_read_mmac_positions": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224
+        ],
+        "v_dma_mmac_positions": [
+          96,
+          96,
+          130,
+          130,
+          162,
+          162,
+          194,
+          194
+        ],
+        "hardware_barrier_mmac_positions": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          32,
+          64,
+          96,
+          128,
+          130,
+          160,
+          162,
+          192,
+          194,
+          224,
+          256
+        ]
+      }
+    },
+    "dma_after4": {
+      "sha256": "57a8f633c911ce4579b0e8a076d9ce08c05053d6071b025a7f0db39c3a1baecd",
+      "after_mmac_count": 4,
+      "next_v_dma_overlap_mmac": 28,
+      "changed_stages": [
+        {
+          "stage": 0,
+          "after_mmac_count": 4,
+          "next_v_dma_overlap_mmac": 28,
+          "dma_results": [
+            "%grp.n822",
+            "%grp.n827"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 1,
+          "after_mmac_count": 4,
+          "next_v_dma_overlap_mmac": 28,
+          "dma_results": [
+            "%grp.n906",
+            "%grp.n911"
+          ],
+          "block_lines": 11
+        },
+        {
+          "stage": 2,
+          "after_mmac_count": 4,
+          "next_v_dma_overlap_mmac": 28,
+          "dma_results": [
+            "%grp.n990",
+            "%grp.n995"
+          ],
+          "block_lines": 11
+        }
+      ],
+      "llvm_and_o3_verified": true,
+      "memory_sync_and_mmac_orders_preserved": true,
+      "k_pairs_and_prefetch_preserved": true,
+      "o3_schedule": {
+        "v_read_mmac_positions": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          160,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          192,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224,
+          224
+        ],
+        "v_dma_mmac_positions": [
+          96,
+          96,
+          132,
+          132,
+          164,
+          164,
+          196,
+          196
+        ],
+        "hardware_barrier_mmac_positions": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          32,
+          64,
+          96,
+          128,
+          132,
+          160,
+          164,
+          192,
+          196,
+          224,
+          256
+        ]
+      }
+    }
+  }
+}

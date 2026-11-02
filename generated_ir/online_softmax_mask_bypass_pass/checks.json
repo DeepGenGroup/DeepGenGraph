@@ -1,0 +1,37 @@
+{
+  "compiler_exports_verified": 6,
+  "compiler_comparisons": [
+    {
+      "bn": 128,
+      "off_equals_legal": true,
+      "approx_matches_standalone_after_o3": true
+    },
+    {
+      "bn": 64,
+      "off_equals_legal": true,
+      "approx_matches_standalone_after_o3": true
+    }
+  ],
+  "attention_cpu_cases_passed": 12,
+  "attention_metrics_match_baseline": true,
+  "pass_matches_manual_after_o3": true,
+  "general_pass_regression": {
+    "cases": 18,
+    "modes": [
+      "off",
+      "legal",
+      "approx"
+    ],
+    "cpu_comparisons": 600,
+    "o3_verified": true,
+    "idempotent": true
+  },
+  "python_unittests_passed": 31,
+  "register_math_regression_passed": true,
+  "gpu_tested": false,
+  "built_targets": [
+    "LegacyLLVMExportTest",
+    "MyTest"
+  ],
+  "source_sha256": "16e92a748fd9048c822626705fd2d5b9c4f98dcefb8762bf9d6d86a1a6c8e868"
+}

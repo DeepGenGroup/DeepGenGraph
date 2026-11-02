@@ -1,0 +1,10 @@
+[ 14%] Built target DeepgengraphTritonTableGen
+[ 35%] Built target DeepgengraphTableGen
+[ 57%] Built target FriskTableGen
+[ 64%] Built target DeepgengraphIR
+[ 78%] Built target FriskIR
+[ 82%] Built target DeepgengraphTritonIR
+[ 96%] Built target DeepgengraphAnalysis
+[100%] Building CXX object test/CMakeFiles/LowerInfoInferenceTest.dir/lower_info_inference_test.cpp.o
+[100%] Linking CXX executable LowerInfoInferenceTest
+[100%] Built target LowerInfoInferenceTest

@@ -1,0 +1,12 @@
+{
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_final/run-20261030-171621-98fko2hz/online-vdb-k64-lds2/kernel.ll",
+  "path": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_lds_prefetch_pass/mytest_k_lds_prefetch2.ll",
+  "sha256": "9f9bf93b8dc3ea843ad81108ae41e8bbe92397ac48014b11f314aba3bcb106b7",
+  "instruction_operand_text_equal": false,
+  "gpu_tested": false,
+  "llvm_diff_after_O3_equal": true,
+  "numerical_reference_passed": true,
+  "max_abs_error": 0.0001350999304853412,
+  "pair_protection_after_O3": true,
+  "instruction_operands_equal_modulo_SSA_names_and_metadata": true
+}

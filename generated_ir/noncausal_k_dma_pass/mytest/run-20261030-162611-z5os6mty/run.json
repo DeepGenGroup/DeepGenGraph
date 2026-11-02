@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "--input",
+    "3rd/deepgengraph/test/test_input_spidD_noncasual.mlir",
+    "--sweep-base",
+    "online-baseline",
+    "--sweep",
+    "k-dma=128;64;64-swizzle",
+    "--set",
+    "workgroup-group-size=32",
+    "--set",
+    "pv-interleave=4",
+    "--set",
+    "v-double-buffer=1",
+    "--output-dir",
+    "generated_ir/noncausal_k_dma_pass/mytest",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as"
+  ],
+  "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD_noncasual.mlir",
+  "loop_iv": "auto",
+  "sweep_base": "online-baseline",
+  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD_noncasual.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-162611-z5os6mty/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66"
+    }
+  ],
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1793348578557858132,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

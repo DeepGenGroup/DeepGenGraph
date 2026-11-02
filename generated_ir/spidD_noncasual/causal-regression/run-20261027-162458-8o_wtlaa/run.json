@@ -1,0 +1,43 @@
+{
+  "argv": [
+    "--input",
+    "generated_ir/gemm_result_layout_comparison/exp2_fixed/layout_3_3/input.mlir",
+    "--case",
+    "online-baseline",
+    "--set",
+    "mask-add-bypass=approx",
+    "--set",
+    "defer-lane-sum=approx",
+    "--set",
+    "local-reduce=approx",
+    "--output-dir",
+    "generated_ir/spidD_noncasual/causal-regression",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as"
+  ],
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/gemm_result_layout_comparison/exp2_fixed/layout_3_3/input.mlir",
+  "loop_iv": "auto",
+  "sweep_base": null,
+  "input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a",
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/gemm_result_layout_comparison/exp2_fixed/layout_3_3/input.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/spidD_noncasual/causal-regression/run-20261027-162458-8o_wtlaa/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a"
+    }
+  ],
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_mtime_ns": 1793089471241652403,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}

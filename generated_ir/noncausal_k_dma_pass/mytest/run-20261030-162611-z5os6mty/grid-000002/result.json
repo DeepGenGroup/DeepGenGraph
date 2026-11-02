@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "candidate_index": 2,
+  "case": "grid-000002",
+  "directory": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-162611-z5os6mty/grid-000002",
+  "source_input": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD_noncasual.mlir",
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-162611-z5os6mty/grid-000002/input.mlir",
+  "llvm_ir": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-162611-z5os6mty/grid-000002/kernel.ll",
+  "log": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_k_dma_pass/mytest/run-20261030-162611-z5os6mty/grid-000002/lowering.log",
+  "parameters": {
+    "pipeline": "0",
+    "reorder": "1",
+    "pack": "1",
+    "layout": "3.3",
+    "carrier": "34816",
+    "math": "approx",
+    "threads": "256",
+    "waves": "4,1",
+    "lifetimes": "1",
+    "masks": "1",
+    "prefetch": "1",
+    "fuse": "0",
+    "reuse": "0",
+    "copy": "async",
+    "alignment": "16",
+    "dma-pack": "useKPack",
+    "dma-export": "asm128",
+    "qk-tile": "32",
+    "vo-tile": "32",
+    "frag-prefetch": "0",
+    "frag-prefetch-words": "4",
+    "retain-fragment-words": "32",
+    "pv-interleave": "4",
+    "v-double-buffer": "1",
+    "k-dma": "64",
+    "k-dma-arg": "1",
+    "pipeline-stages": "none",
+    "loop-mark": "1",
+    "simplify-loop-control": "1",
+    "coalesce-waits": "0",
+    "lds-bytes": "0",
+    "mask-add-bypass": "off",
+    "defer-lane-sum": "off",
+    "local-reduce": "off",
+    "local-reduce-chains": "4",
+    "local-reduce-min-inputs": "16",
+    "local-reduce-ops": "all",
+    "swizzle-q": "off",
+    "swizzle-k": "8:6",
+    "swizzle-v": "off",
+    "swizzle-q-arg": "-1",
+    "swizzle-k-arg": "-1",
+    "swizzle-v-arg": "-1",
+    "workgroup-group-size": "32",
+    "workgroup-reverse": "1",
+    "workgroup-query-axis": "x",
+    "workgroup-head-axis": "y"
+  },
+  "compiler_defaults": false,
+  "launch": null,
+  "loop_iv": "dk",
+  "status": "verified",
+  "seconds": 48.90975003410131,
+  "sha256": "5d541efa8e69fc33647e510bcfc28f2ba79c3a2830ae05bd29336ba968ed888e",
+  "normalized_sha256": "3bef0001b2d1f698e6c342f2503dc377bd065fba281bdc22c9a315b7b272b7be",
+  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "native_lds_bytes": 16384,
+  "static_lds_bytes": 16384,
+  "k_dma_reports": [
+    {
+      "mode": "64",
+      "argument": 1,
+      "original_packets": 8,
+      "packets": 16,
+      "reads": 128,
+      "bases": 0,
+      "function": "Attn_p2"
+    }
+  ],
+  "buffer_dma64_sites": 16,
+  "scheduled_loops": 0,
+  "simplified_loops": 1,
+  "pv_interleave_reports": [
+    {
+      "regions": 4,
+      "width": 4,
+      "function": "Attn_p2"
+    }
+  ],
+  "v_double_buffer_reports": [
+    {
+      "slices": 4,
+      "slot_bytes": 8192,
+      "displacement": 8192,
+      "removed_barriers": 3,
+      "lds_bytes": 16384,
+      "function": "Attn_p2"
+    }
+  ],
+  "v_double_buffer_skips": [],
+  "defer_lane_sum_reports": [],
+  "local_reduction_reports": [],
+  "mask_add_bypass_reports": [],
+  "buffer_dma128_sites": 16,
+  "buffer_dma32_sites": 0,
+  "lds_b64_half_load_sites": 144,
+  "retention_reports": [
+    {
+      "operand_tiles": 4,
+      "budget_words_per_thread": 32
+    }
+  ],
+  "retained_loop_words_observed": [
+    32
+  ],
+  "shared_swizzle_plans": [
+    {
+      "argument": 1,
+      "source_bit": 8,
+      "target_bit": 6,
+      "dma_bytes": 16,
+      "aliases": 1
+    }
+  ],
+  "lds_gep_reported_offsets": 134,
+  "workgroup_orders": [
+    [
+      32,
+      0,
+      1,
+      1
+    ]
+  ],
+  "hardware_tested": false,
+  "benchmark_attempted": false
+}

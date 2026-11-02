@@ -1,0 +1,10 @@
+{
+  "source": "generated_ir/gemm_result_layout_comparison/exp2_fixed/layout_3_1/kernel.ll",
+  "source_sha256": "53aa4db5bce8862821514fd0e5b7813e396b90351f11ed15450f3bbc0e84125d",
+  "diagnostic_sha256": "b985fef88121a2549e7ea1e599e28771214ad6b85107aba2d7a55e29beb2a92d",
+  "qk_last_mmac_line": 988,
+  "qk_first_accumulation_line": 995,
+  "fused_chains": 64,
+  "gpu_tested": false,
+  "target_backend_available": false
+}

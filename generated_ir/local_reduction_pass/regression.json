@@ -1,0 +1,21 @@
+{
+  "fixtures": 46,
+  "modes": [
+    "off",
+    "legal",
+    "approx"
+  ],
+  "legal_transformed": 29,
+  "approx_transformed": 37,
+  "cpu_comparisons": 920,
+  "idempotent": true,
+  "O3_verified": true,
+  "tested_chain_counts": [
+    2,
+    3,
+    4,
+    5,
+    8,
+    16
+  ]
+}

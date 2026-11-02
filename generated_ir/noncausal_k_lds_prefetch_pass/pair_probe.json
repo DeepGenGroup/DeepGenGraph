@@ -1,0 +1,9 @@
+{
+  "isolated_pair_count": 23,
+  "counts": {
+    "ds_read2_b64": 22,
+    "ds_read2st64_b64": 1
+  },
+  "target": "gfx900",
+  "gfx936_full_kernel_tested": false
+}

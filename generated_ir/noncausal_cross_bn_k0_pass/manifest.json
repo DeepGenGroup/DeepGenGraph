@@ -1,0 +1,23 @@
+{
+  "variants": {
+    "control": {
+      "sha256": "314b4dc079c3be8b90c93b1154e300b9092ed4757972598004aa60a081fc885a",
+      "o3_sha256": "eb3df8213a50062bd5762740d2214b7ac847edbf5f87e6d24e2c36a21bfba2cc",
+      "diagnostics": "",
+      "identical_instruction_graph_to_measured": false,
+      "LLVM_and_O3_verified": true
+    },
+    "cross_bn_k0": {
+      "sha256": "ba44c509104e3e751a0ce274f2d9c3ed3050565d615101c379b5d04e5cf8ce73",
+      "o3_sha256": "217f206d10ce532470459c74c282439f33a945894231bf11723c3dbdb06aea79",
+      "diagnostics": "Cross BN K0: packets=4, slot-bytes=8192, overlap-mmac=32, sum-anchors=64, function=Attn_p2",
+      "identical_instruction_graph_to_measured": true,
+      "LLVM_and_O3_verified": true
+    }
+  },
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_qk_tail_prefetch_pass/k_tail_prefetch4.ll",
+  "measured": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cross_bn_k0_lifetimes/k0_sum_anchor.ll",
+  "measured_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+  "exporter_sha256": "f62bd371023e0cd7f79665229b769d3e954a2a730eb20886ae8f014705671fa8",
+  "gpu_tested": false
+}

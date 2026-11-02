@@ -1,0 +1,9 @@
+Executed random h=0 q=0 control
+Executed random h=0 q=0 group_prefetch2
+PASS {'kind': 'random', 'head': 0, 'query': 0, 'bitwise_equal': True, 'reference_atol': 0.01, 'reference_rtol': 0.01, 'reference_tolerance_passed': True, 'reference_mismatch_elements': 0, 'baseline_has_identical_reference_error': True, 'max_abs_error': 0.000145755813135362, 'counts': {'control': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}, 'group_prefetch2': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}}}
+Executed random h=1 q=31 control
+Executed random h=1 q=31 group_prefetch2
+PASS {'kind': 'random', 'head': 1, 'query': 31, 'bitwise_equal': True, 'reference_atol': 0.01, 'reference_rtol': 0.01, 'reference_tolerance_passed': True, 'reference_mismatch_elements': 0, 'baseline_has_identical_reference_error': True, 'max_abs_error': 9.917702902600967e-05, 'counts': {'control': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}, 'group_prefetch2': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}}}
+Executed large_scores h=1 q=1 control
+Executed large_scores h=1 q=1 group_prefetch2
+PASS {'kind': 'large_scores', 'head': 1, 'query': 1, 'bitwise_equal': True, 'reference_atol': 0.01, 'reference_rtol': 0.01, 'reference_tolerance_passed': False, 'reference_mismatch_elements': 25, 'baseline_has_identical_reference_error': True, 'max_abs_error': 0.023974902912743623, 'counts': {'control': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}, 'group_prefetch2': {'vm_waits': 260, 'barriers': 389, 'q_elements': 16384}}}

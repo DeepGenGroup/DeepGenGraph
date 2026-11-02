@@ -1,0 +1,29 @@
+generated_ir/gemm_result_layout_comparison/spill_analysis/kernel.ll  消融实验：基准 3.1策略，shm中转方案
+HSACO (ms): min=5.334074, median=5.346875, p90=5.351291, max=5.352956
+PyTorch SDPA (ms): min=1.106719, median=1.125599, p90=1.143119, max=1.161598
+time_our_mid=5.346874952316284, time_base_mid=1.1255990266799927, speedup=0.21051530786078687x
+
+kernel-name:"Attn_p2"
+ kernel dispatch index                     27
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                45410
+ thread id                                 45410
+ grid size                                 262144
+ work group size                           256
+ shared memory size                        65536
+ scratch size                              0
+ vgpr count                                256
+ sgpr count                                112
+ fbarrier count                            0
+ signal handle                             0x0
+ kernel time                               0.005355(s)
+ processed ALU instructions                19.2562944870(%)
+ performance                               2226.027263(Gflops)
+ shared memory operation                   13787136
+ shared memory bank conflict               27.5182534941(%)
+ L1 cache unit is active                   17.0531228598(%)
+ L1 cache unit is stalled                  0.7800415017(%)
+ L2 cache write unit is stalled            0.0182109770(%)
+ L2 cache hit rate                         78.280317(%)

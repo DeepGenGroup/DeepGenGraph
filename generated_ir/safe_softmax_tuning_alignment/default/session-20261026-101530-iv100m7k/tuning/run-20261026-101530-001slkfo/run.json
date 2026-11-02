@@ -1,0 +1,101 @@
+{
+  "argv": [
+    "--input-list",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs.txt",
+    "--tool",
+    "/tmp/attention-alignment-package/attention-tuning/MyTest",
+    "--output-dir",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning",
+    "--summary-dir",
+    "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k",
+    "--launch-python",
+    "/data2/xsl/miniconda3/bin/python3",
+    "--gen-hsaco",
+    "/tmp/attention-alignment-package/attention-tuning/GenHsaco.sh",
+    "--launcher",
+    "/tmp/attention-alignment-package/attention-tuning/launchKernel.py",
+    "--case",
+    "baseline",
+    "--case",
+    "nohint-rolled",
+    "--case",
+    "pipeline-loop-only",
+    "--case",
+    "group8-reverse",
+    "--case",
+    "group8-reverse-k128-swizzle",
+    "--case",
+    "retained32-baseline",
+    "--case",
+    "online-baseline",
+    "--opt-level",
+    "3",
+    "--device",
+    "0",
+    "--warmup",
+    "10",
+    "--repeat",
+    "50",
+    "--seed",
+    "0",
+    "--timeout",
+    "300",
+    "--llvm-as",
+    "/data2/xsl/install/bin/llvm-as"
+  ],
+  "input": null,
+  "loop_iv": "auto",
+  "sweep_base": null,
+  "input_sha256": null,
+  "inputs": [
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-32-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0001-test_input_1x32x4096x128-64-32-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "1d8c2daf0779ff20fd06b087a9b2458c4d886a0485c4063848c447be86852833"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-64-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0002-test_input_1x32x4096x128-64-64-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "6db8da9a6abf2d5519b3eb060c0dad39ffc0db6a8a9fdaa27cf0b45f44177201"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-64-128-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0003-test_input_1x32x4096x128-64-128-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "84cda52110a18f7f0a48c9a3374e824138f3798c482401686b81b616df26f60a"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-32-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0004-test_input_1x32x4096x128-128-32-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "03aa6672b98342dc554cdf9d4b46a77235d53d7d2f36a5f3c9887f5efee85f25"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-64-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0005-test_input_1x32x4096x128-128-64-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "9c6115e792731053e8bc30160e948a65b0cbcbd5cf4ba24b019865bcc5537922"
+    },
+    {
+      "input": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/inputs/test_input_1x32x4096x128-128-128-32-online.mlir",
+      "snapshot": "/data2/xsl/DeepGenGraph/generated_ir/safe_softmax_tuning_alignment/default/session-20261026-101530-iv100m7k/tuning/run-20261026-101530-001slkfo/input-0006-test_input_1x32x4096x128-128-128-32-online/input.mlir",
+      "loop_iv": "dk",
+      "input_sha256": "412e5a6671f8dcd37f86112790b558d43ffd50741861b605982b5a96dbb6b78c"
+    }
+  ],
+  "tool": "/tmp/attention-alignment-package/attention-tuning/MyTest",
+  "tool_mtime_ns": 1792751141314037322,
+  "llvm_as": "/data2/xsl/install/bin/llvm-as",
+  "hardware_tested": false,
+  "hsaco_requested": false,
+  "benchmark_requested": false,
+  "backend_environment": {
+    "LLVM_DIR": null,
+    "ROCM_BC": null,
+    "GPU_ARCH": null,
+    "GPU_FEATURES": null,
+    "DWARF_VERSION": null
+  }
+}
