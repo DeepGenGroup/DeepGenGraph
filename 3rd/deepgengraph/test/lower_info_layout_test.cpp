@@ -30,6 +30,8 @@ static void initialize(LowerInfo &info, Value buffer, coordXY_t creg,
   info.warpInstUnroll = {3, 1};
   info.thread_own_data_size = creg * coordXY_t{6, 6};
   info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::CanReuse};
+  info.calculateAttr = {BufferAxisCalcuateAttr::InnerThreadReduce,
+                        BufferAxisCalcuateAttr::CrossWarpReduce};
   info.warpIdDivisor = 2;
 }
 
@@ -72,6 +74,8 @@ static void testTranspose(MLIRContext &context, Value buffer, coordXY_t creg,
         "transpose coverage and per-thread storage");
   check(info.reuseable[0] == BufferAxisReuse::CanReuse &&
             info.reuseable[1] == BufferAxisReuse::Hold &&
+            info.calculateAttr[0] == BufferAxisCalcuateAttr::CrossWarpReduce &&
+            info.calculateAttr[1] == BufferAxisCalcuateAttr::InnerThreadReduce &&
             info.ignoreDim == (ignoreDim < 0 ? -1 : 1 - ignoreDim),
         "transpose axis semantics");
   check(info.buffer == buffer && info.mmaInst == &instruction &&
@@ -100,9 +104,11 @@ static void testNoTranspose(Value buffer, coordXY_t creg, coordXY_t order) {
   initialize(info, buffer, creg, order);
   auto oldMap = info.getAffineMap();
   auto widths = info.get_block_widths();
+  auto attrs = info.calculateAttr;
   check(!info.convert_to_row_major(), "row-major/scalar layout stays put");
   auto newMap = info.getAffineMap();
   check(widths == info.get_block_widths() &&
+            attrs == info.calculateAttr &&
             info.base_layout.thread_creg == creg &&
             info.base_layout.thread_creg_order == coordXY_t{1, 0},
         "normalize degenerate order without transposing axes");
@@ -112,6 +118,48 @@ static void testNoTranspose(Value buffer, coordXY_t creg, coordXY_t order) {
           "order normalization preserves valid register indices");
   check(!info.convert_to_row_major() && info.getAffineMap() == newMap,
         "no-op conversion stays idempotent");
+}
+
+static void testReductionScopes(MLIRContext &context, Value buffer) {
+  using Attr = BufferAxisCalcuateAttr;
+  LowerInfo info(64);
+  initialize(info, buffer, {2, 4}, {1, 0});
+  info.block_layout = {4, 1};
+  info.base_layout.warp_layout = {64, 1};
+  info.calculateAttr = {Attr::Normal, Attr::UnknownReduce};
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr == std::array<Attr, 2>{Attr::Normal,
+                                                 Attr::InnerThreadReduce},
+        "local repeats and replicated waves require no communication");
+
+  info.base_layout.warp_layout = {16, 4};
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr[1] == Attr::InnerWarpReduce,
+        "lane-distributed reduction requires warp communication");
+  info.block_layout = {2, 2};
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr[1] == Attr::CrossWarpReduce,
+        "wave-distributed reduction requires cross-warp communication");
+  info.block_layout = {4, 1};
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr[1] == Attr::CrossWarpReduce,
+        "preserve stricter requirements from the same chain");
+
+  info.calculateAttr = {Attr::Normal, Attr::UnknownReduce};
+  info.logicalTransform = AffineMap::getPermutationMap(
+      ArrayRef<unsigned>{1, 0}, &context);
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr[1] == Attr::CrossWarpReduce,
+        "classify logical axes after a layout transform");
+
+  Block rowBlock;
+  info.buffer = rowBlock.addArgument(
+      MemRefType::get({192, 1}, Float32Type::get(&context)),
+      UnknownLoc::get(&context));
+  info.calculateAttr = {Attr::Normal, Attr::UnknownReduce};
+  info.resolveCalculateAttrs();
+  check(info.calculateAttr[1] == Attr::InnerThreadReduce,
+        "a singleton reduction does not use its inherited distribution");
 }
 
 int main() {
@@ -130,5 +178,6 @@ int main() {
     testNoTranspose(buffer, {1, 4}, order);
   }
   testNoTranspose(buffer, {2, 3}, {1, 0});
+  testReductionScopes(context, buffer);
   llvm::outs() << "LowerInfo row-major layout tests passed\n";
 }

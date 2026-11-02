@@ -37,10 +37,30 @@ static const char* BLOCK_LABELS[] = {"iv_blockX", "iv_blockY"};
 #define BUFFER_SEMANTIC_N 2
 #define BUFFER_SEMANTIC_K 3
 
+// 描述 buffer（memref、vector）各个轴的复用属性（是否需要全量分配 reg 保存数据）
 enum class BufferAxisReuse : int32_t {
   Hold = 0,      // 表示该轴的数据必须完整持有，需要在for外提前分配好buffer
   CanReuse = 1   // 表示此轴数据可复用。for中可反复覆写
 };
+
+// 描述 buffer（memref、vector）各个轴的计算属性（是否涉及到规约）
+/*
+例如对于矩阵乘法问题 ： C=A@B,  E=C@D
+block-level-IR里， 初次推断时，AB的 k轴就是 UnknownReduce CD矩阵的k轴同理
+后续具体优化时，如果将C规划成了 block_layout=[2,2] 那么意味着 C矩阵被2x2 warp 划分。
+又因为 C为第二个矩阵乘的左矩阵，k轴需reduce，所以 C的k轴就是 CrossWarpReduce
+D 是否要跨warp，需要看后续的D怎么用。
+threadlevel-IR 也能用
+*/
+// 按约束强度递增；同一传播链逐轴取最大值，不作为物理布局冲突。
+enum class BufferAxisCalcuateAttr : int32_t {
+  Normal = 0,      // 普通，只需要持有自己的数据就行。不涉及跨线程、跨block通信
+  UnknownReduce = 1,      // 初次推断标记；布局协商后细化为线程内、warp 内或跨 warp 规约
+  InnerThreadReduce,    // 表示此轴会用于Reduce，但在线程内部。可直接用寄存器
+  InnerWarpReduce ,   // 表示此轴会用于Reduce, 但是跨thread。 在 warp 内部（可以用shuffle）
+  CrossWarpReduce  ,   // 表示此轴会用于Reduce, 会跨warp通信（不能shuffle，必须要经过shm + 同步
+};
+
 
 class LowerInfoAnalysis ;
 
@@ -123,7 +143,7 @@ public:
   mlir::Operation* op = nullptr;
   int warp_threads;
   BufPos pos = LowerInfo::BufPos::In;  // 作为输入buffer还是输出buffer，或二者兼有
-  coordXY_t warpInstUnroll = {1,1};
+  coordXY_t warpInstUnroll = {1,1};  // 若有for循环，单次迭代里执行几次warpInst
   // Optional bijection from instruction-space coordinates to logical tensor
   // coordinates. Keep the hardware fragment descriptor unchanged: consumers,
   // copies and layout conversions must all compose this map, not reinterpret
@@ -133,6 +153,10 @@ public:
   // over that axis (B is shared by all M waves, A by all N waves).
   int64_t warpIdDivisor = 1;
   std::array<BufferAxisReuse, 2> reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};
+  std::array<BufferAxisCalcuateAttr, 2> calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::Normal};
+
+  // 根据当前布局细化规约范围，保留链上已有的更严格约束。
+  void resolveCalculateAttrs();
 
   int ignoreDim = -1;  // 需要忽略的维度（只看有效维度）
   LowerInfo* convertFrom = nullptr;  // 布局冲突：插入 ConvertLayoutOp，优先 wave shuffle，否则 reg->shm->reg。
@@ -164,7 +188,7 @@ public:
 
   std::array<int64_t, 2> block_layout = {1, 1};  // block内的warp布局，plan1=[2,1], plan2=[1,2]。用户自行决定
   std::array<int64_t, 2> block_layout_order = {0, 1};  // block内warp布局的行列优先顺序 上例中为[1,0] 行优先（列优先也可）
-  std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2] or [4,1]. 其中行列优先顺序无所谓，不影响结果
+  std::array<int64_t, 2> block_repeat = {1, 1};  // 为了覆盖buffer，warp_inst 需要迭代的次数。上例中为 i=0,1,2,3 布局为 [2,2] or [4,1]. 其中行列优先顺序无所谓，不影响结果。单次迭代还需要展开 warpInstUnroll 次
 
   std::array<int64_t, 2>  thread_own_data_size;  // thread级别IR表达上，每个线程应当持有的（最少）buffer元素量，才能完成op的计算
 
@@ -186,6 +210,7 @@ public:
     swap_xy(warpInstUnroll);
     swap_xy(thread_own_data_size);
     std::swap(reuseable[0], reuseable[1]);
+    std::swap(calculateAttr[0], calculateAttr[1]);
     if (ignoreDim == 0 || ignoreDim == 1)
       ignoreDim = 1 - ignoreDim;
 
@@ -327,6 +352,8 @@ public:
     printI64Vec("block_repeat", get_block_repeat());
     printI64Vec("warpInstUnroll", warpInstUnroll);
     printI64Vec("thread_own_data", get_thread_own_data_size());
+    llvm::outs() << "calculate_attr: [" << int(calculateAttr[0]) << ", "
+                 << int(calculateAttr[1]) << "]\n";
     llvm::outs() << "warp_id_divisor = " << warpIdDivisor << "\n";
     if (logicalTransform)
       llvm::outs() << "logical_transform = " << logicalTransform << "\n";
@@ -418,6 +445,8 @@ public:
   void updateLowerInfoForLayoutConvertOp(frisk::ConvertLayoutOp op, LowerInfo newInfo);
 
   void conflictResolve();
+  // 记录保留逻辑轴的传播边；广播轴和规约消去的轴不参与传播。
+  void addCalculateAttrPropagation(Value lhs, Value rhs, int ignoreDim = -1);
   // 根据buffer查找infoMap，找到其中距离currOp最近的之前/之后的Op的 LowerInfo
   LowerInfo* getNearestInferedInfo(const mlir::Value& buffer, mlir::Operation* currOp, bool isBefore = true);
   auto begin() { return infoMap.begin(); }
@@ -426,6 +455,13 @@ public:
 private:
   LowerInfoMapTy infoMap;  // 存放解决完冲突后的 LowerInfo 信息
   DenseMap<mlir::Value, SmallVector<LowerInfo, 4>> m_candidates;  // 先存放所有LowerInfo
+
+  struct CalculateAttrEdge {
+    Value lhs, rhs;
+    unsigned dim;
+  };
+  SmallVector<CalculateAttrEdge> calculateAttrEdges;
+  void resolveCalculateAttrs();
 
   DenseMap<Operation*, unsigned> opOrder;  // 存放 op 顺序
   SmallVector<Operation*> opOrderVec;

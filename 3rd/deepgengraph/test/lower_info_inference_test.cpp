@@ -40,9 +40,122 @@ module {
 }
 )mlir";
 
+static void testIndependentLoopAxes(MLIRContext &context) {
+  using Attr = BufferAxisCalcuateAttr;
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    module {
+      func.func @loop(%a: memref<32x32xf16, 3>,
+                      %b: memref<32x32xf16, 3>)
+          attributes {thread_num = 64 : i32} {
+        %out:2 = affine.for %i = 0 to 2
+            iter_args(%lhs = %a, %rhs = %b)
+            -> (memref<32x32xf16, 3>, memref<32x32xf16, 3>) {
+          %c = frisk.gemm(%lhs, %rhs) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+          affine.yield %lhs, %rhs : memref<32x32xf16, 3>, memref<32x32xf16, 3>
+        }
+        return
+      }
+    }
+  )mlir", &context);
+  check(bool(module), "parse independent loop axes fixture");
+  auto func = *module->getOps<func::FuncOp>().begin();
+  affine::AffineForOp loop;
+  func.walk([&](affine::AffineForOp op) { loop = op; });
+  auto *layouts = LowerInfoAnalysis::run(func);
+  for (unsigned slot = 0; slot < 2; ++slot) {
+    std::array<Attr, 2> expected{Attr::Normal, Attr::Normal};
+    expected[1 - slot] = Attr::InnerWarpReduce;
+    SmallVector<Value, 3> values{loop.getInits()[slot],
+                                loop.getRegionIterArgs()[slot],
+                                loop.getResult(slot)};
+    for (Value value : values) {
+      auto *info = layouts->getLowerInfo(value, loop);
+      check(info && info->calculateAttr == expected,
+            "same-shaped loop carriers must keep independent reduction axes");
+    }
+    auto *yield = loop.getBody()->getTerminator();
+    auto *info = layouts->getLowerInfo(yield->getOperand(slot), yield);
+    check(info && info->calculateAttr == expected,
+          "loop yields retain their own slot's reduction requirements");
+  }
+}
+
+static void testChainedGemm(MLIRContext &context) {
+  using Attr = BufferAxisCalcuateAttr;
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    module {
+      func.func @chain(%a: memref<128x32xf16, 3>,
+                       %b: memref<32x128xf16, 3>,
+                       %d: memref<128x32xf16, 3>)
+          attributes {thread_num = 256 : i32,
+                      frisk.block_warps = array<i64: 2, 2>} {
+        %c = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %half = frisk.cast %c : memref<128x128xf32> -> memref<128x128xf16>
+        %e = frisk.gemm(%half, %d) {transA = false, transB = false} : memref<128x128xf16>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        return
+      }
+    }
+  )mlir", &context);
+  check(bool(module), "parse chained GEMM fixture");
+  auto func = *module->getOps<func::FuncOp>().begin();
+  SmallVector<GemmOp> gemms;
+  CastOp castOp;
+  func.walk([&](GemmOp op) { gemms.push_back(op); });
+  func.walk([&](CastOp op) { castOp = op; });
+  auto *layouts = LowerInfoAnalysis::run(func);
+  auto *c = layouts->getLowerInfo(gemms.front().getResult(), gemms.front());
+  auto *castInput = layouts->getLowerInfo(castOp->getOperand(0), castOp);
+  auto *castOutput = layouts->getLowerInfo(castOp->getResult(0), castOp);
+  auto *a = layouts->getLowerInfo(gemms.back().getMatrixA(), gemms.back());
+  auto *b = layouts->getLowerInfo(gemms.back().getMatrixB(), gemms.back());
+  auto *e = layouts->getLowerInfo(gemms.back().getResult(), gemms.back());
+  check(c && castInput && castOutput && a && b && e,
+        "resolve all chained GEMM uses");
+  for (auto *info : {c, castInput, castOutput, a})
+    check(info->calculateAttr == std::array<Attr, 2>{Attr::Normal,
+                                                    Attr::CrossWarpReduce},
+          "propagate the strictest K requirement across a cast and conversion");
+  check(b->calculateAttr == std::array<Attr, 2>{Attr::InnerWarpReduce,
+                                               Attr::Normal},
+        "independent B operand keeps its own reduction scope");
+  check(e->calculateAttr == std::array<Attr, 2>{Attr::Normal, Attr::Normal},
+        "GEMM output does not inherit its operands' K reduction");
+  bool hasConversion = false;
+  for (auto &entry : *layouts) {
+    auto &info = entry.second;
+    if (info.convertFrom) {
+      hasConversion = true;
+      check(info.calculateAttr == info.convertFrom->calculateAttr,
+            "conversion source candidates receive merged requirements");
+    }
+  }
+  check(hasConversion, "fixture must exercise conflicting GEMM layouts");
+
+  // Re-inserting an identical physical candidate must merge semantic
+  // requirements without introducing a layout conversion.
+  LowerInfoMap candidates;
+  candidates.getOpsOrder(func);
+  LowerInfo normal = *e;
+  normal.convertFrom = nullptr;
+  candidates.addLowerInfo(gemms.back(), normal);
+  LowerInfo stricter = normal;
+  stricter.calculateAttr[1] = Attr::UnknownReduce;
+  candidates.addLowerInfo(gemms.back(), stricter);
+  candidates.conflictResolve();
+  auto *merged = candidates.getLowerInfo(normal.buffer, gemms.back());
+  check(merged && merged->calculateAttr[1] == Attr::CrossWarpReduce &&
+            !merged->convertFrom,
+        "merge duplicate metadata and resolve a single remaining candidate");
+  candidates.conflictResolve();
+  check(candidates.getLowerInfo(normal.buffer, gemms.back())->calculateAttr ==
+            std::array<Attr, 2>{Attr::Normal, Attr::CrossWarpReduce},
+        "calculation attribute resolution is idempotent");
+}
+
 int main(int argc, char **argv) {
   DialectRegistry registry;
-  registry.insert<FriskDialect, arith::ArithDialect, func::FuncDialect>();
+  registry.insert<FriskDialect, arith::ArithDialect, func::FuncDialect,
+                  affine::AffineDialect>();
   MLIRContext context(registry);
   StringRef mode = argc > 1 ? argv[1] : "";
   if (mode == "--no-anchor") {
@@ -87,5 +200,36 @@ int main(int argc, char **argv) {
   check(row->ignoreDim == 1 && row->thread_own_data_size[1] == 1,
         "broadcast row must retain singleton storage");
   check(scaled->ignoreDim == -1, "full output must not inherit the reduced axis");
+  using Attr = BufferAxisCalcuateAttr;
+  ReduceOp reduce;
+  CopyOp copy;
+  func.walk([&](ReduceOp op) { reduce = op; });
+  func.walk([&](CopyOp op) { copy = op; });
+  auto *reduceSrc = layouts->getLowerInfo(reduce.getSrc(), reduce);
+  auto *reduceDst = layouts->getLowerInfo(reduce.getDst(), reduce);
+  check(reduceSrc && reduceSrc->pos == LowerInfo::BufPos::In && reduceDst,
+        "reduction registers both input and output candidates");
+  check(reduceSrc->calculateAttr[1] == Attr::InnerWarpReduce &&
+            scores->calculateAttr[1] == Attr::InnerWarpReduce &&
+            layouts->getLowerInfo(copy.getDstMemRef(), copy)->calculateAttr[1] ==
+                Attr::InnerWarpReduce,
+        "propagate a late reduction requirement through every copy value");
+  check(reduceDst->calculateAttr[1] == Attr::Normal &&
+            row->calculateAttr[1] == Attr::Normal &&
+            scaled->calculateAttr[1] == Attr::Normal,
+        "the reduced/broadcast axis must stop reduction propagation");
+  for (auto &entry : *layouts)
+    for (Attr attr : entry.second.calculateAttr)
+      check(attr != Attr::UnknownReduce, "resolve every reduction scope");
+  func->setAttr("frisk.block_warps",
+                DenseI64ArrayAttr::get(&context, {2, 2}));
+  layouts = LowerInfoAnalysis::run(func);
+  check(layouts->getLowerInfo(reduce.getSrc(), reduce)->calculateAttr[1] ==
+            Attr::CrossWarpReduce &&
+            layouts->getLowerInfo(reduce.getDst(), reduce)->calculateAttr[1] ==
+                Attr::Normal,
+        "a reduction across column waves is not classified as warp-local");
+  testChainedGemm(context);
+  testIndependentLoopAxes(context);
   llvm::outs() << "LowerInfo deferred broadcast inference tests passed\n";
 }

@@ -51,6 +51,89 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 #define LLVM_OUT_MSG(msg)  llvm::outs() << msg << "\n";llvm::outs().flush()
 
 LowerInfo::LowerInfo(int w) : warp_threads(w){ }
+
+void LowerInfo::resolveCalculateAttrs() {
+  using Attr = BufferAxisCalcuateAttr;
+  auto type = buffer ? dyn_cast<ShapedType>(buffer.getType()) : ShapedType{};
+  for (unsigned dim = 0; dim < 2; ++dim) {
+    if (calculateAttr[dim] == Attr::Normal)
+      continue;
+    Attr scope = Attr::InnerThreadReduce;
+    // Repeats/unroll/register widths only add work within each thread.
+    // Replicated waves (warpIdDivisor) do not partition the reduction axis.
+    if (!type || !type.hasRank() || type.getDimSize(dim) != 1) {
+      for (unsigned physicalDim = 0; physicalDim < 2; ++physicalDim) {
+        bool contributes = logicalTransform
+            ? logicalTransform.getResult(dim).isFunctionOfDim(physicalDim)
+            : dim == physicalDim;
+        if (!contributes)
+          continue;
+        if (block_layout[physicalDim] > 1)
+          scope = Attr::CrossWarpReduce;
+        else if (base_layout.warp_layout[physicalDim] > 1)
+          scope = std::max(scope, Attr::InnerWarpReduce);
+      }
+    }
+    calculateAttr[dim] = std::max(calculateAttr[dim], scope);
+  }
+}
+
+void LowerInfoMap::addCalculateAttrPropagation(Value lhs, Value rhs,
+                                               int ignoreDim) {
+  if (lhs == rhs)
+    return;
+  auto lhsType = dyn_cast<ShapedType>(lhs.getType());
+  auto rhsType = dyn_cast<ShapedType>(rhs.getType());
+  if (!lhsType || !rhsType || !lhsType.hasRank() || !rhsType.hasRank() ||
+      lhsType.getRank() != 2 || rhsType.getRank() != 2)
+    return;
+  for (unsigned dim = 0; dim < 2; ++dim) {
+    if (static_cast<int>(dim) == ignoreDim ||
+        lhsType.getDimSize(dim) != rhsType.getDimSize(dim))
+      continue;
+    if (!llvm::any_of(calculateAttrEdges, [&](const CalculateAttrEdge &edge) {
+          return edge.dim == dim &&
+                 ((edge.lhs == lhs && edge.rhs == rhs) ||
+                  (edge.lhs == rhs && edge.rhs == lhs));
+        }))
+      calculateAttrEdges.push_back({lhs, rhs, dim});
+  }
+}
+
+void LowerInfoMap::resolveCalculateAttrs() {
+  using Attrs = std::array<BufferAxisCalcuateAttr, 2>;
+  DenseMap<Value, Attrs> requirements;
+  auto merge = [](auto &dst, const auto &src) {
+    auto merged = std::max(dst, src);
+    bool changed = dst != merged;
+    dst = merged;
+    return changed;
+  };
+  // Layout inference visits an operation only when its anchor is available.
+  // Solve semantic requirements separately to reach consumers/producers that
+  // were already visited, including each independent loop-carried value.
+  bool changed;
+  do {
+    changed = false;
+    for (auto &entry : m_candidates) {
+      auto &required = requirements[entry.first];
+      for (auto &info : entry.second) {
+        for (unsigned dim = 0; dim < 2; ++dim)
+          merge(info.calculateAttr[dim], required[dim]);
+        info.resolveCalculateAttrs();
+        for (unsigned dim = 0; dim < 2; ++dim)
+          changed |= merge(required[dim], info.calculateAttr[dim]);
+      }
+    }
+    for (const auto &edge : calculateAttrEdges) {
+      auto strictest = std::max(requirements[edge.lhs][edge.dim],
+                                requirements[edge.rhs][edge.dim]);
+      changed |= merge(requirements[edge.lhs][edge.dim], strictest);
+      changed |= merge(requirements[edge.rhs][edge.dim], strictest);
+    }
+  } while (changed);
+}
+
 int LowerInfoAnalysis::gemmCount = 0;
 static std::array<int64_t, 2> getThreadOwnDataSize(const LowerInfo &info,
                                                    bool includeBaseRepeat) {
@@ -105,7 +188,8 @@ static bool isSameLayout(const LowerInfo &lhs, const LowerInfo &rhs) {
         isSameLinearLayout(lhs.base_layout, rhs.base_layout) &&
         lhs.block_layout == rhs.block_layout &&
         lhs.block_layout_order == rhs.block_layout_order &&
-        lhs.thread_own_data_size == rhs.thread_own_data_size){
+        lhs.thread_own_data_size == rhs.thread_own_data_size
+      ){
     auto br_wu0_x = lhs.block_repeat[0] * lhs.warpInstUnroll[0];
     auto br_wu0_y = lhs.block_repeat[1] * lhs.warpInstUnroll[1];
     auto br_wu1_x = rhs.block_repeat[0] * rhs.warpInstUnroll[0];
@@ -154,11 +238,17 @@ void LowerInfoMap::addLowerInfo(mlir::Operation *op, LowerInfo info, bool isConf
   // llvm::outs() << "[debug] addLayout : " << op->getName().getStringRef() << " - "<< info.buffer;
 
   auto &candidates = m_candidates[info.buffer];
-  if (!llvm::any_of(candidates, [&](const LowerInfo &candidate) {
-        return isSameCandidate(candidate, info);
-      })) {
-    candidates.push_back(std::move(info));
+  for (auto &candidate : candidates) {
+    if (!isSameCandidate(candidate, info))
+      continue;
+    // Calculation requirements do not change the physical layout and must
+    // not create a conversion or disappear when a candidate is deduplicated.
+    for (unsigned dim = 0; dim < 2; ++dim)
+      candidate.calculateAttr[dim] =
+          std::max(candidate.calculateAttr[dim], info.calculateAttr[dim]);
+    return;
   }
+  candidates.push_back(std::move(info));
   // llvm::outs() << "\n";
   return;
 }
@@ -237,6 +327,7 @@ static void recalcLayout(LowerInfo& info, const coordXY_t& new_thread_own_data_s
   }
 }
 
+// 解决Layout冲突。尝试协商
 void LowerInfoMap::conflictResolve() {
   infoMap.clear();
   
@@ -301,12 +392,10 @@ void LowerInfoMap::conflictResolve() {
         assert(max_tod_sz[0] > 0);
         assert(max_tod_sz[1] > 0);
         // 根据 max_tod_sz, 调整 buffer对应的所有op下的LowerInfo
-        // TODO: 这里需要考虑 gemmop：AB 的k轴循环次数要强制相等吗？——是。否则数学上不成立
+        // 这里需要考虑 gemmop：AB 的k轴循环次数要强制相等吗？——是。否则数学上不成立
         for(auto &info : bufferInfoCandidates){
           if(info.op != nullptr){
             recalcLayout(info, max_tod_sz, bufferPos);
-            auto key = std::make_pair(buffer, info.op);
-            infoMap.try_emplace(key, info);
           }
         }
       }
@@ -337,6 +426,9 @@ void LowerInfoMap::conflictResolve() {
       }
     }
   }
+  // 在最终布局上细化规约范围，并按轴合并同一条链的最严格要求。
+  // 必须先更新候选，再复制到 infoMap，convertFrom 才能看到相同的属性。
+  resolveCalculateAttrs();
   // 结果整理
   for(auto& ent : m_candidates){
     auto buffer = ent.getFirst();
@@ -667,6 +759,7 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
   info.block_layout = block_layout;
   info.block_layout_order = {0, 1};
   info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // C矩阵必须完整持有全部结果，不得覆盖
+  info.calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::Normal};  // C矩阵的两个轴的计算属性
   if(hw->getKind() == HW_KIND_NVIDIA){
     info.buffer = problem.C;
     info.thread_bound = thread_num;
@@ -713,6 +806,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
     block_layout = source_info.get_block_layout();
   }
   info.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // C矩阵必须完整持有全部结果，不得覆盖
+  info.calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::Normal};  // C矩阵的两个轴的计算属性
   info.block_layout = block_layout;
   info.block_layout_order = source_info.block_layout_order;
   if (hw->getKind() == HW_KIND_DCU) {
@@ -745,6 +839,7 @@ void LowerInfoAnalysis::applyDirectGemmAInfo(LowerInfo &info, const GemmProblem 
   info.buffer = problem.A;
   info.mmaInst = mma;
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
+  info.calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::UnknownReduce};  // A矩阵的k轴会reduce
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[1] = 32 / static_cast<int64_t>(problem.inElemBitWidth);
@@ -773,6 +868,7 @@ void LowerInfoAnalysis::applyRelyGemmAInfo(LowerInfo &info, const GemmProblem &p
   info.buffer = problem.A;
   auto blockLayout = info.get_block_layout();
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // A buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
+  info.calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::UnknownReduce};  // A的k轴要reduce
   info.base_layout = mma->desc_a;
   info.block_layout = {blockLayout[0], 1};
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
@@ -787,6 +883,7 @@ void LowerInfoAnalysis::applyGemmBInfo(LowerInfo &info, const GemmProblem &probl
   info.buffer = problem.B;
   info.mmaInst = mma;
   info.reuseable = {BufferAxisReuse::CanReuse, BufferAxisReuse::CanReuse};  // B buffer理论上只需要放得下单个frag即可。每次for循环现从shm 拷贝
+  info.calculateAttr = {BufferAxisCalcuateAttr::UnknownReduce, BufferAxisCalcuateAttr::Normal};  // B的k轴要reduce
   if(hw->getKind() == HW_KIND_NVIDIA){
     auto blockLayout = info.get_block_layout();
     info.base_layout.thread_creg[0] = 1;
@@ -849,6 +946,7 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
 
     if (sourceInfo != nullptr) {
       LowerInfo source = *sourceInfo;
+      buf_info_maps.addCalculateAttrPropagation(src, dst);
       LowerInfo srcCandidate = source;
       srcCandidate.buffer = src;
       srcCandidate.pos = LowerInfo::BufPos::In;
@@ -867,6 +965,7 @@ bool LowerInfoAnalysis::inferCopyOp(Operation *op, LowerInfoMap &buf_info_maps,
         resultCandidate.buffer = result;
         resultCandidate.pos = LowerInfo::BufPos::Out;
         buf_info_maps.addLowerInfo(op, resultCandidate);
+        buf_info_maps.addCalculateAttrPropagation(dst, result);
       }
       return true;
     }
@@ -937,6 +1036,10 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps,
   auto checkCompatibleAndInfer = [](Operation* op, LowerInfo& info, Value targetBuffer, bool isStoreBuffer, LowerInfoMap& infoMap){
     auto memType = mlir::cast<MemRefType>(targetBuffer.getType());
     auto shape = memType.getShape();
+    auto sourceShape = cast<ShapedType>(info.buffer.getType()).getShape();
+    for (unsigned dim = 0; dim < 2; ++dim)
+      if (shape[dim] != sourceShape[dim])
+        info.calculateAttr[dim] = BufferAxisCalcuateAttr::Normal;
     auto [infoThreadData0, infoThreadData1] = info.get_thread_own_data_size();  // base
 
     auto [wl0, wl1] = info.get_warp_layout();  // warp_threads
@@ -1045,9 +1148,11 @@ bool LowerInfoAnalysis::inferBlockOp(Operation *op, LowerInfoMap &buf_info_maps,
   for (const Value &buf : load_bufs) {
     LowerInfo candidateInfo = sourceInfo;
     checkCompatibleAndInfer(op, candidateInfo, buf, false, buf_info_maps); 
+    buf_info_maps.addCalculateAttrPropagation(sourceInfo.buffer, buf);
   }
   LowerInfo candidateInfo = sourceInfo;
   checkCompatibleAndInfer(op, candidateInfo, store_buf, true, buf_info_maps);
+  buf_info_maps.addCalculateAttrPropagation(sourceInfo.buffer, store_buf);
   return true;
 }
 
@@ -1137,6 +1242,9 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
     // A 已经推断, A->C
     LowerInfo sourceA = *infoA;
     sourceA.buffer = problem.A;
+    sourceA.pos = LowerInfo::BufPos::In;
+    sourceA.calculateAttr[1] = std::max(sourceA.calculateAttr[1],
+                                       BufferAxisCalcuateAttr::UnknownReduce);
     buf_info_maps.addLowerInfo(op, sourceA);
     auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceA, true);
     buf_info_maps.addLowerInfo(op, ic);
@@ -1152,6 +1260,9 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
       // B->C
       LowerInfo sourceB = *infoB;
       sourceB.buffer = problem.B;
+      sourceB.pos = LowerInfo::BufPos::In;
+      sourceB.calculateAttr[0] = std::max(sourceB.calculateAttr[0],
+                                         BufferAxisCalcuateAttr::UnknownReduce);
       buf_info_maps.addLowerInfo(op, sourceB);
       auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceB, false);
       buf_info_maps.addLowerInfo(op, ic);
@@ -1205,7 +1316,18 @@ bool LowerInfoAnalysis::inferReduceOp(Operation *op, LowerInfoMap &buf_info_maps
   _dstInfo.thread_own_data_size[1] = required_sz1;
   _dstInfo.thread_own_data_size[dim] = 1; 
   _dstInfo.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};  // 规约结果必须持有完整，不能覆盖
+  _dstInfo.calculateAttr = {BufferAxisCalcuateAttr::Normal, BufferAxisCalcuateAttr::Normal};  // 结果buffer的计算属性按常规即可
+  // Register an input candidate for this use, rather than mutating whichever
+  // producer happened to seed inference. Negotiation resolves its scope.
+  LowerInfo srcCandidate = *srcInfo;
+  srcCandidate.buffer = src;
+  srcCandidate.pos = LowerInfo::BufPos::In;
+  srcCandidate.calculateAttr[dim] =
+      std::max(srcCandidate.calculateAttr[dim],
+               BufferAxisCalcuateAttr::UnknownReduce);
+  buf_info_maps.addLowerInfo(op, srcCandidate);
   buf_info_maps.addLowerInfo(op, _dstInfo);
+  buf_info_maps.addCalculateAttrPropagation(src, dst, dim);
   return true;
 }
 
@@ -1234,6 +1356,7 @@ bool LowerInfoAnalysis::inferOtherSimpleOp(
       candidate.pos = value == result ? LowerInfo::BufPos::Out
                                       : LowerInfo::BufPos::In;
       buf_info_maps.addLowerInfo(owner, candidate);
+      buf_info_maps.addCalculateAttrPropagation(result, value);
     }
     if (yield) {
       layout.buffer = values.front();
@@ -1337,6 +1460,7 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
         if (shape[dim] == 1) {
           candidateInfo.thread_own_data_size[dim] = 1;
           candidateInfo.ignoreDim = dim;
+          candidateInfo.calculateAttr[dim] = BufferAxisCalcuateAttr::Normal;
         }
       }
     }
@@ -1345,6 +1469,7 @@ bool LowerInfoAnalysis::inferArithmeticOp(Operation *op,
       candidateInfo.reuseable = {BufferAxisReuse::Hold, BufferAxisReuse::Hold};
     }
     buf_info_maps.addLowerInfo(op, candidateInfo);
+    buf_info_maps.addCalculateAttrPropagation(layout.buffer, memref);
   }
   return true;
 }
