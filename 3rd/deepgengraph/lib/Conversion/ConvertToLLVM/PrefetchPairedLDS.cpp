@@ -6,6 +6,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ModRef.h"
@@ -21,6 +22,8 @@ using namespace llvm;
 using Inst = Instruction;
 using Order = SmallVector<Inst *, 64>;
 constexpr StringLiteral Marker = "frisk.k_lds_prefetch";
+constexpr StringLiteral TailMarker = "frisk.k_tail_prefetch";
+constexpr StringLiteral TailPair = "frisk.k_tail_pair";
 
 bool mma(Inst *i) {
   auto *c = dyn_cast_or_null<CallInst>(i);
@@ -83,7 +86,8 @@ bool hoist(Order &order, ArrayRef<Inst *> roots, Inst *before) {
   return true;
 }
 
-void schedule(Order region, unsigned distance, Stats &stats) {
+void schedule(Order region, unsigned distance, Stats &stats,
+              StringRef marker = Marker, StringRef pairMetadata = "frisk.k_lds_pair") {
   if (region.empty()) return;
   Order original=region;
   SmallVector<LoadInst *> loads;
@@ -167,8 +171,8 @@ void schedule(Order region, unsigned distance, Stats &stats) {
   for (auto &p:pairs) {
     auto *tag=MDNode::get(end->getContext(),ConstantAsMetadata::get(
         ConstantInt::get(Type::getInt32Ty(end->getContext()),pairID++)));
-    p.a->setMetadata("frisk.k_lds_pair",tag);
-    p.b->setMetadata("frisk.k_lds_pair",tag);
+    p.a->setMetadata(pairMetadata,tag);
+    p.b->setMetadata(pairMetadata,tag);
   }
   auto *hint=Intrinsic::getOrInsertDeclaration(end->getModule(),Intrinsic::amdgcn_sched_barrier);
   auto *mark=MDNode::get(end->getContext(),{});
@@ -176,11 +180,39 @@ void schedule(Order region, unsigned distance, Stats &stats) {
     IRBuilder<> before(anchor), after(anchor->getNextNode());
     for (auto *guard:{before.CreateCall(hint,{before.getInt32(0)}),after.CreateCall(hint,{after.getInt32(0)})}) {
       guard->setMemoryEffects(MemoryEffects::inaccessibleMemOnly());
-      guard->setMetadata(Marker,mark);
+      guard->setMetadata(marker,mark);
     }
   }
   stats.regions++; stats.pairs+=pairs.size(); stats.moved+=moved;
   stats.anchors+=anchors.size(); stats.unpaired+=loads.size()-2*pairs.size();
+}
+
+// These instructions stay in their original order. Only LDS reads and their
+// pure integer address dependencies move across them. In particular, no FP
+// reassociation, speculation of calls, or relaxation of FP flags is needed.
+bool localReduction(Inst *i) {
+  if (i->getOpcode() == Instruction::FAdd) return true;
+  auto *c = dyn_cast<IntrinsicInst>(i);
+  if (!c || c->hasOperandBundles() || c->isMustTailCall() ||
+      !c->doesNotAccessMemory() || c->isConvergent()) return false;
+  switch (c->getIntrinsicID()) {
+  case Intrinsic::maxnum:
+  case Intrinsic::minnum:
+  case Intrinsic::maximum:
+  case Intrinsic::minimum:
+    return true;
+  default:
+    return false;
+  }
+}
+bool reductionWrapper(Inst *i) {
+  return isa<ExtractElementInst, InsertElementInst, ShuffleVectorInst,
+             ExtractValueInst, InsertValueInst>(i);
+}
+bool unprotectedCandidate(Inst *i) {
+  auto *l = dyn_cast<LoadInst>(i);
+  return candidate(l) && !l->getMetadata("frisk.k_lds_pair") &&
+         !l->getMetadata(TailPair);
 }
 } // namespace
 
@@ -234,6 +266,73 @@ bool prefetchPairedLDS(llvm::Module &module,unsigned distance) {
   pipeline.addPass(EarlyCSEPass());
   pipeline.addPass(PrefetchPairedLDSPass(distance));
   for (auto &f:module) if (!f.isDeclaration() && !f.hasFnAttribute(Marker)) pipeline.run(f,analyses);
+  return true;
+}
+
+bool parsePairedLDSTailOption(StringRef arg, unsigned &distance, bool &consumed) {
+  consumed = arg.starts_with("--k-tail-prefetch");
+  if (!consumed) return true;
+  return arg.consume_front("--k-tail-prefetch=") &&
+         !arg.getAsInteger(10, distance) && distance <= 8;
+}
+
+PreservedAnalyses PrefetchPairedLDSTailPass::run(Function &f, FunctionAnalysisManager &) {
+  if (!distance || distance > 8 || f.isDeclaration() || f.hasFnAttribute(TailMarker) ||
+      f.hasFnAttribute(Attribute::OptimizeNone) || f.hasFnAttribute(Attribute::StrictFP))
+    return PreservedAnalyses::all();
+  Stats stats;
+  unsigned reductionRegions = 0;
+  SmallVector<Order, 4> regions;
+  for (auto &block : f) {
+    Order region;
+    bool hasReduction = false;
+    auto flush = [&]() {
+      if (hasReduction) {
+        regions.push_back(std::move(region));
+        ++reductionRegions;
+      }
+      region.clear();
+      hasReduction = false;
+    };
+    for (auto &i : block) {
+      bool reduction = localReduction(&i);
+      if (address(&i) || unprotectedCandidate(&i) || mma(&i) ||
+          reduction || reductionWrapper(&i)) {
+        region.push_back(&i);
+        hasReduction |= reduction;
+      } else {
+        // Also includes existing hints, protected pairs, other memory reads,
+        // constrained FP, wave operations and unknown readnone calls.
+        flush();
+      }
+    }
+    flush();
+  }
+  for (auto &region : regions)
+    schedule(std::move(region), distance, stats, TailMarker, TailPair);
+  errs() << "K tail LDS prefetch: distance=" << distance << ", regions=" << stats.regions
+         << ", pairs=" << stats.pairs << ", moved=" << stats.moved
+         << ", anchors=" << stats.anchors << ", unpaired=" << stats.unpaired
+         << ", reduction-regions=" << reductionRegions << ", function=" << f.getName() << "\n";
+  if (!stats.regions) return PreservedAnalyses::all();
+  f.addFnAttr(TailMarker, Twine(distance).str());
+  auto preserved = PreservedAnalyses::none();
+  preserved.preserveSet<CFGAnalyses>();
+  return preserved;
+}
+
+bool prefetchPairedLDSTail(Module &module, unsigned distance) {
+  if (!distance) return true;
+  if (distance > 8) return false;
+  for (auto &f : module)
+    if (!f.isDeclaration() && f.hasFnAttribute(TailMarker) &&
+        f.getFnAttribute(TailMarker).getValueAsString() != Twine(distance).str()) {
+      errs() << "K tail LDS prefetch: conflicting prior distance in " << f.getName() << "\n";
+      return false;
+    }
+  FunctionAnalysisManager analyses;
+  PrefetchPairedLDSTailPass pass(distance);
+  for (auto &f : module) pass.run(f, analyses);
   return true;
 }
 } // namespace mlir::frisk

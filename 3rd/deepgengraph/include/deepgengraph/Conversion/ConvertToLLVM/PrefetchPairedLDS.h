@@ -15,5 +15,15 @@ public:
 /// Final export pass, after K DMA/layout changes. Enabled runs first perform
 /// local CSE/address simplification so repeated MMAC B reads can be paired.
 bool prefetchPairedLDS(llvm::Module &, unsigned distance = 0);
+bool parsePairedLDSTailOption(llvm::StringRef, unsigned &, bool &consumed);
+/// Complete paired B-operand prefetch in regions interleaved with local
+/// reductions. Does not run CSE, alter reductions or revisit protected pairs.
+class PrefetchPairedLDSTailPass : public llvm::OptionalPassInfoMixin<PrefetchPairedLDSTailPass> {
+  unsigned distance;
+public:
+  explicit PrefetchPairedLDSTailPass(unsigned distance = 0) : distance(distance) {}
+  llvm::PreservedAnalyses run(llvm::Function &, llvm::FunctionAnalysisManager &);
+};
+bool prefetchPairedLDSTail(llvm::Module &, unsigned distance = 0);
 }
 #endif

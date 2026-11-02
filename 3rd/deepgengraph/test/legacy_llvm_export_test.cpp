@@ -1,3 +1,4 @@
+#include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
@@ -28,6 +29,9 @@ int main(int argc, char **argv) {
   bool kDMASpecified = false;
   unsigned kLDSPrefetch = 0;
   bool kLDSPrefetchSpecified = false;
+  unsigned kTailPrefetch = 0;
+  bool kTailPrefetchSpecified = false;
+  bool crossBNK0 = false, crossBNK0Specified = false;
   llvm::StringRef maskAddBypass;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
@@ -45,6 +49,14 @@ int main(int argc, char **argv) {
       llvm::errs() << "use --k-lds-prefetch=0..8\n"; return 1;
     }
     if (consumed) { kLDSPrefetchSpecified = true; continue; }
+    if (!mlir::frisk::parsePairedLDSTailOption(option, kTailPrefetch, consumed)) {
+      llvm::errs() << "use --k-tail-prefetch=0..8\n"; return 1;
+    }
+    if (consumed) { kTailPrefetchSpecified = true; continue; }
+    if (!mlir::frisk::parseCrossBNK0Option(option, crossBNK0, consumed)) {
+      llvm::errs() << "use --cross-bn-k0=0|1\n"; return 1;
+    }
+    if (consumed) { crossBNK0Specified = true; continue; }
     if (!mlir::frisk::parseKDMAOption(option, kDMA, consumed)) {
       llvm::errs() << "use --k-dma=128|64|64-swizzle and --k-dma-arg=N\n";
       return 1;
@@ -108,9 +120,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (softmaxFragmentsSpecified || !maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty() || pvInterleaveSpecified || vDoubleBufferSpecified || kDMASpecified || kLDSPrefetchSpecified) {
+  if (softmaxFragmentsSpecified || !maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty() || pvInterleaveSpecified || vDoubleBufferSpecified || kDMASpecified || kLDSPrefetchSpecified || kTailPrefetchSpecified || crossBNK0Specified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--softmax-fragments=off|fragment|pv] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--softmax-fragments=off|fragment|pv] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -131,6 +143,8 @@ int main(int argc, char **argv) {
     if (!mlir::frisk::narrowKDMA(*module, kDMA)) return 1;
     if (!mlir::frisk::prefetchPairedLDS(*module, kLDSPrefetch)) return 1;
     mlir::frisk::scheduleSoftmaxFragments(*module, softmaxFragments);
+    if (!mlir::frisk::prefetchPairedLDSTail(*module, kTailPrefetch)) return 1;
+    mlir::frisk::prefetchNextK(*module, crossBNK0);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;
@@ -164,7 +178,7 @@ int main(int argc, char **argv) {
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
   if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] <input.ll or ->\n";
+    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
