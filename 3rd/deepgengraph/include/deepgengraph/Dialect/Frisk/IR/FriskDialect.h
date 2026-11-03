@@ -34,4 +34,15 @@
 #define GET_OP_CLASSES
 #include "deepgengraph/Dialect/Frisk/IR/FriskOps.h.inc"
 
+namespace mlir::frisk {
+// Follow task SSA through structured loops/branches; never infer identity from
+// a buffer. Unknown provenance fails so analyses can conservatively decline.
+LogicalResult collectAsyncTaskIssues(Value token,
+    SmallVectorImpl<AsyncCopyGmToShmOp> &issues);
+LogicalResult validateAsyncTaskTokens(Operation *root);
+// After all issues/waits have been lowered, erase their compile-time tokens.
+// Mixed early synchronous/packed lowering retains tokens until the last task.
+LogicalResult lowerAsyncTaskTokens(Operation *root);
+}
+
 #endif

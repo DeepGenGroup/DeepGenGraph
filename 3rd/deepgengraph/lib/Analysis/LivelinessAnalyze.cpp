@@ -39,7 +39,7 @@ bool isBarrier(Operation *op) {
 bool hasLocalCompletion(AsyncCopyGmToShmOp issue) {
   for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
     if (auto wait = dyn_cast<WaitBufferReadyOp>(next);
-        wait && wait.getBuffer() == issue.getDst()) return true;
+        wait && wait.getToken() == issue.getToken()) return true;
     if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(next);
         copy && copy.getDst() == issue.getDst()) return false;
   }
@@ -151,11 +151,17 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
         if (auto issue = dyn_cast<AsyncCopyGmToShmOp>(user);
             issue && use.getOperandNumber() == 1 && hasLocalCompletion(issue)) {
           recordUse();
-          continue;
-        }
-        if (isa<WaitBufferReadyOp>(user)) {
-          // This is a real storage use: the write stays live through the wait.
-          recordUse();
+          for (Operation *consumer : issue.getToken().getUsers()) {
+            auto wait = dyn_cast<WaitBufferReadyOp>(consumer);
+            if (!wait || wait->getBlock() != issue->getBlock()) {
+              info.skipReason = "async task escapes local completion scope";
+              return;
+            }
+            Operation *completion = getTopLevelUser(wait, entry);
+            if (!completion) { info.skipReason = "unsupported task completion scope"; return; }
+            info.accesses.push_back(wait);
+            info.lastUse = std::max(info.lastUse, positions.lookup(completion));
+          }
           continue;
         }
         info.skipReason = "unsupported or escaping use: " +

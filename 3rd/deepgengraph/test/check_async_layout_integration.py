@@ -23,8 +23,8 @@ def packed_case(rows, cols, axis, pack, pair=0, store=0, store_pair=0,
     dma_attrs = f', frisk.dma_bytes = {dma_bytes} : i64' if dma_bytes else ''
     source = f'''func.func @copy_kernel(%src: {src}) attributes {{thread_num = {threads} : i32}} {{
       %tile = memref.alloc() {{{attrs}}} : {dst}
-      frisk.async_copy_gm_to_shm %src to %tile {{alignment = {alignment} : i64{dma_attrs}}} : {src}, {dst}
-      frisk.wait_buffer_ready %tile : {dst}
+      %task_tile = frisk.async_copy_gm_to_shm %src to %tile {{alignment = {alignment} : i64{dma_attrs}}} : {src}, {dst} -> !frisk.async_task
+      frisk.wait_buffer_ready %task_tile : !frisk.async_task
       %c0 = arith.constant 0 : index
       %v = memref.load %tile[%c0, %c0] : {dst}
       return
@@ -84,8 +84,8 @@ def schedule_checks():
       %a = memref.alloc() : memref<64xf32, 3>
       %z = arith.constant 0 : index
       %v = math.exp2 %x : f32
-      frisk.async_copy_gm_to_shm %src to %a : memref<64xf32, 1>, memref<64xf32, 3>
-      frisk.wait_buffer_ready %a : memref<64xf32, 3>
+      %task_a = frisk.async_copy_gm_to_shm %src to %a : memref<64xf32, 1>, memref<64xf32, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_a : !frisk.async_task
       %w = arith.mulf %v, %x : f32
       %r = memref.load %a[%z] : memref<64xf32, 3>
       %s = arith.addf %r, %w : f32
@@ -97,20 +97,20 @@ def schedule_checks():
     assert result.index('arith.mulf') < result.index('wait_buffer_ready') < result.index('memref.load')
     assert lower(result, '--frisk-schedule-async-copies') == result
     late_alloc = source.replace('      %a = memref.alloc() : memref<64xf32, 3>\n', '')
-    late_alloc = late_alloc.replace('      frisk.async_copy',
-                                  '      %a = memref.alloc() : memref<64xf32, 3>\n      frisk.async_copy')
+    late_alloc = late_alloc.replace('      %task_a = frisk.async_copy',
+                                  '      %a = memref.alloc() : memref<64xf32, 3>\n      %task_a = frisk.async_copy')
     result = lower(late_alloc, '--frisk-schedule-async-copies')
     assert result.index('memref.alloc') < result.index('async_copy_gm_to_shm') < result.index('math.exp2')
     for barrier in ('gpu.barrier', 'memref.store %x, %src[%z] : memref<64xf32, 1>',
                     'memref.store %x, %a[%z] : memref<64xf32, 3>',
                     'affine.for %i = 0 to 64 { memref.store %x, %a[%i] : memref<64xf32, 3> }'):
-        blocked = source.replace('      frisk.async_copy', '      ' + barrier + '\n      frisk.async_copy')
+        blocked = source.replace('      %task_a = frisk.async_copy', '      ' + barrier + '\n      %task_a = frisk.async_copy')
         result = lower(blocked, '--frisk-schedule-async-copies')
         assert result.index('math.exp2') < result.index('async_copy_gm_to_shm')
     # Descriptor setup must move before the issue, never after it.
     view = source.replace('%src: memref<64xf32, 1>', '%base: memref<128xf32, 1>')
-    view = view.replace('      frisk.async_copy', '''      %src = memref.subview %base[0] [64] [1] : memref<128xf32, 1> to memref<64xf32, strided<[1]>, 1>
-      frisk.async_copy''').replace(': memref<64xf32, 1>,', ': memref<64xf32, strided<[1]>, 1>,')
+    view = view.replace('      %task_a = frisk.async_copy', '''      %src = memref.subview %base[0] [64] [1] : memref<128xf32, 1> to memref<64xf32, strided<[1]>, 1>
+      %task_a = frisk.async_copy''').replace(': memref<64xf32, 1>,', ': memref<64xf32, strided<[1]>, 1>,')
     result = lower(view, '--frisk-schedule-async-copies')
     assert result.index('memref.subview') < result.index('async_copy_gm_to_shm') < result.index('math.exp2')
     print('PASS issue hoisting, late wait, descriptor dependencies, alias/write/barrier boundaries, idempotence')
@@ -121,11 +121,11 @@ def reuse_checks():
       %a = memref.alloc() : memref<64xf32, 3>
       %b = memref.alloc() : memref<64xf32, 3>
       %z = arith.constant 0 : index
-      frisk.async_copy_gm_to_shm %src to %a : memref<64xf32, 1>, memref<64xf32, 3>
-      frisk.wait_buffer_ready %a : memref<64xf32, 3>
+      %task_a = frisk.async_copy_gm_to_shm %src to %a : memref<64xf32, 1>, memref<64xf32, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_a : !frisk.async_task
       %x = memref.load %a[%z] : memref<64xf32, 3>
-      frisk.async_copy_gm_to_shm %src to %b : memref<64xf32, 1>, memref<64xf32, 3>
-      frisk.wait_buffer_ready %b : memref<64xf32, 3>
+      %task_b = frisk.async_copy_gm_to_shm %src to %b : memref<64xf32, 1>, memref<64xf32, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_b : !frisk.async_task
       %y = memref.load %b[%z] : memref<64xf32, 3>
       %s = arith.addf %x, %y : f32
       return %s : f32
@@ -134,9 +134,9 @@ def reuse_checks():
     assert 'memref<256xi8, 3>' in result and 'frisk.shm_pool' in result
     assert result.index('memref.load') < result.index('gpu.barrier') < result.rindex('async_copy_gm_to_shm')
     assert lower(result, '--test-shm-reuse') == result
-    incomplete = source.replace('frisk.wait_buffer_ready %a : memref<64xf32, 3>', '')
+    incomplete = source.replace('frisk.wait_buffer_ready %task_a : !frisk.async_task', '')
     assert 'frisk.shm_pool' not in lower(incomplete, '--test-shm-reuse')
-    pending = source.replace('      %x = memref.load', '''      frisk.async_copy_gm_to_shm %src to %b : memref<64xf32, 1>, memref<64xf32, 3>
+    pending = source.replace('      %x = memref.load', '''      %pending_b = frisk.async_copy_gm_to_shm %src to %b : memref<64xf32, 1>, memref<64xf32, 3> -> !frisk.async_task
       %x = memref.load''')
     assert 'frisk.shm_pool' not in lower(pending, '--test-shm-reuse')
     print('PASS reuse after completion, release barrier, incomplete/overlapping DMA rejection')
@@ -152,11 +152,11 @@ def separate_completion_checks():
           %a = memref.alloc() : {ty}
           %b = memref.alloc() : {ty}
           %z = arith.constant 0 : index
-          frisk.async_copy_gm_to_shm %src to %a : {src}, {ty}
-          frisk.wait_buffer_ready %a : {ty}
-          frisk.async_copy_gm_to_shm %src to %b : {src}, {ty}
+          %task_a = frisk.async_copy_gm_to_shm %src to %a : {src}, {ty} -> !frisk.async_task
+          frisk.wait_buffer_ready %task_a : !frisk.async_task
+          %task_b = frisk.async_copy_gm_to_shm %src to %b : {src}, {ty} -> !frisk.async_task
           %x = memref.load %a[%z] : {ty}
-          frisk.wait_buffer_ready %b : {ty}
+          frisk.wait_buffer_ready %task_b : !frisk.async_task
           %y = memref.load %b[%z] : {ty}
           %r = arith.addf %x, %y : f32
           memref.store %r, %out[%z] : memref<1xf32, 1>
@@ -175,8 +175,8 @@ def separate_completion_checks():
         # motion. Keep writes and control flow as completion boundaries.
         for boundary in ['gpu.barrier',
                          f'affine.for %i = 0 to {count} {{ gpu.barrier }}']:
-            blocked = source.replace(f'frisk.async_copy_gm_to_shm %src to %b',
-                                     boundary + '\nfrisk.async_copy_gm_to_shm %src to %b')
+            blocked = source.replace(f'%task_b = frisk.async_copy_gm_to_shm %src to %b',
+                                     boundary + '\n%task_b = frisk.async_copy_gm_to_shm %src to %b')
             scheduled = lower(blocked, '--frisk-schedule-async-copies')
             assert scheduled.index('wait_buffer_ready') < scheduled.rindex('async_copy_gm_to_shm')
         # Insert a write after the first read, hence after the first drain.
@@ -199,7 +199,8 @@ def separate_completion_checks():
         assert scheduled.index('wait_buffer_ready') < scheduled.rindex('async_copy_gm_to_shm')
     print('PASS overlapping direct DMA with separate completions, varying sizes, no storage overlap, alias/write/barrier guards')
 
-    # Explicitly authored overlapping issues retain BOTH named completions.
+    # Task lowering preserves both completions; the full pipeline can coalesce
+    # adjacent wait-all/barrier pairs when no access or issue intervenes.
     # The CPU model checks data and guards, not hardware synchronization safety.
     for count, threads in [(63, 64), (128, 128), (260, 256)]:
         src = f'memref<{2 * count}xi32, 1>'
@@ -209,23 +210,26 @@ def separate_completion_checks():
           %s1 = memref.subview %src[{count}] [{count}] [1] : {src} to memref<{count}xi32, strided<[1], offset: {count}>, 1>
           %d0 = memref.subview %dst[0] [{count}] [1] : {dst} to memref<{count}xi32, strided<[1]>, 3>
           %d1 = memref.subview %dst[{count}] [{count}] [1] : {dst} to memref<{count}xi32, strided<[1], offset: {count}>, 3>
-          frisk.async_copy_gm_to_shm %s0 to %d0 : memref<{count}xi32, strided<[1]>, 1>, memref<{count}xi32, strided<[1]>, 3>
-          frisk.async_copy_gm_to_shm %s1 to %d1 : memref<{count}xi32, strided<[1], offset: {count}>, 1>, memref<{count}xi32, strided<[1], offset: {count}>, 3>
-          frisk.wait_buffer_ready %d0 : memref<{count}xi32, strided<[1]>, 3>
-          frisk.wait_buffer_ready %d1 : memref<{count}xi32, strided<[1], offset: {count}>, 3>
+          %task_d0 = frisk.async_copy_gm_to_shm %s0 to %d0 : memref<{count}xi32, strided<[1]>, 1>, memref<{count}xi32, strided<[1]>, 3> -> !frisk.async_task
+          %task_d1 = frisk.async_copy_gm_to_shm %s1 to %d1 : memref<{count}xi32, strided<[1], offset: {count}>, 1>, memref<{count}xi32, strided<[1], offset: {count}>, 3> -> !frisk.async_task
+          frisk.wait_buffer_ready %task_d0 : !frisk.async_task
+          frisk.wait_buffer_ready %task_d1 : !frisk.async_task
           return
         }}'''
+        lowered = lower(source, '--frisk-lower-async-copy')
+        assert lowered.count('rocdl.wait.asyncmark') == 2
+        assert lowered.count('gpu.barrier') == 2
         ir = llvm_ir(source)
-        assert ir.count('call void @llvm.amdgcn.wait.asyncmark') == 2
-        assert ir.count('call void @llvm.amdgcn.s.barrier') == 2
+        assert ir.count('call void @llvm.amdgcn.wait.asyncmark') == 1
+        assert ir.count('call void @llvm.amdgcn.s.barrier') == 1
         execute_copy(ir, 1, 2 * count, 32, threads=threads)
-    print('PASS explicit named waits preserved; CPU DMA data, tails and memory guards')
+    print('PASS task waits lowered before safe adjacent wait-all coalescing; CPU DMA data, tails and memory guards')
 
 
 def permutation_guards():
     template = '''func.func @invalid(%src: memref<8x8xi16, 1>, %dst: memref<64xi16, 3>) {
-      frisk.async_copy_gm_to_shm %src to %dst {frisk.source_map = affine_map<(d0) -> (EXPR)>}
-        : memref<8x8xi16, 1>, memref<64xi16, 3>
+      %task_dst = frisk.async_copy_gm_to_shm %src to %dst {frisk.source_map = affine_map<(d0) -> (EXPR)>}
+        : memref<8x8xi16, 1>, memref<64xi16, 3> -> !frisk.async_task
       return
     }'''
     for expression, error in [('0, 0', 'bijective'), ('d0, 0', 'outside source tile'),

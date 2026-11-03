@@ -1,16 +1,39 @@
 # Frisk GM → SHM copy and buffer readiness
 
 `frisk.async_copy_gm_to_shm` describes a **block tile** copy. It does not
-produce a register tile or imply completion. `frisk.wait_buffer_ready` names
-the shared tile that must be complete and visible to the whole block:
+produce a register tile or imply completion. It returns a task token of C++
+type `friskAsyncTaskType`, printed as `!frisk.async_task`.
+`frisk.wait_buffer_ready` consumes that token to complete and publish the
+corresponding task's writes to the whole block:
 
 ```mlir
-frisk.async_copy_gm_to_shm %gm to %shm {alignment = 4 : i64}
-    : memref<64x32xf16, 1>, memref<64x32xf16, 3>
+%task = frisk.async_copy_gm_to_shm %gm to %shm {alignment = 4 : i64}
+    : memref<64x32xf16, 1>, memref<64x32xf16, 3> -> !frisk.async_task
 // Independent work can go here.
-frisk.wait_buffer_ready %shm : memref<64x32xf16, 3>
+frisk.wait_buffer_ready %task : !frisk.async_task
 // All block threads may now consume the tile.
 ```
+
+Each issue has its own SSA task identity, even when two issues write the same
+buffer. Buffer views, packing, and slot selection do not replace that identity.
+The old buffer-operand wait syntax is no longer accepted.
+
+Task tokens can be carried by `affine.for` / `scf.for` iter_args and yielded
+through `affine.if` / `scf.if` (or selected with `arith.select`). Automatic
+prefetch pipelines carry a FIFO of task tokens alongside rotated storage;
+explicit stage schedules carry the producer-to-wait iteration distance.
+`frisk.async_task_completed : !frisk.async_task` supplies a completed task for
+an inactive guarded prefetch. A wait must consume the token for the tile being
+read, regardless of which newer task has already been issued.
+
+Gfx936 lowering currently emits wait-all (`wait.asyncmark 0`) plus a block
+barrier; the token does not encode a hardware wait-group number. After lowering
+all issues and waits, token carriers become trivial i1 values for ordinary
+control-flow cleanup. Synchronous lowering preserves publication barriers.
+Unknown token consumers and function token ABI lowering are rejected rather
+than erased. Staging/repack still requires a directly matched local wait;
+loop-carried tasks use direct DMA or the existing legal fallback. Storage reuse
+remains conservative when a task escapes its local completion scope.
 
 Both operations are block collective: their descriptors and control flow must
 be uniform across the block. The source and destination have identical static
@@ -35,9 +58,9 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    completion point. Moving a wait into the consumer stage is a separate
    scheduling choice, not an automatic assertion of independence.
 2. `frisk-pipeline-schedule` recognizes async destinations as writes and waits
-   as uses of those destinations. It rotates the same slot into copy, wait,
-   and consumer. It rejects schemes that schedule a consumer without a matching
-   wait between issue and consumption.
+   as task dependencies. It rotates storage for copies and consumers, and carries
+   task tokens across schedule steps. It rejects schemes that schedule a consumer
+   without a wait for its producer's token between issue and consumption.
 3. To disable asynchronous semantics, run **`frisk-lower-async-to-sync` after
    scheduling and before thread tiling**. It selects ordinary `frisk.copy`
    and `frisk.sync_threads_in_block`. Copies carry `frisk.explicit_wait` so
@@ -46,8 +69,8 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
 4. Thread tiling leaves async tile operations intact and recognizes their
    destinations as physical storage, including when adapting register-only
    GEMM producer/consumer layouts. Finalization materializes logical views as
-   strided memref descriptors. Shared packing rewrites async destinations,
-   waits and readers together. It records `frisk.source_map`, an inverse affine
+   strided memref descriptors. Shared packing rewrites async destinations and
+   readers while preserving the task token consumed by waits. It records `frisk.source_map`, an inverse affine
    permutation from flat physical destination elements to logical source
    coordinates. The op verifier checks the permutation is bounded and bijective.
    After layout insertion and hybrid async/sync selection, it invokes
@@ -280,6 +303,8 @@ runtime alignment checks. `FRISK_GM_TO_SHM_MODE=legacy` bypasses promotion.
 cmake --build build --target ThreadTilingTest MyTest -j4
 python3 test/check_frisk_async_copy.py
 python3 test/check_async_layout_integration.py
+python3 test/check_async_task_tokens.py
+python3 test/check_auto_pipeline.py
 python3 test/check_sink_wait_buffer_ready.py
 python3 test/check_direct_dma_wait_motion.py
 python3 test/check_async_attention_export.py output.ll output.log

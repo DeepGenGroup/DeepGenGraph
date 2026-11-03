@@ -62,8 +62,8 @@ func.func @retain(%src: memref<8xf32, 1>) -> !f attributes {thread_num = 64 : i3
   %f0 = frisk.pack_frag %v0 : vector<2xf32> -> !f
   %out = affine.for %i = 0 to 4 iter_args(%acc = %f0) -> !f {
     %buf = memref.alloc() : memref<8xf32, 3>
-    frisk.async_copy_gm_to_shm %src to %buf {alignment = 16 : i64} : memref<8xf32, 1>, memref<8xf32, 3>
-    frisk.wait_buffer_ready %buf : memref<8xf32, 3>
+    %task_buf = frisk.async_copy_gm_to_shm %src to %buf {alignment = 16 : i64} : memref<8xf32, 1>, memref<8xf32, 3> -> !frisk.async_task
+    frisk.wait_buffer_ready %task_buf : !frisk.async_task
     %v = frisk.load_frag %buf[%c0] {tile_type = vector<8xf32>} : memref<8xf32, 3> -> !f
     %s = frisk.elementwise_frag "mul" %v, %v : (!f, !f) -> !f
     %next = frisk.elementwise_frag "add" %acc, %s : (!f, !f) -> !f

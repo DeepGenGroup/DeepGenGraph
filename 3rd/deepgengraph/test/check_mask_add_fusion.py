@@ -53,7 +53,13 @@ with tempfile.TemporaryDirectory() as directory:
             # The matched operation keeps both operands (including +0).
             assert not re.search(r'arith.addf[^\n]*fastmath', transformed), name
         path.write_text(transformed)
+        # Parsing canonicalizes affine expression term order. Compare the
+        # second conversion against the same parsed input, not its first print.
+        parsed = Path(directory) / 'parsed.mlir'
+        result = subprocess.run([str(tool), str(path), '-o', str(parsed)],
+                                capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, (name, result.stderr[-4000:])
         result = subprocess.run(command, capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, (name, result.stderr[-4000:])
-        assert out.read_text() == transformed, (name, 'not idempotent')
+        assert out.read_text() == parsed.read_text(), (name, 'not idempotent')
         print('PASS', name, flush=True)

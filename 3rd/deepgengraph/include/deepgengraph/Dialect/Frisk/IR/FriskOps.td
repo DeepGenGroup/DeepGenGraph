@@ -515,7 +515,7 @@ def Frisk_AsyncCopyGmToShmOp : Frisk_Op<"async_copy_gm_to_shm", [
     Copies equal-shaped, equal-element-type memref tiles from global (1) to
     shared (3) memory. Views express source and destination slices. All threads
     of the block execute this op with the same descriptors. Issuing the copy
-    does NOT make the destination ready. A wait_buffer_ready on the destination
+    does NOT make the destination ready. A wait_buffer_ready on the returned task
     must precede consumers, reuse, or release of either buffer. The source must
     remain unchanged until completion. There is no implicit type conversion.
 
@@ -537,7 +537,13 @@ def Frisk_AsyncCopyGmToShmOp : Frisk_Op<"async_copy_gm_to_shm", [
   }];
   let arguments = (ins AnyMemRef:$src, AnyMemRef:$dst,
       DefaultValuedAttr<I64Attr, "4">:$alignment);
-  let assemblyFormat = "$src `to` $dst attr-dict `:` type($src) `,` type($dst)";
+  let results = (outs Frisk_AsyncTaskType:$token);
+  let builders = [OpBuilder<(ins "Value":$src, "Value":$dst,
+      CArg<"int64_t", "4">:$alignment), [{
+    build($_builder, $_state, friskAsyncTaskType::get($_builder.getContext()),
+          src, dst, alignment);
+  }]>];
+  let assemblyFormat = "$src `to` $dst attr-dict `:` type($src) `,` type($dst) `->` type($token)";
   let hasVerifier = 1;
 }
 
@@ -546,18 +552,23 @@ def Frisk_WaitBufferReadyOp : Frisk_Op<"wait_buffer_ready", [
 ]> {
   let summary = "Make a shared tile ready for block-wide consumption";
   let description = [{
-    All threads in the block participate with the same shared buffer descriptor.
-    On return, prior copies into this buffer are complete and visible to the
+    All threads in the block participate with the same task token.
+    On return, that task's writes are complete and visible to the
     block. Backends may wait for additional buffers. Async gfx936 lowering uses
     wait.asyncmark 0 followed by a block barrier. Synchronous lowering only
     needs a block barrier, which subsequent dependency analysis may remove.
     This does not prove that consumers have finished: buffer reuse after reads
-    may still need sync_threads_in_block. Keep this op with its consumer tile
-    when software pipelining, including the rotated buffer slot.
+    may still need sync_threads_in_block. Software pipelines carry the task
+    token in SSA alongside the corresponding iteration/rotated buffer slot.
   }];
-  let arguments = (ins AnyMemRef:$buffer);
-  let assemblyFormat = "$buffer attr-dict `:` type($buffer)";
-  let hasVerifier = 1;
+  let arguments = (ins Frisk_AsyncTaskType:$token);
+  let assemblyFormat = "$token attr-dict `:` type($token)";
+}
+
+def Frisk_AsyncTaskCompletedOp : Frisk_Op<"async_task_completed", [Pure]> {
+  let summary = "An already-complete task for an inactive pipeline slot";
+  let results = (outs Frisk_AsyncTaskType:$token);
+  let assemblyFormat = "attr-dict `:` type($token)";
 }
 
 def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
@@ -825,7 +836,7 @@ def Frisk_ZeroOp: Frisk_Op<"zero", [Frisk_ComputedTile, Pure]> {
 }
 
 
-def MaskYieldOp: Frisk_Op<"mask_yield", [Pure, ReturnLike, Terminator, HasParent<"frisk::MaskOp">]> {
+def MaskYieldOp: Frisk_Op<"mask_yield", [Pure, ReturnLike, Terminator, HasParent<"frisk::MaskOp, frisk::MaskFragOp">]> {
   let summary = "";
   let description = [{}];
   let arguments = (ins Variadic<AnyType> :$srcs);
@@ -1282,6 +1293,47 @@ def Frisk_ElementwiseFragOp : Frisk_Op<"elementwise_frag", [Pure]> {
   let arguments = (ins StrAttr:$kind, Variadic<Frisk_FragmentType>:$inputs);
   let results = (outs Frisk_FragmentType:$result);
   let assemblyFormat = "$kind $inputs attr-dict `:` functional-type($inputs, $result)";
+  let hasVerifier = 1;
+}
+
+// Semantic register computations. Collective operations are deliberately not
+// speculatable: their participating lanes must execute together. Their lowering
+// recipes are serialized so that the thread pass needs no block layout analysis.
+def Frisk_BroadcastFragOp : Frisk_Op<"broadcast_frag", [Pure]> {
+  let arguments = (ins AnyType:$source);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+def Frisk_ReduceFragOp : Frisk_Op<"reduce_frag", [MemoryEffects<[]>]> {
+  let arguments = (ins Frisk_FragmentType:$source, StrAttr:$kind,
+      I64Attr:$dim, I64Attr:$lane_extent, I64Attr:$lane_stride,
+      I64Attr:$warp_threads, I64Attr:$reduction_width,
+      DenseI64ArrayAttr:$output_fragment_shape);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$kind $source attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+// A layout conversion may require workgroup-wide scratch and barriers. Keep
+// conservative effects even when the selected implementation uses shuffles.
+def Frisk_ConvertLayoutFragOp : Frisk_Op<"convert_layout_frag",
+    [MemoryEffects<[MemRead, MemWrite]>]> {
+  let arguments = (ins Frisk_FragmentType:$source, TypeAttr:$block_type,
+      DictionaryAttr:$source_layout, DictionaryAttr:$target_layout,
+      OptionalAttr<DictionaryAttr>:$shuffle_plan);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+// Keep the original logical-coordinate predicate once, rather than cloning it
+// into every register. Thread lowering applies the serialized ownership map.
+def Frisk_MaskFragOp : Frisk_Op<"mask_frag", [RecursiveMemoryEffects,
+    AttrSizedOperandSegments, SingleBlockImplicitTerminator<"frisk::MaskYieldOp">]> {
+  let arguments = (ins Variadic<Index>:$starts, Optional<Frisk_FragmentType>:$addend,
+      TypeAttrOf<AnyMemRef>:$block_type, DictionaryAttr:$layout,
+      DenseI64ArrayAttr:$fragment_shape, BoolAttr:$mask_on_lhs, BoolAttr:$uniform);
+  let results = (outs Frisk_FragmentType:$result);
+  let regions = (region SizedRegion<1>:$region);
   let hasVerifier = 1;
 }
 

@@ -83,8 +83,6 @@ static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> 
               cast<MemRefType>(buffer.getType()).getShape() ||
           copy->hasAttr("frisk.source_map"))
         return false;
-    } else if (isa<WaitBufferReadyOp>(user)) {
-      // Its descriptor is rewritten together with the issue and all readers.
     }
     else
       // Includes escaping descriptors, calls, atomics, subviews and

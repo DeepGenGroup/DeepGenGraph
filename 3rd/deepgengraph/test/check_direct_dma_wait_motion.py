@@ -7,10 +7,10 @@ from check_frisk_async_copy import lower
 PASS = '--frisk-schedule-async-copies'
 SRC = 'memref<128xi32, 1>'
 DST = 'memref<128xi32, 3>'
-ISSUE_A = f'frisk.async_copy_gm_to_shm %src to %a : {SRC}, {DST}'
-ISSUE_B = f'frisk.async_copy_gm_to_shm %src to %b : {SRC}, {DST}'
-WAIT_A = f'frisk.wait_buffer_ready %a : {DST}'
-WAIT_B = f'frisk.wait_buffer_ready %b : {DST}'
+ISSUE_A = f'%task_a = frisk.async_copy_gm_to_shm %src to %a : {SRC}, {DST} -> !frisk.async_task'
+ISSUE_B = f'%task_b = frisk.async_copy_gm_to_shm %src to %b : {SRC}, {DST} -> !frisk.async_task'
+WAIT_A = f'frisk.wait_buffer_ready %task_a : !frisk.async_task'
+WAIT_B = f'frisk.wait_buffer_ready %task_b : !frisk.async_task'
 
 
 def fixture(prefix='', body_prefix='', body_suffix='', attributes=''):
@@ -78,16 +78,16 @@ def main():
             check(fixture().replace(issue, issue.replace(' : ', f' {{{attr}}} : ', 1)), False)
     staged_src = 'memref<16x16xf16, strided<[1, 16]>, 1>'
     staged_dst = 'memref<256xf16, 3>'
-    staged_issue = f'''frisk.async_copy_gm_to_shm %staged_src to %staged_dst
+    staged_issue = f'''%task_staged_dst = frisk.async_copy_gm_to_shm %staged_src to %staged_dst
       {{alignment = 4 : i64, frisk.source_map = affine_map<(d0) -> (d0 floordiv 16, d0 mod 16)>}}
-      : {staged_src}, {staged_dst}'''
+      : {staged_src}, {staged_dst} -> !frisk.async_task'''
     for first in (False, True):
         text = fixture().replace('%cond: i1)', f'%cond: i1, %staged_src: {staged_src})')
         text = text.replace('%z = arith.constant',
                             f'%staged_dst = memref.alloc() : {staged_dst}\n %z = arith.constant')
         text = text.replace(ISSUE_A if first else ISSUE_B, staged_issue)
         text = text.replace(WAIT_A if first else WAIT_B,
-                            f'frisk.wait_buffer_ready %staged_dst : {staged_dst}')
+                            f'frisk.wait_buffer_ready %task_staged_dst : !frisk.async_task')
         out = check(text, False)
         assert 'lds-repack' in lower(out, '--frisk-lower-async-copy', '--verify-each')
 

@@ -264,6 +264,33 @@ private:
   SmallVector<unsigned> emitOrder; ///< statement indices sorted by order
   DenseMap<Operation *, unsigned> opToStmt;
   SmallVector<RotatedBuffer> rotated;
+  struct TaskHistory {
+    Value original;
+    int64_t producerOffset;
+    SmallVector<Value> previous;
+    Value current;
+  };
+  SmallVector<TaskHistory> tasks;
+  Value completedTask;
+  void beginTaskStep() {
+    for (auto &task : tasks) task.current = completedTask;
+  }
+  SmallVector<Value> advanceTasks() {
+    SmallVector<Value> values;
+    for (auto &task : tasks) {
+      for (unsigned i = task.previous.size(); i > 1; --i)
+        task.previous[i - 1] = task.previous[i - 2];
+      if (!task.previous.empty()) task.previous[0] = task.current;
+      llvm::append_range(values, task.previous);
+    }
+    return values;
+  }
+  void loadTaskHistory(ValueRange values) {
+    unsigned i = 0;
+    for (auto &task : tasks)
+      for (Value &previous : task.previous) previous = values[i++];
+    beginTaskStep();
+  }
   int64_t numStages = 0;
 
   /// Lower/upper bound of the original loop and its upper bound minus one
@@ -416,16 +443,29 @@ LogicalResult PipelineScheduler::collectStatements() {
 // 算几条槽
 LogicalResult PipelineScheduler::collectRotatedBuffers() {
   // A scheduled consumer needs both the issue and the completion dependency.
-  // Readiness follows the destination slot, not the most recently issued copy.
+  // Completion follows the issued task, including across schedule steps.
   for (const Statement &producer : stmts) {
     for (Operation *operation : producer.ops) {
       auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(operation);
       if (!copy) continue;
       Value buffer = bufferOf(copy.getDst());
       SmallVector<frisk::WaitBufferReadyOp> waits;
-      for (Operation *user : buffer.getUsers())
-        if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(user))
-          if (opToStmt.count(wait)) waits.push_back(wait);
+      unsigned distance = 0;
+      for (Operation *user : copy.getToken().getUsers()) {
+        auto wait = dyn_cast<frisk::WaitBufferReadyOp>(user);
+        if (!wait || !opToStmt.count(wait))
+          return copy.emitError("pipeline task must be consumed by a wait in the scheduled loop");
+        const Statement &completion = stmts[opToStmt.lookup(wait)];
+        int64_t lead = producer.offset - completion.offset;
+        if (lead < 0 || (lead == 0 &&
+            (completion.order < producer.order ||
+             (completion.order == producer.order && !operation->isBeforeInBlock(wait)))))
+          return wait.emitError("task wait must be scheduled after its issue");
+        distance = std::max(distance, unsigned(lead));
+        waits.push_back(wait);
+      }
+      tasks.push_back({copy.getToken(), producer.offset,
+                       SmallVector<Value>(distance), Value()});
       for (Operation *user : buffer.getUsers()) {
         if (user == operation || isa<frisk::WaitBufferReadyOp>(user)) continue;
         auto found = opToStmt.find(user);
@@ -463,6 +503,14 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
         continue;
 
       int64_t maxLead = 0;
+      // The destination stays occupied until task completion even if no data
+      // reader uses it. Waits no longer appear in the buffer's SSA use list.
+      for (const auto &task : tasks)
+        if (auto issue = task.original.getDefiningOp<frisk::AsyncCopyGmToShmOp>();
+            bufferOf(issue.getDst()) == bufferOf(written))
+          for (Operation *user : issue.getToken().getUsers())
+            maxLead = std::max(maxLead,
+                st.offset - stmts[opToStmt.lookup(user)].offset);
       // 遍历它的所有 use（含 frisk.copy 给出的句柄，它们指向同一个 buffer）
       SmallVector<Value, 2> handles = bufferHandles(written, stmts);
       for (Value handle : handles) {
@@ -690,9 +738,17 @@ void PipelineScheduler::emitStatement(OpBuilder &builder, const Statement &st,
       map.map(handle, slot);
   }
 
+  SmallVector<Value> producedTasks;
+  SmallVector<Type> producedTypes;
+  for (Operation *op : st.ops)
+    if (auto issue = dyn_cast<frisk::AsyncCopyGmToShmOp>(op)) {
+      producedTasks.push_back(issue.getToken());
+      producedTypes.push_back(issue.getToken().getType());
+    }
   scf::IfOp guardOp;
   if (guardCond) {
-    guardOp = builder.create<scf::IfOp>(loc, guardCond, /*withElseRegion=*/false);
+    guardOp = builder.create<scf::IfOp>(loc, producedTypes, guardCond,
+                                      /*withElseRegion=*/!producedTasks.empty());
     builder.setInsertionPointToStart(&guardOp.getThenRegion().front());
   }
   // 逐 op 克隆
@@ -711,12 +767,35 @@ void PipelineScheduler::emitStatement(OpBuilder &builder, const Statement &st,
             map.lookupOrDefault(copy.getSrcMemRef());
       continue;
     }
-    // 其余 op 直接 clone，IRMapping 自动完成 iv / iter_arg / buffer 的替换
-    builder.clone(*op, map);
+    if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(op))
+      for (auto &task : tasks)
+        if (task.original == wait.getToken()) {
+          unsigned distance = task.producerOffset - st.offset;
+          map.map(task.original, distance ? task.previous[distance - 1]
+                                          : task.current);
+        }
+    Operation *cloned = builder.clone(*op, map);
+    if (auto issue = dyn_cast<frisk::AsyncCopyGmToShmOp>(op))
+      for (auto &task : tasks)
+        if (task.original == issue.getToken()) task.current = cloned->getResult(0);
   }
 
-  if (guardOp)
+  if (guardOp) {
+    if (!producedTasks.empty()) {
+      SmallVector<Value> yielded;
+      for (Value original : producedTasks) yielded.push_back(map.lookup(original));
+      builder.create<scf::YieldOp>(loc, yielded);
+      builder.setInsertionPointToStart(&guardOp.getElseRegion().front());
+      builder.create<scf::YieldOp>(loc,
+          SmallVector<Value>(producedTasks.size(), completedTask));
+    }
     builder.setInsertionPointAfter(guardOp);
+    for (auto [i, original] : llvm::enumerate(producedTasks)) {
+      map.map(original, guardOp.getResult(i));
+      for (auto &task : tasks)
+        if (task.original == original) task.current = guardOp.getResult(i);
+    }
+  }
 }
 // 七步拼出新结构
 LogicalResult PipelineScheduler::build() {
@@ -765,11 +844,19 @@ LogicalResult PipelineScheduler::build() {
   for (Operation *op : hoist)
     op->moveBefore(loop);
 
+  if (!tasks.empty()) {
+    completedTask = builder.create<frisk::AsyncTaskCompletedOp>(
+        loc, frisk::friskAsyncTaskType::get(context));
+    for (auto &task : tasks)
+      for (Value &previous : task.previous) previous = completedTask;
+  }
+
   // 3) Prologue: steps -numStages+1 .. -1, with a barrier between two steps.
   SmallVector<Value> oldInits(loop.getInits().begin(), loop.getInits().end());
   DenseMap<Value, Value> prologueWritten;
   // k 从 -(numStages-1) 到 -1，共 numStages-1 步。FA3 里 numStages=3，就是 k=-2,-1
   for (int64_t k = -(numStages - 1); k < 0; ++k) {
+    beginTaskStep();
     // 每一步一个新 IRMapping
     IRMapping map;
     // 按 emitOrder 遍历语句
@@ -793,6 +880,7 @@ LogicalResult PipelineScheduler::build() {
       emitStatement(builder, st, modulo(k, 2), ivTile, oldInits,
                     /*dropLoopCarriedWrites=*/true, guard, map, &prologueWritten);
     }
+    advanceTasks();
     if (k < -1)
       builder.create<frisk::SyncThreadsInBlockOp>(loc);
   }
@@ -823,6 +911,9 @@ LogicalResult PipelineScheduler::build() {
     initValues.push_back(init);
   }
 
+  unsigned originalCarriers = initValues.size();
+  for (auto &task : tasks) llvm::append_range(initValues, task.previous);
+
   // 5) Steady state loop.  Every step handles the tile `i + offset` of each
   //    statement, the parity of the tile decides which slot is touched.
   // 新上界 = 旧 ub - step，也就是少跑一块（peeledTiles=1），最后一块留给 epilogue。
@@ -835,6 +926,7 @@ LogicalResult PipelineScheduler::build() {
 
   auto bodyBuilder = [&](OpBuilder &nb, Location bodyLoc, Value iv,
                          ValueRange args) {
+    loadTaskHistory(args.drop_front(originalCarriers));
     // The single synchronisation point of a steady state step: it makes sure
     // that the slot written by this step is no longer read by the step before.
     // 循环体顶部唯一一个 barrier。它保证本步要写的槽在上一步已经读完（距离 2 的依赖）
@@ -882,7 +974,9 @@ LogicalResult PipelineScheduler::build() {
     // 对 iter_arg 的「更新」是由克隆出来的 frisk.copy ... to %iter_arg 原地写
     // 寄存器完成的，SSA 值本身不变，所以直接转发——和原循环 affine.yield
     // %arg5, %arg6 的写法一致
-    nb.create<affine::AffineYieldOp>(bodyLoc, args);
+    SmallVector<Value> yielded(args.take_front(originalCarriers));
+    llvm::append_range(yielded, advanceTasks());
+    nb.create<affine::AffineYieldOp>(bodyLoc, yielded);
   };
   // 创建新循环
   auto newLoop = builder.create<affine::AffineForOp>(
@@ -893,6 +987,7 @@ LogicalResult PipelineScheduler::build() {
   //    itself), then the original tail of the function.
   // 插入点挪到新循环之后，插一个 barrier，把稳态循环最后写的槽和 epilogue 的读隔开
   builder.setInsertionPointAfter(newLoop);
+  loadTaskHistory(newLoop.getResults().drop_front(originalCarriers));
   builder.create<frisk::SyncThreadsInBlockOp>(loc);
   // 算最后一块（被 peel 的）的 tile 与 parity：
   // lastK = ub - step - lb、lastTile = lastK/step、lastParity = lastTile % 2。

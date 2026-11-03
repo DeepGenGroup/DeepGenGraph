@@ -25,8 +25,8 @@ def fixture(k=32, n=64, element='f16', threads=128, owned=False):
     output = f'memref<32x{n}xf32, 1>'
     arg = f'memref<{k}x{n}x{element}, 1>' if owned else b
     setup = f'''%b = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {b}
-      frisk.async_copy_gm_to_shm %input to %b {{alignment = 16 : i64}} : {arg}, {b}
-      frisk.wait_buffer_ready %b : {b}''' if owned else ''
+      %task_b = frisk.async_copy_gm_to_shm %input to %b {{alignment = 16 : i64}} : {arg}, {b} -> !frisk.async_task
+      frisk.wait_buffer_ready %task_b : !frisk.async_task''' if owned else ''
     return f'''func.func @gemm(%a: {a}, %{'input' if owned else 'b'}: {arg}, %out: {output})
         attributes {{thread_num = {threads} : i32}} {{
       {setup}
@@ -253,10 +253,10 @@ def main():
             'memref<32x64xf16, strided<[1, 32]>, 1>')
         source = source.replace('%input: memref<32x64xf16, strided<[1, 32]>, 1>',
                                 '%input: memref<64x32xf16, 1>')
-        source = source.replace('frisk.async_copy_gm_to_shm %input',
+        source = source.replace('%task_b = frisk.async_copy_gm_to_shm %input',
             '%transposed = memref.transpose %input (d0, d1) -> (d1, d0) : '
             'memref<64x32xf16, 1> to memref<32x64xf16, strided<[1, 32]>, 1>\n'
-            '      frisk.async_copy_gm_to_shm %transposed')
+            '      %task_b = frisk.async_copy_gm_to_shm %transposed')
         selected = lower(source, '--frisk-promote-gemm-matrix-loads')
         assert 'frisk.read_matrix_from_shm' not in selected
         ir = export(finalize(source, mode))
@@ -292,9 +292,9 @@ def main():
     mixed = fixture(owned=True).replace('%out: memref<32x64xf32, 1>',
         '%other: memref<32x64xf16, strided<[1,32]>, 1>, %out: memref<32x64xf32, 1>')
     mixed = mixed.replace('      %g =', '''
-      frisk.async_copy_gm_to_shm %other to %b {alignment = 16 : i64}
-        : memref<32x64xf16, strided<[1,32]>, 1>, memref<32x64xf16, 3>
-      frisk.wait_buffer_ready %b : memref<32x64xf16, 3>
+      %task_other = frisk.async_copy_gm_to_shm %other to %b {alignment = 16 : i64}
+        : memref<32x64xf16, strided<[1,32]>, 1>, memref<32x64xf16, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_other : !frisk.async_task
       %g =''')
     assert 'frisk.read_matrix_from_shm' not in lower(mixed, '--frisk-promote-gemm-matrix-loads')
     print('PASS physical GM strides, nested transpose/views, all writers, direct vector fallback and explicit staged matrix reads')

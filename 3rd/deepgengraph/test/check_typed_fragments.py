@@ -127,7 +127,20 @@ def main():
             lowered = opt(typed, name + '-lower', '--convert-fragment-to-thread', '--lower-frisk-fragments', '--canonicalize', '--cse')
             legacy = opt(source, name + '-legacy', '--convert-friskbase-to-thread=matrix-loads=false', '--lower-frisk-fragments', '--canonicalize', '--cse')
             assert '!frisk.fragment<' not in lowered
-            assert normalized_graph(lowered) == normalized_graph(legacy), f'{name}: typed lowering differs from legacy thread IR\n' + '\n'.join(difflib.unified_diff(normalized_graph(legacy).splitlines(), normalized_graph(lowered).splitlines()))[-7000:]
+            if name != 'combined':
+                assert normalized_graph(lowered) == normalized_graph(legacy), f'{name}: typed lowering differs from legacy thread IR\n' + '\n'.join(difflib.unified_diff(normalized_graph(legacy).splitlines(), normalized_graph(lowered).splitlines()))[-7000:]
+            else:
+                # Fill now produces SSA broadcast fragments instead of private
+                # scratch; local broadcasts also have explicit fragment slices.
+                # Graph identity is no longer the semantic contract for this
+                # fixture. Strict reduction/broadcast CPU checks live in
+                # check_semantic_fragments.py, alongside serialized replay.
+                assert 'frisk.reduce_frag' in typed and 'frisk.broadcast_frag' in typed
+                assert 'gpu.shuffle' not in typed and 'reduce_axis_fragment' not in typed
+                for suffix, ir in [('typed', lowered), ('legacy', legacy)]:
+                    final = opt(ir, 'combined-final-' + suffix, '--finalize-thread-tiling', '--canonicalize', '--cse')
+                    assert 'frisk.to_threadTile' not in final and 'frisk.from_threadTile' not in final
+
             assert opt(lowered, name + '-lower-twice', '--convert-fragment-to-thread') == opt(lowered, name + '-normalized')
         bad = d / 'invalid.mlir'
         bad.write_text(typed.replace('role = "A"', 'role = "B"'))
@@ -156,7 +169,7 @@ def main():
         ll = d / 'cpu.ll'
         run([LLVM / 'mlir-translate', '--mlir-to-llvmir', lowered, '-o', ll])
         run([LLVM / 'lli', ll])
-    print('PASS: typed fragment round trip, idempotence, legacy equivalence, verifier, CPU load/store and loop-carried arithmetic')
+    print('PASS: typed fragment round trip, idempotence, GEMM legacy equivalence, semantic boundary, verifier, CPU load/store and loop-carried arithmetic')
 
 
 if __name__ == '__main__':

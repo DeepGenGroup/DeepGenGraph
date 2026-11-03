@@ -102,6 +102,7 @@ struct LowerFriskAsyncCopyPass
         memref::MemRefDialect, scf::SCFDialect, gpu::GPUDialect>();
   }
   void runOnOperation() final {
+    if (failed(frisk::validateAsyncTaskTokens(getOperation()))) return signalPassFailure();
     SmallVector<frisk::AsyncCopyGmToShmOp> copies;
     SmallVector<frisk::WaitBufferReadyOp> waits;
     getOperation().walk([&](frisk::AsyncCopyGmToShmOp op) { copies.push_back(op); });
@@ -154,7 +155,7 @@ struct LowerFriskAsyncCopyPass
       if (!dma && useAsyncCopy && !op->hasAttr("frisk.force_sync") && sourceMap) {
         for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
           if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(next);
-              wait && wait.getBuffer() == op.getDst()) { ready = wait; break; }
+              wait && wait.getToken() == op.getToken()) { ready = wait; break; }
           if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(next);
               copy && copy.getDst() == op.getDst()) break;
         }
@@ -273,6 +274,9 @@ struct LowerFriskAsyncCopyPass
       }
       if (participants) b.setInsertionPointAfter(participants);
       if (dma) b.create<ROCDL::AsyncmarkOp>(loc);
+      Value completed = b.create<frisk::AsyncTaskCompletedOp>(loc,
+          frisk::friskAsyncTaskType::get(&getContext()));
+      op.getToken().replaceAllUsesWith(completed);
       op.erase();
     }
     for (auto op : waits) {
@@ -313,6 +317,7 @@ struct LowerFriskAsyncCopyPass
       }
       op.erase();
     }
+    if (failed(frisk::lowerAsyncTaskTokens(getOperation()))) return signalPassFailure();
     if (!copies.empty())
       llvm::errs() << "LowerFriskAsyncCopy: " << directCount << " direct, " << stagedCount
                    << " staged, " << fallbackCount << " fallback; staging bytes " << stagingBytes << "\n";

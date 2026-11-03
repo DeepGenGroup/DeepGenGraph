@@ -193,7 +193,7 @@ struct Candidate {
            isa<affine::AffineApplyOp, gpu::ThreadIdOp, gpu::BlockIdOp,
                memref::SubViewOp, memref::CastOp, memref::TransposeOp,
                BufferViewOp, ExtractFragOp, InsertFragOp, PackFragOp,
-               UnpackFragOp, ElementwiseFragOp>(op));
+               UnpackFragOp, ElementwiseFragOp, BroadcastFragOp>(op));
     });
     return safe;
   }
@@ -225,12 +225,13 @@ struct Candidate {
     SmallVector<Operation *> readers;
     for (Operation *user : storage->getUsers()) {
       if (user == copy) continue;
-      if (auto ready = dyn_cast<WaitBufferReadyOp>(user)) {
-        if (wait || ready->getBlock() != loop.getBody()) return {};
-        wait = ready; continue;
-      }
       if (!isa<memref::LoadOp, LoadFragOp>(user) || !loop->isAncestor(user)) return {}; // No escaping alias.
       readers.push_back(topLevel(user, loop));
+    }
+    for (Operation *user : copy.getToken().getUsers()) {
+      auto ready = dyn_cast<WaitBufferReadyOp>(user);
+      if (!ready || wait || ready->getBlock() != loop.getBody()) return {};
+      wait = ready;
     }
     if (!wait || readers.empty() || !copy->isBeforeInBlock(wait)) return {};
     for (auto *reader : readers)

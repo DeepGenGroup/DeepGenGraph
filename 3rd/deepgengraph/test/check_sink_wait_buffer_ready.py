@@ -5,8 +5,8 @@ from check_frisk_async_copy import lower
 PASS = '--frisk-sink-wait-buffer-ready'
 TY = 'memref<64xf32, 3>'
 SRC = 'memref<64xf32, 1>'
-ISSUE = f'frisk.async_copy_gm_to_shm %src to %a : {SRC}, {TY}'
-WAIT = f'frisk.wait_buffer_ready %a : {TY}'
+ISSUE = f'%task_a = frisk.async_copy_gm_to_shm %src to %a : {SRC}, {TY} -> !frisk.async_task'
+WAIT = f'frisk.wait_buffer_ready %task_a : !frisk.async_task'
 
 
 def fixture(body, prefix='', setup=''):
@@ -58,9 +58,9 @@ def main():
         ('affine.for %i = 0 to 4 {}', 'affine.for', ''),
         (f'%tile = frisk.to_threadTile %a : {TY} -> vector<64xf32>',
          'frisk.to_threadTile', ''),
-        (f'frisk.async_copy_gm_to_shm %src to %b : {SRC}, {TY}',
+        (f'%task_b = frisk.async_copy_gm_to_shm %src to %b : {SRC}, {TY} -> !frisk.async_task',
          'async_copy_gm_to_shm', ''),
-        (f'frisk.wait_buffer_ready %b : {TY}', 'wait_buffer_ready', ''),
+        (f'frisk.wait_buffer_ready %task_a : !frisk.async_task', 'wait_buffer_ready', ''),
     ]:
         result = run(fixture(blocker + '\n %v = arith.mulf %x, %x : f32', prefix))
         assert result.index('wait_buffer_ready') < result.rindex(marker), result
@@ -93,10 +93,10 @@ def main():
     source = '''func.func @tiles(%src: memref<16x16xf16, 1>, %x: f16) {
       %q = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<16x16xf16, 3>
       %k = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<16x16xf16, 3>
-      frisk.async_copy_gm_to_shm %src to %q : memref<16x16xf16, 1>, memref<16x16xf16, 3>
-      frisk.wait_buffer_ready %q : memref<16x16xf16, 3>
-      frisk.async_copy_gm_to_shm %src to %k : memref<16x16xf16, 1>, memref<16x16xf16, 3>
-      frisk.wait_buffer_ready %k : memref<16x16xf16, 3>
+      %task_q = frisk.async_copy_gm_to_shm %src to %q : memref<16x16xf16, 1>, memref<16x16xf16, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_q : !frisk.async_task
+      %task_k = frisk.async_copy_gm_to_shm %src to %k : memref<16x16xf16, 1>, memref<16x16xf16, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_k : !frisk.async_task
       %scaled = frisk.mul %q, %x : memref<16x16xf16, 3>, f16 -> memref<16x16xf16, 3>
       %r = frisk.gemm(%scaled, %k) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", transA = false, transB = false} : memref<16x16xf16, 3>, memref<16x16xf16, 3> -> memref<16x16xf32>
       return
@@ -109,9 +109,9 @@ def main():
     # pre-existing per-operation software-pipeline schedule.
     source = fixture('%v = arith.mulf %x, %x : f32')
     for untouched in [
-        source.replace(ISSUE, ''),
+        source.replace(ISSUE, '%task_a = frisk.async_task_completed : !frisk.async_task'),
         source.replace(WAIT, f'%early = memref.load %a[%z] : {TY}\n' + WAIT),
-        source.replace(WAIT, f'frisk.wait_buffer_ready %a {{pipeline.stage = 1 : i64}} : {TY}'),
+        source.replace(WAIT, f'frisk.wait_buffer_ready %task_a {{pipeline.stage = 1 : i64}} : !frisk.async_task'),
         source.replace('-> f32 {', '-> f32 attributes {pipeline.order = array<i64: 0>} {'),
         source.replace('-> f32 {', '-> f32 attributes {pipeline.scheduled} {'),
     ]:

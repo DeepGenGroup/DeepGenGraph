@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/StringRef.h"
@@ -2468,14 +2469,6 @@ LogicalResult AsyncCopyGmToShmOp::verify() {
   return success();
 }
 
-LogicalResult WaitBufferReadyOp::verify() {
-  auto type = dyn_cast<MemRefType>(getBuffer().getType());
-  auto space = type ? dyn_cast_or_null<IntegerAttr>(type.getMemorySpace()) : IntegerAttr{};
-  if (!space || space.getInt() != 3)
-    return emitOpError("requires a ranked shared (3) buffer");
-  return success();
-}
-
 LogicalResult AsyncCopy::verify(){
   return success();
 }
@@ -2495,3 +2488,107 @@ LogicalResult MaskOp::inferReturnTypes(::mlir::MLIRContext *context, std::option
 
 } // namespace frisk
 } // namespace mlir
+
+namespace mlir::frisk {
+// Task provenance is a graph: loop backedges may revisit a token. Visiting a
+// cycle once is sufficient because both the entry and backedge are explored.
+LogicalResult collectAsyncTaskIssues(Value token,
+    SmallVectorImpl<AsyncCopyGmToShmOp> &issues) {
+  SmallVector<Value> work{token};
+  llvm::DenseSet<Value> seen;
+  while (!work.empty()) {
+    Value value = work.pop_back_val();
+    if (!seen.insert(value).second) continue;
+    if (!isa<friskAsyncTaskType>(value.getType())) return failure();
+    if (auto issue = value.getDefiningOp<AsyncCopyGmToShmOp>()) {
+      if (!llvm::is_contained(issues, issue)) issues.push_back(issue);
+      continue;
+    }
+    if (value.getDefiningOp<AsyncTaskCompletedOp>()) continue;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = arg.getOwner()->getParentOp();
+      unsigned n = arg.getArgNumber();
+      if (!n) return failure();
+      if (auto loop = dyn_cast<affine::AffineForOp>(parent)) {
+        work.push_back(loop.getInits()[n - 1]);
+        work.push_back(loop.getBody()->getTerminator()->getOperand(n - 1));
+      } else if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+        work.push_back(loop.getInitArgs()[n - 1]);
+        work.push_back(loop.getBody()->getTerminator()->getOperand(n - 1));
+      } else return failure();
+      continue;
+    }
+    auto result = cast<OpResult>(value);
+    Operation *op = result.getOwner();
+    unsigned n = result.getResultNumber();
+    if (auto loop = dyn_cast<affine::AffineForOp>(op)) {
+      work.push_back(loop.getInits()[n]);
+      work.push_back(loop.getBody()->getTerminator()->getOperand(n));
+    } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
+      work.push_back(loop.getInitArgs()[n]);
+      work.push_back(loop.getBody()->getTerminator()->getOperand(n));
+    } else if (isa<scf::IfOp, affine::AffineIfOp>(op)) {
+      for (Region &region : op->getRegions()) {
+        if (region.empty()) return failure();
+        work.push_back(region.front().getTerminator()->getOperand(n));
+      }
+    } else if (auto select = dyn_cast<arith::SelectOp>(op)) {
+      work.push_back(select.getTrueValue()); work.push_back(select.getFalseValue());
+    } else return failure();
+  }
+  return success();
+}
+
+LogicalResult validateAsyncTaskTokens(Operation *root) {
+  auto isTask = [](Type t) { return isa<friskAsyncTaskType>(t); };
+  auto walked = root->walk([&](Operation *op) {
+    if (auto fn = dyn_cast<func::FuncOp>(op)) {
+      if (llvm::any_of(fn.getFunctionType().getInputs(), isTask) ||
+          llvm::any_of(fn.getFunctionType().getResults(), isTask)) {
+        op->emitError("async task function ABI lowering is unsupported");
+        return WalkResult::interrupt();
+      }
+    }
+    if ((llvm::any_of(op->getOperandTypes(), isTask) || llvm::any_of(op->getResultTypes(), isTask)) &&
+        !isa<AsyncCopyGmToShmOp, WaitBufferReadyOp, AsyncTaskCompletedOp,
+             affine::AffineForOp, affine::AffineIfOp, affine::AffineYieldOp,
+             scf::ForOp, scf::IfOp, scf::YieldOp, arith::SelectOp>(op)) {
+      op->emitError("unsupported async task token consumer/producer");
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return failure(walked.wasInterrupted());
+}
+
+LogicalResult lowerAsyncTaskTokens(Operation *root) {
+  bool pending = false;
+  root->walk([&](Operation *op) {
+    pending |= isa<AsyncCopyGmToShmOp, WaitBufferReadyOp>(op);
+  });
+  if (pending) return success();
+  if (failed(validateAsyncTaskTokens(root))) return failure();
+  SmallVector<Operation *> completed;
+  auto convert = [&](Type type) -> Type {
+    return isa<friskAsyncTaskType>(type) ? Type(IntegerType::get(root->getContext(), 1)) : type;
+  };
+  root->walk([&](Operation *op) {
+    if (isa<AsyncTaskCompletedOp>(op)) completed.push_back(op);
+    for (Value result : op->getResults()) result.setType(convert(result.getType()));
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments()) arg.setType(convert(arg.getType()));
+  });
+  // gfx936 currently waits for all outstanding groups. Token values have no
+  // runtime representation after those waits; an i1 carrier is folded away by
+  // ordinary control-flow canonicalization, without changing issue/wait order.
+  for (Operation *op : completed) {
+    OpBuilder b(op);
+    Value done = b.create<arith::ConstantIntOp>(op->getLoc(), 1, 1);
+    op->getResult(0).replaceAllUsesWith(done);
+    op->erase();
+  }
+  return success();
+}
+
+} // namespace mlir::frisk

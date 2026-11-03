@@ -431,8 +431,6 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
         if (use->getOperandNumber() != 1 || sourceType.getShape() != type.getShape())
           return;
         writers.push_back(copy);
-      } else if (isa<frisk::WaitBufferReadyOp>(user)) {
-        // Readiness observes the same descriptor, without imposing a layout.
       } else {
         return;
       }
@@ -694,6 +692,41 @@ static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
   }
 }
 
+static std::optional<LowerInfo> readTileLayout(Value value, DictionaryAttr attrs) {
+  auto warpThreads = attrs.getAs<IntegerAttr>("warp_threads");
+  auto ignored = attrs.getAs<IntegerAttr>("ignore_dim");
+  if (!warpThreads || !ignored)
+    return std::nullopt;
+  LowerInfo info(warpThreads.getInt());
+  info.buffer = value;
+  info.ignoreDim = ignored.getInt();
+  if (auto divisor = attrs.getAs<IntegerAttr>("warp_id_divisor"))
+    info.warpIdDivisor = divisor.getInt();
+  if (auto transform = attrs.getAs<AffineMapAttr>("logical_transform"))
+    info.logicalTransform = transform.getValue();
+  auto read = [&](StringRef name, coordXY_t &field) {
+    auto attr = attrs.getAs<DenseI64ArrayAttr>(name);
+    if (!attr || attr.size() != 2)
+      return false;
+    field = {attr[0], attr[1]};
+    return true;
+  };
+  if (!read("thread_widths", info.base_layout.thread_creg) ||
+      !read("thread_creg_order", info.base_layout.thread_creg_order) ||
+      !read("warp_repeat", info.base_layout.warp_repeat) ||
+      !read("warp_repeat_order", info.base_layout.warp_repeat_order) ||
+      !read("warp_layout", info.base_layout.warp_layout) ||
+      !read("warp_layout_order", info.base_layout.warp_layout_order) ||
+      !read("warp_inst_unroll", info.warpInstUnroll) ||
+      !read("block_repeat", info.block_repeat) ||
+      !read("block_layout", info.block_layout) ||
+      !read("block_layout_order", info.block_layout_order))
+    return std::nullopt;
+  info.thread_own_data_size = info.get_thread_widths() * info.get_warp_repeat() *
+                              info.warpInstUnroll * info.get_block_repeat();
+  return info;
+}
+
 // 查询 value 在 consumer 处的布局，按以下顺序寻找：
 //   精确 (value, consumer) -> value 的其他用户 -> 表中同 buffer 的条目。
 // 后两项是兼容改写过程中旧分析键失配的回退，不代表求出了新的最优布局。
@@ -716,38 +749,7 @@ static std::optional<LowerInfo> findLowerInfoForValue(Value value, Operation *co
   auto bridge = value.getDefiningOp<frisk::FromThreadTileOp>();
   if (!bridge)
     return std::nullopt;
-  auto warpThreads = bridge->getAttrOfType<IntegerAttr>("warp_threads");
-  auto ignored = bridge->getAttrOfType<IntegerAttr>("ignore_dim");
-  if (!warpThreads || !ignored)
-    return std::nullopt;
-  LowerInfo info(warpThreads.getInt());
-  info.buffer = value;
-  info.ignoreDim = ignored.getInt();
-  if (auto divisor = bridge->getAttrOfType<IntegerAttr>("warp_id_divisor"))
-    info.warpIdDivisor = divisor.getInt();
-  if (auto transform = bridge->getAttrOfType<AffineMapAttr>("logical_transform"))
-    info.logicalTransform = transform.getValue();
-  auto read = [&](StringRef name, coordXY_t &field) {
-    auto attr = bridge->getAttrOfType<DenseI64ArrayAttr>(name);
-    if (!attr || attr.size() != 2)
-      return false;
-    field = {attr[0], attr[1]};
-    return true;
-  };
-  if (!read("thread_widths", info.base_layout.thread_creg) ||
-      !read("thread_creg_order", info.base_layout.thread_creg_order) ||
-      !read("warp_repeat", info.base_layout.warp_repeat) ||
-      !read("warp_repeat_order", info.base_layout.warp_repeat_order) ||
-      !read("warp_layout", info.base_layout.warp_layout) ||
-      !read("warp_layout_order", info.base_layout.warp_layout_order) ||
-      !read("warp_inst_unroll", info.warpInstUnroll) ||
-      !read("block_repeat", info.block_repeat) ||
-      !read("block_layout", info.block_layout) ||
-      !read("block_layout_order", info.block_layout_order))
-    return std::nullopt;
-  info.thread_own_data_size = info.get_thread_widths() * info.get_warp_repeat() *
-                              info.warpInstUnroll * info.get_block_repeat();
-  return info;
+  return readTileLayout(value, bridge->getAttrDictionary());
 }
 
 // A/B layouts may only budget one MMA's registers. A bridge represents the
@@ -813,27 +815,34 @@ static LogicalResult setCopyTileShape(LowerInfo &info, ArrayRef<int64_t> shape) 
 // 用于从线程内 packed 下标构造 map 操作数、比较布局、或恢复 LowerInfo。
 // 相同 vector shape 不意味着 lane 所有权相同，不能只记录形状。
 // getAffineMap 会更新 LowerInfo 内部辅助字段，所以这里对副本调用。
+static DictionaryAttr tileLayoutAttrs(const LowerInfo &info, OpBuilder &builder) {
+  NamedAttrList attrs;
+  LowerInfo layout = info;
+  attrs.set("tile_layout", AffineMapAttr::get(layout.getAffineMap()));
+  if (info.warpIdDivisor != 1)
+    attrs.set("warp_id_divisor", builder.getI64IntegerAttr(info.warpIdDivisor));
+  if (info.logicalTransform)
+    attrs.set("logical_transform", AffineMapAttr::get(info.logicalTransform));
+  attrs.set("thread_widths", builder.getDenseI64ArrayAttr(info.get_thread_widths()));
+  attrs.set("warp_repeat", builder.getDenseI64ArrayAttr(info.get_warp_repeat()));
+  attrs.set("warp_inst_unroll", builder.getDenseI64ArrayAttr(info.warpInstUnroll));
+  attrs.set("thread_creg_order", builder.getDenseI64ArrayAttr(info.base_layout.thread_creg_order));
+  attrs.set("warp_repeat_order", builder.getDenseI64ArrayAttr(info.base_layout.warp_repeat_order));
+  attrs.set("warp_layout", builder.getDenseI64ArrayAttr(info.get_warp_layout()));
+  attrs.set("warp_layout_order", builder.getDenseI64ArrayAttr(info.base_layout.warp_layout_order));
+  attrs.set("block_repeat", builder.getDenseI64ArrayAttr(info.get_block_repeat()));
+  attrs.set("block_layout", builder.getDenseI64ArrayAttr(info.get_block_layout()));
+  attrs.set("block_layout_order", builder.getDenseI64ArrayAttr(info.get_block_layout_order()));
+  attrs.set("warp_threads", builder.getI64IntegerAttr(info.warp_threads));
+  attrs.set("ignore_dim", builder.getI64IntegerAttr(info.ignoreDim));
+  attrs.set("tiled", builder.getBoolAttr(true));
+  return attrs.getDictionary(builder.getContext());
+}
+
 static void setTileLayout(Operation *bridge, const LowerInfo &info,
                           OpBuilder &builder) {
-  LowerInfo layout = info;
-  bridge->setAttr("tile_layout", AffineMapAttr::get(layout.getAffineMap()));
-  if (info.warpIdDivisor != 1)
-    bridge->setAttr("warp_id_divisor", builder.getI64IntegerAttr(info.warpIdDivisor));
-  if (info.logicalTransform)
-    bridge->setAttr("logical_transform", AffineMapAttr::get(info.logicalTransform));
-  bridge->setAttr("thread_widths", builder.getDenseI64ArrayAttr(info.get_thread_widths()));
-  bridge->setAttr("warp_repeat", builder.getDenseI64ArrayAttr(info.get_warp_repeat()));
-  bridge->setAttr("warp_inst_unroll", builder.getDenseI64ArrayAttr(info.warpInstUnroll));
-  bridge->setAttr("thread_creg_order", builder.getDenseI64ArrayAttr(info.base_layout.thread_creg_order));
-  bridge->setAttr("warp_repeat_order", builder.getDenseI64ArrayAttr(info.base_layout.warp_repeat_order));
-  bridge->setAttr("warp_layout", builder.getDenseI64ArrayAttr(info.get_warp_layout()));
-  bridge->setAttr("warp_layout_order", builder.getDenseI64ArrayAttr(info.base_layout.warp_layout_order));
-  bridge->setAttr("block_repeat", builder.getDenseI64ArrayAttr(info.get_block_repeat()));
-  bridge->setAttr("block_layout", builder.getDenseI64ArrayAttr(info.get_block_layout()));
-  bridge->setAttr("block_layout_order", builder.getDenseI64ArrayAttr(info.get_block_layout_order()));
-  bridge->setAttr("warp_threads", builder.getI64IntegerAttr(info.warp_threads));
-  bridge->setAttr("ignore_dim", builder.getI64IntegerAttr(info.ignoreDim));
-  markTiled(bridge, builder);
+  for (NamedAttribute attr : tileLayoutAttrs(info, builder))
+    bridge->setAttr(attr.getName(), attr.getValue());
 }
 
 // 创建 block -> thread 的显式表示边界，并附上完整布局属性。
@@ -1831,6 +1840,25 @@ static FailureOr<Value> broadcastLocalVectorToTile(Value sourceVector,
     return sourceVector;
   }
 
+  if (emitTypedFragments) {
+    auto fragmentShape = getFragmentShape(tileTy.getShape(), info);
+    return mapFragments(rewriter, loc, tileTy, fragmentShape,
+        [&](ArrayRef<Value> origins, VectorType output) -> Value {
+          SmallVector<int64_t> shape(fragmentShape);
+          SmallVector<Value> positions(origins);
+          for (unsigned d = 0; d < shape.size(); ++d)
+            if (sourceTy.getDimSize(d) == 1) {
+              shape[d] = 1;
+              positions[d] = createIndexConstant(rewriter, loc, 0);
+            }
+          auto inputType = VectorType::get(shape, sourceTy.getElementType());
+          Value input = transferFragment(rewriter, loc, sourceVector, inputType, positions);
+          Value result = rewriter.create<BroadcastFragOp>(loc, localFragmentType(output),
+              packFragment(rewriter, loc, input, localFragmentType(inputType)));
+          return unpackFragment(rewriter, loc, result);
+        });
+  }
+
   Value result =
       rewriter
           .create<arith::ConstantOp>(
@@ -1933,6 +1961,8 @@ castFloatVectorElementType(Value vector, Type dstElementType,
       [&](ArrayRef<Value> origins, VectorType dst) -> Value {
         auto src = VectorType::get(fragment, srcElementType);
         Value value = transferFragment(rewriter, loc, vector, src, origins);
+        if (emitTypedFragments)
+          return elementwiseFragment(rewriter, loc, "cast", ValueRange{value}, dst);
         if (srcFloatTy.getWidth() < dstFloatTy.getWidth())
           return rewriter.create<arith::ExtFOp>(loc, dst, value);
         return rewriter.create<arith::TruncFOp>(loc, dst, value);
@@ -1948,6 +1978,13 @@ static FailureOr<Value> materializeElementwiseOperand(
   if (isa<FloatType>(original.getType())) {
     if (original.getType() != resultType.getElementType())
       return failure();
+    if (emitTypedFragments)
+      return mapFragments(rewriter, loc, resultType,
+          getFragmentShape(resultType.getShape(), resultInfo),
+          [&](ArrayRef<Value>, VectorType fragment) -> Value {
+            return unpackFragment(rewriter, loc,
+                rewriter.create<BroadcastFragOp>(loc, localFragmentType(fragment), adapted));
+          });
     return rewriter.create<vector::BroadcastOp>(loc, resultType, adapted).getResult();
   }
   // Each operand must supply the logical coordinates owned by the result.
@@ -2208,6 +2245,19 @@ public:
     if (!element)
       return failure();
     auto loc = op.getLoc();
+    if (emitTypedFragments) {
+      Value scalar = rewriter.create<arith::ConstantOp>(loc, type->getElementType(), cast<TypedAttr>(element));
+      Value tile = mapFragments(rewriter, loc, *type, getFragmentShape(type->getShape(), *info),
+          [&](ArrayRef<Value>, VectorType fragment) -> Value {
+            return unpackFragment(rewriter, loc,
+                rewriter.create<BroadcastFragOp>(loc, localFragmentType(fragment), scalar));
+          });
+      Value block = fromThreadTile(tile, op.getMemref().getType(), *info, rewriter, loc);
+      writeBackBlockTile(block, adaptor.getMemref(), *info, rewriter, loc);
+      if (op.hasValueResult()) rewriter.replaceOp(op, block);
+      else rewriter.eraseOp(op);
+      return success();
+    }
     auto memType = MemRefType::get(type->getShape(), type->getElementType());
     Value tile = toThreadTile(adaptor.getMemref(), memType, *info, rewriter, loc);
     Value value = rewriter.create<arith::ConstantOp>(loc, type->getElementType(),
@@ -2282,12 +2332,12 @@ public:
 // 用这些逻辑坐标替换原 region 参数，克隆标量表达式，将 mask_yield 的值
 // 插入当前线程 vector。否则使用局部 iv 会让不同线程误算同一组 mask 坐标。
 struct MaskTileElement {
-  ConversionPatternRewriter &rewriter;
+  OpBuilder &rewriter;
   Location loc;
   LowerInfo *resultInfo;
   Value tidx;
   MemRefType resultTy;
-  frisk::MaskOp::Adaptor adaptor;
+  ValueRange starts;
   Block *body;
   frisk::MaskYieldOp yieldOp;
   Value addend;
@@ -2302,7 +2352,7 @@ struct MaskTileElement {
       SmallVector<Value, 2> regionArgs;
       regionArgs.reserve(accessIndices.size());
       for (auto [start, accessIndex] :
-           llvm::zip(adaptor.getStarts(), accessIndices)) {
+           llvm::zip(starts, accessIndices)) {
         regionArgs.push_back(addIndexValues(rewriter, loc, start, accessIndex));
       }
 
@@ -2333,6 +2383,80 @@ struct MaskTileElement {
     return scalar;
   }
 };
+
+static Value lowerFragmentMask(OpBuilder &rewriter, Location loc, MemRefType resultTy,
+    VectorType vecTy, LowerInfo resultInfo, ValueRange starts, Block *body,
+    Value addend, bool maskOnLhs, bool uniformMasks, ArrayRef<int64_t> fragmentShape) {
+    auto vectorShape = vecTy.getShape();
+    Value resultVector = rewriter.create<arith::ConstantOp>(loc, vecTy, rewriter.getZeroAttr(vecTy));
+    auto yieldOp = cast<MaskYieldOp>(body->getTerminator());
+    Value tidx = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
+    MaskTileElement element{rewriter, loc,     &resultInfo, tidx,
+                            resultTy, starts, body,       yieldOp,
+                            addend, maskOnLhs, {}};
+    auto emitMask = [&]() -> Value {
+      return
+        FragmentTileLoopNest(rewriter, loc, vectorShape, {"tiled", "mask_fragment"},
+                           fragmentShape)
+            .emit(resultVector, element);
+    };
+    Value complete, unmasked;
+    if (uniformMasks && resultTy.getRank() == 2 && resultTy.hasStaticShape() &&
+        resultTy.getDimSize(0) > 0 && resultTy.getDimSize(1) > 0) {
+      // Recognize select(row + nonnegative diagonal <= col, masked, clear).
+      // All other regions retain the general per-element implementation.
+      auto select = yieldOp->getOperand(0).getDefiningOp<arith::SelectOp>();
+      auto compare = select ? select.getCondition().getDefiningOp<arith::CmpIOp>() : arith::CmpIOp{};
+      auto add = compare ? compare.getLhs().getDefiningOp<arith::AddIOp>() : arith::AddIOp{};
+      auto offset = add ? add.getRhs().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
+      auto clear = select ? select.getFalseValue().getDefiningOp<arith::ConstantOp>() : arith::ConstantOp{};
+      bool pure = llvm::all_of(body->without_terminator(), [](Operation &inst) {
+        return isa<arith::ConstantOp, arith::AddIOp, arith::CmpIOp, arith::SelectOp>(inst);
+      });
+      if (pure && compare && compare.getPredicate() == arith::CmpIPredicate::ule &&
+          add && add.getLhs() == body->getArgument(0) && offset && offset.value() >= 0 &&
+          compare.getRhs() == body->getArgument(1) && clear) {
+        auto plus = [&](Value start, int64_t delta) -> Value {
+          return rewriter.create<arith::AddIOp>(loc, start, createIndexConstant(rewriter, loc, delta));
+        };
+        auto uge = [&](Value a, Value b) -> Value {
+          return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, a, b);
+        };
+        Value row = starts[0], col = starts[1];
+        Value rowEnd = plus(row, resultTy.getDimSize(0) - 1);
+        Value colEnd = plus(col, resultTy.getDimSize(1) - 1);
+        Value first = plus(row, offset.value()), last = plus(rowEnd, offset.value());
+        // Unsigned comparisons also guard index wraparound. A wrapping span
+        // must always use the original elementwise predicate.
+        Value safeRow = rewriter.create<arith::AndIOp>(loc, uge(rowEnd, row), uge(last, rowEnd));
+        Value safe = rewriter.create<arith::AndIOp>(loc, safeRow, uge(colEnd, col));
+        Value past = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, first, colEnd);
+        complete = rewriter.create<arith::AndIOp>(loc, safe, past);
+        unmasked = rewriter.create<arith::ConstantOp>(loc, clear.getValue());
+      }
+    }
+    if (complete) {
+      auto choose = rewriter.create<scf::IfOp>(loc, TypeRange{vecTy}, complete, true);
+      choose->setAttr("frisk.uniform_mask", rewriter.getUnitAttr());
+      rewriter.setInsertionPointToStart(&choose.getThenRegion().front());
+      Value vector;
+      if (addend) {
+        element.clear = unmasked;
+        vector = emitMask();
+        element.clear = {};
+      } else {
+        vector = rewriter.create<vector::BroadcastOp>(loc, vecTy, unmasked);
+      }
+      rewriter.create<scf::YieldOp>(loc, vector);
+      rewriter.setInsertionPointToStart(&choose.getElseRegion().front());
+      rewriter.create<scf::YieldOp>(loc, emitMask());
+      rewriter.setInsertionPointAfter(choose);
+      resultVector = choose.getResult(0);
+    } else {
+      resultVector = emitMask();
+    }
+    return resultVector;
+}
 
 /// 匹配：rank <= 2、带 LowerInfo 的 memref mask，region yield 一个标量。
 /// 对线程持有的每个元素执行 region，经 FromThreadTile 返回原 block 类型。
@@ -2424,69 +2548,20 @@ public:
       addend = *operand;
     }
 
-    MaskTileElement element{rewriter, loc,     &*resultInfo, tidx,
-                            resultTy, adaptor, body,       yieldOp,
-                            addend, add && add.getLhs() == op.getResult(), {}};
-    auto emitMask = [&]() -> Value {
-      return
-        FragmentTileLoopNest(rewriter, loc, vectorShape, {"tiled", "mask_fragment"},
-                           getFragmentShape(vectorShape, *resultInfo))
-            .emit(resultVector, element);
-    };
-    Value complete, unmasked;
-    if (uniformMasks && resultTy.getRank() == 2 && resultTy.hasStaticShape() &&
-        resultTy.getDimSize(0) > 0 && resultTy.getDimSize(1) > 0) {
-      // Recognize select(row + nonnegative diagonal <= col, masked, clear).
-      // All other regions retain the general per-element implementation.
-      auto select = yieldOp->getOperand(0).getDefiningOp<arith::SelectOp>();
-      auto compare = select ? select.getCondition().getDefiningOp<arith::CmpIOp>() : arith::CmpIOp{};
-      auto add = compare ? compare.getLhs().getDefiningOp<arith::AddIOp>() : arith::AddIOp{};
-      auto offset = add ? add.getRhs().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
-      auto clear = select ? select.getFalseValue().getDefiningOp<arith::ConstantOp>() : arith::ConstantOp{};
-      bool pure = llvm::all_of(body->without_terminator(), [](Operation &inst) {
-        return isa<arith::ConstantOp, arith::AddIOp, arith::CmpIOp, arith::SelectOp>(inst);
-      });
-      if (pure && compare && compare.getPredicate() == arith::CmpIPredicate::ule &&
-          add && add.getLhs() == body->getArgument(0) && offset && offset.value() >= 0 &&
-          compare.getRhs() == body->getArgument(1) && clear) {
-        auto plus = [&](Value start, int64_t delta) -> Value {
-          return rewriter.create<arith::AddIOp>(loc, start, createIndexConstant(rewriter, loc, delta));
-        };
-        auto uge = [&](Value a, Value b) -> Value {
-          return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, a, b);
-        };
-        Value row = adaptor.getStarts()[0], col = adaptor.getStarts()[1];
-        Value rowEnd = plus(row, resultTy.getDimSize(0) - 1);
-        Value colEnd = plus(col, resultTy.getDimSize(1) - 1);
-        Value first = plus(row, offset.value()), last = plus(rowEnd, offset.value());
-        // Unsigned comparisons also guard index wraparound. A wrapping span
-        // must always use the original elementwise predicate.
-        Value safeRow = rewriter.create<arith::AndIOp>(loc, uge(rowEnd, row), uge(last, rowEnd));
-        Value safe = rewriter.create<arith::AndIOp>(loc, safeRow, uge(colEnd, col));
-        Value past = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, first, colEnd);
-        complete = rewriter.create<arith::AndIOp>(loc, safe, past);
-        unmasked = rewriter.create<arith::ConstantOp>(loc, clear.getValue());
-      }
-    }
-    if (complete) {
-      auto choose = rewriter.create<scf::IfOp>(loc, TypeRange{vecTy}, complete, true);
-      choose->setAttr("frisk.uniform_mask", rewriter.getUnitAttr());
-      rewriter.setInsertionPointToStart(&choose.getThenRegion().front());
-      Value vector;
-      if (add) {
-        element.clear = unmasked;
-        vector = emitMask();
-        element.clear = {};
-      } else {
-        vector = rewriter.create<vector::BroadcastOp>(loc, vecTy, unmasked);
-      }
-      rewriter.create<scf::YieldOp>(loc, vector);
-      rewriter.setInsertionPointToStart(&choose.getElseRegion().front());
-      rewriter.create<scf::YieldOp>(loc, emitMask());
-      rewriter.setInsertionPointAfter(choose);
-      resultVector = choose.getResult(0);
+    if (emitTypedFragments) {
+      Value input = addend ? packFragment(rewriter, loc, addend, localFragmentType(vecTy)) : Value{};
+      auto mask = rewriter.create<MaskFragOp>(loc, localFragmentType(vecTy),
+          adaptor.getStarts(), input, TypeAttr::get(resultTy), tileLayoutAttrs(*resultInfo, rewriter),
+          rewriter.getDenseI64ArrayAttr(getFragmentShape(vectorShape, *resultInfo)),
+          rewriter.getBoolAttr(add && add.getLhs() == op.getResult()),
+          rewriter.getBoolAttr(uniformMasks));
+      IRMapping mapping;
+      rewriter.cloneRegionBefore(op.getRegion(), mask.getRegion(), mask.getRegion().end(), mapping);
+      resultVector = unpackFragment(rewriter, loc, mask);
     } else {
-      resultVector = emitMask();
+      resultVector = lowerFragmentMask(rewriter, loc, resultTy, vecTy, *resultInfo,
+          adaptor.getStarts(), body, addend, add && add.getLhs() == op.getResult(),
+          uniformMasks, getFragmentShape(vectorShape, *resultInfo));
     }
     Value block = fromThreadTile(resultVector, op.getResult().getType(),
                                 *resultInfo, rewriter, loc);
@@ -2503,10 +2578,9 @@ public:
 
 // 为浮点归约生成单位元：add=0、mul=1、min=+∞、max=-∞。
 // 未知 kind 返回 failure，调用方据此拒绝该归约。
-static FailureOr<Value> createReduceIdentity(frisk::ReduceOp op, Type elemTy,
+static FailureOr<Value> createReduceIdentity(Location loc, StringRef kind, Type elemTy,
                                              OpBuilder &rewriter) {
   double identity = 0.0;
-  auto kind = op.getKind();
   if (kind == "add") {
     identity = 0.0;
   } else if (kind == "mul") {
@@ -2519,25 +2593,24 @@ static FailureOr<Value> createReduceIdentity(frisk::ReduceOp op, Type elemTy,
     return failure();
   }
   auto attr = rewriter.getFloatAttr(elemTy, identity);
-  return rewriter.create<arith::ConstantOp>(op->getLoc(), attr).getResult();
+  return rewriter.create<arith::ConstantOp>(loc, attr).getResult();
 }
 
 // 按 reduce.kind 合并两个浮点值，生成 addf/mulf/minnumf/maxnumf。
-static FailureOr<Value> combineReduceValues(frisk::ReduceOp op, Value lhs,
+static FailureOr<Value> combineReduceValues(Location loc, StringRef kind, Value lhs,
                                             Value rhs, OpBuilder &rewriter) {
-  auto kind = op.getKind();
   if (kind == "add") {
-    return rewriter.create<arith::AddFOp>(op->getLoc(), lhs, rhs).getResult();
+    return rewriter.create<arith::AddFOp>(loc, lhs, rhs).getResult();
   }
   if (kind == "mul") {
-    return rewriter.create<arith::MulFOp>(op->getLoc(), lhs, rhs).getResult();
+    return rewriter.create<arith::MulFOp>(loc, lhs, rhs).getResult();
   }
   if (kind == "min") {
-    return rewriter.create<arith::MinNumFOp>(op->getLoc(), lhs, rhs)
+    return rewriter.create<arith::MinNumFOp>(loc, lhs, rhs)
         .getResult();
   }
   if (kind == "max") {
-    return rewriter.create<arith::MaxNumFOp>(op->getLoc(), lhs, rhs)
+    return rewriter.create<arith::MaxNumFOp>(loc, lhs, rhs)
         .getResult();
   }
   return failure();
@@ -2548,8 +2621,10 @@ static FailureOr<Value> combineReduceValues(frisk::ReduceOp op, Value lhs,
 // laneExtent 是归约轴上的 lane 数；laneStride 由该轴在 warp_layout_order
 // 中的位置决定，因此 XOR shuffle 的偏移不是一律 1、2、4。
 struct ReduceTileElement {
-  ConversionPatternRewriter &rewriter;
-  frisk::ReduceOp op;
+  OpBuilder &rewriter;
+  Location loc;
+  StringRef kind;
+  int64_t dim;
   Value source;
   VectorType sourceType;
   Value identity;
@@ -2561,8 +2636,6 @@ struct ReduceTileElement {
   // 沿源线程 vector 的归约轴循环累加，再按 offset*laneStride 做 XOR shuffle，
   // 最后返回归约标量，由外层 emitter 组装输出片段。支持保留或去掉归约轴。
   Value emit(ArrayRef<Value> outputIvs, Value output) {
-    auto loc = op.getLoc();
-    int64_t dim = op.getDim();
     struct ReductionElement {
       ReduceTileElement &self;
       ArrayRef<Value> outputIvs;
@@ -2571,7 +2644,7 @@ struct ReduceTileElement {
         unsigned out = 0;
         bool keepDim = outputIvs.size() == static_cast<size_t>(self.sourceType.getRank());
         for (int64_t i = 0; i < self.sourceType.getRank(); ++i) {
-          if (i == self.op.getDim()) {
+          if (i == self.dim) {
             indices.push_back(reductionIvs[0]);
             if (keepDim)
               ++out;
@@ -2579,8 +2652,8 @@ struct ReduceTileElement {
             indices.push_back(outputIvs[out++]);
           }
         }
-        Value value = self.rewriter.create<vector::ExtractOp>(self.op.getLoc(), self.source, indices);
-        return *combineReduceValues(self.op, accumulator, value, self.rewriter);
+        Value value = self.rewriter.create<vector::ExtractOp>(self.loc, self.source, indices);
+        return *combineReduceValues(self.loc, self.kind, accumulator, value, self.rewriter);
       }
     } element{*this, outputIvs};
     // Keep the original left-to-right FP association across all fragments.
@@ -2590,11 +2663,25 @@ struct ReduceTileElement {
       auto shuffle = rewriter.create<gpu::ShuffleOp>(loc, reduced,
           static_cast<int32_t>(offset * laneStride), static_cast<int32_t>(warpThreads),
           gpu::ShuffleMode::XOR);
-      reduced = *combineReduceValues(op, reduced, shuffle.getShuffleResult(), rewriter);
+      reduced = *combineReduceValues(loc, kind, reduced, shuffle.getShuffleResult(), rewriter);
     }
     return reduced;
   }
 };
+
+static FailureOr<Value> lowerFragmentReduction(OpBuilder &b, Location loc,
+    Value source, VectorType resultType, StringRef kind, int64_t dim,
+    int64_t lanes, int64_t stride, int64_t wave, int64_t width,
+    ArrayRef<int64_t> outputFragment) {
+  auto sourceType = cast<VectorType>(source.getType());
+  auto identity = createReduceIdentity(loc, kind, sourceType.getElementType(), b);
+  if (failed(identity)) return failure();
+  Value initial = b.create<arith::ConstantOp>(loc, resultType, b.getZeroAttr(resultType));
+  ReduceTileElement element{b, loc, kind, dim, source, sourceType, *identity,
+                            lanes, stride, wave, width};
+  return FragmentTileLoopNest(b, loc, resultType.getShape(),
+      {"tiled", "reduce_fragment"}, outputFragment).emit(initial, element);
+}
 
 // Compose the same tid/thread-index decomposition as buildMappedAccessIndices.
 // Project singleton axes before comparing: their layout metadata may differ
@@ -2802,18 +2889,25 @@ public:
     if (shape.empty() || shape.size() != static_cast<size_t>(resultType->getRank()))
       return failure();
     auto dstType = VectorType::get(shape, resultType->getElementType());
-    auto identity = createReduceIdentity(op, sourceType->getElementType(), rewriter);
-    if (failed(identity))
-      return failure();
     auto loc = op.getLoc();
     Value source = toThreadTile(adaptor.getSrc(), *sourceType, *sourceInfo, rewriter, loc);
-    Value initial = rewriter.create<arith::ConstantOp>(loc, dstType,
-        cast<TypedAttr>(rewriter.getZeroAttr(dstType)));
-    ReduceTileElement element{rewriter, op, source, *sourceType, *identity,
-                               lanes, stride, sourceInfo->warp_threads,
-                               getFragmentShape(sourceType->getShape(), *sourceInfo)[dim]};
-    Value result = FragmentTileLoopNest(rewriter, loc, shape, {"tiled", "reduce_fragment"},
-        getFragmentShape(shape, *resultInfo)).emit(initial, element);
+    int64_t width = getFragmentShape(sourceType->getShape(), *sourceInfo)[dim];
+    auto outputFragment = getFragmentShape(shape, *resultInfo);
+    Value result;
+    if (emitTypedFragments) {
+      Value reduced = rewriter.create<ReduceFragOp>(loc, localFragmentType(dstType),
+          packFragment(rewriter, loc, source, localFragmentType(*sourceType)),
+          op.getKindAttr(), rewriter.getI64IntegerAttr(dim),
+          rewriter.getI64IntegerAttr(lanes), rewriter.getI64IntegerAttr(stride),
+          rewriter.getI64IntegerAttr(sourceInfo->warp_threads),
+          rewriter.getI64IntegerAttr(width), rewriter.getDenseI64ArrayAttr(outputFragment));
+      result = unpackFragment(rewriter, loc, reduced);
+    } else {
+      auto reduced = lowerFragmentReduction(rewriter, loc, source, dstType, op.getKind(),
+          dim, lanes, stride, sourceInfo->warp_threads, width, outputFragment);
+      if (failed(reduced)) return failure();
+      result = *reduced;
+    }
     if (forwardReductionTemporary(op, result, *resultInfo, rewriter)) {
       rewriter.eraseOp(op);
       return success();
@@ -3287,7 +3381,7 @@ public:
 // 布局转换的回读 emitter：以目标 LowerInfo 把线程下标映射到共享 scratch，
 // 读回标量并组装新的线程 vector；生产者在 scratch 中使用的是源布局地址。
 struct LayoutReadBackElement {
-  ConversionPatternRewriter &rewriter;
+  OpBuilder &rewriter;
   Location loc;
   LowerInfo &info;
   Value tid;
@@ -3299,6 +3393,117 @@ struct LayoutReadBackElement {
     return scalar;
   }
 };
+
+// Verify a serialized shuffle against the complete lane/register ownership
+// maps. A hand-edited or stale recipe must never silently permute logical data.
+static bool validFragmentShufflePlan(Operation *op, VectorType tile, ShapedType block,
+    LowerInfo from, LowerInfo to, DictionaryAttr plan) {
+  if (!plan) return true;
+  auto kernel = op->getParentOfType<func::FuncOp>();
+  auto threads = kernel ? kernel->getAttrOfType<IntegerAttr>("thread_num") : IntegerAttr{};
+  if (!threads || threads.getInt() <= 0 || tile.getNumElements() > 262144 / threads.getInt())
+    return false;
+  auto source = effectiveThreadTileMap(from, block, tile, op->getContext());
+  auto target = effectiveThreadTileMap(to, block, tile, op->getContext());
+  auto masks = plan.getAs<DenseI64ArrayAttr>("xor_masks");
+  int64_t registers = plan.getAs<IntegerAttr>("registers").getInt();
+  auto coordinate = [&](AffineMap map, int64_t tid, int64_t row, int64_t col) {
+    SmallVector<Attribute> values, result;
+    for (int64_t n : {tid, row, col})
+      values.push_back(IntegerAttr::get(IndexType::get(op->getContext()), n));
+    if (failed(map.constantFold(values, result))) result.clear();
+    return result;
+  };
+  for (int64_t tid = 0; tid < threads.getInt(); ++tid)
+    for (int64_t row = 0; row < tile.getDimSize(0); ++row)
+      for (int64_t col = 0; col < tile.getDimSize(1); ++col) {
+        int64_t lane = tid, reg = col % registers;
+        for (int stage = masks.size() - 1; stage >= 0; --stage) {
+          int64_t bit = int64_t(1) << stage, mask = masks[stage];
+          if (bool(lane & mask) != bool(reg & bit)) { lane ^= mask; reg ^= bit; }
+        }
+        auto expected = coordinate(target, tid, row, col);
+        auto actual = coordinate(source, lane, row, col / registers * registers + reg);
+        if (expected.empty() || expected != actual) return false;
+      }
+  return true;
+}
+
+static Value lowerFragmentLayout(Operation *op, OpBuilder &rewriter, Value source,
+    ShapedType blockTy, VectorType toTy, LowerInfo fromInfo, LowerInfo toInfo,
+    DictionaryAttr plan) {
+    auto loc = op->getLoc();
+    // Do not trust a stale or hand-written plan without checking the complete
+    // source/target mapping. Unsupported conversions keep the shared path.
+    if (plan) {
+      auto masks = plan.getAs<DenseI64ArrayAttr>("xor_masks");
+      int64_t registers = plan.getAs<IntegerAttr>("registers").getInt();
+      Value tid = findThreadIdxOp(op, rewriter);
+      Value lane = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), tid);
+      Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+      Value width = rewriter.create<arith::ConstantIntOp>(loc,
+          plan.getAs<IntegerAttr>("width").getInt(), 32);
+      SmallVector<Value> offsets, bits;
+      for (int64_t mask : masks.asArrayRef()) {
+        Value offset = rewriter.create<arith::ConstantIntOp>(loc, mask, 32);
+        offsets.push_back(offset);
+        Value bit = rewriter.create<arith::AndIOp>(loc, lane, offset);
+        bits.push_back(rewriter.create<arith::CmpIOp>(loc,
+            arith::CmpIPredicate::ne, bit, zero));
+      }
+      Value result = mapFragments(rewriter, loc, toTy, {1, registers},
+          [&](ArrayRef<Value> origins, VectorType fragmentType) -> Value {
+        Value fragment = transferFragment(rewriter, loc, source, fragmentType, origins);
+        SmallVector<Value> values;
+        for (int64_t reg = 0; reg < registers; ++reg)
+          values.push_back(rewriter.create<vector::ExtractOp>(loc, fragment,
+              ArrayRef<int64_t>{0, reg}));
+        for (auto [stage, offset] : llvm::enumerate(offsets)) {
+          int64_t registerBit = int64_t(1) << stage;
+          for (int64_t lo = 0; lo < registers; ++lo) {
+            if (lo & registerBit)
+              continue;
+            int64_t hi = lo | registerBit;
+            Value send = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                        values[lo], values[hi]);
+            auto shuffle = rewriter.create<gpu::ShuffleOp>(loc, send, offset,
+                                                           width, gpu::ShuffleMode::XOR);
+            shuffle->setAttr("frisk.layout_role", rewriter.getStringAttr("wmmaC"));
+            Value received = shuffle.getResult(0);
+            Value low = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                       received, values[lo]);
+            Value high = rewriter.create<arith::SelectOp>(loc, bits[stage],
+                                                        values[hi], received);
+            values[lo] = low;
+            values[hi] = high;
+          }
+        }
+        for (int64_t reg = 0; reg < registers; ++reg)
+          fragment = rewriter.create<vector::InsertOp>(loc, values[reg], fragment,
+                                                       ArrayRef<int64_t>{0, reg});
+        return fragment;
+      });
+      return result;
+    }
+    auto scratchTy = MemRefType::get(blockTy.getShape(), blockTy.getElementType(),
+        AffineMap{}, rewriter.getI64IntegerAttr(int(friskMs::Shared)));
+    auto scratch = rewriter.create<memref::AllocOp>(loc, scratchTy);
+    markTiled(scratch, rewriter);
+    Value tid = findThreadIdxOp(op, rewriter);
+    Value sourceBlock = fromThreadTile(source, blockTy, fromInfo, rewriter, loc);
+    // Reuse the same leader selection and shared-memory barrier as other
+    // writebacks; replicated source layouts must not race on scratch stores.
+    writeBackBlockTile(sourceBlock, scratch, fromInfo, rewriter, loc);
+    Value initial = rewriter.create<arith::ConstantOp>(loc, toTy,
+        cast<TypedAttr>(rewriter.getZeroAttr(toTy)));
+    LayoutReadBackElement element{rewriter, loc, toInfo, tid, scratch};
+    Value result = FragmentTileLoopNest(rewriter, loc, toTy.getShape(), {"tiled", "layout_fragment"},
+        getFragmentShape(toTy.getShape(), toInfo)).emit(initial, element);
+    // No thread may reuse scratch until all threads have completed their reads.
+    auto readSync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
+    markTiled(readSync, rewriter);
+    return result;
+}
 
 // 落实显式布局转换：已验证的 WMMA C 计划使用寄存器 shuffle；其余转换
 // 按 fromInfo 取源寄存器 -> 按源坐标写 shared scratch ->
@@ -3338,79 +3543,21 @@ public:
       return success();
     }
     auto plan = op->getAttrOfType<DictionaryAttr>("frisk.shuffle_plan");
-    // Do not trust a stale or hand-written plan without checking the complete
-    // source/target mapping. Unsupported conversions keep the shared path.
-    if (plan && plan == getWmmaShufflePlan(op) && *fromTy == *toTy) {
-      auto masks = plan.getAs<DenseI64ArrayAttr>("xor_masks");
-      int64_t registers = plan.getAs<IntegerAttr>("registers").getInt();
-      Value tid = findThreadIdxOp(op, rewriter);
-      Value lane = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), tid);
-      Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-      Value width = rewriter.create<arith::ConstantIntOp>(loc,
-          plan.getAs<IntegerAttr>("width").getInt(), 32);
-      SmallVector<Value> offsets, bits;
-      for (int64_t mask : masks.asArrayRef()) {
-        Value offset = rewriter.create<arith::ConstantIntOp>(loc, mask, 32);
-        offsets.push_back(offset);
-        Value bit = rewriter.create<arith::AndIOp>(loc, lane, offset);
-        bits.push_back(rewriter.create<arith::CmpIOp>(loc,
-            arith::CmpIPredicate::ne, bit, zero));
-      }
-      Value result = mapFragments(rewriter, loc, *toTy, {1, registers},
-          [&](ArrayRef<Value> origins, VectorType fragmentType) -> Value {
-        Value fragment = transferFragment(rewriter, loc, source, fragmentType, origins);
-        SmallVector<Value> values;
-        for (int64_t reg = 0; reg < registers; ++reg)
-          values.push_back(rewriter.create<vector::ExtractOp>(loc, fragment,
-              ArrayRef<int64_t>{0, reg}));
-        for (auto [stage, offset] : llvm::enumerate(offsets)) {
-          int64_t registerBit = int64_t(1) << stage;
-          for (int64_t lo = 0; lo < registers; ++lo) {
-            if (lo & registerBit)
-              continue;
-            int64_t hi = lo | registerBit;
-            Value send = rewriter.create<arith::SelectOp>(loc, bits[stage],
-                                                        values[lo], values[hi]);
-            auto shuffle = rewriter.create<gpu::ShuffleOp>(loc, send, offset,
-                                                           width, gpu::ShuffleMode::XOR);
-            shuffle->setAttr("frisk.layout_role", rewriter.getStringAttr("wmmaC"));
-            Value received = shuffle.getResult(0);
-            Value low = rewriter.create<arith::SelectOp>(loc, bits[stage],
-                                                       received, values[lo]);
-            Value high = rewriter.create<arith::SelectOp>(loc, bits[stage],
-                                                        values[hi], received);
-            values[lo] = low;
-            values[hi] = high;
-          }
-        }
-        for (int64_t reg = 0; reg < registers; ++reg)
-          fragment = rewriter.create<vector::InsertOp>(loc, values[reg], fragment,
-                                                       ArrayRef<int64_t>{0, reg});
-        return fragment;
-      });
-      rewriter.replaceOp(op, fromThreadTile(result, op->getResult(0).getType(),
-                                            toInfo, rewriter, loc));
-      return success();
+    if (!plan || plan != getWmmaShufflePlan(op) || *fromTy != *toTy)
+      plan = {};
+    Value result;
+    if (emitTypedFragments) {
+      Value converted = rewriter.create<ConvertLayoutFragOp>(loc, localFragmentType(*toTy),
+          packFragment(rewriter, loc, source, localFragmentType(*fromTy)),
+          TypeAttr::get(blockTy), tileLayoutAttrs(fromInfo, rewriter),
+          tileLayoutAttrs(toInfo, rewriter), plan);
+      result = unpackFragment(rewriter, loc, converted);
+    } else {
+      result = lowerFragmentLayout(op, rewriter, source, blockTy, *toTy,
+                                   fromInfo, toInfo, plan);
     }
-    auto scratchTy = MemRefType::get(blockTy.getShape(), blockTy.getElementType(),
-        AffineMap{}, rewriter.getI64IntegerAttr(int(friskMs::Shared)));
-    auto scratch = rewriter.create<memref::AllocOp>(loc, scratchTy);
-    markTiled(scratch, rewriter);
-    Value tid = findThreadIdxOp(op, rewriter);
-    Value sourceBlock = fromThreadTile(source, blockTy, fromInfo, rewriter, loc);
-    // Reuse the same leader selection and shared-memory barrier as other
-    // writebacks; replicated source layouts must not race on scratch stores.
-    writeBackBlockTile(sourceBlock, scratch, fromInfo, rewriter, loc);
-    Value initial = rewriter.create<arith::ConstantOp>(loc, *toTy,
-        cast<TypedAttr>(rewriter.getZeroAttr(*toTy)));
-    LayoutReadBackElement element{rewriter, loc, toInfo, tid, scratch};
-    Value result = FragmentTileLoopNest(rewriter, loc, toTy->getShape(), {"tiled", "layout_fragment"},
-        getFragmentShape(toTy->getShape(), toInfo)).emit(initial, element);
-    // No thread may reuse scratch until all threads have completed their reads.
-    auto readSync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
-    markTiled(readSync, rewriter);
     rewriter.replaceOp(op, fromThreadTile(result, op->getResult(0).getType(),
-                                          toInfo, rewriter, loc));
+                                        toInfo, rewriter, loc));
     return success();
   }
 };
@@ -4183,7 +4330,7 @@ public:
         // remain explicit until the original scheduled completion point.
         if (axis && sourceAxis && axis.getInt() != *sourceAxis &&
             type.getElementTypeBitWidth() < 32 && wait &&
-            wait.getBuffer() == issue.getDst())
+            wait.getToken() == issue.getToken())
           synchronous.push_back(issue);
       });
       for (auto issue : synchronous) {
@@ -4192,6 +4339,9 @@ public:
         // The ordinary copy publishes its stores with a block barrier.
         b.create<frisk::CopyOp>(issue.getLoc(), issue.getSrc(), issue.getDst());
         wait->erase();
+        Value completed = b.create<frisk::AsyncTaskCompletedOp>(issue.getLoc(),
+            frisk::friskAsyncTaskType::get(kernel.getContext()));
+        issue.getToken().replaceAllUsesWith(completed);
         issue.erase();
       }
       llvm::errs() << "Async direct-only: " << synchronous.size()
@@ -4901,7 +5051,7 @@ public:
       return;
     }
     kernel.walk([&](Operation *op) {
-      if (!isa<frisk::AsyncCopyGmToShmOp, frisk::WaitBufferReadyOp>(op)) return;
+      if (!isa<frisk::AsyncCopyGmToShmOp>(op)) return;
       OpBuilder b(op);
       for (OpOperand &operand : op->getOpOperands())
         operand.set(materializeAsyncView(operand.get(), b, op->getLoc()));
@@ -5096,7 +5246,8 @@ public:
     SmallVector<Work> work;
     bool unsupported = false;
     kernel.walk([&](Operation *op) {
-      if (isa<LoadFragOp, ExtractFragOp, PackFragOp, GemmFragOp, ElementwiseFragOp>(op))
+      if (isa<LoadFragOp, ExtractFragOp, PackFragOp, GemmFragOp, ElementwiseFragOp,
+              BroadcastFragOp, ReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
         work.push_back({op, cast<FragmentType>(op->getResult(0).getType())});
       else if (isa<StoreFragOp, InsertFragOp, UnpackFragOp>(op))
         work.push_back({op, cast<FragmentType>(op->getOperand(0).getType())});
@@ -5186,6 +5337,49 @@ public:
         markTiled(mma, b);
         result = mma;
         ++gemms;
+      } else if (auto mask = dyn_cast<MaskFragOp>(op)) {
+        auto info = readTileLayout(op->getResult(0), mask.getLayout());
+        if (!info || simplifyAffineMap(info->getAffineMap()) !=
+            simplifyAffineMap(mask.getLayout().getAs<AffineMapAttr>("tile_layout").getValue())) {
+          op->emitError("invalid serialized mask layout"); return signalPassFailure();
+        }
+        result = lowerFragmentMask(b, loc, cast<MemRefType>(mask.getBlockType()),
+            registers, *info, mask.getStarts(), &mask.getRegion().front(),
+            op->getNumOperands() > mask.getStarts().size()
+                ? op->getOperand(mask.getStarts().size()) : Value{},
+            mask.getMaskOnLhs(), mask.getUniform(), mask.getFragmentShape());
+      } else if (auto broadcast = dyn_cast<BroadcastFragOp>(op)) {
+        Value source = op->getOperand(0);
+        if (!isa<VectorType>(source.getType()))
+          result = b.create<vector::BroadcastOp>(loc, registers, source);
+        else {
+          Value initial = b.create<arith::ConstantOp>(loc, registers, b.getZeroAttr(registers));
+          BroadcastTileElement element{b, loc, cast<VectorType>(source.getType()), source};
+          result = FragmentTileLoopNest(b, loc, registers.getShape()).emit(initial, element);
+        }
+      } else if (auto reduce = dyn_cast<ReduceFragOp>(op)) {
+        auto reduced = lowerFragmentReduction(b, loc, op->getOperand(0), registers,
+            reduce.getKind(), reduce.getDim(), reduce.getLaneExtent(), reduce.getLaneStride(),
+            reduce.getWarpThreads(), reduce.getReductionWidth(), reduce.getOutputFragmentShape());
+        if (failed(reduced)) { op->emitError("invalid fragment reduction"); return signalPassFailure(); }
+        result = *reduced;
+      } else if (auto layout = dyn_cast<ConvertLayoutFragOp>(op)) {
+        auto from = readTileLayout(op->getOperand(0), layout.getSourceLayout());
+        auto to = readTileLayout(op->getOperand(0), layout.getTargetLayout());
+        if (!from || !to) { op->emitError("invalid serialized layout conversion"); return signalPassFailure(); }
+        auto block = cast<ShapedType>(layout.getBlockType());
+        auto plan = layout.getShufflePlan().value_or(DictionaryAttr{});
+        auto consistent = [](LowerInfo &info, DictionaryAttr attrs) {
+          return simplifyAffineMap(info.getAffineMap()) ==
+              simplifyAffineMap(attrs.getAs<AffineMapAttr>("tile_layout").getValue());
+        };
+        if (!consistent(*from, layout.getSourceLayout()) ||
+            !consistent(*to, layout.getTargetLayout()) ||
+            !validFragmentShufflePlan(op, registers, block, *from, *to, plan)) {
+          op->emitError("serialized layout/shuffle recipe does not match logical coordinates");
+          return signalPassFailure();
+        }
+        result = lowerFragmentLayout(op, b, op->getOperand(0), block, registers, *from, *to, plan);
       } else if (auto compute = dyn_cast<ElementwiseFragOp>(op)) {
         auto values = compute.getInputs();
         StringRef kind = compute.getKind();

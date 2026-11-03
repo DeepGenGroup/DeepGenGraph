@@ -29,11 +29,11 @@ print('PASS rejects unaligned/unsupported DMA widths and partial copy waves')
 source = '''module {
   func.func @copy_kernel(%src: memref<32x128xf16, strided<[1,128]>, 1>,
                          %dst: memref<4096xf16, 3>) attributes {thread_num = 256 : i32} {
-    frisk.async_copy_gm_to_shm %src to %dst {
+    %task_dst = frisk.async_copy_gm_to_shm %src to %dst {
       alignment = 16 : i64, frisk.dma_bytes = 16 : i64, frisk.copy_threads = 128 : i64,
       frisk.source_map = affine_map<(d0) -> ((d0 floordiv 1024) * 8 + d0 mod 8, (d0 floordiv 8) mod 128)>
-    } : memref<32x128xf16, strided<[1,128]>, 1>, memref<4096xf16, 3>
-    frisk.wait_buffer_ready %dst : memref<4096xf16, 3>
+    } : memref<32x128xf16, strided<[1,128]>, 1>, memref<4096xf16, 3> -> !frisk.async_task
+    frisk.wait_buffer_ready %task_dst : !frisk.async_task
     return
   }
 }'''

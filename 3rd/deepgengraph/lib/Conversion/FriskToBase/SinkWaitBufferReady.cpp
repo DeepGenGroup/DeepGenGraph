@@ -144,13 +144,12 @@ void mlir::frisk::sinkWaitBufferReady(func::FuncOp kernel) {
     if (scheduled)
       continue;
 
-    // Require an exact descriptor match in this block. An aliasing subview
-    // wait need not complete the whole transfer, and a rotated loop slot must
-    // retain its manually scheduled completion point.
+    // Require the exact issue token in this block. Loop-carried tasks retain
+    // their scheduled completion point; buffer aliases do not identify tasks.
     AsyncCopyGmToShmOp issue;
     for (Operation *prev = wait->getPrevNode(); prev; prev = prev->getPrevNode()) {
       if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(prev)) {
-        if (copy.getDst() == wait.getBuffer() &&
+        if (copy.getToken() == wait.getToken() &&
             !BufferDependencies::hasSchedule(copy))
           issue = copy;
         break;

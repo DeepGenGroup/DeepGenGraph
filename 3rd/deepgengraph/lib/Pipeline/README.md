@@ -17,7 +17,7 @@
   `rocdl.wait.asyncmark 0` 和 `gpu.barrier` 后，合并同一 block 中重复的
   wait-all/publication。可以跨越无副作用、可推测执行的普通索引/算术操作，
   不跨越任何内存读写、调用、不透明 asm、新 async group、未知 target op、
-  partial wait、region 或 CFG 边界。不同 buffer 的 `frisk.wait_buffer_ready`
+  partial wait、region 或 CFG 边界。不同任务 token 的 `frisk.wait_buffer_ready`
   **不会**在 Base 层被视为等价。单独的 `barrier; wait-all; barrier` 也不会
   错删后一个 publication barrier。它与已有基于依赖分析的
   `barrier-optimize` 是不同 Pass，先合并冗余序列，再做原有依赖分析。
@@ -363,3 +363,12 @@ LDS 49,408 → 40,960 B，稳态 LLVM barrier 调用点 8 → 4，K 读取
 128 条标量 half load → 16 条 `<8 x half>` load，稳态 P/rowsum 的 FP32 LDS
 读写均消除。调度层的单个同步点不代表最终代码只有一个 barrier；copy lowering
 仍保留发布同步，不能按 pipeline 标记直接删除。
+
+### Async task SSA
+
+`async_copy_gm_to_shm` 返回 `!frisk.async_task`（C++ `friskAsyncTaskType`），
+`wait_buffer_ready` 的 operand 是该 token。自动流水线通过 iter_args 传递
+预取任务队列；显式 stage 调度按 issue/wait 的迭代距离传递 token。
+无效的预取分支 yield `async_task_completed`。buffer 轮转和 token 队列分别
+维护，同一 buffer 的多次 issue 不共享任务身份。后端目前仍是 wait-all，
+不会把 token 的 SSA 身份误当成硬件 wait-group 编号。

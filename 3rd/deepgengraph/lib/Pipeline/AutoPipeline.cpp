@@ -57,7 +57,7 @@ private:
   Value bound(OpBuilder &b, bool lower);
   Value offset(OpBuilder &b, Value iv, int64_t tiles);
   SmallVector<Value> selectSlots(OpBuilder &b, Value ordinal, int64_t lead);
-  void issue(OpBuilder &b, Value iv, ValueRange slots);
+  SmallVector<Value> issue(OpBuilder &b, Value iv, ValueRange slots);
 
   affine::AffineForOp loop;
   int64_t stages;
@@ -214,12 +214,6 @@ bool PrefetchLoop::analyze() {
         Operation *user = use.getOwner();
         if (user == transfer.op)
           continue;
-        if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(user);
-            wait && wait->getBlock() == loop.getBody()) {
-          waits.insert(user);
-          ready.push_back(user);
-          continue;
-        }
         // Descriptor escapes and aliases require a more general lifetime
         // proof. Direct reads cover block GEMMs, arithmetic and scalar tests.
         bool read = readsOperands(user) ||
@@ -232,6 +226,14 @@ bool PrefetchLoop::analyze() {
       }
     if (consumers.empty())
       return reject("prefetch storage has no direct consumer");
+    if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(transfer.op)) {
+      for (Operation *user : copy.getToken().getUsers()) {
+        if (!isa<frisk::WaitBufferReadyOp>(user) || user->getBlock() != loop.getBody())
+          return reject("async task escapes the iteration or has an unsupported consumer");
+        waits.insert(user);
+        ready.push_back(user);
+      }
+    }
     if (isa<frisk::AsyncCopyGmToShmOp>(transfer.op))
       for (Operation *consumer : consumers)
         if (!llvm::any_of(ready, [&](Operation *wait) {
@@ -297,7 +299,8 @@ SmallVector<Value> PrefetchLoop::selectSlots(OpBuilder &b, Value ordinal,
   return selected;
 }
 
-void PrefetchLoop::issue(OpBuilder &b, Value iv, ValueRange slots) {
+SmallVector<Value> PrefetchLoop::issue(OpBuilder &b, Value iv, ValueRange slots) {
+  SmallVector<Value> tasks;
   IRMapping mapping;
   mapping.map(loop.getInductionVar(), iv);
   for (Operation &op : loop.getBody()->without_terminator())
@@ -307,7 +310,7 @@ void PrefetchLoop::issue(OpBuilder &b, Value iv, ValueRange slots) {
     Value source = mapping.lookupOrDefault(transfer.source);
     if (isa<frisk::AsyncCopyGmToShmOp>(transfer.op)) {
       mapping.map(transfer.buffer, slots[i]);
-      b.clone(*transfer.op, mapping);
+      tasks.push_back(b.clone(*transfer.op, mapping)->getResult(0));
     } else {
       auto type = cast<MemRefType>(source.getType());
       int64_t alignment = std::max<int64_t>(1, type.getElementTypeBitWidth() / 8);
@@ -315,9 +318,11 @@ void PrefetchLoop::issue(OpBuilder &b, Value iv, ValueRange slots) {
         alignment = 1;
       if (auto attr = transfer.op->getAttrOfType<IntegerAttr>("alignment"))
         alignment = attr.getInt();
-      b.create<frisk::AsyncCopyGmToShmOp>(transfer.op->getLoc(), source, slots[i], alignment);
+      tasks.push_back(b.create<frisk::AsyncCopyGmToShmOp>(
+          transfer.op->getLoc(), source, slots[i], alignment).getToken());
     }
   }
+  return tasks;
 }
 
 void PrefetchLoop::build() {
@@ -334,23 +339,34 @@ void PrefetchLoop::build() {
   // DMA. Short and non-multiple trip counts need no special epilogue.
   Value nonempty = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, lb, ub);
   Value extent = b.create<arith::SubIOp>(loc, ub, lb);
+  auto taskType = frisk::friskAsyncTaskType::get(b.getContext());
+  SmallVector<Type> taskTypes(transfers.size(), taskType);
+  Value completed = b.create<frisk::AsyncTaskCompletedOp>(loc, taskType);
+  SmallVector<Value> emptyTasks(transfers.size(), completed), initialTasks;
   for (int64_t i = 0; i < stages - 1; ++i) {
     Value distance = b.create<arith::ConstantIndexOp>(loc, i * loop.getStepAsInt());
     Value enough = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, extent, distance);
     Value valid = b.create<arith::AndIOp>(loc, nonempty, enough);
-    auto guard = b.create<scf::IfOp>(loc, valid, false);
-    OpBuilder::InsertionGuard insertion(b);
-    b.setInsertionPointToStart(&guard.getThenRegion().front());
-    Value iv = offset(b, lb, i);
-    SmallVector<Value> slots;
-    for (auto &transfer : transfers)
-      slots.push_back(transfer.slots[i]);
-    issue(b, iv, slots);
+    auto guard = b.create<scf::IfOp>(loc, taskTypes, valid, true);
+    {
+      OpBuilder::InsertionGuard insertion(b);
+      b.setInsertionPointToStart(&guard.getThenRegion().front());
+      Value iv = offset(b, lb, i);
+      SmallVector<Value> slots;
+      for (auto &transfer : transfers) slots.push_back(transfer.slots[i]);
+      b.create<scf::YieldOp>(loc, issue(b, iv, slots));
+      b.setInsertionPointToStart(&guard.getElseRegion().front());
+      b.create<scf::YieldOp>(loc, emptyTasks);
+    }
+    llvm::append_range(initialTasks, guard.getResults());
   }
+  unsigned originalCarriers = loop.getNumIterOperands();
+  SmallVector<Value> inits(loop.getInits());
+  llvm::append_range(inits, initialTasks);
   auto steady = b.create<affine::AffineForOp>(loc,
       loop.getLowerBoundOperands(), loop.getLowerBoundMap(),
       loop.getUpperBoundOperands(), loop.getUpperBoundMap(),
-      loop.getStepAsInt(), loop.getInits());
+      loop.getStepAsInt(), inits);
   for (NamedAttribute attr : loop->getDiscardableAttrs())
     if (attr.getName() != hintName)
       steady->setAttr(attr.getName(), attr.getValue());
@@ -368,25 +384,28 @@ void PrefetchLoop::build() {
   auto current = selectSlots(b, ordinal, 0);
   // Wait BEFORE issuing the future tile: backends may implement readiness as
   // wait-all. Moving these waits after the issue would serialize the prefetch.
-  for (Value buffer : current)
-    b.create<frisk::WaitBufferReadyOp>(loc, buffer);
+  auto taskQueue = steady.getRegionIterArgs().drop_front(originalCarriers);
+  for (Value task : taskQueue.take_front(transfers.size()))
+    b.create<frisk::WaitBufferReadyOp>(loc, task);
   // Release all previous-iteration readers before reusing their slot. This is
   // explicit even on backends where readiness also includes a block barrier.
   b.create<frisk::SyncThreadsInBlockOp>(loc);
   Value remaining = b.create<arith::SubIOp>(loc, ub, iv);
   Value distance = b.create<arith::ConstantIndexOp>(loc, (stages - 1) * loop.getStepAsInt());
   Value valid = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, remaining, distance);
-  auto guard = b.create<scf::IfOp>(loc, valid, false);
+  auto guard = b.create<scf::IfOp>(loc, taskTypes, valid, true);
   {
     OpBuilder::InsertionGuard insertion(b);
     b.setInsertionPointToStart(&guard.getThenRegion().front());
     Value futureIv = offset(b, iv, stages - 1);
     auto future = selectSlots(b, ordinal, stages - 1);
-    issue(b, futureIv, future);
+    b.create<scf::YieldOp>(loc, issue(b, futureIv, future));
+    b.setInsertionPointToStart(&guard.getElseRegion().front());
+    b.create<scf::YieldOp>(loc, emptyTasks);
   }
   IRMapping mapping;
   mapping.map(loop.getInductionVar(), iv);
-  mapping.map(loop.getRegionIterArgs(), steady.getRegionIterArgs());
+  mapping.map(loop.getRegionIterArgs(), steady.getRegionIterArgs().take_front(originalCarriers));
   for (auto [i, transfer] : llvm::enumerate(transfers))
     for (Value handle : transfer.handles)
       mapping.map(handle, current[i]);
@@ -396,13 +415,15 @@ void PrefetchLoop::build() {
   SmallVector<Value> results;
   for (Value value : loop.getBody()->getTerminator()->getOperands())
     results.push_back(mapping.lookupOrDefault(value));
+  llvm::append_range(results, taskQueue.drop_front(transfers.size()));
+  llvm::append_range(results, guard.getResults());
   // The no-iter-args builder supplies an empty terminator.
   if (!steady.getBody()->empty() &&
       steady.getBody()->back().hasTrait<OpTrait::IsTerminator>())
     steady.getBody()->back().erase();
   b.setInsertionPointToEnd(steady.getBody());
   b.create<affine::AffineYieldOp>(loc, results);
-  loop.replaceAllUsesWith(steady.getResults());
+  loop.replaceAllUsesWith(steady.getResults().take_front(originalCarriers));
   loop.erase();
 }
 

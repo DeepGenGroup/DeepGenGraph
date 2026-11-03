@@ -264,6 +264,8 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
     ValueRange indices;
     AffineMap map;
     bool fragment = false;
+    if (isa<ReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
+      return WalkResult::interrupt();
     if (auto load = dyn_cast<LoadFragOp>(op)) {
       buffer = load.getSource(); fragment = true;
     } else if (auto store = dyn_cast<StoreFragOp>(op)) {
@@ -477,7 +479,7 @@ static bool pipelineFragments(Loop loop) {
     if (isa<LoadFragOp, affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
       continue;
     if (op.getNumRegions() || !isMemoryEffectFree(&op) ||
-        isa<gpu::ShuffleOp, ToThreadTileOp, FromThreadTileOp>(op))
+        isa<gpu::ShuffleOp, ReduceFragOp, ConvertLayoutFragOp, ToThreadTileOp, FromThreadTileOp>(op))
       return false;
   }
 
@@ -789,11 +791,11 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
     auto wait = dyn_cast_or_null<WaitBufferReadyOp>(issue->getNextNode());
     // Hoisting normally leaves wait at its original location; find its exact
     // same-block descriptor match, stopping at a second issue into that tile.
-    if (!wait || wait.getBuffer() != issue.getDst()) {
+    if (!wait || wait.getToken() != issue.getToken()) {
       wait = {};
       for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
         if (auto ready = dyn_cast<WaitBufferReadyOp>(next);
-            ready && ready.getBuffer() == issue.getDst()) { wait = ready; break; }
+            ready && ready.getToken() == issue.getToken()) { wait = ready; break; }
         if (auto other = dyn_cast<AsyncCopyGmToShmOp>(next);
             other && other.getDst() == issue.getDst()) break;
       }

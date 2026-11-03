@@ -55,7 +55,7 @@ def sync_checks():
         ("new async group", "rocdl.asyncmark\n"),
         ("unknown effects", '"test.opaque"() : () -> ()\n'),
         ("opaque assembly", 'llvm.inline_asm has_side_effects "", "" : () -> ()\n'),
-        ("named buffer wait", "frisk.wait_buffer_ready %a : memref<4xi32, 3>\n"),
+        ("task wait", "%task = frisk.async_task_completed : !frisk.async_task\nfrisk.wait_buffer_ready %task : !frisk.async_task\n"),
         ("conditional", "scf.if %cond { rocdl.asyncmark }\n"),
     ]:
         check(label, wait("a") + barrier("b") + middle +

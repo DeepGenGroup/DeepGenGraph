@@ -35,8 +35,8 @@ def fixture(shape='260', element='i32', layout='', alignment=4, threads=128):
     dst = f'memref<{shape}x{element}, 3>'
     return f'''module {{
   func.func @copy_kernel(%src: {src}, %dst: {dst}) attributes {{thread_num = {threads} : i32}} {{
-    frisk.async_copy_gm_to_shm %src to %dst {{alignment = {alignment} : i64}} : {src}, {dst}
-    frisk.wait_buffer_ready %dst : {dst}
+    %task_dst = frisk.async_copy_gm_to_shm %src to %dst {{alignment = {alignment} : i64}} : {src}, {dst} -> !frisk.async_task
+    frisk.wait_buffer_ready %task_dst : !frisk.async_task
     return
   }}
 }}
@@ -233,16 +233,17 @@ def main():
     # Promotion preserves aliases and the original completion point.
     original = '''func.func @promote(%src: memref<128xf32, 1>, %dst: memref<128xf32, 3>) {
       %alias = frisk.copy %src to %dst [affine_map<() -> (1)>] : memref<128xf32, 1>, memref<128xf32, 3> -> memref<128xf32, 3>
-      frisk.wait_buffer_ready %alias : memref<128xf32, 3>
+      %c0 = arith.constant 0 : index
+      %x = memref.load %alias[%c0] : memref<128xf32, 3>
       return
     }'''
     promoted = lower(original, '--frisk-promote-gm-to-shm-async')
-    assert 'frisk.copy ' not in promoted and promoted.count('frisk.wait_buffer_ready %arg1') == 2
+    assert 'frisk.copy ' not in promoted and promoted.count('frisk.wait_buffer_ready') == 1
     # Nested logical views must preserve source row strides and origin.
     view = '''func.func @view(%src: memref<4x132xf32, 1>, %dst: memref<2x128xf32, 3>) attributes {thread_num = 128 : i32} {
       %tile = frisk.buffer_view %src[1, 4], ranges = [2, 128] : memref<4x132xf32, 1> -> memref<2x128xf32, 1>
-      frisk.async_copy_gm_to_shm %tile to %dst : memref<2x128xf32, 1>, memref<2x128xf32, 3>
-      frisk.wait_buffer_ready %dst : memref<2x128xf32, 3>
+      %task_dst = frisk.async_copy_gm_to_shm %tile to %dst : memref<2x128xf32, 1>, memref<2x128xf32, 3> -> !frisk.async_task
+      frisk.wait_buffer_ready %task_dst : !frisk.async_task
       return
     }'''
     materialized = lower(view, '--finalize-thread-tiling')
@@ -261,27 +262,22 @@ def main():
     scheduled = lower(pipeline, '--frisk-pipeline-schedule')
     assert 'pipeline.slots = 2' in scheduled
     assert 'frisk.wait_buffer_ready' in scheduled
-    # Check the actual selected SSA slot, including multi-result scf.if values.
-    last_ready = None
-    for line in scheduled.splitlines():
-        ready = re.search(r'frisk.wait_buffer_ready (%[\w#]+)', line)
-        if ready:
-            last_ready = ready[1]
-        consumer = re.search(r'frisk.gemm\([^,]+, (%[\w#]+)\)', line)
-        if consumer:
-            assert consumer[1] == last_ready, (consumer[1], last_ready)
+    # Completion of a previous tile is carried independently of the selected buffer.
+    assert re.search(r'iter_args\([^\n]+!frisk.async_task', scheduled), scheduled
+    steady = scheduled[scheduled.index('affine.for'):]
+    assert re.search(r'frisk.wait_buffer_ready %arg\d+ : !frisk.async_task', steady), scheduled
     assert 'requires wait_buffer_ready' in lower(
-        pipeline.replace('frisk.wait_buffer_ready %shared : memref<32x32xf16, 3>',
+        pipeline.replace('frisk.wait_buffer_ready %task_shared : !frisk.async_task',
                          'frisk.sync_threads_in_block'), '--frisk-pipeline-schedule', ok=False)
     assert 'requires wait_buffer_ready' in lower(
-        pipeline.replace('frisk.wait_buffer_ready %shared : memref<32x32xf16, 3>',
-                         'frisk.wait_buffer_ready %lhs : memref<64x32xf16, 3>'),
+        pipeline.replace('frisk.wait_buffer_ready %task_shared : !frisk.async_task',
+                         'frisk.wait_buffer_ready %task_lhs : !frisk.async_task'),
         '--frisk-pipeline-schedule', ok=False)
-    issue = 'frisk.async_copy_gm_to_shm %tile to %shared : memref<32x32xf16, 1>, memref<32x32xf16, 3>'
-    wait = 'frisk.wait_buffer_ready %shared : memref<32x32xf16, 3>'
+    issue = '%task_shared = frisk.async_copy_gm_to_shm %tile to %shared : memref<32x32xf16, 1>, memref<32x32xf16, 3> -> !frisk.async_task'
+    wait = 'frisk.wait_buffer_ready %task_shared : !frisk.async_task'
     premature = pipeline.replace(issue + '\n      ' + wait, wait + '\n      ' + issue)
     premature = premature.replace('0, 0, 1, 1, 1, 1', '0, 0, 0, 1, 1, 1')
-    assert 'requires wait_buffer_ready' in lower(premature, '--frisk-pipeline-schedule', ok=False)
+    assert 'does not dominate' in lower(premature, '--frisk-pipeline-schedule', ok=False)
     # Both modes must accept exactly the same scheduled tile/readiness IR.
     for mode in ('true', 'false'):
         lower(scheduled, '--convert-friskbase-to-thread', '--finalize-thread-tiling',

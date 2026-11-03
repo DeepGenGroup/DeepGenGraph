@@ -33,8 +33,8 @@ def fixture(hint="2 : i64", name="probe", asynchronous=True):
     %v{suffix} = memref.subview %src{suffix}[%offset] [1] [1] : {src} to {view}
 """
         if asynchronous:
-            loads += f"""    frisk.async_copy_gm_to_shm %v{suffix} to %{suffix} : {view}, {dst}
-    frisk.wait_buffer_ready %{suffix} : {dst}
+            loads += f"""    %task_{suffix} = frisk.async_copy_gm_to_shm %v{suffix} to %{suffix} : {view}, {dst} -> !frisk.async_task
+    frisk.wait_buffer_ready %task_{suffix} : !frisk.async_task
 """
         else:
             loads += f"""    %h{suffix} = frisk.copy %v{suffix} to %{suffix} [affine_map<() -> (1)>] : {view}, {dst} -> {dst}
@@ -60,16 +60,65 @@ def fixture(hint="2 : i64", name="probe", asynchronous=True):
 
 
 def cpu_ir(text):
-    # Remove only the target memory spaces and block synchronization.
+    # Delay each one-element fixture transfer until its own task is waited on.
+    # Unique runtime task IDs make an off-by-one queue or same-buffer rebinding
+    # observable in the recurrences, even on machines without a GPU.
     text = re.sub(r", [13]>", ">", text)
     text = re.sub(r'frisk\.alloc_buffer \{[^}]*\} -> (memref<[^\n]+>)',
                   r'memref.alloc() : \1', text)
+
+    def issue(m):
+        token, src, dst, srcty, dstty = m.groups()
+        name = "%dma_" + token[1:]
+        return f"""{name}_z = arith.constant 0 : index
+    {name}_value = memref.load {src}[{name}_z] : {srcty}
+    {name}_ptr = memref.extract_aligned_pointer_as_index {dst} : {dstty} -> index
+    {name}_addr = arith.index_cast {name}_ptr : index to i64
+    {token} = func.call @task_issue({name}_value, {name}_addr) : (f32, i64) -> i64"""
+
     text = re.sub(
-        r"frisk\.async_copy_gm_to_shm (%[\w#]+) to (%[\w#]+)(?: \{[^}]*\})? : (memref<.*>), (memref<.*>)",
-        r"memref.copy \1, \2 : \3 to \4", text)
-    text = re.sub(r"^.*frisk\.(?:wait_buffer_ready|sync_threads_in_block).*\n",
-                  "", text, flags=re.M)
-    return text
+        r"(%[\w#]+) = frisk\.async_copy_gm_to_shm (%[\w#]+) to (%[\w#]+)(?: \{[^}]*\})? : (memref<.*>), (memref<.*>) -> !frisk.async_task",
+        issue, text)
+    text = re.sub(r"frisk\.async_task_completed : !frisk.async_task",
+                  "arith.constant 0 : i64", text)
+    text = re.sub(r"frisk\.wait_buffer_ready (%[\w#]+) : !frisk.async_task",
+                  r"func.call @task_wait(\1) : (i64) -> ()", text)
+    text = re.sub(r"^.*frisk\.sync_threads_in_block.*\n", "", text, flags=re.M)
+    text = text.replace("!frisk.async_task", "i64")
+    return text.replace('module {', 'module {\n'
+        'func.func private @task_issue(f32, i64) -> i64\n'
+        'func.func private @task_wait(i64)\n', 1)
+
+
+TASK_RUNTIME = r"""
+@task_next = internal global i64 1
+@task_values = internal global [4096 x float] zeroinitializer
+@task_addresses = internal global [4096 x i64] zeroinitializer
+define i64 @task_issue(float %v, i64 %address) {
+  %id = load i64, ptr @task_next
+  %next = add i64 %id, 1
+  store i64 %next, ptr @task_next
+  %vp = getelementptr [4096 x float], ptr @task_values, i64 0, i64 %id
+  %ap = getelementptr [4096 x i64], ptr @task_addresses, i64 0, i64 %id
+  store float %v, ptr %vp
+  store i64 %address, ptr %ap
+  ret i64 %id
+}
+define void @task_wait(i64 %id) {
+  %empty = icmp eq i64 %id, 0
+  br i1 %empty, label %done, label %complete
+complete:
+  %vp = getelementptr [4096 x float], ptr @task_values, i64 0, i64 %id
+  %ap = getelementptr [4096 x i64], ptr @task_addresses, i64 0, i64 %id
+  %v = load float, ptr %vp
+  %address = load i64, ptr %ap
+  %dst = inttoptr i64 %address to ptr
+  store float %v, ptr %dst
+  br label %done
+done:
+  ret void
+}
+"""
 
 
 def main_ir():
@@ -116,7 +165,11 @@ def execute_cpu(text, work, name):
          "--convert-func-to-llvm", "--convert-cf-to-llvm",
          "--reconcile-unrealized-casts", "-o", low])
     run([LLVM / "mlir-translate", "--mlir-to-llvmir", low, "-o", ll])
-    run([LLVM / "lli", ll])
+    runtime = work / "task-runtime.ll"
+    runtime.write_text(TASK_RUNTIME)
+    linked = work / (name + ".linked.ll")
+    run([LLVM / "llvm-link", ll, runtime, "-S", "-o", linked])
+    run([LLVM / "lli", linked])
 
 
 def main():
@@ -168,10 +221,10 @@ def main():
                 "    %x = memref.load",
                 "    %alias = memref.cast %a : memref<1xf32, 3> to memref<?xf32, 3>\n    %x = memref.load"),
             "missing-wait": fixture().replace(
-                "    frisk.wait_buffer_ready %a : memref<1xf32, 3>\n", ""),
+                "    frisk.wait_buffer_ready %task_a : !frisk.async_task\n", ""),
             "early-consumer": fixture().replace(
-                "    frisk.wait_buffer_ready %a : memref<1xf32, 3>",
-                "    %early = memref.load %a[%c0] : memref<1xf32, 3>\n    frisk.wait_buffer_ready %a : memref<1xf32, 3>"),
+                "    frisk.wait_buffer_ready %task_a : !frisk.async_task",
+                "    %early = memref.load %a[%c0] : memref<1xf32, 3>\n    frisk.wait_buffer_ready %task_a : !frisk.async_task"),
             "opaque-call": "func.func private @opaque()\n" + fixture().replace(
                 "    %p = arith.mulf", "    func.call @opaque() : () -> ()\n    %p = arith.mulf"),
             "recurrence-address": fixture().replace(

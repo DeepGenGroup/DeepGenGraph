@@ -26,6 +26,11 @@ def Frisk_BarrierType : Frisk_Type<"Barrier", "barrier"> {
   }];
 }
 
+// SSA identity of a block-collective asynchronous task, independent of storage.
+def Frisk_AsyncTaskType : Frisk_Type<"friskAsyncTask", "async_task"> {
+  let summary = "Completion dependency for one asynchronous task";
+}
+
 // 1. 定义统一的类型约束
 def Frisk_ScalarOrMemRefOrVector :
     AnyTypeOf<[AnyMemRef, AnyVectorOfNonZeroRank, F16, F32],

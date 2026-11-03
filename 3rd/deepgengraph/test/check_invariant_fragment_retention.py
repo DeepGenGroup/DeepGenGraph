@@ -21,8 +21,8 @@ func.func @{name}(%a: memref<256x{n}xf16, 1>, %b: memref<256x{n}xf16, 1>, %n: in
   {before}
   %result = affine.for %i = 0 to {upper} iter_args(%acc = %zero) -> vector<{n}xf16> {{
     %tile = memref.alloc() alignment = 16 : memref<256x{n}xf16, 3>
-    frisk.async_copy_gm_to_shm {source} to %tile {{alignment = 16 : i64}} : memref<256x{n}xf16, 1>, memref<256x{n}xf16, 3>
-    frisk.wait_buffer_ready %tile : memref<256x{n}xf16, 3>
+    %task_tile = frisk.async_copy_gm_to_shm {source} to %tile {{alignment = 16 : i64}} : memref<256x{n}xf16, 1>, memref<256x{n}xf16, 3> -> !frisk.async_task
+    frisk.wait_buffer_ready %task_tile : !frisk.async_task
 {reads}
     %v = vector.from_elements {values} : vector<{n}xf16>
     %scaled = arith.mulf %v, %scale : vector<{n}xf16>
@@ -79,10 +79,10 @@ def main():
     rejected(fixture(extra='%alias = memref.cast %tile : memref<256x16xf16, 3> to memref<?x16xf16, 3>'))
     rejected(fixture().replace('%tile[%tid, %c0]', '%tile[%i, %c0]'))
     # Readiness must precede every reader, and only one producer is permitted.
-    wait = '    frisk.wait_buffer_ready %tile : memref<256x16xf16, 3>\n'
+    wait = '    frisk.wait_buffer_ready %task_tile : !frisk.async_task\n'
     rejected(fixture().replace(wait, '').replace('    %scaled =', wait+'    %scaled ='))
-    copy = '    frisk.async_copy_gm_to_shm %b to %tile {alignment = 16 : i64} : memref<256x16xf16, 1>, memref<256x16xf16, 3>\n'
-    rejected(fixture().replace(copy, copy+copy))
+    copy = '    %task_tile = frisk.async_copy_gm_to_shm %b to %tile {alignment = 16 : i64} : memref<256x16xf16, 1>, memref<256x16xf16, 3> -> !frisk.async_task\n'
+    rejected(fixture().replace(copy, copy+copy.replace('%task_tile', '%second_task')))
     # A thread-dependent trip count cannot justify collective prologue motion.
     rejected(fixture(upper='%bound', before='%bound = arith.addi %tid, %c1 : index'))
     # Known block ranges can prove a dynamic uniform loop nonempty.
@@ -102,7 +102,7 @@ def main():
     # Two arbitrary operands share one budget; do not spend max-words per copy.
     two = fixture()
     begin, end = two.index('    %tile ='), two.index('    %next =')
-    second = re.sub(r'%(tile|x\d+|v|scaled)\b', lambda m: m[0]+'_b', two[begin:end]).replace('%b to', '%a to')
+    second = re.sub(r'%(tile|task_tile|x\d+|v|scaled)\b', lambda m: m[0]+'_b', two[begin:end]).replace('%b to', '%a to')
     two = two[:end] + second + two[end:]
     two = two.replace('    %next = arith.addf %acc, %scaled', '    %partial = arith.addf %acc, %scaled : vector<16xf16>\n    %next = arith.addf %partial, %scaled_b')
     for budget, count in [(8,1), (16,2)]:

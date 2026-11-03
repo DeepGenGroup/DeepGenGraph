@@ -22,8 +22,8 @@ lower-frisk-fragments          # 物理存储规划仍在实际线程访存暴�
 
 `!frisk.fragment<vector<...>, {...}>` 是当前 lane 的寄存器值。MMA 布局字典记录
 A/B/C 角色、指令与 lane/register 分布；空字典表示显式的线程局部片段。
-不定义 `frisk.fragment` / `frisk.fragment_yield` region Op。所有操作直接位于
-循环体中，通过普通 SSA 数据依赖连接。跨循环的 fragment 累加器使用
+不定义通用 `frisk.fragment` / `frisk.fragment_yield` 包装 region。计算操作通过
+普通 SSA 数据依赖连接；`mask_frag` 的 region 只保存原始逻辑坐标谓词。跨循环的 fragment 累加器使用
 `iter_args/yield`，没有原地修改寄存器 SSA 值。
 
 - `load_frag(memref, indices)` 返回 fragment，`store_frag(fragment, memref, indices)`
@@ -34,8 +34,23 @@ A/B/C 角色、指令与 lane/register 分布；空字典表示显式的线程�
   `tile_type` 和完整 tile layout，随后组合原有 view/stride/shared packing 处理。
 - `gemm_frag(a,b,acc)` 返回新 accumulator，校验 A/B/C 角色和指令。MMA 是
   collective，不能标为可推测执行。与 block `gemm` 分开命名以避免混淆其内存语义。
-- `elementwise_frag` 支持 add/sub/mul/div/max/exp2 和浮点 cast；广播、mask、
-  reduction、matrix read 直接生成原有标量/vector 操作，保留通信规则。
+- `elementwise_frag` 支持 add/sub/mul/div/max/exp2 和浮点 cast。
+- `broadcast_frag` 接收 scalar 或 fragment，只扩展单例轴；Fill 使用 fragment
+  广播及 `store_frag`，保留目的内存的写入语义。
+- `reduce_frag` 接收完整归约所需的寄存器 fragment，返回保留或删除归约轴的
+  fragment。保存 kind、dim、lane extent/stride、wave size，以及线程阶段的
+  归约片宽和输出片形状。它没有标量归约体，也不提前生成 shuffle。
+  归约覆盖多个基本片时将其作为一个 fragment 集合保留，避免提前分成 partial
+  sums 改变浮点结合顺序；thread lowering 仍先从单位元开始顺序累加全部本地元素，
+  然后进行跨 lane 归约。
+- `convert_layout_frag` 接收源布局 fragment，返回目标布局 fragment；保存逻辑
+  block 类型、完整源/目标布局和可选 shuffle plan。跨片/跨 lane 的重排整体保留，
+  到 thread lowering 才生成 shuffle 或 LDS scratch、leader 写入和两侧同步。
+  再次验证序列化 map 与布局字段一致，并逐 lane/register 验证 shuffle 的坐标。
+- `mask_frag` 保存一份原始逻辑坐标谓词、starts、布局和可选 fused addend；
+  uniform mask 分支和每个寄存器的谓词克隆均延后到 thread lowering。
+- Matrix read 和协作 DMA 仍使用既有存储/传输操作；地址、leader guard 和同步
+  不属于上述算子的标量计算展开。
 - `pack_frag/unpack_frag` 是显式的寄存器表示边界，不搬运数据、不改变 lane 分布，
   在下一阶段消除。不能用它们代替布局转换。
 
@@ -55,11 +70,12 @@ A/B/C 角色、指令与 lane/register 分布；空字典表示显式的线程�
 ```bash
 cmake --build 3rd/deepgengraph/build --target MyTest ThreadTilingTest -j 3
 python3 3rd/deepgengraph/test/check_typed_fragments.py
+python3 3rd/deepgengraph/test/check_semantic_fragments.py
 ```
 
 该测试包含序列化、幂等性、新旧线程 IR 对照、非法访问诊断，以及在 CPU 上执行
 fragment 访存和循环累加。non-causal 完整导出与调优命令位于
-`generated_ir/typed_fragment_noncausal/`；GPU 性能必须在目标设备复测。
+`generated_ir/semantic_fragment_noncausal/`（沿用最佳 non-causal 参数）；GPU 性能必须在目标设备复测。
 
 ## Fragment 层提前优化（2026-11-03）
 
@@ -78,8 +94,10 @@ vector，证明布局等价后把 computed tile 的 `load_frag` 改为 `extract_
   carrier 初始化来自 producer 时，在 consumer carrier 上覆盖当前 producer 片段。
   `load_frag` 支持一级 lookahead，携带值保持 FragmentType；尾部没有越界预取。
   typed 访存若与写入可能别名，尚未证明物理布局下的独立性时拒绝融合。
+  `reduce_frag`、`convert_layout_frag` 和带谓词 region 的 `mask_frag` 是保守调度边界，
+  不跨越尚未展开的 collective 或潜在同步重排。
 - `frisk-retain-invariant-fragments` 接受 typed load、extract/insert、pack/unpack
-  和 elementwise 链；仍要求唯一 owned allocation/copy/wait、不变 source、
+  和 elementwise/broadcast 链；仍要求唯一 owned allocation/copy/wait、不变 source、
   非空且 block-uniform 的外层循环。GEMM、shuffle、未知副作用不会附带提升。
   预算按最终跨循环存活值的 register payload 计算，支持 FragmentType。
 - `fuse-fragment-accumulator` 识别完整且不重叠的 MN producer 循环，以及同坐标的
@@ -92,7 +110,7 @@ vector，证明布局等价后把 computed tile 的 `load_frag` 改为 `extract_
 三个 Pass 的命中、拒绝、幂等性、carrier 覆盖，以及 CPU baseline/optimized
 数值对照。现有 typed Fragment、旧 fragment scheduling/fusion 和 retention
 测试继续适用。最佳 non-causal 同参数完整导出、阶段 IR 与数值模型验证见
-`generated_ir/fragment_level_optimized_noncausal/`；性能仍需在目标 DCU 复测。
+`generated_ir/semantic_fragment_noncausal/`；性能仍需在目标 DCU 复测。
 
 ## Fragment 组织
 
@@ -102,7 +120,8 @@ vector，证明布局等价后把 computed tile 的 `load_frag` 改为 `extract_
 结果使用 `ignoreDim` 选择对应的布局轴。
 
 `FragmentTileLoopNest` 对 fragment 网格按行优先展平，生成一个
-`affine.for`。循环体内的寄存器坐标静态展开：
+`affine.for`。fragment 阶段保留显式语义操作；以下寄存器坐标展开发生在
+`convert-fragment-to-thread` 及后续物化阶段：
 
 ```
 fragment = thread_creg * warp_repeat
@@ -113,9 +132,9 @@ thread_index[d] = origin[d] + register_offset[d]
 
 例如 thread tile 为 `vector<2x32xf32>`、fragment 为 `1x4`，外层循环
 执行 16 次，每次操作一个 `vector<1x4xf32>`。动态片段起点通过
-`vector.extract/insert` 实现；片段内算术仍使用 fragment vector。
+`extract_frag/insert_frag` 表达，到 thread 阶段才展开为 `vector.extract/insert`。
 
-Add/Sub/Mul/Div、Exp2、Cast、Zero、广播、Mask、Fill、Copy、Block、
+线程阶段的 Add/Sub/Mul/Div、Exp2、Cast、Zero、广播、Mask、Fill、Copy、Block、
 ConvertLayout 及 bridge 最终物化均使用该组织方式。Reduce 的输出轴
 与归约轴分别按 fragment 遍历，片段内仍按原顺序逐元素累加，warp shuffle
 发生在完整线程内归约之后。GEMM 使用显式的 MN 片段循环与内层 K 累加循环。A/B 在 K 片段使用处

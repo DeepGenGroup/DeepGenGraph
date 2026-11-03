@@ -94,7 +94,7 @@ struct PromoteGlobalToSharedAsyncPass
         alignment = attr.getInt();
       auto issue = b.create<frisk::AsyncCopyGmToShmOp>(loc, source, destination,
                                                      alignment);
-      auto wait = b.create<frisk::WaitBufferReadyOp>(loc, destination);
+      auto wait = b.create<frisk::WaitBufferReadyOp>(loc, issue.getToken());
       if (schedule.count(copy)) {
         schedule[issue] = schedule.lookup(copy);
         schedule[wait] = schedule.lookup(copy);
@@ -122,9 +122,10 @@ struct LowerFriskAsyncToSyncPass
     return "Select ordinary tile copies and block synchronization before thread tiling";
   }
   void getDependentDialects(DialectRegistry &registry) const final {
-    registry.insert<frisk::FriskDialect, gpu::GPUDialect>();
+    registry.insert<frisk::FriskDialect, gpu::GPUDialect, arith::ArithDialect>();
   }
   void runOnOperation() final {
+    if (failed(frisk::validateAsyncTaskTokens(getOperation()))) return signalPassFailure();
     SmallVector<Operation *> ops;
     getOperation().walk([&](Operation *op) {
       if (isa<frisk::AsyncCopyGmToShmOp, frisk::WaitBufferReadyOp>(op))
@@ -146,14 +147,26 @@ struct LowerFriskAsyncToSyncPass
         copy->setAttr("frisk.explicit_wait", b.getUnitAttr());
       } else {
         auto wait = cast<frisk::WaitBufferReadyOp>(op);
-        bool packed = llvm::any_of(wait.getBuffer().getUsers(), [](Operation *user) {
-          return isa<frisk::AsyncCopyGmToShmOp>(user) && user->hasAttr("frisk.force_sync");
+        SmallVector<frisk::AsyncCopyGmToShmOp> issues;
+        if (failed(frisk::collectAsyncTaskIssues(wait.getToken(), issues))) {
+          wait.emitError("cannot resolve async task for synchronous lowering");
+          return signalPassFailure();
+        }
+        bool packed = llvm::any_of(issues, [](frisk::AsyncCopyGmToShmOp issue) {
+          return issue->hasAttr("frisk.source_map");
         });
-        if (packed) b.create<gpu::BarrierOp>(op->getLoc());
-        else b.create<frisk::SyncThreadsInBlockOp>(op->getLoc());
+        // Packed tasks still need late permutation-aware lowering and their wait.
+        if (packed) continue;
+        b.create<frisk::SyncThreadsInBlockOp>(op->getLoc());
+      }
+      if (auto issue = dyn_cast<frisk::AsyncCopyGmToShmOp>(op)) {
+        Value completed = b.create<frisk::AsyncTaskCompletedOp>(op->getLoc(),
+            frisk::friskAsyncTaskType::get(&getContext()));
+        issue.getToken().replaceAllUsesWith(completed);
       }
       op->erase();
     }
+    if (failed(frisk::lowerAsyncTaskTokens(getOperation()))) signalPassFailure();
   }
 };
 } // namespace
