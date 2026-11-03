@@ -943,6 +943,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // Schedule against fragment SHM reads/writes and task completion before
+  // lowering. Final packing/scheduling below recomputes physical lifetimes.
+  AddFuncPass(frisk::createScheduleAsyncCopiesPass());
+  AddFuncPass(frisk::createAnalyzeShmLivenessPass());
   llvm::outs() << "\n---- after fragment-level optimization -----\n";
   llvm::outs().flush(); src->dump();
   AddFuncPass(mlir::frisk::createConvertFragmentToThreadIRPass());

@@ -91,7 +91,23 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    build/test/ThreadTilingTest input.mlir --frisk-sink-wait-buffer-ready \
      --verify-each -o scheduled.mlir
    ```
-5. After fragment inlining, `frisk-schedule-async-copies` moves issues earlier
+5. `frisk-schedule-async-copies` also runs at the typed fragment boundary,
+   after retention and before `convert-fragment-to-thread`. `load_frag` and
+   `store_frag` report reads/writes on their specific memref operands. The
+   logical storage analysis follows aliases and task completion; register uses
+   of a loaded fragment do not extend the source LDS lifetime. Early motion
+   requires an understood owned destination and block-uniform control flow,
+   stays within the block, preserves explicit pipeline schedules and treats
+   deferred thread-tile bridges as boundaries. Early waits never cross another
+   DMA launch. No LDS pool is materialized while typed fragments or bridges
+   remain. Inspect either logical or physical lifetimes without changing IR:
+
+   ```bash
+   build/test/ThreadTilingTest input.mlir --frisk-schedule-async-copies \
+     --frisk-analyze-shm-liveness --verify-each -o scheduled.mlir
+   ```
+
+   After thread finalization and physical packing, the same scheduler moves issues earlier
    and waits toward consumers within the same block. Pure descriptor setup and
    static owned LDS allocations move with the issue. Alias checks protect source writes and destination
    reads/writes; barriers, other async operations and unknown effects bound
@@ -105,9 +121,17 @@ alignment (1 or 2 are accepted and select the ordinary-copy fallback).
    fragment lowering establishes them before scheduling and checks again after.
    All named waits and barriers remain, with wait count zero.
    This happens **before** storage reuse, so pending transfers extend
-   the allocation lifetime. A matching same-block, exact-descriptor wait is
-   required for async storage reuse; incomplete/conditional completion stays
-   conservative. Collective loop backedges and storage handoffs retain barriers
+   the allocation lifetime. Storage analysis follows task SSA forward through
+   affine/SCF loop carriers and branch yields, independently of destination
+   aliases. A least-fixed-point completion proof requires both next-iteration
+   consumption and exit drains for carried tasks, including zero-trip init
+   paths and every slot of a multi-stage FIFO. Branch-local issues may yield
+   their task to a wait outside the branch; a conditional wait on an outer
+   task does not prove completion. A select that can discard a pending task,
+   an unconsumed cycle or an unknown escape stays conservative. Cross-iteration
+   tasks keep storage live across the entire loop and through its exit drains;
+   they never qualify for iteration-local reuse. Physical analysis is rebuilt
+   after the final schedule. Collective loop backedges and storage handoffs retain barriers
    to protect previous readers. This is intra-iteration scheduling, not
    automatic double buffering or cross-iteration pipelining.
 6. `frisk-lower-async-copy` runs at the start of `secondLowering`, after

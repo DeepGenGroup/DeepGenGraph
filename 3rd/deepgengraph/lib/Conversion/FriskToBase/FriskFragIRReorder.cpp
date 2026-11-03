@@ -719,17 +719,44 @@ private:
   AliasAnalysis &aliases;
 };
 
-// Schedule only within a block, after physical layouts and all accesses are
-// visible, but BEFORE storage reuse. Thus an early issue extends the live range
-// that the allocator sees. Never move an issue after allocation against a stale
-// reuse plan, and never speculate across a barrier or an unknown effect.
+static bool hasExplicitSchedule(Operation *op) {
+  for (; op; op = op->getParentOp())
+    for (StringRef name : {"pipeline.stage", "pipeline.order",
+                          "pipeline.scheduled", "pipeline_slot"})
+      if (op->hasAttr(name))
+        return true;
+  return false;
+}
+
+// Schedule within a block, at the logical fragment boundary and again after
+// physical packing, always BEFORE reuse. Logical scheduling uses the storage
+// analysis to require owned, understood destinations and proven task completion.
+// It never crosses DMA launches with a wait: that needs the final packet proof.
+// Physical reuse recomputes all lifetimes after the final schedule.
 static void scheduleAsyncCopies(func::FuncOp kernel) {
+  bool logical = false, pooled = false;
+  kernel.walk([&](Operation *op) {
+    logical |= isa<ToThreadTileOp, FromThreadTileOp>(op) ||
+        llvm::any_of(op->getOperandTypes(), [](Type t) { return isa<FragmentType>(t); }) ||
+        llvm::any_of(op->getResultTypes(), [](Type t) { return isa<FragmentType>(t); });
+    pooled |= op->hasAttr("frisk.shm_pool");
+  });
+  if (pooled)
+    return; // Never invalidate an already materialized storage-reuse plan.
+  llvm::DenseSet<Value> understoodDestinations;
+  if (logical) {
+    auto liveness = analyzeShmLiveness(kernel);
+    for (const auto &buffer : liveness.buffers)
+      if (buffer.reusable)
+        understoodDestinations.insert(buffer.aliases.begin(), buffer.aliases.end());
+  }
   AliasAnalysis aliases(kernel);
   DirectDMAWaitMotion directWaitMotion(aliases);
   auto independent = [&](Operation *op, AsyncCopyGmToShmOp issue) {
     return !op->walk([&](Operation *nested) {
       if (isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp,
-              AsyncCopyGmToShmOp>(nested)) return WalkResult::interrupt();
+              AsyncCopyGmToShmOp, ToThreadTileOp, FromThreadTileOp>(nested) ||
+          hasExplicitSchedule(nested)) return WalkResult::interrupt();
       if (isa<affine::AffineForOp, scf::ForOp, scf::IfOp>(nested))
         return WalkResult::advance(); // Inspect their bodies, not just operands.
       auto effects = dyn_cast<MemoryEffectOpInterface>(nested);
@@ -751,6 +778,10 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
   SmallVector<AsyncCopyGmToShmOp> issues;
   kernel.walk([&](AsyncCopyGmToShmOp op) { issues.push_back(op); });
   for (auto issue : issues) {
+    if (hasExplicitSchedule(issue) ||
+        (logical && (!understoodDestinations.contains(issue.getDst()) ||
+                     !isInBlockUniformControlFlow(issue))))
+      continue;
     // Do not reschedule manually staged copies before their slot selection or
     // across iterations. Descriptor dependencies bound the motion naturally.
     llvm::SetVector<Operation *> setup;
@@ -762,7 +793,9 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
       auto allocation = dyn_cast<memref::AllocOp>(def);
       bool staticShared = allocation && allocation.getType().hasStaticShape() &&
           allocation.getType().getMemorySpaceAsInt() == 3 && allocation->getNumOperands() == 0;
-      if (setup.size() >= 128 || def->getNumRegions() || (!isPure(def) && !staticShared)) {
+      if (setup.size() >= 128 || def->getNumRegions() ||
+          isa<ToThreadTileOp, FromThreadTileOp>(def) || hasExplicitSchedule(def) ||
+          (!isPure(def) && !staticShared)) {
         anchors.insert(def);
         return;
       }
@@ -790,7 +823,7 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
     // remains a hard boundary even if it does not name the copied buffer.
     auto wait = dyn_cast_or_null<WaitBufferReadyOp>(issue->getNextNode());
     // Hoisting normally leaves wait at its original location; find its exact
-    // same-block descriptor match, stopping at a second issue into that tile.
+    // same-block token match, stopping at a second issue into that tile.
     if (!wait || wait.getToken() != issue.getToken()) {
       wait = {};
       for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
@@ -800,10 +833,10 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
             other && other.getDst() == issue.getDst()) break;
       }
     }
-    if (wait)
+    if (wait && !hasExplicitSchedule(wait))
       while (Operation *next = wait->getNextNode()) {
         if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(next)) {
-          if (!directWaitMotion.canCross(wait, issue, copy))
+          if (logical || !directWaitMotion.canCross(wait, issue, copy))
             break;
         } else if (next->hasTrait<OpTrait::IsTerminator>() ||
                    !independent(next, issue)) {
@@ -818,8 +851,20 @@ class ScheduleAsyncCopies : public PassWrapper<ScheduleAsyncCopies, OperationPas
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleAsyncCopies)
   StringRef getArgument() const final { return "frisk-schedule-async-copies"; }
-  StringRef getDescription() const final { return "Schedule tile DMA against physical memory dependencies"; }
+  StringRef getDescription() const final { return "Schedule tile DMA against logical or physical storage dependencies before reuse"; }
   void runOnOperation() final { scheduleAsyncCopies(getOperation()); }
+};
+
+class AnalyzeShmLiveness : public PassWrapper<AnalyzeShmLiveness, OperationPass<func::FuncOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AnalyzeShmLiveness)
+  StringRef getArgument() const final { return "frisk-analyze-shm-liveness"; }
+  StringRef getDescription() const final { return "Report logical or physical SHM lifetimes without allocating storage"; }
+  void runOnOperation() final {
+    llvm::errs() << "SHM liveness @" << getOperation().getSymName() << '\n';
+    dumpShmLiveness(analyzeShmLiveness(getOperation()), llvm::errs());
+    markAllAnalysesPreserved();
+  }
 };
 
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
@@ -897,5 +942,8 @@ std::unique_ptr<Pass> createLowerFriskFragmentsPass() {
 }
 std::unique_ptr<Pass> createScheduleAsyncCopiesPass() {
   return std::make_unique<ScheduleAsyncCopies>();
+}
+std::unique_ptr<Pass> createAnalyzeShmLivenessPass() {
+  return std::make_unique<AnalyzeShmLiveness>();
 }
 } // namespace mlir::frisk

@@ -1241,15 +1241,16 @@ def Frisk_FromThreadTileOp: Frisk_Op<"from_threadTile", [Pure]> {
 
 // Explicit block -> fragment -> thread IR. Coordinates count fragments, not
 // elements. Memory operations carry the same layout recipe as tile bridges.
-def Frisk_LoadFragOp : Frisk_Op<"load_frag", [MemoryEffects<[MemRead]>]> {
-  let arguments = (ins AnyMemRef:$source, Variadic<Index>:$indices,
+def Frisk_LoadFragOp : Frisk_Op<"load_frag", []> {
+  let arguments = (ins Arg<AnyMemRef, "storage read into registers", [MemRead]>:$source, Variadic<Index>:$indices,
                        TypeAttrOf<AnyVectorOfNonZeroRank>:$tile_type);
   let results = (outs Frisk_FragmentType:$result);
   let assemblyFormat = "$source `[` $indices `]` attr-dict `:` type($source) `->` type($result)";
   let hasVerifier = 1;
 }
-def Frisk_StoreFragOp : Frisk_Op<"store_frag", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (ins Frisk_FragmentType:$value, AnyMemRef:$destination,
+def Frisk_StoreFragOp : Frisk_Op<"store_frag", []> {
+  let arguments = (ins Frisk_FragmentType:$value,
+                       Arg<AnyMemRef, "storage written from registers", [MemWrite]>:$destination,
                        Variadic<Index>:$indices, TypeAttrOf<AnyVectorOfNonZeroRank>:$tile_type);
   let assemblyFormat = "$value `,` $destination `[` $indices `]` attr-dict `:` type($value) `,` type($destination)";
   let hasVerifier = 1;

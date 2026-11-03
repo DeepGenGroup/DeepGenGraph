@@ -24,6 +24,7 @@ std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();
 std::unique_ptr<mlir::Pass> createPromoteGemmMatrixLoadsPass(std::string wmmaLayout = "auto");
 std::unique_ptr<mlir::Pass> createLowerFriskAsyncToSyncPass();
 std::unique_ptr<mlir::Pass> createScheduleAsyncCopiesPass();
+std::unique_ptr<mlir::Pass> createAnalyzeShmLivenessPass();
 std::unique_ptr<mlir::Pass> createSinkWaitBufferReadyPass();
 void sinkWaitBufferReady(mlir::func::FuncOp kernel);
 // Expose register carriers and typed fragment reads without scalarizing them

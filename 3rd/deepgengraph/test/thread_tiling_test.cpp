@@ -110,6 +110,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createPromoteGemmMatrixLoadsPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncToSyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createScheduleAsyncCopiesPass(); });
+  mlir::registerPass([] { return mlir::frisk::createAnalyzeShmLivenessPass(); });
   mlir::registerPass([] { return mlir::frisk::createSinkWaitBufferReadyPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));

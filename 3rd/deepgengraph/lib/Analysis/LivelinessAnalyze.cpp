@@ -34,8 +34,8 @@ bool isBarrier(Operation *op) {
   return isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp>(op);
 }
 
-// Only pair an issue with an exact-descriptor wait in the same block. A wait
-// in a conditional/next iteration is not a completion proof for storage reuse.
+// Iteration-local full-overwrite proofs still require completion in this block;
+// the more general task-flow analysis below must not imply iteration locality.
 bool hasLocalCompletion(AsyncCopyGmToShmOp issue) {
   for (Operation *next = issue->getNextNode(); next; next = next->getNextNode()) {
     if (auto wait = dyn_cast<WaitBufferReadyOp>(next);
@@ -44,6 +44,104 @@ bool hasLocalCompletion(AsyncCopyGmToShmOp issue) {
         copy && copy.getDst() == issue.getDst()) return false;
   }
   return false;
+}
+
+// Follow task identity forward, independently of destination descriptor aliases.
+// Provenance alone is a may-analysis: finding one reachable wait does not prove
+// completion on every execution. A loop carrier must be drained both on its
+// next iteration and on exit (including the zero-trip path for an init).
+// Solve these AND/OR obligations to a least fixed point: an unconsumed cycle
+// cannot prove itself complete. FIFO pipelines with waits on the head and all
+// exit slots are supported without treating different iterations as sequential.
+bool collectTaskLifetime(AsyncCopyGmToShmOp issue,
+                         SmallVectorImpl<Operation *> &accesses,
+                         bool &acrossIterations) {
+  SmallVector<Value> work{issue.getToken()};
+  DenseSet<Value> seen, complete;
+  DenseMap<Value, SmallVector<SmallVector<Value, 2>>> obligations;
+  for (unsigned i = 0; i < work.size(); ++i) {
+    Value value = work[i];
+    if (!seen.insert(value).second)
+      continue;
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      accesses.push_back(user);
+      auto forward = [&](std::initializer_list<Value> targets) {
+        // A use in a nested conditional/zero-trip loop may never execute.
+        // Track its possible lifetime, but only unconditional forwarding can
+        // discharge completion. Branch-local producers still forward through
+        // their own yield, and loop inits explicitly cover the zero-trip path.
+        if (user->getBlock() == value.getParentBlock())
+          obligations[value].emplace_back(targets);
+        work.append(targets.begin(), targets.end());
+      };
+      if (auto wait = dyn_cast<WaitBufferReadyOp>(user)) {
+        // A conditional wait on an outer token is not a completion guarantee.
+        if (wait->getBlock() == value.getParentBlock())
+          complete.insert(value);
+        continue;
+      }
+      if (auto loop = dyn_cast<scf::ForOp>(user)) {
+        unsigned first = loop->getNumOperands() - loop.getInitArgs().size();
+        if (use.getOperandNumber() < first)
+          return false;
+        unsigned n = use.getOperandNumber() - first;
+        forward({loop.getRegionIterArgs()[n], loop.getResult(n)});
+        acrossIterations = true;
+        continue;
+      }
+      if (auto loop = dyn_cast<affine::AffineForOp>(user)) {
+        unsigned first = loop->getNumOperands() - loop.getInits().size();
+        if (use.getOperandNumber() < first)
+          return false;
+        unsigned n = use.getOperandNumber() - first;
+        forward({loop.getRegionIterArgs()[n], loop.getResult(n)});
+        acrossIterations = true;
+        continue;
+      }
+      if (isa<scf::YieldOp, affine::AffineYieldOp>(user)) {
+        Operation *parent = user->getParentOp();
+        unsigned n = use.getOperandNumber();
+        if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+          forward({loop.getRegionIterArgs()[n], loop.getResult(n)});
+          acrossIterations = true;
+        } else if (auto loop = dyn_cast<affine::AffineForOp>(parent)) {
+          forward({loop.getRegionIterArgs()[n], loop.getResult(n)});
+          acrossIterations = true;
+        } else if (isa<scf::IfOp, affine::AffineIfOp>(parent)) {
+          // Whenever this branch's issue executes, this yield forwards it.
+          forward({parent->getResult(n)});
+        } else {
+          return false;
+        }
+        continue;
+      }
+      if (auto select = dyn_cast<arith::SelectOp>(user)) {
+        // Track either arm for lifetime, but a select can discard a pending
+        // task. It proves completion only if both arms are this same task.
+        work.push_back(select.getResult());
+        if (select.getTrueValue() == value && select.getFalseValue() == value)
+          forward({select.getResult()});
+        continue;
+      }
+      return false; // Task escapes or has an unknown consumer.
+    }
+  }
+  bool changed;
+  do {
+    changed = false;
+    for (auto &entry : obligations) {
+      if (complete.contains(entry.first))
+        continue;
+      if (llvm::any_of(entry.second, [&](const auto &targets) {
+            return llvm::all_of(targets, [&](Value v) { return complete.contains(v); });
+          })) {
+        complete.insert(entry.first);
+        changed = true;
+      }
+    }
+  } while (changed);
+  return complete.contains(issue.getToken());
 }
 
 // These regions finish synchronously. async.execute and parallel regions must
@@ -67,7 +165,10 @@ bool isSynchronousAccess(Operation *op) {
   // thread tiling has made their accesses explicit.
   if (auto read = dyn_cast<ReadMatrixFromShmOp>(op))
     return !read.isBlockForm();
-  return isa<memref::LoadOp, memref::StoreOp, memref::CopyOp,
+  // Fragment loads finish the SHM read here; uses of the register result do
+  // not keep its source storage alive. Fragment stores write their destination.
+  return isa<LoadFragOp, StoreFragOp,
+             memref::LoadOp, memref::StoreOp, memref::CopyOp,
              memref::DimOp, memref::AssumeAlignmentOp,
              affine::AffineLoadOp, affine::AffineStoreOp,
              affine::AffineVectorLoadOp, affine::AffineVectorStoreOp,
@@ -101,6 +202,12 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
         info.lastUse = std::max(info.lastUse, position);
         hasUse = true;
       };
+      if (auto view = dyn_cast<BufferViewOp>(user)) {
+        if (view.getSource() == value) {
+          worklist.push_back(view.getResult());
+          continue;
+        }
+      }
       if (auto view = dyn_cast<ViewLikeOpInterface>(user)) {
         if (view.getViewSource() == value && user->getNumRegions() == 0 &&
             isMemoryEffectFree(user)) {
@@ -149,17 +256,18 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
       }
       if (!isSynchronousAccess(user)) {
         if (auto issue = dyn_cast<AsyncCopyGmToShmOp>(user);
-            issue && use.getOperandNumber() == 1 && hasLocalCompletion(issue)) {
+            issue && use.getOperandNumber() == 1) {
           recordUse();
-          for (Operation *consumer : issue.getToken().getUsers()) {
-            auto wait = dyn_cast<WaitBufferReadyOp>(consumer);
-            if (!wait || wait->getBlock() != issue->getBlock()) {
-              info.skipReason = "async task escapes local completion scope";
-              return;
-            }
-            Operation *completion = getTopLevelUser(wait, entry);
+          SmallVector<Operation *> taskAccesses;
+          if (!collectTaskLifetime(issue, taskAccesses, info.asyncAcrossIterations)) {
+            info.skipReason = "async task has no guaranteed completion or escapes";
+            return;
+          }
+          for (Operation *access : taskAccesses) {
+            Operation *completion = getTopLevelUser(access, entry);
             if (!completion) { info.skipReason = "unsupported task completion scope"; return; }
-            info.accesses.push_back(wait);
+            info.accesses.push_back(access);
+            info.firstUse = std::min(info.firstUse, positions.lookup(completion));
             info.lastUse = std::max(info.lastUse, positions.lookup(completion));
           }
           continue;
@@ -317,7 +425,7 @@ bool fullyOverwrites(Operation *op, const ShmLiveInterval &info,
 }
 
 void findIterationLocalLoops(ShmLiveInterval &info, func::FuncOp kernel) {
-  if (!info.reusable || info.aliases.size() != 1)
+  if (!info.reusable || info.aliases.size() != 1 || info.asyncAcrossIterations)
     return; // Alias/iter_arg cases retain the existing whole-loop lifetime.
   Block *entry = &kernel.getBody().front();
   for (Operation *loop = info.accesses.front()->getParentOp();
@@ -502,6 +610,8 @@ void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os) {
       os << ", live [" << info.firstUse << ", " << info.lastUse << "]";
     else
       os << ", skipped: " << info.skipReason;
+    if (info.asyncAcrossIterations)
+      os << ", async across iterations";
     os << '\n';
   }
 }
@@ -590,11 +700,13 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
     *stats = {};
   if (!kernel->hasAttr("thread_num"))
     return false;
-  bool hasBridges = false;
+  bool hasDeferredStorage = false;
   kernel.walk([&](Operation *op) {
-    hasBridges |= isa<ToThreadTileOp, FromThreadTileOp>(op);
+    hasDeferredStorage |= isa<ToThreadTileOp, FromThreadTileOp>(op) ||
+        llvm::any_of(op->getOperandTypes(), [](Type t) { return isa<FragmentType>(t); }) ||
+        llvm::any_of(op->getResultTypes(), [](Type t) { return isa<FragmentType>(t); });
   });
-  if (hasBridges)
+  if (hasDeferredStorage)
     return false;
   auto liveness = analyzeShmLiveness(kernel);
   auto plan = planShmReuse(liveness);

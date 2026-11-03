@@ -15,6 +15,8 @@ frisk-frag-ir-reorder          # typed fragment 循环融合、load_frag lookahe
 canonicalize / cse
 frisk-simplify-loop-control    # 可选：展开已标记的小循环
 frisk-retain-invariant-fragments # 可选：按 max-words 预算保留 operand
+frisk-schedule-async-copies     # 逻辑 SHM 访问与 task 完成约束下的保守调度
+frisk-analyze-shm-liveness     # 输出调度后的逻辑生命周期，不分配存储
 convert-fragment-to-thread     # 不重新推断布局；只消费序列化的 IR
 finalize-thread-tiling
 lower-frisk-fragments          # 物理存储规划仍在实际线程访存暴露后
@@ -78,6 +80,18 @@ fragment 访存和循环累加。non-causal 完整导出与调优命令位于
 `generated_ir/semantic_fragment_noncausal/`（沿用最佳 non-causal 参数）；GPU 性能必须在目标设备复测。
 
 ## Fragment 层提前优化（2026-11-03）
+
+typed fragment 优化结束前运行 `frisk-schedule-async-copies`，根据逻辑 SHM
+生命周期保守提前 issue、下沉同 block 的直接 token wait。`load_frag` 和
+`store_frag` 的内存效应绑定具体 source/destination；load 返回寄存器值，其
+后续计算不延长源 SHM 的生命周期。`frisk-analyze-shm-liveness` 可独立输出
+分析结果，不修改 IR。任务完成分析支持 affine/SCF 的 `iter_args/yield`、
+分支 yield 和多槽 token FIFO，要求循环头消费与所有尾部 drain；缺少完成
+证明时禁用对应 buffer 的复用。跨迭代任务保守覆盖整个循环及出口 wait。
+
+此阶段不生成物理 LDS pool，也不把 wait 移过另一条 DMA。线程访问展开和
+shared packing 后仍重新调度、重新分析，再落实共享存储复用与交接 barrier。
+测试：`python3 3rd/deepgengraph/test/check_fragment_async_liveness.py`。
 
 上述三个优化 Pass 现在在 MyTest 的 typed Fragment 阶段执行。独立运行也支持
 相同的序列化 IR；保留原 scalar/vector matcher，供旧流程与回归测试使用。

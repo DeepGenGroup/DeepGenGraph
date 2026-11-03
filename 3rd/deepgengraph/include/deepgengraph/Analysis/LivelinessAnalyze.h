@@ -22,6 +22,7 @@ struct ShmLiveInterval {
   uint64_t alignment = 1;
   unsigned firstUse = 0;
   unsigned lastUse = 0; // Inclusive; equal endpoints interfere.
+  bool asyncAcrossIterations = false;
   bool reusable = false;
   std::string skipReason;
 };
@@ -54,11 +55,15 @@ struct ShmReuseStats {
   unsigned insertedBarriers = 0;
 };
 
-/// Call after pipeline scheduling, LowerInfo inference and thread tiling. Handles
+/// Supports logical fragment accesses as well as finalized physical accesses.
+/// Call again after scheduling, layout lowering and packing before physical reuse.
+/// Handles
 /// static identity-layout memref.alloc in address space 3; follows views, selects,
-/// if results and for iter_args. Unknown/escaping/async uses are excluded. Multi-
+/// if results and for iter_args. Async task completion follows structured SSA
+/// carriers, including loop backedges and exit drains. Unknown/escaping uses or
+/// tasks without a guaranteed completion are excluded. Multi-
 /// block functions and accesses inside unsupported regions are also excluded.
-/// For full coverage, run after FinalizeThreadTiling: outstanding Frisk bridges
+/// For full physical coverage, run after FinalizeThreadTiling: outstanding Frisk bridges
 /// defer physical accesses and are intentionally treated as unsupported uses.
 /// Analysis/plan contain IR handles and must be recomputed after modifying IR.
 ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel);
@@ -84,8 +89,9 @@ bool isInBlockUniformControlFlow(Operation *op);
 /// Applies only if bytes decrease. Returns true iff IR changed. Existing pool
 /// allocations are excluded, making repeated calls safe. Loop-body barriers
 /// require provably block-uniform loop bounds and collective enclosing control
-/// flow. Conditional regions remain atomic. Unfinalized thread-tile bridges
-/// defer pooling, so an early pool cannot lock out later scratch allocations.
+/// flow. Conditional regions remain atomic. Typed fragments and unfinalized
+/// thread-tile bridges defer pooling, so an early pool cannot lock out later
+/// scratch allocations or fix storage before physical scheduling.
 bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats = nullptr);
 
 } // namespace mlir::frisk
