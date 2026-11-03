@@ -897,7 +897,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   if (copyMode == "sync")
     AddFuncPass(frisk::createLowerFriskAsyncToSyncPass());
-  auto tiling = mlir::frisk::createConvertFriskBaseToThreadLevelIRPass();
+  auto tiling = mlir::frisk::createConvertFriskBaseToFragmentIRPass();
   std::string tilingOptions = std::string("pack-shared-operands=") +
       (packSharedEnabled ? "true" : "false") + " wmma-layout=" + wmmaLayout.str();
   tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
@@ -912,7 +912,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
           })))
     return 1;
   AddFuncPass(std::move(tiling));
-  llvm::outs() << "\n---------- after createConvertFriskBaseToThreadLevelIRPass ---------\n"; llvm::outs().flush();src->dump();
+  llvm::outs() << "\n---------- after convert-friskbase-to-fragment ---------\n"; llvm::outs().flush();src->dump();
+
+  AddFuncPass(mlir::frisk::createConvertFragmentToThreadIRPass());
+  llvm::outs() << "\n---------- after convert-fragment-to-thread ---------\n"; llvm::outs().flush(); src->dump();
 
   AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
   // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
@@ -924,7 +927,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     fragmentPM.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
     // Resolve bridges and simplify indices before proving fragment dependences.
     fragmentPM.addNestedPass<func::FuncOp>(frisk::createFriskFragIRReorderPass());
-    // Preserve fragment regions in the scheduling dump. Lower them separately.
+    // Dump the flat SSA schedule before storage planning and late unrolling.
 
     if (failed(fragmentPM.run(*src)))
       return 1;
@@ -953,8 +956,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
   AddFuncPass(frisk::createLowerFriskFragmentsPass());
-  // Affine LICM only inspects direct operands of unknown region operations;
-  // run it after inlining fragment regions so their captured values are visible.
+  // Preserve fragment scheduling opportunities, then hoist invariant storage
+  // and address calculations after physical storage planning and unrolling.
   AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
   AddFuncPass(mlir::affine::createAffineLoopInvariantCodeMotionPass());
   AddFuncPass(mlir::affine::createAffineLoopNormalizePass(true));

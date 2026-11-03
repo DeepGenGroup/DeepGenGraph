@@ -1228,23 +1228,61 @@ def Frisk_FromThreadTileOp: Frisk_Op<"from_threadTile", [Pure]> {
 }
 
 
-// A scheduling unit executes exactly once. Keep its scalar implementation
-// encapsulated until fragment fusion/pipelining has finished. It deliberately
-// has no inlining canonicalizer and is not speculatable across control flow.
-def Frisk_FragmentOp : Frisk_Op<"fragment", [SingleBlock, NoRegionArguments,
-    RecursiveMemoryEffects]> {
-  let summary = "One fragment load, computation, gather or store";
-  let arguments = (ins StrAttr:$kind);
-  let results = (outs Variadic<AnyType>:$values);
-  let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = "$kind attr-dict-with-keyword (`->` `(` type($values)^ `)`)? $body";
+// Explicit block -> fragment -> thread IR. Coordinates count fragments, not
+// elements. Memory operations carry the same layout recipe as tile bridges.
+def Frisk_LoadFragOp : Frisk_Op<"load_frag", [MemoryEffects<[MemRead]>]> {
+  let arguments = (ins AnyMemRef:$source, Variadic<Index>:$indices,
+                       TypeAttrOf<AnyVectorOfNonZeroRank>:$tile_type);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source `[` $indices `]` attr-dict `:` type($source) `->` type($result)";
   let hasVerifier = 1;
 }
-
-def Frisk_FragmentYieldOp : Frisk_Op<"fragment_yield", [Pure, Terminator,
-    HasParent<"FragmentOp">]> {
-  let arguments = (ins Variadic<AnyType>:$values);
-  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+def Frisk_StoreFragOp : Frisk_Op<"store_frag", [MemoryEffects<[MemWrite]>]> {
+  let arguments = (ins Frisk_FragmentType:$value, AnyMemRef:$destination,
+                       Variadic<Index>:$indices, TypeAttrOf<AnyVectorOfNonZeroRank>:$tile_type);
+  let assemblyFormat = "$value `,` $destination `[` $indices `]` attr-dict `:` type($value) `,` type($destination)";
+  let hasVerifier = 1;
+}
+def Frisk_ExtractFragOp : Frisk_Op<"extract_frag", [Pure]> {
+  let arguments = (ins AnyVectorOfNonZeroRank:$source, Variadic<Index>:$indices);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source `[` $indices `]` attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+def Frisk_InsertFragOp : Frisk_Op<"insert_frag", [Pure,
+    AllTypesMatch<["destination", "result"]>]> {
+  let arguments = (ins Frisk_FragmentType:$value, AnyVectorOfNonZeroRank:$destination,
+                       Variadic<Index>:$indices);
+  let results = (outs AnyVectorOfNonZeroRank:$result);
+  let assemblyFormat = "$value `,` $destination `[` $indices `]` attr-dict `:` type($value) `into` type($destination)";
+  let hasVerifier = 1;
+}
+def Frisk_PackFragOp : Frisk_Op<"pack_frag", [Pure]> {
+  let arguments = (ins AnyVectorOfNonZeroRank:$source);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+def Frisk_UnpackFragOp : Frisk_Op<"unpack_frag", [Pure]> {
+  let arguments = (ins Frisk_FragmentType:$source);
+  let results = (outs AnyVectorOfNonZeroRank:$result);
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+def Frisk_GemmFragOp : Frisk_Op<"gemm_frag", [MemoryEffects<[]>,
+    AllTypesMatch<["acc", "result"]>]> {
+  let arguments = (ins Frisk_FragmentType:$a, Frisk_FragmentType:$b,
+                       Frisk_FragmentType:$acc, StrAttr:$inst_name,
+                       StrAttr:$inst_constraints);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$a `,` $b `,` `acc` `=` $acc attr-dict `:` type($a) `,` type($b) `,` type($acc) `->` type($result)";
+  let hasVerifier = 1;
+}
+def Frisk_ElementwiseFragOp : Frisk_Op<"elementwise_frag", [Pure]> {
+  let arguments = (ins StrAttr:$kind, Variadic<Frisk_FragmentType>:$inputs);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$kind $inputs attr-dict `:` functional-type($inputs, $result)";
+  let hasVerifier = 1;
 }
 
 #endif // FRISK_OPS

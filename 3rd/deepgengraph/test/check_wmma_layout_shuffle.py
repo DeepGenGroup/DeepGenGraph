@@ -35,10 +35,13 @@ def gemm(m, n, k, threads):
 
 
 def execute_shuffle(ir, threads=256):
-    # Take the compute region containing the layout shuffles, and identify its
-    # input fragment from the actual vector.extract operands.
-    start = ir.rfind('frisk.fragment "compute"', 0, ir.index("gpu.shuffle"))
-    body = ir[start:ir.index("frisk.fragment_yield", start)]
+    # Trace the flat SSA shuffle sequence through its final register insertion.
+    # Select the four extracts feeding the first shuffle, then the four inserts
+    # which construct its result. No scheduling region is needed.
+    prefix = ir[:ir.index("gpu.shuffle")]
+    start = list(re.finditer(rf"^.*{SSA} = vector.extract {SSA}\[0, 0\].*$", prefix, re.M))[-1].start()
+    inserts = list(re.finditer(rf"^.*{SSA} = vector.insert .*\[0, [0-3]\].*$", ir[start:], re.M))
+    body = ir[start:start + inserts[3].end()]
     extracts = re.findall(rf"({SSA}) = vector.extract ({SSA})\[0, ([0-3])\]", body)
     inputs = extracts[-4:]
     assert [int(x[2]) for x in inputs] == list(range(4))

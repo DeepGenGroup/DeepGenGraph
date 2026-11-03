@@ -42,7 +42,7 @@ def main():
                                   shape + r"xf16, 3>", scheduled)) == 2
         assert scheduled.count("frisk.copy_to_reg") == 2
         thread = module_after(proc.stdout,
-                              "---------- after createConvertFriskBaseToThreadLevelIRPass ---------")
+                              "---------- after convert-fragment-to-thread ---------")
         assert not re.search(r"frisk\.(?:copy_to_reg|gemm)\b", thread)
         finalized = module_after(proc.stdout,
                                   "---------- after createFinalizeThreadTilingPass ---------")

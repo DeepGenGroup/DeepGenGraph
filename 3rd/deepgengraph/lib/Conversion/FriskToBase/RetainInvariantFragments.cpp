@@ -182,7 +182,7 @@ struct Candidate {
                forOp.getConstantUpperBound() >= forOp.getConstantLowerBound();
         return;
       }
-      if (isa<FragmentOp, FragmentYieldOp, affine::AffineYieldOp>(op)) return;
+      if (isa<affine::AffineYieldOp>(op)) return;
       StringRef dialect = op->getName().getDialectNamespace();
       safe = !op->getNumRegions() && isMemoryEffectFree(op) &&
           (dialect == "arith" || dialect == "vector" ||

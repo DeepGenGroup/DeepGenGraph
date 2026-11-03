@@ -64,7 +64,7 @@ def main():
             assert result.returncode == 0, f"{name}: MyTest failed\n{log[-4000:]}"
             # MyTest currently ignores some PassManager return values.
             assert not re.search(r"error:|Assertion .*failed|LLVM ERROR", log), log
-            stage = log.split("---------- after createConvertFriskBaseToThreadLevelIRPass", 1)[1]
+            stage = log.split("---------- after convert-fragment-to-thread", 1)[1]
             stage = stage.split("---- after threadIR legalize", 1)[0]
             expected = "vector<2x32xf32>, vector<2x1xf32>"
             if name == "swapped_carriers":

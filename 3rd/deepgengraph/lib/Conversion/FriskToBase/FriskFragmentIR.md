@@ -2,6 +2,60 @@
 
 当前实现：`FriskBaseToTheadlevelIR_plan2.cpp`、`FriskFragIRReorder.cpp`。
 
+## 显式 typed fragment 中间层
+
+MyTest 现在默认执行以下阶段（原 `convert-friskbase-to-thread` 保留作兼容和对照）：
+
+```
+block IR
+convert-friskbase-to-fragment   # 和旧 tiling pass 使用同一套选项、LowerInfo 与布局规划
+convert-fragment-to-thread     # 不重新推断布局；只消费序列化的 IR
+finalize-thread-tiling
+frisk-frag-ir-reorder
+lower-frisk-fragments
+```
+
+`!frisk.fragment<vector<...>, {...}>` 是当前 lane 的寄存器值。MMA 布局字典记录
+A/B/C 角色、指令与 lane/register 分布；空字典表示显式的线程局部片段。
+不定义 `frisk.fragment` / `frisk.fragment_yield` region Op。所有操作直接位于
+循环体中，通过普通 SSA 数据依赖连接。跨循环的 fragment 累加器使用
+`iter_args/yield`，没有原地修改寄存器 SSA 值。
+
+- `load_frag(memref, indices)` 返回 fragment，`store_frag(fragment, memref, indices)`
+  写内存且无返回值。保留内存 read/write effects；不隐含同步。
+- `extract_frag(vector, indices)` 返回 fragment；`insert_frag(fragment, vector, indices)`
+  返回完整的新 vector。二者均无内存副作用。
+- indices 是 **fragment 网格坐标**，不是元素偏移。访问 memref 的 Op 保存
+  `tile_type` 和完整 tile layout，随后组合原有 view/stride/shared packing 处理。
+- `gemm_frag(a,b,acc)` 返回新 accumulator，校验 A/B/C 角色和指令。MMA 是
+  collective，不能标为可推测执行。与 block `gemm` 分开命名以避免混淆其内存语义。
+- `elementwise_frag` 支持 add/sub/mul/div/max/exp2 和浮点 cast；广播、mask、
+  reduction、matrix read 直接生成原有标量/vector 操作，保留通信规则。
+- `pack_frag/unpack_frag` 是显式的寄存器表示边界，不搬运数据、不改变 lane 分布，
+  在下一阶段消除。不能用它们代替布局转换。
+
+分片大小依然是 `thread_creg * warp_repeat`，网格数量是
+`block_repeat * warpInstUnroll`。GEMM 的 A/B/C 网格分别为 `[FM,FK]`、
+`[FK,FN]`、`[FM,FN]`。`reuse_axes/calc_axes` 保存 load 使用点的分析约束；
+它们不替代布局和算子索引语义。A/B 的 shared 输入按 fragment 使用处加载，
+寄存器生产者通过已有 tile bridge 接到 extract。C 从零开始并组装为寄存器 tile；
+只有显式内存目的操作才生成 store。写回保留已有 leader guard 和外部 barrier。
+
+当前支持静态 rank-1/2、完整可整除的 fragment。静态越界、payload 类型不匹配、
+缺失分布布局和不匹配的 MMA 角色会被 verifier 拒绝；动态 fragment 坐标要求调用方
+保证处于网格内。fragment 类型只用于函数内部，跨函数 fragment ABI 暂不支持。
+
+验证：
+
+```bash
+cmake --build 3rd/deepgengraph/build --target MyTest ThreadTilingTest -j 3
+python3 3rd/deepgengraph/test/check_typed_fragments.py
+```
+
+该测试包含序列化、幂等性、新旧线程 IR 对照、非法访问诊断，以及在 CPU 上执行
+fragment 访存和循环累加。non-causal 完整导出与调优命令位于
+`generated_ir/typed_fragment_noncausal/`；GPU 性能必须在目标设备复测。
+
 ## Fragment 组织
 
 每线程的计算 fragment 形状为 `thread_creg * warp_repeat`，与 GEMM
@@ -128,11 +182,8 @@ Global→Shared Copy 使用连续传输 packet 作为搬运 fragment，其宽度
 Alloc、BufferView、同步及表示转换本身没有计算迭代空间，继续保留其原语义。
 
 循环属性：`frisk.fragment_loop`、`frisk.fragment_shape`、`frisk.tile_shape`、
-`iterLabel`。`frisk.fragment` 是一个无条件、单 block 的 region，捕获外部
-SSA 值，通过 `frisk.fragment_yield` 返回寄存器 fragment；`kind` 分为
-`load`、`store`、`compute`、`gather`。多个标量访存和组装寄存器的操作仍
-处于一个 fragment 边界内。它具有递归内存副作用，不能在 canonicalize
-阶段提前内联。完整 tile 的 scatter 在 region 外以保留融合的依赖证明。
+`iterLabel`。load、计算、寄存器组装和 scatter 均直接位于循环体中，
+调度分析普通 SSA 操作数及真实内存副作用，不依赖 region 包装或隐式 captures。
 
 单片段循环在本 Pass 的单次迭代提升阶段保留；后续 canonicalize
 可以按通常规则消除。属性是调度提示，不作为安全融合的依据。
@@ -156,7 +207,7 @@ shared allocation 的读取生命周期在循环前结束，允许后续存储�
 函数入口的 block-uniform affine loop，要求证明至少执行一次，并跳过静态
 单次循环。候选 copy 必须直接位于目标循环体内，目的为该循环内独占的静态
 allocation；其用户只能是唯一 copy、唯一 wait 和 memref.load。读取可位于
-fragment region 或静态内层循环中，但其地址不能依赖目标循环的 IV/carrier。
+目标循环体或静态内层循环中，但其地址不能依赖目标循环的 IV/carrier。
 输入的 BK 分块仍嵌套时，先使用现有 loop specialization 暴露候选。旋转
 流水 buffer、未知控制流、逃逸别名、未知副作用以及可能改写源数据的操作
 保守跳过。不同 global 参数不默认 noalias。
@@ -182,7 +233,7 @@ convert-friskbase-to-thread
 finalize-thread-tiling
 canonicalize  # 可选：简化索引，增加可证明的融合机会
 frisk-frag-ir-reorder     # 融合 + 下一片段预取
-lower-frisk-fragments     # 内联 region、shared memory 复用、延后展开 K
+lower-frisk-fragments     # shared memory 复用、延后展开 K
 canonicalize
 cse
 # ThreadLevelIRLegalize -> IRDeepOptimize -> LLVM lowering
@@ -212,7 +263,7 @@ iter_args/yield/results，支持 vector、memref 和独立 scalar carrier，保�
 
 ## 预取与延后展开
 
-融合后，对只读且有 compute fragment 的静态片段循环生成一级 lookahead：
+融合后，对包含显式 load 的只读静态片段循环生成一级 lookahead：
 
 ```
 carried = load(first)
@@ -230,9 +281,9 @@ acc = compute(last, carried, acc)
 这只是把下一个 fragment 的真实 load 放到当前 MMA/计算之前，为后端隐藏
 访存延迟提供指令顺序，不保证目标 GPU 的性能收益。
 
-`lower-frisk-fragments` 才去掉 region。当前 MLIR 的 affine LICM 不检查
-未知 region 的隐式 captures，因此 affine LICM、buffer hoisting 和 loop
-normalize 也在此 Pass 之后运行。共享内存复用在此阶段按调度后的
+`lower-frisk-fragments` 执行 packing、DMA 调度、共享内存复用和延后展开，
+不再内联 region。affine LICM、buffer hoisting 和 loop normalize 仍在该 Pass
+之后运行，以保留调度机会。共享内存复用在此阶段按调度后的
 生命周期执行。标记 `frisk.loopUnrollFull` 的 K 循环此时才展开，单循环上限
 64 次，额外操作总预算 65536；更大的循环保留。后续 IRDeepOptimize 继续
 展开能静态化 vector 索引的循环。fragment 内固定的寄存器坐标仍允许静态
@@ -245,7 +296,7 @@ cmake --build 3rd/deepgengraph/build --target ThreadTilingTest MyTest -j 2
 python3 3rd/deepgengraph/test/check_fragment_loops.py
 python3 3rd/deepgengraph/test/check_plan2_thread_tiles.py \
   3rd/deepgengraph/build/test/ThreadTilingTest
-python3 3rd/deepgengraph/test/check_fragment_schedule.py
+python3 3rd/deepgengraph/test/check_fragment_schedule.py --schedule-only
 ```
 
 第一项测试包含融合正反例、CPU baseline/fused 数值执行及 attention

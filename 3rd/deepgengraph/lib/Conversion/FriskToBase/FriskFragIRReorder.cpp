@@ -119,12 +119,7 @@ static Value invariantMemref(Value value) {
 }
 
 static bool belongsToIteration(Operation *op, Loop loop) {
-  while (op->getParentOp() != loop) {
-    op = op->getParentOp();
-    if (!op || !isa<frisk::FragmentOp>(op))
-      return false;
-  }
-  return true;
+  return op->getParentOp() == loop;
 }
 
 // Prove an insert chain writes distinct scalar positions on each iteration.
@@ -231,7 +226,7 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
       buffer = load.getMemref(); indices = load.getIndices();
     } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
       buffer = store.getMemref(); indices = store.getIndices(); write = true;
-    } else if (isa<Loop, affine::AffineYieldOp, frisk::FragmentOp, frisk::FragmentYieldOp>(op)) {
+    } else if (isa<Loop, affine::AffineYieldOp>(op)) {
       return WalkResult::advance();
     } else {
       // Includes barriers, calls, allocation/free, atomics and unknown effects.
@@ -398,63 +393,31 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
 //   steady:   next = load(i+1); current = compute(i, carriedLoad)
 //   epilogue: compute(last, carriedLoad)
 // No speculative last load, no reordered accumulator updates, no movement
-// across a barrier or a write (including writes in another fragment region).
+// across a barrier or a write. Dependencies come from ordinary SSA operands.
 static bool pipelineFragments(Loop loop) {
   if (!loop->hasAttr("frisk.fragment_loop") || loop->hasAttr("frisk.pipelined"))
     return false;
   auto ivs = iterations(loop);
   if (ivs.size() < 2)
     return false;
-  bool readsMemory = false, hasCompute = false;
-  SmallVector<frisk::FragmentOp> loads;
-  for (Operation &op : loop.getBody()->without_terminator()) {
-    auto fragment = dyn_cast<frisk::FragmentOp>(op);
-    if (!fragment)
-      continue;
-    hasCompute |= fragment.getKind() == "compute";
-    if ((fragment.getKind() == "load" || fragment.getKind() == "gather") &&
-        fragment.getNumResults())
-      loads.push_back(fragment);
-  }
-  if (loads.empty() || !hasCompute)
-    return false;
-  // Validate the entire iteration, not just the proposed load groups. An
-  // unknown effect, collective, nested loop or write is a scheduling boundary.
-  auto safe = loop.walk([&](Operation *op) {
-    if (op == loop || isa<frisk::FragmentOp, frisk::FragmentYieldOp,
-                          affine::AffineYieldOp>(op))
-      return WalkResult::advance();
+  SmallVector<Operation *> loads;
+  for (Operation &op : loop.getBody()->without_terminator())
     if (isa<affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
-      return WalkResult::advance();
-    if (op->getNumRegions() || !isMemoryEffectFree(op))
-      return WalkResult::interrupt();
-    // Register MMA stays at the original iteration's compute point.
-    if (isa<gpu::ShuffleOp>(op))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
-  if (safe.wasInterrupted())
+      loads.push_back(&op);
+  if (loads.empty())
     return false;
-
-  llvm::SmallPtrSet<Operation *, 16> groups, slice;
-  for (auto load : loads) {
-    groups.insert(load);
-    auto valid = load.walk([&](Operation *op) {
-      if (op == load || isa<frisk::FragmentYieldOp>(op))
-        return WalkResult::advance();
-      if (isa<affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op)) {
-        readsMemory = true;
-        return WalkResult::advance();
-      }
-      // No collective or non-speculatable computation moves to the prologue.
-      return !op->getNumRegions() && isMemoryEffectFree(op) && isSpeculatable(op)
-          ? WalkResult::advance() : WalkResult::interrupt();
-    });
-    if (valid.wasInterrupted())
+  // Validate the entire iteration. Unknown effects, collectives, nested
+  // control flow and writes are scheduling boundaries.
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (isa<affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
+      continue;
+    if (op.getNumRegions() || !isMemoryEffectFree(&op) ||
+        isa<gpu::ShuffleOp>(op))
       return false;
   }
-  if (!readsMemory)
-    return false;
+
+  llvm::SmallPtrSet<Operation *, 16> groups, slice;
+  groups.insert(loads.begin(), loads.end());
   std::function<bool(Value)> addDependency = [&](Value value) {
     if (value == loop.getInductionVar())
       return true;
@@ -465,21 +428,21 @@ static bool pipelineFragments(Loop loop) {
       return true;
     if (slice.contains(def))
       return true;
-    if (groups.contains(def)) {
-      slice.insert(def);
-      llvm::SetVector<Value> captures;
-      getUsedValuesDefinedAbove(def->getRegions(), captures);
-      return llvm::all_of(captures, addDependency);
-    }
-    if (def->getNumRegions() || !isMemoryEffectFree(def) || !isSpeculatable(def))
+    // A dependent memory read is not a pure address calculation. Reject
+    // indirect loads rather than duplicating or moving them into the prologue.
+    if (groups.contains(def) || def->getNumRegions() ||
+        !isMemoryEffectFree(def) || !isSpeculatable(def))
+      return false;
+    if (!llvm::all_of(def->getOperands(), addDependency))
       return false;
     slice.insert(def);
-    return llvm::all_of(def->getOperands(), addDependency);
+    return true;
   };
-  for (auto load : loads)
-    for (Value value : load.getResults())
-      if (!addDependency(value))
-        return false;
+  for (Operation *load : loads) {
+    if (!llvm::all_of(load->getOperands(), addDependency))
+      return false;
+  }
+  slice.insert(loads.begin(), loads.end());
 
   OpBuilder b(loop);
   Location loc = loop.getLoc();
@@ -495,7 +458,7 @@ static bool pipelineFragments(Loop loop) {
     }
     SmallVector<Value> values;
     for (auto load : loads)
-      for (Value value : load.getResults())
+      for (Value value : load->getResults())
         values.push_back(mapping.lookup(value));
     return values;
   };
@@ -505,7 +468,7 @@ static bool pipelineFragments(Loop loop) {
     mapping.map(loop.getRegionIterArgs(), carriers);
     unsigned position = 0;
     for (auto load : loads)
-      for (Value value : load.getResults())
+      for (Value value : load->getResults())
         mapping.map(value, prefetched[position++]);
     for (Operation &op : loop.getBody()->without_terminator())
       if (!groups.contains(&op))
@@ -795,18 +758,6 @@ public:
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
-    SmallVector<frisk::FragmentOp> fragments;
-    getOperation().walk<WalkOrder::PostOrder>([&](frisk::FragmentOp op) {
-      fragments.push_back(op);
-    });
-    for (auto fragment : fragments) {
-      auto &body = fragment.getBody().front();
-      auto yield = cast<frisk::FragmentYieldOp>(body.getTerminator());
-      fragment.replaceAllUsesWith(yield.getOperands());
-      while (&body.front() != yield.getOperation())
-        body.front().moveBefore(fragment);
-      fragment.erase();
-    }
     // Establish old-reader protection before considering moving readiness
     // barriers across direct launches. Recheck after the final schedule too.
     synchronizeSharedMemoryLoopBackedges(getOperation());

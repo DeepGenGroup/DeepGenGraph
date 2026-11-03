@@ -110,6 +110,15 @@ def PackSharedMemory: Pass<"pack-shared-memory", "::mlir::func::FuncOp"> {
   let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect"];
 }
 
+def ConvertFriskBaseToFragmentIR: Pass<"convert-friskbase-to-fragment", "::mlir::func::FuncOp"> {
+  let summary = "Lower block tiles to typed fragments using the thread tiling layout options";
+  let constructor = "mlir::frisk::createConvertFriskBaseToFragmentIRPass()";
+}
+def ConvertFragmentToThreadIR: Pass<"convert-fragment-to-thread", "::mlir::func::FuncOp"> {
+  let summary = "Lower typed fragments to register vectors and deferred tile accesses";
+  let constructor = "mlir::frisk::createConvertFragmentToThreadIRPass()";
+}
+
 def PromoteGlobalToSharedAsync: Pass<"frisk-promote-gm-to-shm-async", "::mlir::func::FuncOp"> {
   let summary = "Represent global/shared copies with explicit buffer readiness";
   let constructor = "mlir::frisk::createPromoteGlobalToSharedAsyncPass()";
@@ -163,7 +172,7 @@ def RetainInvariantFragments: Pass<"frisk-retain-invariant-fragments", "::mlir::
 }
 
 def LowerFriskFragments: Pass<"lower-frisk-fragments", "::mlir::func::FuncOp"> {
-  let summary = "Lower scheduled fragment regions, plan storage and unroll marked loops";
+  let summary = "Plan storage and unroll scheduled fragment loops";
   let constructor = "mlir::frisk::createLowerFriskFragmentsPass()";
   let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect", "mlir::gpu::GPUDialect", "mlir::frisk::FriskDialect"];
 }

@@ -13,6 +13,8 @@ std::unique_ptr<mlir::Pass> createOptimizeTensorLoopsPass();
 std::unique_ptr<mlir::Pass> createNormalizeAttentionKLayoutPass();
 std::unique_ptr<mlir::Pass> createPlanWmmaLayoutConversionsPass();
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass();
+std::unique_ptr<mlir::Pass> createConvertFriskBaseToFragmentIRPass();
+std::unique_ptr<mlir::Pass> createConvertFragmentToThreadIRPass();
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
 std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass();

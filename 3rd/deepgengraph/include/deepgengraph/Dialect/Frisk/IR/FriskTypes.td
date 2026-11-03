@@ -10,6 +10,15 @@ class Frisk_Type<string name, string typeMnemonic, list<Trait> traits = []>
   let mnemonic = typeMnemonic;
 }
 
+// A lane's register payload and its serializable distribution contract.
+// An empty layout denotes an explicitly thread-local (non-collective) fragment.
+def Frisk_FragmentType : Frisk_Type<"Fragment", "fragment"> {
+  let parameters = (ins "::mlir::VectorType":$registerType,
+                        "::mlir::DictionaryAttr":$layout);
+  let assemblyFormat = "`<` $registerType `,` $layout `>`";
+  let genVerifyDecl = 1;
+}
+
 def Frisk_BarrierType : Frisk_Type<"Barrier", "barrier"> {
   let summary = "Barrier handle type";
   let description = [{

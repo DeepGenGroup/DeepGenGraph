@@ -88,13 +88,17 @@ def main():
     # Known block ranges can prove a dynamic uniform loop nonempty.
     retained(fixture(upper='%bound', before='%bid = gpu.block_id x {range = 32 : index}\n  %bound = arith.addi %bid, %c1 : index'), 8)
     cases += 14
-    # A region's implicit captures must be analyzed, not just its direct operands.
-    region = fixture()
-    begin, end = region.index('    %x0 ='), region.index('    %scaled =')
-    read_body = region[begin:end].replace('%v =', '%packed =')
-    region = region[:begin] + '    %v = frisk.fragment "load" -> (vector<16xf16>) {\n' + read_body + '      frisk.fragment_yield %packed : vector<16xf16>\n    }\n' + region[end:]
-    retained(region, 8)
-    rejected(region.replace('%tile[%tid, %c0]', '%tile[%i, %c0]'))
+    # Nested static loops are transparent, but IV-dependent addresses are not.
+    nested = fixture()
+    begin, end = nested.index('    %x0 ='), nested.index('    %scaled =')
+    read_body = nested[begin:end].replace('%v =', '%packed =')
+    nested = nested[:begin] + '    %v = affine.for %j = 0 to 2 iter_args(%old = %zero) -> vector<16xf16> {\n' + read_body + '      affine.yield %packed : vector<16xf16>\n    }\n' + nested[end:]
+    nested_out = run(nested, 8)
+    assert 'frisk.retained_words = 8 : i32' in nested_out, nested_out
+    assert nested_out.count('frisk.async_copy_gm_to_shm') == 1
+    assert nested_out.index('frisk.async_copy_gm_to_shm') < nested_out.index('affine.for')
+    assert run(nested_out, 8) == nested_out
+    rejected(nested.replace('%tile[%tid, %c0]', '%tile[%i, %c0]'))
     # Two arbitrary operands share one budget; do not spend max-words per copy.
     two = fixture()
     begin, end = two.index('    %tile ='), two.index('    %next =')

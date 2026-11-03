@@ -305,6 +305,19 @@ lds-bytes 修改导出 IR，不属于 MyTest argv。
   dma-export：auto/split32/hcu128/asm128；auto 随 copy 选择，async/hybrid
     使用 asm128，其他使用 split32；gfx936 当前采用 asm128。
   qk-tile/vo-tile：非负整数，0=自动；独立控制 QK/VO 分块，当前基线为 32/32。
+  pv-interleave：0/1/2/4，PV累加链交错；0关闭，1为串行调度提示对照。
+  v-double-buffer：0/1，在可证明安全的现有LDS空间内启用V双缓冲；默认0。
+    不支持的格式跳过并在lowering日志说明，不扩大LDS。可与pv-interleave组合扫描。
+  k-dma：128/64/64-swizzle，默认128；只调整选定K输入的最终DMA。
+    64 将每个128-bit包拆为两个buffer_load_dwordx2；64-swizzle额外应用9:3
+    LDS字节地址XOR，并保留公共基址+常量GEP。Q/V仍走原DMA导出路径。
+    要求copy=async/hybrid、dma-export=auto/asm128；编译器证明失败会报错。
+  k-dma-arg：K输入的LLVM ABI编号，默认1（Q,K,V,O）；其他ABI显式设置。
+  k-lds-prefetch：0..8，默认0；K/B的b64 LDS成对读取提前最多N条MMAC，
+    并插入调度保护。DMA、同步、未知调用均为边界；不增加搬运量。
+  cross-bn-k0：0|1，默认0；最后一片PV预取下一轮K0，固定分母归约位置以避免spill。
+  k-tail-prefetch：0..8，默认0；补齐与局部max/sum归约交错的K/B读取预取。
+    独立于k-lds-prefetch，保留已有配对；推荐先测4，实际收益以GPU为准。
   frag-prefetch：0/1，MMAC fragment 预取，与 prefetch 参数不同。
   frag-prefetch-words：正整数，fragment 预取 words/thread 预算，基线为 4。
   retain-fragment-words：非负 32 位整数，跨循环保留不变 operand 的
@@ -335,6 +348,11 @@ lds-bytes 修改导出 IR，不属于 MyTest argv。
     其他输入仍需检查实际保留数量、VGPR/scratch 和 GPU 正确性/性能。
   baseline / nohint-unrolled：历史起点，nohint + DK 展开，retain=0。
   group8-reverse：baseline + group=8 + reverse；swizzle 均关闭。
+  online-vdb-k64：group32 forward、PV interleave4、V双缓冲、K 64-bit+swizzle，
+    并启用 mask-add-bypass/defer-lane-sum/local-reduce；输入是否causal由MLIR决定。
+    不包含历史 LLVM 基线的 K 成对 LDS 提前读取调度，性能不能直接视为该基线。
+  online-vdb-k64-lds2：online-vdb-k64 加 k-lds-prefetch=2；按当前地址推导配对，
+    不依赖旧汇编配对表，新产物需测试目标GPU的read2选择与性能。
   group8-reverse-k128-swizzle：group8-reverse + 仅 K 8:6，建议先与前者对照。
   group8-reverse-qk128-swizzle / group8-reverse-qkv128-swizzle：Q/K 或 Q/K/V 均为 8:6。
     Q/V 为保留 128-bit DMA 的实验布局，不保证性能收益。
@@ -394,6 +412,7 @@ LEGACY_BASE = dict(
     prefetch="0", fuse="1", reuse="0", copy="legacy", alignment="0",
     **{"dma-pack": "legacy", "dma-export": "auto", "qk-tile": "0", "vo-tile": "0",
        "frag-prefetch": "0", "frag-prefetch-words": "8", "retain-fragment-words": "0",
+       "pv-interleave": "0", "v-double-buffer": "0", "k-dma": "128", "k-dma-arg": "1", "k-lds-prefetch": "0", "k-tail-prefetch": "0", "cross-bn-k0": "0",
        "pipeline-stages": "keep", "loop-mark": "keep",
        "simplify-loop-control": "1", "coalesce-waits": "1", "lds-bytes": "0",
        "mask-add-bypass": "off",
@@ -415,6 +434,12 @@ RETAINED32_BASE = dict(BASE, **{"workgroup-group-size": "8", "workgroup-reverse"
 # algorithm is selected by the input generator, not by this compiler preset.
 # GPU performance of this new IR must be remeasured.
 ONLINE_BASE = dict(RETAINED32_BASE, **{"workgroup-group-size": "4", "frag-prefetch": "0"})
+# Match the public parameters of the non-causal V-buffer/DMA64 experiment.
+# Historical K paired-LDS prefetch scheduling is not included in this preset.
+# The preset never changes input attention semantics.
+KDMA64_BASE = dict(ONLINE_BASE, **{"workgroup-group-size": "32", "workgroup-reverse": "0",
+    "mask-add-bypass": "approx", "defer-lane-sum": "approx", "local-reduce": "approx",
+    "pv-interleave": "4", "v-double-buffer": "1", "k-dma": "64-swizzle"})
 KEYS = list(BASE)
 POSITIONAL_KEYS = (
     "reorder", "pack", "layout", "carrier", "math", "threads", "waves",
@@ -425,13 +450,16 @@ SWIZZLE_KEYS = ("swizzle-q", "swizzle-k", "swizzle-v")
 SWIZZLE_ARG_KEYS = tuple(key + "-arg" for key in SWIZZLE_KEYS)
 WORKGROUP_AXIS_KEYS = ("workgroup-query-axis", "workgroup-head-axis")
 NAMED_KEYS = ("frag-prefetch", "frag-prefetch-words", "retain-fragment-words",
+              "pv-interleave", "v-double-buffer", "k-dma", "k-dma-arg", "k-lds-prefetch", "k-tail-prefetch", "cross-bn-k0",
               "simplify-loop-control", "coalesce-waits", "mask-add-bypass",
               "defer-lane-sum", "local-reduce", "local-reduce-chains", "local-reduce-min-inputs", "local-reduce-ops",
               *SWIZZLE_KEYS, *SWIZZLE_ARG_KEYS, "workgroup-group-size", "workgroup-reverse",
               *WORKGROUP_AXIS_KEYS)
 BOOLS = ("pipeline", "reorder", "pack", "lifetimes", "masks", "prefetch", "fuse",
-         "frag-prefetch", "simplify-loop-control", "coalesce-waits", "workgroup-reverse")
+         "frag-prefetch", "v-double-buffer", "cross-bn-k0", "simplify-loop-control", "coalesce-waits", "workgroup-reverse")
 ENUMS = {"layout": ("3.1", "3.2", "3.3"),
+         "k-dma": ("128", "64", "64-swizzle"),
+         "pv-interleave": ("0", "1", "2", "4"),
          "mask-add-bypass": ("off", "legal", "approx"),
          "defer-lane-sum": ("off", "legal", "approx"),
          "local-reduce": ("off", "legal", "approx"),
@@ -494,6 +522,9 @@ def resolve_workgroup_axes(source, cfg):
 
 def incompatible_layout(cfg):
     """Reject known impossible tuning combinations; tile proofs stay in MyTest."""
+    if cfg["k-dma"] != "128" and (cfg["copy"] not in ("async", "hybrid") or
+                                    cfg["dma-export"] not in ("auto", "asm128")):
+        return True
     enabled = any(cfg[key] != "off" for key in SWIZZLE_KEYS)
     if enabled:
         export = cfg["dma-export"]
@@ -609,8 +640,34 @@ def ir_facts(text, diagnostics):
     staged = diagnostics.split(marker, 1)[1].split("\n}\n", 1)[0] if marker in diagnostics else ""
     counts = re.findall(r"SimplifyLoopControl: (\d+) small loops specialized", diagnostics)
     return {"static_lds_bytes": lds_bytes(text),
+            "cross_bn_k0_reports": [dict(packets=int(p), slot_bytes=int(b), overlap_mmac=int(o),
+                sum_anchors=int(a), function=f) for p,b,o,a,f in re.findall(
+                    r"Cross BN K0: packets=(\d+), slot-bytes=(\d+), overlap-mmac=(\d+), sum-anchors=(\d+), function=([^\n]+)", diagnostics)],
+            "k_tail_prefetch_reports": [dict(distance=int(d), regions=int(r), pairs=int(p),
+                moved=int(m), anchors=int(a), unpaired=int(u), reduction_regions=int(rr), function=f)
+                for d,r,p,m,a,u,rr,f in re.findall(
+                    r"K tail LDS prefetch: distance=(\d+), regions=(\d+), pairs=(\d+), moved=(\d+), anchors=(\d+), unpaired=(\d+), reduction-regions=(\d+), function=([^\n]+)", diagnostics)],
+            "k_lds_prefetch_reports": [dict(distance=int(d), regions=int(r), pairs=int(p),
+                moved=int(m), anchors=int(a), unpaired=int(u), function=f)
+                for d,r,p,m,a,u,f in re.findall(
+                    r"K LDS prefetch: distance=(\d+), regions=(\d+), pairs=(\d+), moved=(\d+), anchors=(\d+), unpaired=(\d+), function=([^\n]+)", diagnostics)],
+            "k_dma_reports": [dict(mode=mode, argument=int(arg), original_packets=int(before),
+                                   packets=int(after), reads=int(reads), bases=int(bases), function=fn)
+                for mode,arg,before,after,reads,bases,fn in re.findall(
+                    r"K DMA: mode=([^,]+), argument=(\d+), packets=(\d+)->(\d+), reads=(\d+), bases=(\d+), function=([^\n]+)", diagnostics)],
+            "buffer_dma64_sites": text.count("buffer_load_dwordx2 "),
             "scheduled_loops": staged.count("pipeline.scheduled") if marker in diagnostics else None,
             "simplified_loops": sum(map(int, counts)),
+            "pv_interleave_reports": [dict(regions=int(regions), width=int(width), function=fn)
+                for regions, width, fn in re.findall(
+                    r"PV interleave: (\d+) regions, width=(\d+), function=([^\n]+)", diagnostics)],
+            "v_double_buffer_reports": [dict(slices=int(slices), slot_bytes=int(size),
+                                              displacement=int(offset), removed_barriers=int(barriers),
+                                              lds_bytes=int(lds), function=fn)
+                for slices, size, offset, barriers, lds, fn in re.findall(
+                    r"V double buffer: (\d+) slices, slot-bytes=(\d+), displacement=(-?\d+), removed-barriers=(\d+), LDS=(\d+), function=([^\n]+)", diagnostics)],
+            "v_double_buffer_skips": [dict(function=fn, reason=reason)
+                for fn, reason in re.findall(r"V double buffer: skipped, function=([^\n:]+): ([^\n]+)", diagnostics)],
             "defer_lane_sum_reports": [dict(function=fn, states=int(states),
                                               loop_shuffles=int(shuffles), mode=mode)
                 for fn, states, shuffles, mode in re.findall(
@@ -740,7 +797,7 @@ def main(argv=None):
         limits = {"carrier": 2**64, "reuse": 2**32, "threads": 2**32,
                   "alignment": 2**63, "qk-tile": 2**63, "vo-tile": 2**63,
                   "frag-prefetch-words": 2**32, "retain-fragment-words": 2**32,
-                  "lds-bytes": 2**32, "workgroup-group-size": 2**63}
+                  "lds-bytes": 2**32, "workgroup-group-size": 2**63, "k-dma-arg": 2**32, "k-lds-prefetch": 9, "k-tail-prefetch": 9}
         if key in limits:
             if not re.fullmatch(r"[0-9]+", value):
                 p.error(f"{key} 必须为非负整数")
@@ -807,6 +864,8 @@ def main(argv=None):
         yield "baseline", BASE.copy()
         yield "retained32-baseline", RETAINED32_BASE.copy()
         yield "online-baseline", ONLINE_BASE.copy()
+        yield "online-vdb-k64", KDMA64_BASE.copy()
+        yield "online-vdb-k64-lds2", dict(KDMA64_BASE, **{"k-lds-prefetch": "2"})
         yield "legacy-baseline", LEGACY_BASE.copy()
         grouped = dict(BASE, **{"workgroup-group-size": "8", "workgroup-reverse": "1"})
         yield "group8-reverse", grouped.copy()

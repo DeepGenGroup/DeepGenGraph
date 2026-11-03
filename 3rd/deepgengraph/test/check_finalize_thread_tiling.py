@@ -14,7 +14,7 @@ from pathlib import Path
 TEST_DIR = Path(__file__).resolve().parent
 BINARY = (Path(sys.argv[1]) if len(sys.argv) > 1 else
           TEST_DIR.parent / "build/test/MyTest").resolve()
-STAGE = "---------- after createConvertFriskBaseToThreadLevelIRPass ---------"
+STAGE = "---------- after convert-fragment-to-thread ---------"
 
 
 def run(path, work):

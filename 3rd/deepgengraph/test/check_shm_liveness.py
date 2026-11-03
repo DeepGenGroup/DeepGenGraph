@@ -333,7 +333,7 @@ def main():
 
     if len(sys.argv) > 2:
         log = Path(sys.argv[2]).read_text()
-        source = module_after(log, "---------- after createConvertFriskBaseToThreadLevelIRPass ---------")
+        source = module_after(log, "---------- after convert-fragment-to-thread ---------")
         # Bridges defer pooling until finalization exposes every physical use.
         deferred, _ = run(source)
         if "frisk.to_threadTile" in source:

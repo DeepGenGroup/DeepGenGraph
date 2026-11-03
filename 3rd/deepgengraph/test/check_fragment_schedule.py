@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check preserved fragment boundaries, lookahead legality and CPU semantics."""
+"""Check flat fragment SSA scheduling, lookahead legality and CPU semantics."""
 from pathlib import Path
 import re
 import subprocess
@@ -8,6 +8,10 @@ import tempfile
 
 from check_gemm_pv_addresses import Addresses, split_args
 
+# The standalone pass/CPU suite can run independently of MyTest's historical
+# hard-coded LLVM address oracle, which assumes older packing/export defaults.
+SCHEDULE_ONLY = '--schedule-only' in sys.argv
+sys.argv = [arg for arg in sys.argv if arg != '--schedule-only']
 HERE = Path(__file__).resolve().parent
 TOOL = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else HERE.parent / 'build/test/ThreadTilingTest'
 LLVM = Path(sys.argv[2]) if len(sys.argv) > 2 else Path('/data2/xsl/install/bin')
@@ -25,17 +29,11 @@ func.func @{name}(%a: memref<8xf32>, %base: index) -> f32 {{
   %zero = arith.constant 0.0 : f32
   %out = affine.for %i = {lower} to {upper} step {step} iter_args(%acc = %zero) -> f32 {{
     %index = affine.apply affine_map<(d0)[s0] -> (d0 + s0)>(%i)[%base]
-    %v = frisk.fragment "load" -> (vector<1xf32>) {{
-      %x = memref.load %a[{address}] : memref<8xf32>
-      %p = vector.broadcast %x : f32 to vector<1xf32>
-      frisk.fragment_yield %p : vector<1xf32>
-    }}
+    %x = memref.load %a[{address}] : memref<8xf32>
+    %v = vector.broadcast %x : f32 to vector<1xf32>
     {extra}
-    %sum = frisk.fragment "compute" -> (f32) {{
-      %x = vector.extract %v[0] : f32 from vector<1xf32>
-      %y = arith.addf %acc, %x : f32
-      frisk.fragment_yield %y : f32
-    }}
+    %element = vector.extract %v[0] : f32 from vector<1xf32>
+    %sum = arith.addf %acc, %element : f32
     affine.yield %sum : f32
   }} {{frisk.fragment_loop}}
   return %out : f32
@@ -47,19 +45,13 @@ FUSED = r'''func.func @fused(%a: memref<8xf32>, %base: index) -> f32 {
   %z = arith.constant dense<0.0> : vector<4xf32>
   %zero = arith.constant 0.0 : f32
   %tile = affine.for %i = 0 to 4 iter_args(%v = %z) -> vector<4xf32> {
-    %x = frisk.fragment "load" -> (f32) {
-      %r = memref.load %a[%i] : memref<8xf32>
-      frisk.fragment_yield %r : f32
-    }
+    %x = memref.load %a[%i] : memref<8xf32>
     %r = vector.insert %x, %v[%i] : f32 into vector<4xf32>
     affine.yield %r : vector<4xf32>
   } {frisk.fragment_loop}
   %sum = affine.for %i = 0 to 4 iter_args(%acc = %zero) -> f32 {
-    %r = frisk.fragment "compute" -> (f32) {
-      %x = vector.extract %tile[%i] : f32 from vector<4xf32>
-      %r = arith.addf %acc, %x : f32
-      frisk.fragment_yield %r : f32
-    }
+    %x = vector.extract %tile[%i] : f32 from vector<4xf32>
+    %r = arith.addf %acc, %x : f32
     affine.yield %r : f32
   } {frisk.fragment_loop}
   return %sum : f32
@@ -148,6 +140,11 @@ def main():
             'empty': (fixture('empty', 0, 0), False, 0.0),
             'barrier': (fixture('barrier', extra='gpu.barrier'), False, None),
             'write': (fixture('write', extra='memref.store %zero, %a[%i] : memref<8xf32>'), False, None),
+            'nested_control': (fixture('nested_control', extra='affine.for %j = 0 to 2 {}'), False, None),
+            'opaque_call': ('func.func private @opaque()\n' + fixture('opaque_call', extra='func.call @opaque() : () -> ()'), False, None),
+            'indirect_address': (fixture('indirect_address').replace(
+                '%index = affine.apply affine_map<(d0)[s0] -> (d0 + s0)>(%i)[%base]',
+                '%raw = memref.load %a[%i] : memref<8xf32>\n    %integer = arith.fptosi %raw : f32 to i32\n    %index = arith.index_cast %integer : i32 to index').replace('%x = memref.load %a[%i]', '%x = memref.load %a[%index]'), False, None),
             'carried_address': (fixture('carried_address').replace(
                 '%index = affine.apply affine_map<(d0)[s0] -> (d0 + s0)>(%i)[%base]',
                 '%integer = arith.fptosi %acc : f32 to i32\n    %index = arith.index_cast %integer : i32 to index').replace('%a[%i]', '%a[%index]'), False, None),
@@ -158,16 +155,17 @@ def main():
             src.write_text(text)
             run([TOOL, src, '--frisk-frag-ir-reorder', '--verify-each', '-o', dst])
             ir = dst.read_text()
+            assert not re.search(r'(?<!!)frisk\.fragment(?:\s|_yield\b)', ir)
             assert ('frisk.pipelined' in ir) == should_pipeline, (name, ir)
             if name == 'fused':
                 assert 'frisk.fused' in ir, ir
             if should_pipeline:
                 assert '"prologue"' in ir and '"prefetch"' in ir
-                assert ir.index('"prefetch"') < ir.index('frisk.fragment "compute"')
+                assert ir.index('"prefetch"') < ir.index('arith.addf')
                 # The steady loop ends before the final valid index, so no
                 # out-of-bounds speculative read is emitted for the epilogue.
-                assert ir.count('frisk.fragment "load"') == 2, ir
-                assert ir.count('frisk.fragment "compute"') == 2, ir
+                assert ir.count('memref.load') == 2, ir
+                assert ir.count('arith.addf') == 2, ir
             twice = directory / f'{name}.twice.mlir'
             run([TOOL, dst, '--frisk-frag-ir-reorder', '-o', twice])
             assert ir == twice.read_text(), (name, 'non-idempotent schedule')
@@ -222,12 +220,12 @@ def main():
         assert 'frisk.pipelined' in text and 'frisk.fused' in text
         assert text.count('"prefetch"') >= 2, 'GEMM operands should be pipelined'
         run([TOOL, scheduled, '--lower-frisk-fragments', '-o', late])
-        assert not re.search(r'frisk\.fragment(?:\s|_yield\b)', late.read_text()), 'all fragment regions must be lowered'
+        assert not re.search(r'frisk\.fragment(?:\s|_yield\b)', late.read_text()), 'no fragment region operations may be emitted'
         print('PASS attention: preserved MN/K, scheduled prefetch, late lowering')
+        if SCHEDULE_ONLY:
+            return
 
-        # Exercise the production ordering as well: affine LICM must only run
-        # after fragment regions have been inlined, because this LLVM version
-        # does not inspect captures in unknown region operations.
+        # Exercise production scheduling, late unrolling and LLVM export.
         full_tool = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else TOOL.with_name('MyTest')
         result = subprocess.run([str(full_tool), str(HERE/'test_input.mlir'), '0'],
                                 cwd=directory, stdout=subprocess.PIPE,

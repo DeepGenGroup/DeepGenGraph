@@ -27,7 +27,7 @@
 //   LowerInfoAnalysis 推断每个 (Value, 使用它的 Operation) 的布局；
 //   插入必要的 ConvertLayoutOp；各 pattern 将计算改写为线程级计算；
 //   用 ToThreadTile(block) 读入，用 FromThreadTile(thread) 保留原 block 类型；
-//   在线程 tile 内生成 fragment 循环和 load/compute/store region；
+//   在线程 tile 内生成 fragment 循环和显式 load/compute/store 操作；
 //   尽量折叠布局一致的 To(From(...))，暂时保留外层循环的 block 类型接口。
 // 【第二阶段】FinalizeThreadTiling：
 //   调整可转换的 affine 循环携带值，折叠桥接，展开剩余桥接为实际访存；
@@ -57,6 +57,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "llvm/Support/SaveAndRestore.h"
 
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
@@ -120,6 +121,7 @@ using friskMs = frisk::attr::MemorySpace;
 // 同一逻辑矩阵在不同消费者处可能需要不同分布，所以不能只按 SSA 值缓存布局。
 // 第一阶段完成后清空 s_info；第二阶段依靠桥接属性恢复信息，不依赖旧分析对象。
 static LowerInfoMap *s_info = nullptr;
+static thread_local bool emitTypedFragments = false;
 static HWSpecification *s_hw = nullptr;
 // 记录显式 ConvertLayoutOp 的源布局和目标布局，供该 op 的重写使用。
 // 这里存的是布局描述，不是 block SSA 值到 thread SSA 值的替换表。
@@ -1436,29 +1438,41 @@ struct FragmentLoopOptions {
   bool unrollFull = false;
 };
 
-// A fragment region preserves the scheduling boundary even when its target
-// implementation needs several scalar loads or register insertions.
-// 创建一个无条件执行的单 block region，将 body 生成的操作包在同一调度边界内。
-// body 捕获外部 SSA 值；有结果时用 fragment_yield 导出，无结果时仅保留副作用。
-// 这里构造的是 IR 容器，并没有执行计算，也不保证 region 对应单条机器指令。
-template <typename Callback>
-static Value buildFragment(OpBuilder &b, Location loc, Type resultType,
-                           StringRef kind, Callback body) {
-  SmallVector<Type> types;
-  if (resultType)
-    types.push_back(resultType);
-  auto fragment = b.create<frisk::FragmentOp>(loc, types, b.getStringAttr(kind));
-  fragment.getBody().push_back(new Block);
-  b.setInsertionPointToStart(&fragment.getBody().front());
-  Value value = body();
-  b.create<frisk::FragmentYieldOp>(loc, value ? ValueRange{value} : ValueRange{});
-  b.setInsertionPointAfter(fragment);
-  return resultType ? fragment.getResult(0) : Value{};
-}
-
 static Value transferFragment(OpBuilder &b, Location loc, Value tile,
                               VectorType fragmentType, ArrayRef<Value> origins,
                               Value fragment = {});
+
+static FragmentType localFragmentType(VectorType registers) {
+  return FragmentType::get(registers.getContext(), registers,
+                          DictionaryAttr::get(registers.getContext()));
+}
+static Value packFragment(OpBuilder &b, Location loc, Value value, FragmentType type) {
+  if (auto unpack = value.getDefiningOp<UnpackFragOp>();
+      unpack && unpack.getSource().getType() == type)
+    return unpack.getSource();
+  return b.create<PackFragOp>(loc, type, value);
+}
+static Value unpackFragment(OpBuilder &b, Location loc, Value value) {
+  return b.create<UnpackFragOp>(loc,
+      cast<FragmentType>(value.getType()).getRegisterType(), value);
+}
+static SmallVector<Value> fragmentCoordinates(OpBuilder &b, Location loc,
+    ArrayRef<Value> origins, VectorType registers) {
+  SmallVector<Value> indices;
+  for (auto [d, origin] : llvm::enumerate(origins))
+    indices.push_back(floorDivBy(b, loc, origin, registers.getDimSize(d)));
+  return indices;
+}
+static Value elementwiseFragment(OpBuilder &b, Location loc, StringRef kind,
+                                ValueRange values, VectorType output) {
+  SmallVector<Value> inputs;
+  for (Value value : values)
+    inputs.push_back(packFragment(b, loc, value,
+        localFragmentType(cast<VectorType>(value.getType()))));
+  Value result = b.create<ElementwiseFragOp>(loc, localFragmentType(output),
+                                           b.getStringAttr(kind), inputs);
+  return unpackFragment(b, loc, result);
+}
 
 // A fragment is one instruction's per-thread register tile. Singleton and
 // reduced axes are projected before constructing the fragment iteration space.
@@ -1542,12 +1556,12 @@ public:
   // vector carrier：body 返回标量，先组装片段，再插回完整线程 vector；
   // 标量/memref carrier：依次传递 body 返回值（例如归约累加器）；
   // 无 carrier：body 只生成 store 等副作用，fragment 不返回值。
-  Value emit(Value initial, BodyEmitter &body, StringRef kind = "compute") {
+  Value emit(Value initial, BodyEmitter &body) {
     return emitFragments(initial, [&](ArrayRef<Value> origins, Value current) {
       auto vectorType = initial ? dyn_cast<VectorType>(initial.getType()) : VectorType{};
       Type resultType = vectorType ? Type(VectorType::get(fragment, vectorType.getElementType()))
                                    : initial ? initial.getType() : Type{};
-      Value result = buildFragment(builder, loc, resultType, kind, [&]() -> Value {
+      Value result = [&]() -> Value {
         Value packed = vectorType ? builder.create<arith::ConstantOp>(
             loc, resultType, builder.getZeroAttr(resultType)).getResult() : current;
         int64_t registers = ShapedType::getNumElements(fragment);
@@ -1568,7 +1582,7 @@ public:
                               : element;
         }
         return packed;
-      });
+      }();
       return vectorType ? transferFragment(builder, loc, current,
           cast<VectorType>(resultType), origins, result) : result;
     });
@@ -1590,6 +1604,15 @@ private:
 static Value transferFragment(OpBuilder &b, Location loc, Value tile,
                               VectorType fragmentType, ArrayRef<Value> origins,
                               Value fragment) {
+  if (emitTypedFragments) {
+    auto type = localFragmentType(fragmentType);
+    auto indices = fragmentCoordinates(b, loc, origins, fragmentType);
+    if (fragment)
+      return b.create<InsertFragOp>(loc, tile.getType(),
+          packFragment(b, loc, fragment, type), tile, indices);
+    Value extracted = b.create<ExtractFragOp>(loc, type, tile, indices);
+    return unpackFragment(b, loc, extracted);
+  }
   bool insert = bool(fragment);
   if (!insert)
     fragment = b.create<arith::ConstantOp>(loc, fragmentType,
@@ -1625,11 +1648,11 @@ static Value mapFragments(OpBuilder &b, Location loc, VectorType type,
   Value initial = b.create<arith::ConstantOp>(loc, type, b.getZeroAttr(type));
   return FragmentTileLoopNest(b, loc, type.getShape(), {"tiled", "fragment"}, fragment)
       .emitFragments(initial, [&](ArrayRef<Value> origins, Value tile) {
-        Value value = buildFragment(b, loc, fragmentType, "compute", [&]() {
+        Value value = [&]() {
           Value result = compute(origins, fragmentType);
           markTiled(result.getDefiningOp(), b);
           return result;
-        });
+        }();
         return transferFragment(b, loc, tile, fragmentType, origins, value);
       });
 }
@@ -1723,8 +1746,24 @@ static void writeBackBlockTile(Value block, Value destination, LowerInfo info,
     decltype(emitStore) &fn;
     Value emit(ArrayRef<Value> ivs, Value current) { return fn(ivs, current); }
   } body{emitStore};
-  FragmentTileLoopNest(builder, loc, threadType.getShape(), {"tiled", "store"},
-                     getFragmentShape(threadType.getShape(), info)).emit({}, body, "store");
+  auto fragmentShape = getFragmentShape(threadType.getShape(), info);
+  FragmentTileLoopNest stores(builder, loc, threadType.getShape(), {"tiled", "store"},
+                             fragmentShape);
+  if (emitTypedFragments) {
+    auto registers = VectorType::get(fragmentShape, threadType.getElementType());
+    stores.emitFragments({}, [&](ArrayRef<Value> origins, Value) -> Value {
+      [&]() -> Value {
+        auto indices = fragmentCoordinates(builder, loc, origins, registers);
+        Value value = builder.create<ExtractFragOp>(loc, localFragmentType(registers), source, indices);
+        auto store = builder.create<StoreFragOp>(loc, value, target, indices, TypeAttr::get(vectorType));
+        if (!local) setTileLayout(store, info, builder);
+        return {};
+      }();
+      return {};
+    });
+  } else {
+    stores.emit({}, body);
+  }
   if (leader)
     builder.setInsertionPointAfter(leader);
   if (dstType.getMemorySpaceAsInt() == int(friskMs::Shared)) {
@@ -1971,6 +2010,11 @@ public:
         [&](ArrayRef<Value> origins, VectorType type) -> Value {
           Value a = transferFragment(rewriter, op.getLoc(), *lhs, type, origins);
           Value b = transferFragment(rewriter, op.getLoc(), *rhs, type, origins);
+          if (emitTypedFragments) {
+            StringRef name = FromOp::getOperationName();
+            return elementwiseFragment(rewriter, op.getLoc(), name.drop_front(6),
+                                       ValueRange{a, b}, type);
+          }
           auto newop = rewriter.create<ToOp>(op.getLoc(), a, b);
           newop->setAttr("origin",rewriter.getStringAttr(op->getName().getStringRef()));
           return newop;
@@ -2010,6 +2054,8 @@ public:
         getFragmentShape(type->getShape(), *info),
         [&](ArrayRef<Value> origins, VectorType fragmentType) -> Value {
           Value fragment = transferFragment(rewriter, op.getLoc(), *input, fragmentType, origins);
+          if (emitTypedFragments)
+            return elementwiseFragment(rewriter, op.getLoc(), "exp2", fragment, fragmentType);
           return rewriter.create<math::Exp2Op>(op.getLoc(), fragment);
         });
     rewriter.replaceOp(op, fromThreadTile(result, op.getResult().getType(),
@@ -2094,6 +2140,9 @@ public:
         [&](ArrayRef<Value> origins, VectorType dst) -> Value {
           Value fragment = transferFragment(rewriter, op.getLoc(), input,
               VectorType::get(shape, source.getElementType()), origins);
+          if (emitTypedFragments && isa<FloatType>(source.getElementType()) &&
+              isa<FloatType>(dst.getElementType()))
+            return elementwiseFragment(rewriter, op.getLoc(), "cast", fragment, dst);
           auto converted = finalizeNumericCast(rewriter, op.getLoc(), fragment, dst);
           if (failed(converted)) {
             supported = false;
@@ -2174,7 +2223,7 @@ public:
       }
     } elementBody{rewriter, loc, value, tile};
     FragmentTileLoopNest(rewriter, loc, type->getShape(), {"tiled", "fill"},
-                      getFragmentShape(type->getShape(), *info)).emit({}, elementBody, "store");
+                      getFragmentShape(type->getShape(), *info)).emit({}, elementBody);
     Value block = fromThreadTile(tile, op.getMemref().getType(), *info, rewriter, loc);
     writeBackBlockTile(block, adaptor.getMemref(), *info, rewriter, loc);
     if (op.hasValueResult())
@@ -2940,7 +2989,7 @@ static LogicalResult lowerGlobalToSharedCopy(
     }
     return indices;
   };
-  Value packet = buildFragment(rewriter, loc, vectorType, "load", [&]() {
+  Value packet = [&]() {
     if (columnMajorSource) {
       auto at = coordinates(start);
       Value buffer = source;
@@ -2995,7 +3044,7 @@ static LogicalResult lowerGlobalToSharedCopy(
         loc, scalar, packet, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(reg)});
   }
     return packet;
-  });
+  }();
   auto converted = castFloatVectorElementType(
       packet, dstType.getElementType(), rewriter, loc);
   if (failed(converted))
@@ -3003,7 +3052,7 @@ static LogicalResult lowerGlobalToSharedCopy(
   auto indices = coordinates(start);
   Value buffer = destination;
   resolveViewAccess(rewriter, loc, buffer, indices);
-  buildFragment(rewriter, loc, Type{}, "store", [&]() -> Value {
+  [&]() -> Value {
     if (pack == 1 && !columnPacking && !columnMajorSource) {
       auto store = rewriter.create<vector::StoreOp>(loc, *converted, buffer, indices);
       markTiled(store, rewriter);
@@ -3023,7 +3072,7 @@ static LogicalResult lowerGlobalToSharedCopy(
       }
     }
     return {};
-  });
+  }();
   rewriter.setInsertionPointAfter(chunk);
   if (!op->hasAttr("frisk.explicit_wait")) {
     auto sync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
@@ -3356,7 +3405,7 @@ public:
         cast<TypedAttr>(rewriter.getZeroAttr(*toTy)));
     LayoutReadBackElement element{rewriter, loc, toInfo, tid, scratch};
     Value result = FragmentTileLoopNest(rewriter, loc, toTy->getShape(), {"tiled", "layout_fragment"},
-        getFragmentShape(toTy->getShape(), toInfo)).emit(initial, element, "load");
+        getFragmentShape(toTy->getShape(), toInfo)).emit(initial, element);
     // No thread may reuse scratch until all threads have completed their reads.
     auto readSync = rewriter.create<frisk::SyncThreadsInBlockOp>(loc);
     markTiled(readSync, rewriter);
@@ -3508,7 +3557,7 @@ public:
       Value emit(ArrayRef<Value> ivs, Value current) { return fn(ivs, current); }
     } blockElement{emitBlock};
     FragmentTileLoopNest(rewriter, loc, shape, {"tiled", "block_fragment"},
-                      getFragmentShape(shape, output->info)).emit({}, blockElement, "store");
+                      getFragmentShape(shape, output->info)).emit({}, blockElement);
     for (auto &buffer : buffers) {
       if (!buffer.written)
         continue;
@@ -3563,7 +3612,7 @@ public:
     Value result = FragmentTileLoopNest(rewriter, loc, type->getShape(),
         {"tiled", "matrix_load"}, fragment).emitFragments(initial,
         [&](ArrayRef<Value> origins, Value current) {
-      Value loaded = buildFragment(rewriter, loc, fragmentType, "load", [&]() {
+      Value loaded = [&]() {
         auto base = buildMappedAccessIndices(rewriter, loc, physical, waveBase, origins, 2);
         auto inputLane = UnflattenIndexToXY(d, inst->inShmLayout.warp_layout_order,
                                             inst->inShmLayout.warp_layout);
@@ -3617,7 +3666,7 @@ public:
                 ArrayRef<OpFoldResult>{rewriter.getIndexAttr(row), rewriter.getIndexAttr(col)});
           }
         return packed;
-      });
+      }();
       return transferFragment(rewriter, loc, current, fragmentType, origins, loaded);
     });
     rewriter.replaceOp(op, fromThreadTile(result, op.getResult().getType(), *info,
@@ -3635,6 +3684,22 @@ public:
 // M/N 片段网格展平成一个 IR 循环，内层 K 循环逐片段累加；C 片段从零开始，
 // 结束后插入完整 C 线程 vector，再用 FromThreadTile 替换原 GEMM 结果。
 // op.getC() 在这里是输出 SSA 值，不是 GEMM 的输入累加器。
+static FragmentType mmaFragmentType(OpBuilder &b, VectorType registers,
+                                    const LowerInfo &info, StringRef role,
+                                    StringAttr instruction) {
+  NamedAttrList layout;
+  layout.set("role", b.getStringAttr(role));
+  layout.set("instruction", instruction);
+  layout.set("thread_widths", b.getDenseI64ArrayAttr(info.get_thread_widths()));
+  layout.set("warp_repeat", b.getDenseI64ArrayAttr(info.get_warp_repeat()));
+  layout.set("warp_layout", b.getDenseI64ArrayAttr(info.get_warp_layout()));
+  layout.set("warp_layout_order", b.getDenseI64ArrayAttr(info.base_layout.warp_layout_order));
+  layout.set("thread_creg_order", b.getDenseI64ArrayAttr(info.base_layout.thread_creg_order));
+  layout.set("warp_repeat_order", b.getDenseI64ArrayAttr(info.base_layout.warp_repeat_order));
+  layout.set("warp_threads", b.getI64IntegerAttr(info.warp_threads));
+  return FragmentType::get(b.getContext(), registers, layout.getDictionary(b.getContext()));
+}
+
 class GemmOpTiling : public OpConversionPattern<frisk::GemmOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -3701,11 +3766,16 @@ public:
     auto fragmentA = VectorType::get(aFragmentShape, aType.getElementType());
     auto fragmentB = VectorType::get(bFragmentShape, bType.getElementType());
     auto fragmentC = VectorType::get(cFragmentShape, cType.getElementType());
+    auto typedA = mmaFragmentType(rewriter, fragmentA, *infoA, "A", instName);
+    auto typedB = mmaFragmentType(rewriter, fragmentB, *infoB, "B", instName);
+    auto typedC = mmaFragmentType(rewriter, fragmentC, *infoC, "C", instName);
     auto loc = op.getLoc();
     Value initial = rewriter.create<arith::ConstantOp>(
         loc, threadTileC, rewriter.getZeroAttr(threadTileC));
     Value zeroFragment = rewriter.create<arith::ConstantOp>(
         loc, fragmentC, rewriter.getZeroAttr(fragmentC));
+    if (emitTypedFragments)
+      zeroFragment = packFragment(rewriter, loc, zeroFragment, typedC);
     // 外层枚举 C 的 (m,n) 片段；cOrigin 是线程 vector 坐标，除以片段宽度
     // 才得到片段编号 m/n。MN 与 K 循环保留到后续融合、调度完成之后。
     Value result = FragmentTileLoopNest(rewriter, loc, threadTileC.getShape(),
@@ -3724,7 +3794,27 @@ public:
           Value k = kFor.getInductionVar();
           auto operand = [&](Value block, VectorType tileType, VectorType fragType,
                              LowerInfo &info, Value row, Value col) {
-            return buildFragment(rewriter, loc, fragType, "load", [&]() {
+            if (emitTypedFragments) {
+              auto type = &info == infoA ? typedA : typedB;
+              return [&]() -> Value {
+                auto memref = dyn_cast<MemRefType>(block.getType());
+                if (memref && memref.getMemorySpaceAsInt() == int(friskMs::Shared)) {
+                  auto load = rewriter.create<LoadFragOp>(loc, type, block,
+                      ValueRange{row, col}, TypeAttr::get(tileType));
+                  setTileLayout(load, info, rewriter);
+                  SmallVector<int64_t> reuse, calc;
+                  for (auto attr : info.reuseable) reuse.push_back(int64_t(attr));
+                  for (auto attr : info.calculateAttr) calc.push_back(int64_t(attr));
+                  load->setAttr("reuse_axes", rewriter.getDenseI64ArrayAttr(reuse));
+                  load->setAttr("calc_axes", rewriter.getDenseI64ArrayAttr(calc));
+                  return load;
+                }
+                Value tile = toThreadTile(block, tileType, info, rewriter, loc);
+                tile.getDefiningOp()->setAttr("frisk.fragment_source", rewriter.getUnitAttr());
+                return rewriter.create<ExtractFragOp>(loc, type, tile, ValueRange{row, col});
+              }();
+            }
+            return [&]() {
               // 在使用位置描述完整 A/B 布局，但只抽取当前 (m,k)/(k,n) 片段。
               // fragment_source 让 Finalize 把这些 extract 原地改为实际 load，
               // 从而无需先加载包含所有 K 片段的完整线程 vector。
@@ -3734,21 +3824,27 @@ public:
                   composeAccessIndex(rewriter, loc, rewriter.getAffineDimExpr(0) * fragType.getDimSize(0), row),
                   composeAccessIndex(rewriter, loc, rewriter.getAffineDimExpr(0) * fragType.getDimSize(1), col)};
               return transferFragment(rewriter, loc, tile, fragType, origin);
-            });
+            }();
           };
           Value a = operand(adaptor.getA(), threadTileA, fragmentA, *infoA, m, k);
           Value b = operand(adaptor.getB(), threadTileB, fragmentB, *infoB, k, n);
-          Value mma = buildFragment(rewriter, loc, fragmentC, "compute", [&]() -> Value {
+          Value mma = [&]() -> Value {
+            if (emitTypedFragments)
+              return rewriter.create<GemmFragOp>(loc, typedC, a, b,
+                  kFor.getRegionIterArgs()[0], instName, constraints);
             auto op = rewriter.create<frisk::WarpMmaRROp>(
                 loc, fragmentC, a, b, kFor.getRegionIterArgs()[0]);
             markTiled(op, rewriter);
             op->setAttr("inst_name", instName);
             op->setAttr("inst_constraints", constraints);
             return op;
-          });
+          }();
           rewriter.create<affine::AffineYieldOp>(loc, mma);
           rewriter.setInsertionPointAfter(kFor);
           // K 累加结束后把 C fragment 插回当前完整线程结果；外层循环携带它。
+          if (emitTypedFragments)
+            return rewriter.create<InsertFragOp>(loc, output.getType(),
+                kFor.getResult(0), output, ValueRange{m, n}).getResult();
           return transferFragment(rewriter, loc, output, fragmentC, cOrigin, kFor.getResult(0));
         });
 
@@ -3839,9 +3935,34 @@ static void foldThreadTilePairs(Operation *root) {
 // 共享内存复用推迟到 fragment 调度完成后。
 // 只有带 thread_num 的函数会处理；需要推断时必须存在 GEMM 布局锚点。
 // 该阶段不会统一改写循环签名，也不保证桥接已经全部消失。
+template <bool Typed>
 class ConvertFriskBaseToThreadLevelIR
-    : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR> {
+    : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR<Typed>> {
+  using Base = impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR<Typed>>;
+  using Base::packSharedOperands;
+  using Base::matrixLoads;
+  using Base::asyncDirectOnly;
+  using Base::dmaPackMode;
+  using Base::swizzleQ;
+  using Base::swizzleQArg;
+  using Base::swizzleK;
+  using Base::swizzleKArg;
+  using Base::swizzleV;
+  using Base::swizzleVArg;
+  using Base::uniformMasks;
+  using Base::fuseMaskAdd;
+  using Base::wmmaShuffle;
+  using Base::wmmaLayout;
+  using Base::getOperation;
+  using Base::getContext;
+  using Base::signalPassFailure;
 public:
+  StringRef getArgument() const override {
+    return Typed ? "convert-friskbase-to-fragment" : "convert-friskbase-to-thread";
+  }
+  StringRef getName() const override {
+    return Typed ? "ConvertFriskBaseToFragmentIR" : "ConvertFriskBaseToThreadLevelIR";
+  }
   // 声明本 pass 会创建的 dialect，让 pass 管理器提前加载相应 IR 定义。
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<frisk::FriskDialect, arith::ArithDialect, affine::AffineDialect,
@@ -3851,7 +3972,8 @@ public:
 
   // 对当前 func.func 执行本阶段转换；具体处理顺序见下方分支和类说明。
   void runOnOperation() override {
-    auto kernel = getOperation();
+    llvm::SaveAndRestore<bool> mode(emitTypedFragments, Typed);
+    func::FuncOp kernel = getOperation();
     if (!kernel->hasAttr("thread_num"))
       return;
     eraseTriviallyDeadOps(kernel);
@@ -3888,7 +4010,7 @@ public:
       // Shared storage planning is deferred until after fragment scheduling.
       return;
     }
-    auto *context = &getContext();
+    MLIRContext *context = &getContext();
     s_hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, context);
     convertLayoutInfo.clear();
     // Explicit CopyToReg slices need no GEMM-anchored layout analysis.
@@ -3920,7 +4042,14 @@ public:
       return;
     }
     if (s_info->begin() != s_info->end()) {
-      const auto &info = s_info->begin()->second;
+      // Operand layouts can broadcast a wave axis (A: Mx1, B: 1xN).
+      // A DenseMap's first entry is not the kernel's compute distribution and
+      // varies across processes. Use the first GEMM output as the anchor.
+      LowerInfo *anchor = nullptr;
+      kernel.walk([&](frisk::GemmOp gemm) {
+        if (!anchor) anchor = s_info->getLowerInfo(gemm.getC(), gemm);
+      });
+      const auto &info = anchor ? *anchor : s_info->begin()->second;
       kernel->setAttr("warp_layout", DenseI64ArrayAttr::get(context, info.get_warp_layout()));
       kernel->setAttr("block_layout", DenseI64ArrayAttr::get(context, info.get_block_layout()));
       kernel->setAttr("block_layout_order", DenseI64ArrayAttr::get(context, info.get_block_layout_order()));
@@ -4113,7 +4242,11 @@ public:
 
 // 第一阶段的工厂入口，对应命令行 --convert-friskbase-to-thread。
 std::unique_ptr<mlir::Pass> createConvertFriskBaseToThreadLevelIRPass() {
-  return std::make_unique<ConvertFriskBaseToThreadLevelIR>();
+  return std::make_unique<ConvertFriskBaseToThreadLevelIR<false>>();
+}
+
+std::unique_ptr<mlir::Pass> createConvertFriskBaseToFragmentIRPass() {
+  return std::make_unique<ConvertFriskBaseToThreadLevelIR<true>>();
 }
 
 namespace {
@@ -4534,7 +4667,7 @@ public:
     Value source = op.getBlockTile();
     // fragment_source 的所有用户必须是同一 block 中的标量 extract。
     // 先完整验证用户，再逐个把线程位置映射成物理地址并替换为 memref.load；
-    // 动态的 m/n/k 起点仍留在 fragment region 内，供后续预取调度使用。
+    // 动态的 m/n/k 起点仍留在 fragment 循环内，供后续预取调度使用。
     auto materializeFragment = [&](Value buffer, ShapedType physical,
                                    const ThreadTileAccess &mapping) -> LogicalResult {
       SmallVector<vector::ExtractOp> reads;
@@ -4646,7 +4779,7 @@ public:
     FragmentTileLoopNest loops(rewriter, loc, thread.getShape(),
                             {"tiled", "load_fragment", unroll && unroll.getValue()},
                             fragment);
-    Value tile = loops.emit(initial, element, "load");
+    Value tile = loops.emit(initial, element);
     if (exchanged)
       rewriter.create<gpu::BarrierOp>(loc);
     if (storage) {
@@ -4728,7 +4861,7 @@ public:
 // 第二阶段 pass，消除线程 tiling 的中间表示。
 // 顺序有语义意义：先 cast/循环携带值重写和桥接抵消，再实际展开访存，
 // 随后消除纯暂存、检查是否仍有 To/From/view/cast。
-// fragment region/循环在此保留；共享内存复用和标记循环展开由后续 pass 完成。
+// fragment 循环在此保留；共享内存复用和标记循环展开由后续 pass 完成。
 // 最终检查失败表示存在尚不支持的布局或使用方式，不会假装已经完成 lowering。
 // WarpMmaRROp 等并不由这里全部降成机器指令；它仍需后续专门的转换 pass。
 class FinalizeThreadTiling : public impl::FinalizeThreadTilingBase< FinalizeThreadTiling>{
@@ -4825,6 +4958,163 @@ public:
 // 第二阶段的工厂入口，对应命令行 --finalize-thread-tiling。
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass(){
   return std::make_unique<FinalizeThreadTiling>();
+}
+
+namespace {
+class ConvertFragmentToThreadIR
+    : public PassWrapper<ConvertFragmentToThreadIR, OperationPass<func::FuncOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertFragmentToThreadIR)
+  StringRef getArgument() const final { return "convert-fragment-to-thread"; }
+  StringRef getDescription() const final { return "Materialize typed fragment operations as thread register IR"; }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<FriskDialect, affine::AffineDialect, arith::ArithDialect,
+        vector::VectorDialect, math::MathDialect, memref::MemRefDialect, gpu::GPUDialect>();
+  }
+  void runOnOperation() override {
+    llvm::SaveAndRestore<bool> mode(emitTypedFragments, false);
+    auto kernel = getOperation();
+    // This function pass lowers internal kernel values, not interprocedural
+    // ABIs. Do not silently change a callee signature without its callers.
+    for (Type type : kernel.getFunctionType().getInputs())
+      if (isa<FragmentType>(type)) {
+        kernel.emitError("fragment function arguments require interprocedural type conversion");
+        return signalPassFailure();
+      }
+    for (Type type : kernel.getFunctionType().getResults())
+      if (isa<FragmentType>(type)) {
+        kernel.emitError("fragment function results require interprocedural type conversion");
+        return signalPassFailure();
+      }
+    struct Work { Operation *op; FragmentType type; };
+    SmallVector<Work> work;
+    bool unsupported = false;
+    kernel.walk([&](Operation *op) {
+      if (isa<LoadFragOp, ExtractFragOp, PackFragOp, GemmFragOp, ElementwiseFragOp>(op))
+        work.push_back({op, cast<FragmentType>(op->getResult(0).getType())});
+      else if (isa<StoreFragOp, InsertFragOp, UnpackFragOp>(op))
+        work.push_back({op, cast<FragmentType>(op->getOperand(0).getType())});
+      else if ((llvm::any_of(op->getOperandTypes(), [](Type t) { return isa<FragmentType>(t); }) ||
+                llvm::any_of(op->getResultTypes(), [](Type t) { return isa<FragmentType>(t); })) &&
+               !isa<affine::AffineForOp, affine::AffineYieldOp,
+                    scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp, scf::YieldOp>(op)) {
+        op->emitError("unsupported consumer/producer of typed fragment SSA values");
+        unsupported = true;
+      }
+    });
+    if (unsupported) return signalPassFailure();
+    if (work.empty()) return;
+    // Fragments are internal SSA values, including affine/scf loop carriers.
+    // Change their representation together, then materialize operations. No
+    // analysis pointers or hardware selection are needed in this second pass.
+    auto convert = [](Type type) -> Type {
+      if (auto fragment = dyn_cast<FragmentType>(type)) return fragment.getRegisterType();
+      return type;
+    };
+    kernel.walk([&](Operation *op) {
+      for (Value result : op->getResults()) result.setType(convert(result.getType()));
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (BlockArgument arg : block.getArguments()) arg.setType(convert(arg.getType()));
+    });
+    unsigned loads = 0, stores = 0, extracts = 0, inserts = 0, gemms = 0, elementwise = 0;
+    for (auto [op, type] : work) {
+      OpBuilder b(op);
+      Location loc = op->getLoc();
+      VectorType registers = type.getRegisterType();
+      auto origins = [&](ValueRange indices) {
+        SmallVector<Value> result;
+        for (auto [d, index] : llvm::enumerate(indices))
+          result.push_back(composeAccessIndex(b, loc,
+              b.getAffineDimExpr(0) * registers.getDimSize(d), index));
+        return result;
+      };
+      Value result;
+      if (isa<PackFragOp, UnpackFragOp>(op)) {
+        result = op->getOperand(0);
+      } else if (auto load = dyn_cast<LoadFragOp>(op)) {
+        auto bridge = b.create<ToThreadTileOp>(loc, load.getTileType(), load.getSource());
+        for (NamedAttribute attr : op->getAttrs())
+          if (attr.getName() != "tile_type" && attr.getName() != "reuse_axes" && attr.getName() != "calc_axes")
+            bridge->setAttr(attr.getName(), attr.getValue());
+        bridge->setAttr("frisk.fragment_source", b.getUnitAttr());
+        result = transferFragment(b, loc, bridge, registers, origins(load.getIndices()));
+        ++loads;
+      } else if (auto extract = dyn_cast<ExtractFragOp>(op)) {
+        result = transferFragment(b, loc, extract.getSource(), registers, origins(extract.getIndices()));
+        ++extracts;
+      } else if (auto insert = dyn_cast<InsertFragOp>(op)) {
+        result = transferFragment(b, loc, insert.getDestination(), registers,
+                                  origins(insert.getIndices()), op->getOperand(0));
+        ++inserts;
+      } else if (auto store = dyn_cast<StoreFragOp>(op)) {
+        ThreadTileAccess access;
+        auto memory = cast<MemRefType>(store.getDestination().getType());
+        if (failed(access.read(op, memory, cast<VectorType>(store.getTileType())))) {
+          op->emitError("invalid serialized fragment store layout");
+          return signalPassFailure();
+        }
+        Value tid;
+        if (access.map) tid = b.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
+        auto start = origins(store.getIndices());
+        for (int64_t reg = 0; reg < registers.getNumElements(); ++reg) {
+          int64_t remaining = reg;
+          SmallVector<OpFoldResult> local(registers.getRank());
+          SmallVector<Value> coords(registers.getRank());
+          for (int d = registers.getRank() - 1; d >= 0; --d) {
+            int64_t offset = remaining % registers.getDimSize(d);
+            remaining /= registers.getDimSize(d);
+            local[d] = b.getIndexAttr(offset);
+            coords[d] = offset == 0 ? start[d] : composeAccessIndex(b, loc, b.getAffineDimExpr(0) + offset, start[d]);
+          }
+          Value scalar = b.create<vector::ExtractOp>(loc, op->getOperand(0), local);
+          auto indices = access.indices(b, loc, tid, coords, memory);
+          auto lowered = b.create<affine::AffineStoreOp>(loc, scalar, store.getDestination(), indices);
+          markTiled(lowered, b);
+        }
+        ++stores;
+      } else if (auto gemm = dyn_cast<GemmFragOp>(op)) {
+        auto mma = b.create<WarpMmaRROp>(loc, registers, op->getOperand(0), op->getOperand(1), op->getOperand(2));
+        mma->setAttr("inst_name", gemm.getInstNameAttr());
+        mma->setAttr("inst_constraints", gemm.getInstConstraintsAttr());
+        markTiled(mma, b);
+        result = mma;
+        ++gemms;
+      } else if (auto compute = dyn_cast<ElementwiseFragOp>(op)) {
+        auto values = compute.getInputs();
+        StringRef kind = compute.getKind();
+        if (kind == "add") result = b.create<arith::AddFOp>(loc, values[0], values[1]);
+        else if (kind == "sub") result = b.create<arith::SubFOp>(loc, values[0], values[1]);
+        else if (kind == "mul") result = b.create<arith::MulFOp>(loc, values[0], values[1]);
+        else if (kind == "div") result = b.create<arith::DivFOp>(loc, values[0], values[1]);
+        else if (kind == "max") result = b.create<arith::MaxNumFOp>(loc, values[0], values[1]);
+        else if (kind == "exp2") result = b.create<math::Exp2Op>(loc, values[0]);
+        else if (kind == "cast") {
+          auto casted = finalizeNumericCast(b, loc, values[0], registers);
+          if (failed(casted)) { op->emitError("unsupported fragment cast"); return signalPassFailure(); }
+          result = *casted;
+        }
+        if (!result) { op->emitError("unsupported fragment computation"); return signalPassFailure(); }
+        if (Operation *def = result.getDefiningOp(); def && def->getBlock() == op->getBlock()) {
+          if (kind != "cast" && kind != "exp2") def->setAttr("origin", b.getStringAttr("frisk." + kind));
+          markTiled(def, b);
+        }
+        ++elementwise;
+      }
+      if (result) op->getResult(0).replaceAllUsesWith(result);
+      op->erase();
+    }
+    foldThreadTilePairs(kernel);
+    eraseTriviallyDeadOps(kernel);
+    llvm::errs() << "Fragment -> thread: " << loads << " loads, " << stores
+                 << " stores, " << extracts << " extracts, " << inserts
+                 << " inserts, " << gemms << " GEMMs, " << elementwise << " elementwise ops\n";
+  }
+};
+} // namespace
+
+std::unique_ptr<mlir::Pass> createConvertFragmentToThreadIRPass() {
+  return std::make_unique<ConvertFragmentToThreadIR>();
 }
 
 } // namespace mlir::frisk

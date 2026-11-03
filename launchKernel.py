@@ -360,7 +360,7 @@ def attention_baseline(q,k,v,):
     return output
 
 
-def attention_baseline_sdpa(q, k, v):
+def attention_baseline_sdpa(q, k, v, causal=True):
     """PyTorch SDPA baseline for Q/K/V [B,H,S,D].
 
     PyTorch selects the attention backend for the current device and dtype.
@@ -371,7 +371,7 @@ def attention_baseline_sdpa(q, k, v):
         k,
         v,
         dropout_p=0.0,
-        is_causal=True,
+        is_causal=causal,
     )
 
 
@@ -589,6 +589,10 @@ def parse_arguments(argv=None):
     )
 
     parser.add_argument("--config", type=Path, help="launch.json produced by TuneAttention")
+    causal_mode = parser.add_mutually_exclusive_group()
+    causal_mode.add_argument("--causal", dest="causal", action="store_true", default=None)
+    causal_mode.add_argument("--non-causal", dest="causal", action="store_false",
+                             help="Compare against full attention without a causal mask")
     parser.add_argument("--shape", type=lambda x: parse_dimensions(x, 4),
                         help="B,H,S,D; default 1,32,4096,128 without --config")
     parser.add_argument("--json-output", type=Path, help="Write correctness and timing results as JSON")
@@ -610,13 +614,15 @@ def parse_arguments(argv=None):
             parser.error(f"Invalid --config: {exc}")
     for key, default in (("kernel", "Attn_p2"), ("k_layout", "bhsd"),
                          ("shared_mem", 0), ("shape", (1, 32, 4096, 128)),
-                         ("grid", None), ("block", None)):
+                         ("grid", None), ("block", None), ("causal", True)):
         if getattr(args, key) is None:
             setattr(args, key, config.get(key, default))
     if args.grid is None or args.block is None:
         parser.error("--grid and --block are required unless supplied by --config")
     if args.k_layout not in ("bhsd", "bhds"):
         parser.error("Invalid K layout in --config")
+    if type(args.causal) is not bool:
+        parser.error("causal in --config must be a boolean")
     if type(args.shared_mem) is not int or args.shared_mem < 0:
         parser.error("--shared-mem must be non-negative")
     if not isinstance(args.kernel, str) or not args.kernel:
@@ -703,6 +709,7 @@ def main(argv=None):
         args.warmup, args.repeat
     ))
     print("K layout    : {}".format(args.k_layout))
+    print("Causal      : {}".format(args.causal))
     if args.k_layout == "bhds":
         print("SDPA timing excludes legacy K transpose/contiguous conversion.")
 
@@ -734,7 +741,7 @@ def main(argv=None):
         shared_mem_bytes=args.shared_mem
     ) as launch:
         baseline, time_base, time_ours = benchmark_attention(
-            lambda: attention_baseline_sdpa(q, k_sdpa, v),  # qkv all [bhsd]
+            lambda: attention_baseline_sdpa(q, k_sdpa, v, causal=args.causal),
             launch,
             warmup=args.warmup,
             repeat=args.repeat,
@@ -761,6 +768,7 @@ def main(argv=None):
             "hsaco": str(Path(args.hsaco).resolve()), "kernel": args.kernel,
             "shape": args.shape, "grid": args.grid, "block": args.block,
             "k_layout": args.k_layout, "shared_mem": args.shared_mem,
+            "causal": args.causal,
             "seed": args.seed, "warmup": args.warmup, "repeat": args.repeat,
             "device": torch.cuda.get_device_name(args.device),
             "pytorch": torch.__version__, "hip": torch.version.hip,
