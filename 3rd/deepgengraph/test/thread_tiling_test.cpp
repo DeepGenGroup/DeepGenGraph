@@ -102,6 +102,7 @@ int main(int argc, char **argv) {
   });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createRetainInvariantFragmentsPass(); });
+  mlir::registerPass([] { return mlir::frisk::createFuseFragmentAccumulatorPass(); });
   mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
   mlir::registerPass([] { return mlir::frisk::createConvertFriskBaseToFragmentIRPass(); });
   mlir::registerPass([] { return mlir::frisk::createConvertFragmentToThreadIRPass(); });

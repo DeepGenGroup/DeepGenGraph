@@ -42,4 +42,5 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   MLIRROCDLToLLVMIRTranslation
   MLIRTargetLLVMIRExport
   FriskIR 
+  FriskToBase
 )

@@ -914,30 +914,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(std::move(tiling));
   llvm::outs() << "\n---------- after convert-friskbase-to-fragment ---------\n"; llvm::outs().flush();src->dump();
 
-  AddFuncPass(mlir::frisk::createConvertFragmentToThreadIRPass());
-  llvm::outs() << "\n---------- after convert-fragment-to-thread ---------\n"; llvm::outs().flush(); src->dump();
-
-  AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
-  // Packed thread coordinates are finalized here. Fuse before vector-to-LLVM
-  // lowering decomposes the independent MMA fragment insertion chain.
-  {
-    PassManager fragmentPM(ctx.get());
-    // Loop-carrier normalization can leave identity extraction loops around O.
-    // Fold those first so the original accumulator dominates every fragment.
-    fragmentPM.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
-    // Resolve bridges and simplify indices before proving fragment dependences.
-    fragmentPM.addNestedPass<func::FuncOp>(frisk::createFriskFragIRReorderPass());
-    // Dump the flat SSA schedule before storage planning and late unrolling.
-
-    if (failed(fragmentPM.run(*src)))
-      return 1;
-  }
-  // pm.addPass(mlir::createSymbolDCEPass());
+  // Optimize typed fragment SSA before materializing register vectors/accesses.
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+  AddFuncPass(frisk::createFuseFragmentAccumulatorPass());
+  llvm::outs() << "\n---- after fragment-level fuse-fragment-accumulator -----\n";
+  llvm::outs().flush(); src->dump();
+  AddFuncPass(frisk::createFriskFragIRReorderPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   AddPass(mlir::createCSEPass());
-  llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n"; llvm::outs().flush();src->dump();
-
-  // Layout inference needs the original loop-carried tiles. Once thread
-  // mapping is complete, specialize before physical packing and LDS reuse.
+  llvm::outs() << "\n---- after fragment-level frisk-frag-ir-reorder -----\n";
+  llvm::outs().flush(); src->dump();
+  // Specialize typed carriers before retention; physical storage is still deferred.
   if (simplifyLoopControl) {
     AddFuncPass(mlir::pipeline::createSimplifyLoopControlPass());
     AddPass(mlir::createCSEPass());
@@ -955,6 +942,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---- after frisk-retain-invariant-fragments -----\n";
     llvm::outs().flush(); src->dump();
   }
+
+  llvm::outs() << "\n---- after fragment-level optimization -----\n";
+  llvm::outs().flush(); src->dump();
+  AddFuncPass(mlir::frisk::createConvertFragmentToThreadIRPass());
+  llvm::outs() << "\n---------- after convert-fragment-to-thread ---------\n";
+  llvm::outs().flush(); src->dump();
+  AddFuncPass(mlir::frisk::createFinalizeThreadTilingPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+  AddPass(mlir::createCSEPass());
+  llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n";
+  llvm::outs().flush(); src->dump();
+
   AddFuncPass(frisk::createLowerFriskFragmentsPass());
   // Preserve fragment scheduling opportunities, then hoist invariant storage
   // and address calculations after physical storage planning and unrolling.
@@ -1072,7 +1071,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     os.clear_error();
     return 1;
   }
-  llvm::outs() << "[d] llvmIR 已输出到 " << outputPath << "\n";
+  llvm::outs() << "[d] llvmIR has been output to: " << outputPath << "\n";
   llvm::outs().flush();
   #endif
   return 0;

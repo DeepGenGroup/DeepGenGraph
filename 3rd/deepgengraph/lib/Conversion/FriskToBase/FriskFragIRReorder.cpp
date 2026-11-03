@@ -122,6 +122,51 @@ static bool belongsToIteration(Operation *op, Loop loop) {
   return op->getParentOp() == loop;
 }
 
+// Enumerate logical register elements, not fragment grid points. Different
+// fragment shapes can overlap even when their grid coordinates differ.
+static std::optional<Footprint> registerFootprint(Operation *op, Loop loop, int64_t iv) {
+  SmallVector<OpFoldResult> indices;
+  SmallVector<int64_t> shape;
+  if (auto insert = dyn_cast<InsertFragOp>(op)) {
+    indices.append(insert.getIndices().begin(), insert.getIndices().end());
+    shape = llvm::to_vector(cast<FragmentType>(insert.getValue().getType()).getRegisterType().getShape());
+  } else if (auto extract = dyn_cast<ExtractFragOp>(op)) {
+    indices.append(extract.getIndices().begin(), extract.getIndices().end());
+    shape = llvm::to_vector(cast<FragmentType>(extract.getResult().getType()).getRegisterType().getShape());
+  } else if (auto insert = dyn_cast<vector::InsertOp>(op)) {
+    if (isa<VectorType>(insert.getValueToStore().getType())) return {};
+    indices = insert.getMixedPosition();
+  } else if (auto extract = dyn_cast<vector::ExtractOp>(op)) {
+    if (isa<VectorType>(extract.getType())) return {};
+    indices = extract.getMixedPosition();
+  } else return {};
+  auto start = position(indices, loop, iv);
+  if (!start) return {};
+  if (shape.empty()) return Footprint{*start};
+  int64_t size = 1;
+  for (auto [d, extent] : llvm::enumerate(shape)) {
+    if (extent <= 0 || size > 65536 / extent ||
+        __builtin_mul_overflow((*start)[d], extent, &(*start)[d])) return {};
+    size *= extent;
+  }
+  Footprint result;
+  for (int64_t n = 0; n < size; ++n) {
+    auto coordinate = *start;
+    int64_t rest = n;
+    for (int d = shape.size() - 1; d >= 0; --d) {
+      if (__builtin_add_overflow(coordinate[d], rest % shape[d], &coordinate[d])) return {};
+      rest /= shape[d];
+    }
+    result.insert(coordinate);
+  }
+  return result;
+}
+static Value insertDestination(Operation *op) {
+  if (auto insert = dyn_cast<InsertFragOp>(op)) return insert.getDestination();
+  if (auto insert = dyn_cast<vector::InsertOp>(op)) return insert.getDest();
+  return {};
+}
+
 // Prove an insert chain writes distinct scalar positions on each iteration.
 // Restrict carrier uses to this chain and own-position scalar extracts; opaque
 // vector arithmetic/reductions on the whole carrier are not pointwise updates.
@@ -129,17 +174,16 @@ static bool vectorWrites(Loop loop, unsigned number,
                          SmallVectorImpl<Footprint> &writes) {
   Value arg = loop.getRegionIterArgs()[number];
   Value value = loop.getBody()->getTerminator()->getOperand(number);
-  SmallVector<vector::InsertOp> inserts;
+  SmallVector<Operation *> inserts;
   llvm::SmallPtrSet<Operation *, 16> chain;
   SmallVector<Value> versions{value};
   while (value != arg) {
-    auto insert = value.getDefiningOp<vector::InsertOp>();
-    if (!insert || insert->getBlock() != loop.getBody() ||
-        isa<VectorType>(insert.getValueToStore().getType()))
+    auto *insert = value.getDefiningOp();
+    if (!insert || !insertDestination(insert) || insert->getBlock() != loop.getBody())
       return false;
     inserts.push_back(insert);
     chain.insert(insert);
-    value = insert.getDest();
+    value = insertDestination(insert);
     versions.push_back(value);
   }
   auto ivs = iterations(loop);
@@ -149,9 +193,10 @@ static bool vectorWrites(Loop loop, unsigned number,
   for (int64_t iv : ivs) {
     Footprint current;
     for (auto insert : inserts) {
-      auto index = position(insert.getMixedPosition(), loop, iv);
-      if (!index || !current.insert(*index).second || !all.insert(*index).second)
-        return false;
+      auto footprint = registerFootprint(insert, loop, iv);
+      if (!footprint || all.size() + footprint->size() > 65536) return false;
+      for (const auto &index : *footprint)
+        if (!current.insert(index).second || !all.insert(index).second) return false;
     }
     writes.push_back(std::move(current));
   }
@@ -160,13 +205,13 @@ static bool vectorWrites(Loop loop, unsigned number,
       if (use.getOwner() == loop.getBody()->getTerminator() ||
           (chain.contains(use.getOwner()) && use.getOperandNumber() == 1))
         continue;
-      auto extract = dyn_cast<vector::ExtractOp>(use.getOwner());
-      if (!extract || !belongsToIteration(extract, loop) ||
-          isa<VectorType>(extract.getType()) || use.getOperandNumber() != 0)
+      auto *extract = use.getOwner();
+      if (!isa<ExtractFragOp, vector::ExtractOp>(extract) ||
+          !belongsToIteration(extract, loop) || use.getOperandNumber() != 0)
         return false;
       for (auto [n, iv] : llvm::enumerate(ivs)) {
-        auto index = position(extract.getMixedPosition(), loop, iv);
-        if (!index || !writes[n].count(*index))
+        auto footprint = registerFootprint(extract, loop, iv);
+        if (!footprint || !llvm::all_of(*footprint, [&](const auto &p) { return writes[n].count(p); }))
           return false;
       }
     }
@@ -192,13 +237,12 @@ static bool checkVectorUse(Value result, Loop a, Loop b, unsigned number) {
           writes != consumerWrites)
         return false;
     } else if (b->isAncestor(owner)) {
-      auto extract = dyn_cast<vector::ExtractOp>(owner);
-      if (!extract || !belongsToIteration(owner, b) ||
-          use.getOperandNumber() != 0 || isa<VectorType>(extract.getType()))
+      if (!isa<ExtractFragOp, vector::ExtractOp>(owner) || !belongsToIteration(owner, b) ||
+          use.getOperandNumber() != 0)
         return false;
       for (auto [n, iv] : llvm::enumerate(ivs)) {
-        auto index = position(extract.getMixedPosition(), b, iv);
-        if (!index || !writes[n].count(*index))
+        auto footprint = registerFootprint(owner, b, iv);
+        if (!footprint || !llvm::all_of(*footprint, [&](const auto &p) { return writes[n].count(p); }))
           return false;
       }
     }
@@ -211,6 +255,7 @@ struct Access {
   bool write;
   SmallVector<OpFoldResult> indices;
   AffineMap map;
+  bool fragment = false;
 };
 static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
   auto result = loop.walk([&](Operation *op) {
@@ -218,7 +263,15 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
     bool write = false;
     ValueRange indices;
     AffineMap map;
-    if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+    bool fragment = false;
+    if (auto load = dyn_cast<LoadFragOp>(op)) {
+      buffer = load.getSource(); fragment = true;
+    } else if (auto store = dyn_cast<StoreFragOp>(op)) {
+      buffer = store.getDestination(); write = true; fragment = true;
+    } else if (isa<ToThreadTileOp, FromThreadTileOp>(op) &&
+               llvm::any_of(op->getOperandTypes(), [](Type t) { return isa<MemRefType>(t); })) {
+      return WalkResult::interrupt(); // Hidden memory access, not a descriptor.
+    } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
       buffer = load.getMemref(); indices = load.getMapOperands(); map = load.getAffineMap();
     } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
       buffer = store.getMemref(); indices = store.getMapOperands(); map = store.getAffineMap(); write = true;
@@ -233,7 +286,7 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
       return isMemoryEffectFree(op) ? WalkResult::advance() : WalkResult::interrupt();
     }
     accesses.push_back({invariantMemref(buffer), write,
-                       SmallVector<OpFoldResult>(indices.begin(), indices.end()), map});
+                       SmallVector<OpFoldResult>(indices.begin(), indices.end()), map, fragment});
     return WalkResult::advance();
   });
   return !result.wasInterrupted();
@@ -266,6 +319,9 @@ static bool memorySafe(Loop a, Loop b, AliasAnalysis &aliases) {
     for (const Access &y : second) {
       if ((!x.write && !y.write) || aliases.alias(x.buffer, y.buffer).isNo())
         continue;
+      // A distributed fragment's register coordinates are not memory indices.
+      // Until the physical mapping is proved, reject aliasing writes.
+      if (x.fragment || y.fragment) return false;
       if (x.buffer != y.buffer || ivs.empty() ||
           !cast<MemRefType>(x.buffer.getType()).getLayout().isIdentity())
         return false;
@@ -360,13 +416,22 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
     if (!result || result.getOwner() != a || !isa<VectorType>(init.getType()))
       continue;
     Value value = a.getBody()->getTerminator()->getOperand(result.getResultNumber());
-    SmallVector<vector::InsertOp> inserts;
-    while (auto insert = value.getDefiningOp<vector::InsertOp>()) {
+    SmallVector<Operation *> inserts;
+    while (auto *insert = value.getDefiningOp()) {
+      if (!insertDestination(insert)) break;
       inserts.push_back(insert);
-      value = insert.getDest();
+      value = insertDestination(insert);
     }
     Value updated = fused.getRegionIterArgs()[firstCount + n];
-    for (auto insert : llvm::reverse(inserts)) {
+    for (auto *op : llvm::reverse(inserts)) {
+      if (auto insert = dyn_cast<InsertFragOp>(op)) {
+        SmallVector<Value> indices;
+        for (Value index : insert.getIndices()) indices.push_back(mapping.lookupOrDefault(index));
+        updated = builder.create<InsertFragOp>(insert.getLoc(), updated.getType(),
+            mapping.lookupOrDefault(insert.getValue()), updated, indices);
+        continue;
+      }
+      auto insert = cast<vector::InsertOp>(op);
       SmallVector<OpFoldResult> indices;
       for (OpFoldResult index : insert.getMixedPosition())
         indices.push_back(isa<Value>(index) ? OpFoldResult(mapping.lookupOrDefault(cast<Value>(index))) : index);
@@ -402,17 +467,17 @@ static bool pipelineFragments(Loop loop) {
     return false;
   SmallVector<Operation *> loads;
   for (Operation &op : loop.getBody()->without_terminator())
-    if (isa<affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
+    if (isa<LoadFragOp, affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
       loads.push_back(&op);
   if (loads.empty())
     return false;
   // Validate the entire iteration. Unknown effects, collectives, nested
   // control flow and writes are scheduling boundaries.
   for (Operation &op : loop.getBody()->without_terminator()) {
-    if (isa<affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
+    if (isa<LoadFragOp, affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
       continue;
     if (op.getNumRegions() || !isMemoryEffectFree(&op) ||
-        isa<gpu::ShuffleOp>(op))
+        isa<gpu::ShuffleOp, ToThreadTileOp, FromThreadTileOp>(op))
       return false;
   }
 
@@ -794,10 +859,12 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
 
 class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorder> {
   void runOnOperation() override {
+    if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
     // Restart after each mutation: nested loop handles and alias caches may
     // otherwise refer to erased operations. Each successful step removes a loop.
     bool changed;
     do {
+      if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
       changed = false;
       AliasAnalysis aliases(getOperation());
       getOperation().walk<WalkOrder::PreOrder>([&](Loop a) {
@@ -816,6 +883,7 @@ class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorde
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) { loops.push_back(loop); });
     for (auto loop : loops)
       pipelineFragments(loop);
+    if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
   }
 };
 } // namespace

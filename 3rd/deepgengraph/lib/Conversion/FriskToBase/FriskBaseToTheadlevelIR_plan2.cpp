@@ -4961,6 +4961,112 @@ std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass(){
 }
 
 namespace {
+// Keep memory reads explicit at the fragment level. A whole-tile bridge is
+// materialized at its original location, never sunk past an intervening write.
+class NormalizeFragmentAccess : public RewritePattern {
+public:
+  explicit NormalizeFragmentAccess(MLIRContext *ctx)
+      : RewritePattern(MatchAnyOpTypeTag(), 1, ctx) {}
+  LogicalResult matchAndRewrite(Operation *op, PatternRewriter &b) const override {
+    if (auto extract = dyn_cast<ExtractFragOp>(op)) {
+      auto insert = extract.getSource().getDefiningOp<InsertFragOp>();
+      if (!insert || !llvm::equal(insert.getIndices(), extract.getIndices())) return failure();
+      Value value = insert.getValue();
+      auto type = cast<FragmentType>(extract.getResult().getType());
+      if (cast<FragmentType>(value.getType()).getRegisterType() != type.getRegisterType()) return failure();
+      if (value.getType() != type) {
+        value = b.create<UnpackFragOp>(op->getLoc(), type.getRegisterType(), value);
+        value = b.create<PackFragOp>(op->getLoc(), type, value);
+      }
+      b.replaceOp(extract, value);
+      return success();
+    }
+    if (auto pack = dyn_cast<PackFragOp>(op)) {
+      auto unpack = pack.getSource().getDefiningOp<UnpackFragOp>();
+      if (!unpack || unpack.getSource().getType() != pack.getResult().getType())
+        return failure();
+      b.replaceOp(pack, unpack.getSource());
+      return success();
+    }
+    if (auto unpack = dyn_cast<UnpackFragOp>(op)) {
+      auto pack = unpack.getSource().getDefiningOp<PackFragOp>();
+      if (!pack) return failure();
+      b.replaceOp(unpack, pack.getSource());
+      return success();
+    }
+    auto load = dyn_cast<LoadFragOp>(op);
+    auto to = dyn_cast<ToThreadTileOp>(op);
+    if (!load && !to) return failure();
+    Value source = load ? load.getSource() : to.getBlockTile();
+    auto tile = dyn_cast<VectorType>(load ? load.getTileType() : to.getResult().getType());
+    auto block = dyn_cast<ShapedType>(source.getType());
+    if (!tile || !block) return failure();
+    ThreadTileAccess access;
+    if (failed(access.read(op, block, tile))) return failure();
+    if (auto from = source.getDefiningOp<FromThreadTileOp>()) {
+      if (from.getThreadTile().getType() != tile) return failure();
+      ThreadTileAccess producer;
+      if (failed(producer.read(from, block, tile))) return failure();
+      auto kernel = op->getParentOfType<func::FuncOp>();
+      auto threads = kernel ? kernel->getAttrOfType<IntegerAttr>("thread_num") : IntegerAttr{};
+      if (!threads || !access.map || !producer.map) return failure();
+      auto effective = [&](const ThreadTileAccess &a) {
+        return effectiveThreadTileMap(a.map, a.widths, a.repeats, a.unroll,
+            a.regOrder, a.repeatOrder, a.ignoreDim, block, tile);
+      };
+      if (!sameThreadTileCoordinates(effective(producer), effective(access),
+                                     tile, threads.getInt())) return failure();
+      if (load)
+        b.replaceOpWithNewOp<ExtractFragOp>(load, load.getResult().getType(),
+                                          from.getThreadTile(), load.getIndices());
+      else
+        b.replaceOp(to, from.getThreadTile());
+      return success();
+    }
+    if (!to || !isa<MemRefType>(source.getType())) return failure();
+    // Only physical storage, not a computed memref-valued tile, is readable.
+    Value root = source;
+    while (auto view = root.getDefiningOp<BufferViewOp>()) root = view.getSource();
+    if (root.getDefiningOp<FromThreadTileOp>()) return failure();
+    SmallVector<int64_t> shape(tile.getShape());
+    if (access.map)
+      for (unsigned d = 0; d < shape.size(); ++d) {
+        unsigned axis = shape.size() == 1 && access.ignoreDim == 0 ? 1 : d;
+        shape[d] = tile.getDimSize(d) == 1 ? 1 : access.widths[axis] * access.repeats[axis];
+        if (tile.getDimSize(d) % shape[d]) return failure();
+      }
+    auto fragment = VectorType::get(shape, tile.getElementType());
+    Value initial = b.create<arith::ConstantOp>(op->getLoc(), tile, b.getZeroAttr(tile));
+    auto result = FragmentTileLoopNest(b, op->getLoc(), tile.getShape(),
+        {"tiled", "load_fragment"}, shape).emitFragments(initial,
+        [&](ArrayRef<Value> origin, Value output) -> Value {
+          auto indices = fragmentCoordinates(b, op->getLoc(), origin, fragment);
+          auto read = b.create<LoadFragOp>(op->getLoc(), localFragmentType(fragment),
+                                         source, indices, TypeAttr::get(tile));
+          for (NamedAttribute attr : op->getAttrs()) read->setAttr(attr.getName(), attr.getValue());
+          return b.create<InsertFragOp>(op->getLoc(), tile, read, output, indices);
+        });
+    b.replaceOp(to, result);
+    return success();
+  }
+};
+} // namespace
+
+LogicalResult normalizeTypedFragmentIR(func::FuncOp kernel) {
+  bool typed = false;
+  kernel.walk([&](Operation *op) {
+    typed |= llvm::any_of(op->getResultTypes(), [](Type t) { return isa<FragmentType>(t); });
+  });
+  if (!typed) return success();
+  RewritePatternSet patterns(kernel.getContext());
+  patterns.add<ThreadTileLoopFinalization, NormalizeFragmentAccess>(kernel.getContext());
+  if (failed(applyPatternsGreedily(kernel, std::move(patterns)))) return failure();
+  foldThreadTilePairs(kernel);
+  eraseTriviallyDeadOps(kernel);
+  return success();
+}
+
+namespace {
 class ConvertFragmentToThreadIR
     : public PassWrapper<ConvertFragmentToThreadIR, OperationPass<func::FuncOp>> {
 public:

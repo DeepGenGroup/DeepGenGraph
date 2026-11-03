@@ -26,6 +26,9 @@ std::unique_ptr<mlir::Pass> createLowerFriskAsyncToSyncPass();
 std::unique_ptr<mlir::Pass> createScheduleAsyncCopiesPass();
 std::unique_ptr<mlir::Pass> createSinkWaitBufferReadyPass();
 void sinkWaitBufferReady(mlir::func::FuncOp kernel);
+// Expose register carriers and typed fragment reads without scalarizing them
+// or planning physical shared storage. Consumes only serialized layout IR.
+mlir::LogicalResult normalizeTypedFragmentIR(mlir::func::FuncOp kernel);
 mlir::LogicalResult packSharedMemory(mlir::func::FuncOp kernel);
 
 #define GEN_PASS_DECL_CONVERTFRISKBASETOTHREADLEVELIR

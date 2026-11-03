@@ -1,5 +1,6 @@
 // Retain immutable, thread-distributed operand values across a collective loop.
-// Run after thread tiling / loop specialization, before shared packing/reuse.
+// Run on typed fragments after loop specialization, before thread lowering.
+// The legacy scalar/vector form remains supported for standalone callers.
 // This deliberately matches dataflow and effects, never argument roles or names.
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
@@ -177,6 +178,9 @@ struct Candidate {
       if (auto load = dyn_cast<memref::LoadOp>(op)) {
         safe = load.getMemref() == storage.getResult(); return;
       }
+      if (auto load = dyn_cast<LoadFragOp>(op)) {
+        safe = load.getSource() == storage.getResult(); return;
+      }
       if (auto forOp = dyn_cast<Loop>(op)) {
         safe = forOp.hasConstantBounds() &&
                forOp.getConstantUpperBound() >= forOp.getConstantLowerBound();
@@ -187,7 +191,9 @@ struct Candidate {
       safe = !op->getNumRegions() && isMemoryEffectFree(op) &&
           (dialect == "arith" || dialect == "vector" ||
            isa<affine::AffineApplyOp, gpu::ThreadIdOp, gpu::BlockIdOp,
-               memref::SubViewOp, memref::CastOp, memref::TransposeOp>(op));
+               memref::SubViewOp, memref::CastOp, memref::TransposeOp,
+               BufferViewOp, ExtractFragOp, InsertFragOp, PackFragOp,
+               UnpackFragOp, ElementwiseFragOp>(op));
     });
     return safe;
   }
@@ -223,8 +229,7 @@ struct Candidate {
         if (wait || ready->getBlock() != loop.getBody()) return {};
         wait = ready; continue;
       }
-      auto load = dyn_cast<memref::LoadOp>(user);
-      if (!load || !loop->isAncestor(user)) return {}; // No escaping alias.
+      if (!isa<memref::LoadOp, LoadFragOp>(user) || !loop->isAncestor(user)) return {}; // No escaping alias.
       readers.push_back(topLevel(user, loop));
     }
     if (!wait || readers.empty() || !copy->isBeforeInBlock(wait)) return {};
@@ -248,6 +253,7 @@ struct Candidate {
         });
         if (!live) continue;
         Type type = value.getType();
+        if (auto fragment = dyn_cast<FragmentType>(type)) type = fragment.getRegisterType();
         if (auto vector = dyn_cast<VectorType>(type)) {
           if (vector.isScalable()) return {};
           bits += vector.getNumElements() * vector.getElementTypeBitWidth();
@@ -272,6 +278,7 @@ class RetainInvariantFragments
   void runOnOperation() override {
     if (!maxWords || getOperation().isExternal() ||
         !getOperation()->hasAttr("thread_num")) return;
+    if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
     // Only entry-level collective loops in v1: nested retention scopes would
     // require an overlapping-live-range budget, rather than independent sums.
     SmallVector<Loop> loops;

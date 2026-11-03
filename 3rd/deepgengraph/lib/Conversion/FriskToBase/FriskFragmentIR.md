@@ -9,10 +9,15 @@ MyTest 现在默认执行以下阶段（原 `convert-friskbase-to-thread` 保留
 ```
 block IR
 convert-friskbase-to-fragment   # 和旧 tiling pass 使用同一套选项、LowerInfo 与布局规划
+canonicalize                  # 使用项目 VectorSafeCanonicalizer
+fuse-fragment-accumulator      # typed MN/K 结果与逐片段 add 融合
+frisk-frag-ir-reorder          # typed fragment 循环融合、load_frag lookahead
+canonicalize / cse
+frisk-simplify-loop-control    # 可选：展开已标记的小循环
+frisk-retain-invariant-fragments # 可选：按 max-words 预算保留 operand
 convert-fragment-to-thread     # 不重新推断布局；只消费序列化的 IR
 finalize-thread-tiling
-frisk-frag-ir-reorder
-lower-frisk-fragments
+lower-frisk-fragments          # 物理存储规划仍在实际线程访存暴露后
 ```
 
 `!frisk.fragment<vector<...>, {...}>` 是当前 lane 的寄存器值。MMA 布局字典记录
@@ -55,6 +60,39 @@ python3 3rd/deepgengraph/test/check_typed_fragments.py
 该测试包含序列化、幂等性、新旧线程 IR 对照、非法访问诊断，以及在 CPU 上执行
 fragment 访存和循环累加。non-causal 完整导出与调优命令位于
 `generated_ir/typed_fragment_noncausal/`；GPU 性能必须在目标设备复测。
+
+## Fragment 层提前优化（2026-11-03）
+
+上述三个优化 Pass 现在在 MyTest 的 typed Fragment 阶段执行。独立运行也支持
+相同的序列化 IR；保留原 scalar/vector matcher，供旧流程与回归测试使用。
+
+共享的 `normalizeTypedFragmentIR` 只整理表示：将循环 carrier 规范为线程寄存器
+vector，证明布局等价后把 computed tile 的 `load_frag` 改为 `extract_frag`，
+并在原 `to_threadTile` 位置用带布局属性的 `load_frag` 循环显式读取物理存储。
+不会把整个 tile 的读取任意下沉到其使用点；这保留了遇到后续写入时的快照语义。
+匹配的 pack/unpack 与同位置 insert/extract 也在此消除。此时不展开 MMA 为指令，
+不改写物理 LDS packing，也不要求保留进程内 LowerInfo。
+
+- `frisk-frag-ir-reorder` 对 `insert_frag/extract_frag` 枚举实际覆盖的寄存器元素，
+  不把 fragment 网格坐标误当作元素坐标。只融合同迭代消费已产生位置的循环；
+  carrier 初始化来自 producer 时，在 consumer carrier 上覆盖当前 producer 片段。
+  `load_frag` 支持一级 lookahead，携带值保持 FragmentType；尾部没有越界预取。
+  typed 访存若与写入可能别名，尚未证明物理布局下的独立性时拒绝融合。
+- `frisk-retain-invariant-fragments` 接受 typed load、extract/insert、pack/unpack
+  和 elementwise 链；仍要求唯一 owned allocation/copy/wait、不变 source、
+  非空且 block-uniform 的外层循环。GEMM、shuffle、未知副作用不会附带提升。
+  预算按最终跨循环存活值的 register payload 计算，支持 FragmentType。
+- `fuse-fragment-accumulator` 识别完整且不重叠的 MN producer 循环，以及同坐标的
+  `extract_frag -> elementwise_frag add -> insert_frag` consumer 循环。把 add
+  放到每个完成的 K reduction 之后，删除额外的整 tile add 循环。
+  保持 `add(old, reduce_k(..., zero))` 的精度和操作数顺序，不把 old 提前作为
+  GEMM 的 K 初值。跨片段读取、不完整覆盖、多用户、晚定义依赖等情况拒绝。
+
+独立回归：`python3 3rd/deepgengraph/test/check_fragment_level_passes.py`，覆盖
+三个 Pass 的命中、拒绝、幂等性、carrier 覆盖，以及 CPU baseline/optimized
+数值对照。现有 typed Fragment、旧 fragment scheduling/fusion 和 retention
+测试继续适用。最佳 non-causal 同参数完整导出、阶段 IR 与数值模型验证见
+`generated_ir/fragment_level_optimized_noncausal/`；性能仍需在目标 DCU 复测。
 
 ## Fragment 组织
 
@@ -190,9 +228,9 @@ Alloc、BufferView、同步及表示转换本身没有计算迭代空间，继�
 
 ## 跨循环 operand 保留
 
-`frisk-retain-invariant-fragments` 在 thread tiling、fragment fusion 和小循环
-specialization 后、`lower-frisk-fragments` 的 packing / DMA 调度 / LDS 复用前
-运行。MyTest 和 RunFriskSHell.sh 的 `--retain-fragment-words=N` 启用它，默认
+`frisk-retain-invariant-fragments` 在 typed fragment fusion 和小循环
+specialization 后、`convert-fragment-to-thread` 前运行；旧线程 IR 仍可独立运行。
+`lower-frisk-fragments` 的 packing / DMA 调度 / LDS 复用继续在后段执行。MyTest 和 RunFriskSHell.sh 的 `--retain-fragment-words=N` 启用它，默认
 为 0（关闭）；独立 Pass 使用 `max-words=N`（默认 8）。预算是每线程最终跨
 循环存活的 payload 的 32-bit 字数，不是后端 VGPR 数的保证。
 
@@ -206,7 +244,7 @@ shared allocation 的读取生命周期在循环前结束，允许后续存储�
 匹配不读取 Q/K/V role、函数名、SSA 编号或固定 BM/BN/BK。第一版只处理
 函数入口的 block-uniform affine loop，要求证明至少执行一次，并跳过静态
 单次循环。候选 copy 必须直接位于目标循环体内，目的为该循环内独占的静态
-allocation；其用户只能是唯一 copy、唯一 wait 和 memref.load。读取可位于
+allocation；其用户只能是唯一 copy、唯一 wait 和 load_frag（或旧 memref.load）。读取可位于
 目标循环体或静态内层循环中，但其地址不能依赖目标循环的 IV/carrier。
 输入的 BK 分块仍嵌套时，先使用现有 loop specialization 暴露候选。旋转
 流水 buffer、未知控制流、逃逸别名、未知副作用以及可能改写源数据的操作
@@ -224,15 +262,18 @@ allocation；其用户只能是唯一 copy、唯一 wait 和 memref.load。读�
 
 工厂函数：`mlir::frisk::createFriskFragIRReorderPass()`。
 命令行：`--frisk-frag-ir-reorder`。已注册到 Passes.td/CMake/ThreadTilingTest，
-MyTest 在 `createFinalizeThreadTilingPass()` 后执行。
+MyTest 在 `convert-fragment-to-thread` 前执行。
 
 推荐顺序：
 
 ```
-convert-friskbase-to-thread
+convert-friskbase-to-fragment
+canonicalize  # 使用项目 VectorSafeCanonicalizer
+fuse-fragment-accumulator
+frisk-frag-ir-reorder     # typed 融合 + 下一片段预取
+# 可选 simplify-loop-control、retain-invariant-fragments
+convert-fragment-to-thread
 finalize-thread-tiling
-canonicalize  # 可选：简化索引，增加可证明的融合机会
-frisk-frag-ir-reorder     # 融合 + 下一片段预取
 lower-frisk-fragments     # shared memory 复用、延后展开 K
 canonicalize
 cse
