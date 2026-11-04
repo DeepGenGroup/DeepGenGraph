@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
   bool kLDSPrefetchSpecified = false;
   unsigned kTailPrefetch = 0;
   bool kTailPrefetchSpecified = false;
-  bool crossBNK0 = false, crossBNK0Specified = false;
+  bool crossBNK0 = false, crossBNK0Specified = false, elideBackedgeBarrier = false;
   llvm::StringRef maskAddBypass;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
@@ -57,6 +57,7 @@ int main(int argc, char **argv) {
       llvm::errs() << "use --cross-bn-k0=0|1\n"; return 1;
     }
     if (consumed) { crossBNK0Specified = true; continue; }
+    if (option == "--elide-backedge-barrier=1") { elideBackedgeBarrier = true; continue; }
     if (!mlir::frisk::parseKDMAOption(option, kDMA, consumed)) {
       llvm::errs() << "use --k-dma=128|64|64-swizzle and --k-dma-arg=N\n";
       return 1;
@@ -145,6 +146,7 @@ int main(int argc, char **argv) {
     mlir::frisk::scheduleSoftmaxFragments(*module, softmaxFragments);
     if (!mlir::frisk::prefetchPairedLDSTail(*module, kTailPrefetch)) return 1;
     mlir::frisk::prefetchNextK(*module, crossBNK0);
+    if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(*module);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;

@@ -42,7 +42,9 @@ void splitFullWaveAsyncDMAToDwords(llvm::Module &module);
 /// Sources must resolve to uniform kernel pointer arguments, and every source
 /// tensor has sourceBytes bytes (<4GiB). Retains per-lane physical addresses.
 /// Replaces wait.asyncmark(0) with an explicit VMEM wait for opaque asm loads.
-void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes);
+// With reuseLeaderRead, an LDS base that is already a readfirstlane is passed
+// straight to M0 instead of being read a second time at the DMA.
+void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bool reuseLeaderRead = false);
 
 /// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
 /// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.

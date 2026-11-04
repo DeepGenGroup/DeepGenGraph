@@ -84,6 +84,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::pipeline::createAutoPipelinePass(); });
   mlir::registerPass([] { return mlir::pipeline::createSimplifyLoopControlPass(); });
   mlir::registerPass([] { return mlir::frisk::createCoalesceWaitsAndBarriersPass(); });
+  mlir::registerPass([] { return mlir::frisk::createSimplifyBoundedAffinePass(); });
+  mlir::registerPass([] { return mlir::frisk::createHoistWaveInvariantsPass(); });
   mlir::PassRegistration<TestShmLoopSyncPass>();
   mlir::registerPass([] {
     return mlir::frisk::createNormalizeAttentionKLayoutPass();

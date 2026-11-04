@@ -372,40 +372,64 @@ void attachLLVMDebugScopes(ModuleOp module, StringRef inputFilename) {
   });
 }
 
+// --dump-llvm-passes=1: print the module after each LLVM-level optimization, using
+// the same marker format as the MLIR stages so script/annotate_lowering_log.py can
+// diff consecutive stages.
+void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
+  if (!enabled) return;
+  llvm::outs() << "\n---- after llvm " << name << " -----\n";
+  module.print(llvm::outs(), /*AssemblyAnnotationWriter=*/nullptr);
+  llvm::outs().flush();
+}
+
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators, unsigned pvInterleave = 0, bool vDoubleBuffer = false,
                              const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0,
                              mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
-                             unsigned kTailPrefetch = 0, bool crossBNK0 = false) {
+                             unsigned kTailPrefetch = 0, bool crossBNK0 = false,
+                             bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
+                             bool dumpPasses = false) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
-    mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes);
+    mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes, reuseLeaderRead);
   else if (splitPackedDMA)
     mlir::frisk::splitFullWaveAsyncDMAToDwords(module);
   mlir::frisk::protectAsyncDMASourceAddresses(module);
   if (!splitPackedDMA && !asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToHCU(module);
+  dumpLLVMPass(module, dumpPasses, "lowerAsyncDMA");
 
   // Lifetime optimization exposes thread bounds and folds LDS leader guards.
   // After all late rewrites, merge the now-constant branches before retrying
   // the same-block MMAC accumulator matcher. Keep early math fusion intact.
   if (fuseAccumulators)
     mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
+  dumpLLVMPass(module, dumpPasses, "fuseMMACAccumulators");
 
   // Final scheduling: subsequent fusion/lifetime passes must not undo the
   // requested accumulator order. Interleave first, then independently prove
   // V ownership and advance DMA into the alternate LDS slot when requested.
   mlir::frisk::interleavePVAccumulators(module, pvInterleave);
+  dumpLLVMPass(module, dumpPasses, "interleavePVAccumulators");
   mlir::frisk::doubleBufferV(module, vDoubleBuffer);
+  dumpLLVMPass(module, dumpPasses, "doubleBufferV");
   if (!mlir::frisk::narrowKDMA(module, kDMA))
     llvm::report_fatal_error("cannot apply requested K DMA configuration");
+  dumpLLVMPass(module, dumpPasses, "narrowKDMA");
   if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
     llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
+  dumpLLVMPass(module, dumpPasses, "prefetchPairedLDS");
   mlir::frisk::scheduleSoftmaxFragments(module, softmaxFragments);
+  dumpLLVMPass(module, dumpPasses, "scheduleSoftmaxFragments");
   if (!mlir::frisk::prefetchPairedLDSTail(module, kTailPrefetch))
     llvm::report_fatal_error("cannot apply requested K tail LDS prefetch configuration");
+  dumpLLVMPass(module, dumpPasses, "prefetchPairedLDSTail");
   mlir::frisk::prefetchNextK(module, crossBNK0);
+  dumpLLVMPass(module, dumpPasses, "prefetchNextK");
+  // Only legal after prefetchNextK: see the comment on elideBackedgeBarrier.
+  if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(module);
+  dumpLLVMPass(module, dumpPasses, "elideBackedgeBarrier");
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -454,6 +478,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   unsigned kLDSPrefetch = 0;
   unsigned kTailPrefetch = 0;
   bool crossBNK0 = false;
+  bool simplifyBoundedAffine = true, hoistLDSBases = true, hoistLaneShuffles = true;
+  bool elideBackedgeBarrier = true;
+  bool dumpLLVMPasses = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
   StringRef maskAddBypass = "off";
@@ -553,6 +580,23 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       }
       (pair.first == "--coalesce-waits" ? coalesceWaits : simplifyLoopControl) =
           pair.second == "1";
+    } else if (option.starts_with("--simplify-bounded-affine=") || option.starts_with("--hoist-lds-bases=") ||
+        option.starts_with("--hoist-lane-shuffles=") || option.starts_with("--elide-backedge-barrier=")) {
+      auto pair = option.split('=');
+      if (pair.second != "0" && pair.second != "1") {
+        llvm::errs() << pair.first << " must be 0 or 1\n";
+        return 1;
+      }
+      (pair.first == "--simplify-bounded-affine" ? simplifyBoundedAffine
+       : pair.first == "--hoist-lds-bases" ? hoistLDSBases
+       : pair.first == "--hoist-lane-shuffles" ? hoistLaneShuffles
+                                               : elideBackedgeBarrier) = pair.second == "1";
+    } else if (option.consume_front("--dump-llvm-passes=")) {
+      if (option != "0" && option != "1") {
+        llvm::errs() << "dump-llvm-passes must be 0 or 1\n";
+        return 1;
+      }
+      dumpLLVMPasses = option == "1";
     } else if (option.consume_front("--frag-prefetch=")) {
       if (option != "0" && option != "1") {
         llvm::errs() << "frag-prefetch must be 0 or 1\n";
@@ -856,6 +900,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     if (failed(reorder->initializeOptions(workgroupOptions, [&](const llvm::Twine &m) {
           llvm::errs() << m << '\n'; return failure(); }))) return 1;
     AddFuncPass(std::move(reorder));
+    llvm::outs() << "\n---------- after reorder-workgroups ---------\n"; llvm::outs().flush();src->dump();
   }
   AddPass(frisk::createNormalizeAttentionKLayoutPass());
   llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n"; llvm::outs().flush();src->dump();
@@ -1006,6 +1051,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   llvm::outs() << "\n---- after affine-scalrep -----\n"; llvm::outs().flush(); src->dump();
 
+  // Loops are final and normalized here. Run before lowering so that the now
+  // loop-invariant applies are hoisted by secondLowering's LICM.
+  if (simplifyBoundedAffine) {
+    AddFuncPass(frisk::createSimplifyBoundedAffinePass());
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-simplify-bounded-affine -----\n"; llvm::outs().flush(); src->dump();
+  }
+
   // mlir::affine::loopUnrollByFactor
 
   mlir::ModuleOp mod = *src;
@@ -1014,6 +1068,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
                             copyMode != "sync", coalesceWaits))
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush(); 
+  // Needs the CFG and the mbcnt/readfirstlane ops that lowering just created,
+  // and must precede LLVM translation, whose late passes rely on dominance only.
+  if (hoistLDSBases || hoistLaneShuffles) {
+    AddPass(frisk::createHoistWaveInvariantsPass(hoistLDSBases, hoistLaneShuffles));
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
+  }
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);
   
@@ -1031,29 +1092,37 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   llvmModule->setSourceFileName(argv[1]);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
   if (mathMode == "approx")
     frisk::optimizeApproximateRegisterMath(*llvmModule);
   else if (mathMode == "mmac-exp2" || mathMode == "mmac-recip")
     frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-exp2", mathMode == "mmac-recip");
   else if (mathMode == "mmac")
     frisk::fuseMMACAccumulators(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");
   if (maskAddBypass != "off")
     frisk::bypassMaskAdds(*llvmModule, maskAddBypass == "approx");
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "bypassMaskAdds");
   if (localReduce != "off")
     frisk::optimizeLocalReductions(*llvmModule, localReductionOptions);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeLocalReductions");
   if (deferLaneSum != "off") {
     frisk::deferLaneSums(*llvmModule, deferLaneSumOptions);
   }
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "deferLaneSums");
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "prefetchGlobalPackets");
   if (optimizeLifetimes)
     frisk::optimizeRegisterLifetimes(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterLifetimes");
   if (ldsReuseWords)
     frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
   if (fragPrefetch)
     frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
 
   if (canonicalizeLDS) frisk::canonicalizeLDSGEPs(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "canonicalizeLDSGEPs");
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;
@@ -1068,7 +1137,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0);
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
+      hoistLDSBases, elideBackedgeBarrier, dumpLLVMPasses);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
@@ -1354,7 +1424,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

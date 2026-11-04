@@ -225,7 +225,7 @@ void lowerWideAsyncDMAToHCU(llvm::Module &module) {
   if (generic->use_empty()) generic->eraseFromParent();
 }
 
-void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes) {
+void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bool reuseLeaderRead) {
   auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
   if (!generic) return;
   if (!sourceBytes) llvm::report_fatal_error("buffer DMA requires a nonzero tensor byte range");
@@ -263,8 +263,16 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes) {
     rsrc = b.CreateInsertElement(rsrc, b.getInt32(0x00020000), 3, "dma.buffer.rsrc");
     auto *readFirst = llvm::Intrinsic::getOrInsertDeclaration(&module,
         llvm::Intrinsic::amdgcn_readfirstlane, {i32});
-    auto *lds = b.CreateCall(readFirst,
-        {b.CreatePtrToInt(call->getArgOperand(1), i32)}, "dma.buffer.lds");
+    llvm::Value *lds = nullptr;
+    // InstCombine has widened the pointer's integer to inttoptr(zext(read)).
+    if (auto *pointer = llvm::dyn_cast<llvm::IntToPtrInst>(call->getArgOperand(1)); pointer && reuseLeaderRead) {
+      llvm::Value *integer = pointer->getOperand(0);
+      if (auto *widened = llvm::dyn_cast<llvm::ZExtInst>(integer)) integer = widened->getOperand(0);
+      if (auto *read = llvm::dyn_cast<llvm::CallInst>(integer); read && read->getCalledFunction() == readFirst)
+        lds = read;
+    }
+    if (!lds)
+      lds = b.CreateCall(readFirst, {b.CreatePtrToInt(call->getArgOperand(1), i32)}, "dma.buffer.lds");
     // M0 is an explicit output (its post-asm value is the LDS base), not an
     // opaque reserved-register clobber. The unused result still describes the
     // register definition to codegen and avoids the reserved clobber warning.

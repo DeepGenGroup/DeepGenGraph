@@ -17,6 +17,8 @@ std::unique_ptr<mlir::Pass> createBarrierOptimizePass();
 std::unique_ptr<mlir::Pass> createCoalesceWaitsAndBarriersPass();
 std::unique_ptr<mlir::Pass> createLowerFriskAsyncCopyPass(bool useAsyncCopy = true);
 std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
+std::unique_ptr<mlir::Pass> createSimplifyBoundedAffinePass();
+std::unique_ptr<mlir::Pass> createHoistWaveInvariantsPass(bool ldsBases = true, bool laneShuffles = true);
 
 // -------- Lower Pipeline ----------
 bool firstLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context) ;

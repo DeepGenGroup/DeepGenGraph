@@ -13,5 +13,9 @@ public:
 };
 /// Final export scheduling, after V buffering, K layout and softmax scheduling.
 void prefetchNextK(llvm::Module &, bool enabled = false);
+// Erase the barrier ending each iteration once it orders nothing the next
+// iteration's opening barrier does not. Only acts on functions prefetchNextK
+// transformed, and must run after it, because that pass anchors on this barrier.
+void elideBackedgeBarrier(llvm::Module &);
 }
 #endif
