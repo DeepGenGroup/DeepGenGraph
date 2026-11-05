@@ -1,3 +1,23 @@
+// ===========================================================================
+// PackSharedMemory（pack-shared-memory）：packSharedMemory 是 LowerFriskFragments（优化汇总.py 第 15 项）的第一步。
+//
+// 作用：
+//   把带 frisk.shared_pack 标注的二维 LDS alloc 改成一维物理布局，所有访问按同一个置换重写，
+//   DMA 附上反向映射 frisk.source_map。相邻访问合并成更宽的向量读写。K 的 swizzle（第 6 项打的属性）
+//   也在这里落实。外部 ABI 和全局张量布局不变。
+//
+// 输入属性（由 ConvertFriskBaseToFragmentIR 写在 alloc 上）：
+//   frisk.shared_pack         一个包的元素数（如 16-bit 元素取 8 表示 128-bit 包）。
+//   frisk.shared_pack_axis    沿第 0 轴还是第 1 轴打包。
+//   frisk.shared_pair_stride  成对打包的跨度。
+//   frisk.shared_store_stride / frisk.shared_store_pair  写入侧的跨度和配对。
+//   frisk.shared_packet_rows  行组内交错完整的列包，0 表示旧行为。
+//   frisk.shared_swizzle_src / frisk.shared_swizzle_dst  字节地址 XOR：dst 位 ^= src 位。
+// 实际映射公式见 ShmDataIODesc（lib/Analysis/ShmDataIODesc.cpp）。
+//
+// 要点：一个连通的别名分量必须整体一起改。一旦不满足条件就不改；但如果要求了 swizzle 却没有改成，
+// packSharedMemory 末尾会直接报错，因为 swizzle 是用户明确请求的。
+// ===========================================================================
 // Physical LDS packing is separate from lane ownership / logical tile layout.
 // A complete owned allocation is permuted together with all its accesses;
 // no global tensor layout or kernel ABI is changed.
@@ -27,6 +47,7 @@ static AffineMap compose(AffineMap map, SmallVectorImpl<Value> &operands) {
   return simplifyAffineMap(map);
 }
 
+// 证明 next - first 恒等于 distance。
 static bool consecutive(Value first, Value next, int64_t distance) {
   auto *ctx = first.getContext();
   SmallVector<Value> operands{next, first};
@@ -36,6 +57,11 @@ static bool consecutive(Value first, Value next, int64_t distance) {
   return constant && constant.getValue() == distance;
 }
 
+// 一次需要重写的访问。
+//   op / buffer  访问 op 和它用的 memref 别名。
+//   indices      逻辑坐标的操作数。
+//   map          affine 访问的 map，memref 访问时为空。
+//   stored       store 的值，load 时为空。
 struct Access {
   Operation *op;
   Value buffer;
@@ -44,6 +70,8 @@ struct Access {
   Value stored;
 };
 
+// 收集别名分量的全部访问。遇到任何未支持的 op（调用、subview、已有 vector 访问等）返回 false，整体放弃。
+// 矩阵读有额外要求：包必须正好 128-bit，读的元素在物理上要连续。
 static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> &accesses,
                     SmallVectorImpl<memref::DeallocOp> &deallocs) {
   for (OpOperand *use : aliases.accesses) {
@@ -95,6 +123,12 @@ static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> 
 // Merge only exact adjacent addresses with no intervening memory operation,
 // control flow, barrier, or non-speculatable computation. Reads move to the
 // first read; writes to the last write. This never reads padding or a tail.
+// 把相邻地址的标量 load/store 合并成 vector，宽度取不超过 128-bit 的 2 的幂。
+//   group    当前连续访问。
+//   first    group 的第一个下标。
+//   writing  group 是读还是写（不混合）。
+//   flush    把 group 发射成向量访问。
+// 读合并到第一条的位置，写合并到最后一条的位置。
 static void coalesce(Block *block, Value buffer) {
   auto type = cast<MemRefType>(buffer.getType());
   int64_t limit = 128 / type.getElementTypeBitWidth();
@@ -163,6 +197,7 @@ static void coalesce(Block *block, Value buffer) {
   flush();
 }
 
+// 处理一块 alloc 及其别名分量。全部检查都在改写前做完。
 static void packAllocation(memref::AllocOp alloc,
                            llvm::SmallPtrSetImpl<Operation *> &visited) {
   if (visited.contains(alloc))
@@ -174,6 +209,7 @@ static void packAllocation(memref::AllocOp alloc,
     visited.insert(storage);
   // Never permute one branch independently. Even a missing annotation on an
   // alternative invalidates the entire component, including direct accesses.
+  // 分量里的所有 alloc 必须属性完全一致。例如 select 的两个分支不能只改一支。
   for (Operation *storage : aliases.allocations) {
     if (!isa<memref::AllocOp>(storage))
       return;
@@ -218,6 +254,7 @@ static void packAllocation(memref::AllocOp alloc,
       type.getDimSize(0) % (2 * pairStride) ||
       2 * pack * type.getElementTypeBitWidth() > 128))
     return;
+  // io：物理布局描述，提供“逻辑 -> 物理”和“物理 -> 逻辑”的映射。
   auto io = ShmDataIODesc::getPacked(
       {type.getDimSize(0), type.getDimSize(1)},
       type.getElementTypeBitWidth() / 8, axis, pack, pairStride,
@@ -234,6 +271,7 @@ static void packAllocation(memref::AllocOp alloc,
   if (!collect(aliases, accesses, deallocs))
     return;
 
+  // 矩阵读只传一个基址，隐式读连续的 pack 个元素，所以必须证明这些元素在物理上真的连续。
   for (auto &access : accesses)
     if (isa<ReadMatrixFromShmOp>(access.op)) {
       // Moving just the lane pointer is correct only if every element read
@@ -268,6 +306,7 @@ static void packAllocation(memref::AllocOp alloc,
         if (selectAsyncDMATransferBytes(copy, 16,
                 io->getPhysicalToLogicalMap(alloc.getContext())) != 16) return;
 
+  // 开始改写：physical = 一维 memref，buffers[旧别名] = 新的 memref。
   IRRewriter b(alloc.getContext());
   auto physical = MemRefType::get({type.getNumElements()}, type.getElementType(),
                                  AffineMap{}, type.getMemorySpace());
@@ -300,10 +339,12 @@ static void packAllocation(memref::AllocOp alloc,
   }
   // The same descriptor maps consumers to physical LDS and inverts that
   // placement for GM producers. Preserve source strides in the copy's memref.
+  // inverse：物理 LDS 元素 -> 逻辑坐标。DMA lowering 用 frisk.source_map 计算每个 lane 的 GM 地址。
   auto inverse = io->getPhysicalToLogicalMap(b.getContext());
   for (OpOperand *use : aliases.accesses)
     if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
       copy->setAttr("frisk.source_map", AffineMapAttr::get(inverse));
+  // blocks：需要做访问合并的 (基本块, buffer)。下面的循环重写每个访问的下标。
   llvm::SetVector<std::pair<Block *, Value>> blocks;
   for (auto &access : accesses) {
     b.setInsertionPoint(access.op);

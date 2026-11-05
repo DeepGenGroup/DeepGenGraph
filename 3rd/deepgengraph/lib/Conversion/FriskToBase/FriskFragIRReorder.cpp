@@ -3,6 +3,26 @@
 // Scheduling A(all), B(all) as (A(i), B(i)) reverses B(i) / A(j), j > i.
 // Check precisely those dependences; never infer independence from a marker.
 //===----------------------------------------------------------------------===//
+// ===========================================================================
+// 本文件包含 4 个 Pass（文件末尾注册）：
+//
+// FriskFragIRReorder（frisk-frag-ir-reorder）   优化汇总.py 第 8 项，fragment 阶段
+//   1. tryFuse：把相邻的同边界 fragment 循环融合成一个，直到不动点。
+//   2. pipelineFragments：只读 fragment 循环做一级 lookahead，让“下一片的 load”排在“当前片的
+//      计算”之前，用计算掩盖 load 延迟。
+//
+// ScheduleAsyncCopies（frisk-schedule-async-copies）   第 11 项，fragment 阶段
+//   scheduleAsyncCopies：在基本块内把 DMA 发起尽量上提、wait 尽量下沉。
+//
+// AnalyzeShmLiveness（frisk-analyze-shm-liveness）   第 12 项
+//   只打印 LDS 生命周期报告，不改 IR。
+//
+// LowerFriskFragments（lower-frisk-fragments）   第 15 项，thread 阶段
+//   LDS 打包 -> 回边同步 -> 再次调度 DMA -> LDS 物理复用 -> 展开 fragment 循环。
+//
+// 文件内的证明方法：循环边界都是小常量，所以把每次迭代的坐标直接求值出来比较，是
+// “有界证明”而不是启发式。求值不出来或超预算就放弃优化。
+// ===========================================================================
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "mlir/Analysis/AliasAnalysis.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -32,11 +52,14 @@ namespace {
 #define GEN_PASS_DEF_FRISKFRAGIRREORDER
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 using Loop = affine::AffineForOp;
+// Coordinate：一个多维坐标。Footprint：一组坐标，也就是一次访问覆盖的逻辑寄存器元素或内存位置。
 using Coordinate = SmallVector<int64_t>;
 using Footprint = std::set<Coordinate>;
 
 // Evaluation is a bounded proof, not a heuristic. Unknown/dynamic coordinates
 // cause rejection. Small static fragment loops are the intended workload.
+// 可枚举的最大迭代次数，超过就放弃证明。
+// evaluate：把 value 在 iv 取某值时求成常量。支持 iv、常量、affine.apply。
 static constexpr int64_t maxIterations = 256;
 static std::optional<int64_t> evaluate(Value value, Loop loop, int64_t iv,
                                       unsigned depth = 0) {
@@ -62,6 +85,7 @@ static std::optional<int64_t> evaluate(Value value, Loop loop, int64_t iv,
   return std::nullopt;
 }
 
+// 把一组索引（常量或 SSA 值）求值成坐标。
 static std::optional<Coordinate> position(ArrayRef<OpFoldResult> indices,
                                            Loop loop, int64_t iv) {
   Coordinate result;
@@ -76,6 +100,7 @@ static std::optional<Coordinate> position(ArrayRef<OpFoldResult> indices,
   return result;
 }
 
+// 枚举循环 iv 的所有取值。返回空表示非常量边界、超限或循环本身没有迭代，调用方都按“无法证明”处理。
 static SmallVector<int64_t> iterations(Loop loop) {
   SmallVector<int64_t> values;
   if (!loop.hasConstantBounds())
@@ -92,6 +117,8 @@ static SmallVector<int64_t> iterations(Loop loop) {
 
 // A memref yield transports a descriptor, not a snapshot of the contents.
 // Only invariant descriptors are resolved; swapped/selected aliases stay unknown.
+// 穿过 iter_arg / 循环结果，找到 memref 真正的来源。只有 yield 原样传递时才穿透，
+// 轮转交换（swap）的 buffer 保持未知。
 static Value invariantMemref(Value value) {
   for (unsigned depth = 0; depth < 32; ++depth) {
     Loop loop;
@@ -124,6 +151,9 @@ static bool belongsToIteration(Operation *op, Loop loop) {
 
 // Enumerate logical register elements, not fragment grid points. Different
 // fragment shapes can overlap even when their grid coordinates differ.
+// 计算 insert/extract 在第 iv 次迭代访问了哪些逻辑寄存器元素。
+// InsertFrag/ExtractFrag 的索引是 fragment 网格坐标，要乘以 fragment 形状展开到元素，
+// 因为形状不同的 fragment 即使网格坐标不同也可能重叠。
 static std::optional<Footprint> registerFootprint(Operation *op, Loop loop, int64_t iv) {
   SmallVector<OpFoldResult> indices;
   SmallVector<int64_t> shape;
@@ -170,6 +200,11 @@ static Value insertDestination(Operation *op) {
 // Prove an insert chain writes distinct scalar positions on each iteration.
 // Restrict carrier uses to this chain and own-position scalar extracts; opaque
 // vector arithmetic/reductions on the whole carrier are not pointwise updates.
+// 证明第 number 个 vector carrier 是“每轮写不同位置”的 insert 链。
+// 输出 writes[n] = 第 n 次迭代写入的足迹。
+// versions：carrier 在 insert 链上的每个 SSA 版本。
+// chain：链上的 insert 集合。
+// 所有 version 的使用者只能是 yield、链上下一个 insert，或只读本轮已写位置的 extract。
 static bool vectorWrites(Loop loop, unsigned number,
                          SmallVectorImpl<Footprint> &writes) {
   Value arg = loop.getRegionIterArgs()[number];
@@ -219,6 +254,8 @@ static bool vectorWrites(Loop loop, unsigned number,
   return true;
 }
 
+// 证明 B 对 A 结果（vector）的使用可以融合：B 第 n 轮只读 A 第 n 轮写过的位置。
+// 如果 result 是 B 的 init，还要求 B 写的位置与 A 完全相同。
 static bool checkVectorUse(Value result, Loop a, Loop b, unsigned number) {
   SmallVector<Footprint> writes;
   if (!vectorWrites(a, number, writes))
@@ -250,6 +287,11 @@ static bool checkVectorUse(Value result, Loop a, Loop b, unsigned number) {
   return true;
 }
 
+// 一次内存访问的描述。
+//   buffer    经 invariantMemref 解析后的 memref。
+//   write     是否写。
+//   indices / map  访问索引和 affine map（map 可为空）。
+//   fragment  是否 LoadFrag/StoreFrag。它的坐标是寄存器坐标，不是内存索引，不能直接比较。
 struct Access {
   Value buffer;
   bool write;
@@ -257,6 +299,7 @@ struct Access {
   AffineMap map;
   bool fragment = false;
 };
+// 收集循环内所有内存访问。遇到 reduce、布局转换、mask、barrier、调用等一律返回 false，放弃融合。
 static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
   auto result = loop.walk([&](Operation *op) {
     Value buffer;
@@ -294,6 +337,7 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
   return !result.wasInterrupted();
 }
 
+// 访问在第 iv 次迭代的具体地址。
 static std::optional<Coordinate> address(const Access &access, Loop loop, int64_t iv) {
   auto operands = position(access.indices, loop, iv);
   if (!operands || !access.map)
@@ -309,6 +353,9 @@ static std::optional<Coordinate> address(const Access &access, Loop loop, int64_
   return coord;
 }
 
+// 融合 A(all), B(all) -> (A(i), B(i)) 只会颠倒“B(i) 与 A(j), j > i”的先后。
+// 所以只需检查这些配对：至少一方是写、可能别名时，地址必须不同。
+// 这里 earlier = B(i)，later = A(j)。
 static bool memorySafe(Loop a, Loop b, AliasAnalysis &aliases) {
   SmallVector<Access> first, second;
   if (!collectAccesses(a, first) || !collectAccesses(b, second))
@@ -342,6 +389,8 @@ static bool memorySafe(Loop a, Loop b, AliasAnalysis &aliases) {
   return true;
 }
 
+// 融合相邻循环 A、B。合法性检查分 4 步：边界相同；中间的 op 纯净且不用 A 的结果；
+// A 的结果被 B 使用时可以逐迭代对应（checkVectorUse）；memorySafe。
 static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
   if (a->hasAttr("frisk.pipelined") || b->hasAttr("frisk.pipelined"))
     return false;
@@ -374,6 +423,8 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
   if (!memorySafe(a, b, aliases))
     return false;
 
+  // inits：融合循环的初值 = A 的 inits + B 的 inits。B 的 init 如果来自 A 的结果，改用 A 的 init，
+  // 因为 A 的结果在融合循环内部才产生。下面的 overlay 负责补回 A 的本轮写入。
   OpBuilder builder(b);
   SmallVector<Value> inits(a.getInits());
   for (Value init : b.getInits()) {
@@ -395,6 +446,7 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
   IRMapping mapping;
   mapping.map(a.getInductionVar(), fused.getInductionVar());
   mapping.map(b.getInductionVar(), fused.getInductionVar());
+  // firstCount：融合循环中属于 A 的 carrier 数，前 firstCount 个属于 A，其余属于 B。
   unsigned firstCount = a.getNumResults();
   for (auto [old, replacement] : llvm::zip(a.getRegionIterArgs(),
                                          fused.getRegionIterArgs().take_front(firstCount)))
@@ -461,12 +513,15 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
 //   epilogue: compute(last, carriedLoad)
 // No speculative last load, no reordered accumulator updates, no movement
 // across a barrier or a write. Dependencies come from ordinary SSA operands.
+// 把循环拆成 prologue + steady 循环 + epilogue。
+// 要求循环带 frisk.fragment_loop、至少 2 次迭代、至少有一个 load，其它 op 都是纯计算。
 static bool pipelineFragments(Loop loop) {
   if (!loop->hasAttr("frisk.fragment_loop") || loop->hasAttr("frisk.pipelined"))
     return false;
   auto ivs = iterations(loop);
   if (ivs.size() < 2)
     return false;
+  // loads：循环体内所有读操作，都要被提前一轮。
   SmallVector<Operation *> loads;
   for (Operation &op : loop.getBody()->without_terminator())
     if (isa<LoadFragOp, affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
@@ -483,6 +538,9 @@ static bool pipelineFragments(Loop loop) {
       return false;
   }
 
+  // groups：load 集合。
+  // slice：load 及其地址计算（反向依赖），提前时一起克隆。
+  // addDependency：把 value 的定义加入 slice。依赖另一条 load（间接读）就失败。
   llvm::SmallPtrSet<Operation *, 16> groups, slice;
   groups.insert(loads.begin(), loads.end());
   std::function<bool(Value)> addDependency = [&](Value value) {
@@ -513,6 +571,8 @@ static bool pipelineFragments(Loop loop) {
 
   OpBuilder b(loop);
   Location loc = loop.getLoc();
+  // cloneLoads：在给定 iv 下克隆 load 切片，返回 load 结果。stage 记录 prologue / prefetch。
+  // cloneCompute：在给定 iv 下克隆其余计算，load 结果用已预取的值替换，返回 yield 值。
   auto cloneLoads = [&](Value iv, StringRef stage) {
     IRMapping mapping;
     mapping.map(loop.getInductionVar(), iv);
@@ -546,6 +606,11 @@ static bool pipelineFragments(Loop loop) {
     return values;
   };
 
+  // 生成：
+  //   prefetched = load(first)                         prologue
+  //   steady for i in [first, last): next = load(i+1); compute(i, carried); carried = next
+  //   compute(last, carried)                           epilogue
+  // steady 的 iter_args = 原 carrier + 预取值。边界到 last 为止，不会越界多读。
   Value first = b.create<arith::ConstantIndexOp>(loc, ivs.front());
   SmallVector<Value> prefetched = cloneLoads(first, "prologue");
   SmallVector<Value> inits(loop.getInits());
@@ -579,6 +644,9 @@ static bool pipelineFragments(Loop loop) {
 #define GEN_PASS_DEF_LOWERFRISKFRAGMENTS
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
+// 判断 wait 能否越过下一条 DMA（next）。wait lowering 后带 barrier，越过 DMA 相当于把 barrier 也
+// 移到 DMA 之后。要证明两件事：两条都是可直发的 DMA 包；这个 barrier 不是在为 next 的目的地
+// 释放旧读者。只在物理阶段使用（logical 时 scheduleAsyncCopies 直接不跨 DMA）。
 // Crossing a DMA also moves a block barrier. Prove both direct packet legality
 // and that this barrier is not releasing old readers of the crossed DMA's dst.
 // Keep this separate from ordinary independence: issue hoisting must NOT gain
@@ -601,6 +669,8 @@ public:
     // intervening independent work were already checked by the ordinary sink.
     // Only an explicit barrier can discharge previous readers/writers. Named
     // waits may themselves move later, so do not rely on them here.
+    // 从 wait 往前逐层回溯，直到遇到显式 barrier：路径上所有 op 都不能碰 next 的目的地。
+    // 回溯到循环体开头时，还要处理上一轮迭代的旧读者，所以要求循环尾已有显式 barrier。
     Operation *cursor = wait;
     while (!isa<func::FuncOp>(cursor)) {
       for (Operation *prev = cursor->getPrevNode(); prev;
@@ -629,6 +699,7 @@ private:
     return op && isa<gpu::BarrierOp, SyncThreadsInBlockOp>(op);
   }
 
+  // op 或其祖先已有手动/流水调度，不能再动。
   static bool scheduled(Operation *op) {
     for (; op; op = op->getParentOp())
       for (StringRef name : {"pipeline.stage", "pipeline.order",
@@ -639,6 +710,7 @@ private:
     return false;
   }
 
+  // 穿过 view / cast 找到 memref 的根。
   static Value origin(Value value) {
     for (unsigned depth = 0; depth < 32; ++depth) {
       Operation *def = value.getDefiningOp();
@@ -656,6 +728,8 @@ private:
     return aliases.alias(a, b).isNo();
   }
 
+  // 能否作为“直发 DMA”：thread 数合法（64 的倍数，不超过 1024）、无 buffer_view、目的是未进入复用/打包
+  // 计划的 alloc，且有可用的硬件传输宽度。
   bool isDirect(AsyncCopyGmToShmOp op) {
     auto function = op->getParentOfType<func::FuncOp>();
     auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
@@ -675,6 +749,7 @@ private:
     return selectAsyncDMATransferBytes(op, width ? width.getInt() : 0) != 0;
   }
 
+  // op 位于被移动的 barrier 之前。判断它是否可能是 next 目的地的旧读者/写者，或是 next 源的写者。
   bool safeBeforeBarrier(Operation *op, AsyncCopyGmToShmOp next) {
     // These earlier synchronous regions are not being moved across the wait.
     // Inspect their accesses so an unrelated initialization/read loop does not
@@ -719,6 +794,7 @@ private:
   AliasAnalysis &aliases;
 };
 
+// op 或其祖先带手动流水标注。注意这里的属性列表比 DirectDMAWaitMotion::scheduled 少两项。
 static bool hasExplicitSchedule(Operation *op) {
   for (; op; op = op->getParentOp())
     for (StringRef name : {"pipeline.stage", "pipeline.order",
@@ -733,6 +809,12 @@ static bool hasExplicitSchedule(Operation *op) {
 // analysis to require owned, understood destinations and proven task completion.
 // It never crosses DMA launches with a wait: that needs the final packet proof.
 // Physical reuse recomputes all lifetimes after the final schedule.
+// 核心调度函数，ScheduleAsyncCopies（fragment 阶段）和 LowerFriskFragments（物理阶段）都调用。
+//   logical  IR 仍含 fragment 或 to/from_thread_tile，说明还在逻辑阶段，规则更保守。
+//   pooled   已有 frisk.shm_pool，物理复用已定，不能再调度。
+// 对每条 DMA 做两件事：
+//   1. 把 DMA（及其描述符切片）尽量上提。
+//   2. 把对应 wait 尽量下沉到第一次真正依赖它的位置。
 static void scheduleAsyncCopies(func::FuncOp kernel) {
   bool logical = false, pooled = false;
   kernel.walk([&](Operation *op) {
@@ -743,6 +825,7 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
   });
   if (pooled)
     return; // Never invalidate an already materialized storage-reuse plan.
+  // 逻辑阶段只调度目的 LDS 可被生命周期分析完全理解（reusable）的 DMA。
   llvm::DenseSet<Value> understoodDestinations;
   if (logical) {
     auto liveness = analyzeShmLiveness(kernel);
@@ -752,6 +835,9 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
   }
   AliasAnalysis aliases(kernel);
   DirectDMAWaitMotion directWaitMotion(aliases);
+  // op 是否与这条 DMA 无关，即 DMA / wait 可以越过它：
+  // 遇到 barrier、wait、其它 DMA、to/from_thread_tile、手动调度就算相关；
+  // 读写目的地算相关；写源算相关；副作用未知算相关。
   auto independent = [&](Operation *op, AsyncCopyGmToShmOp issue) {
     return !op->walk([&](Operation *nested) {
       if (isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp,
@@ -784,6 +870,8 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
       continue;
     // Do not reschedule manually staged copies before their slot selection or
     // across iterations. Descriptor dependencies bound the motion naturally.
+    // setup：DMA 的 src/dst 描述符计算（纯计算或静态 LDS alloc），要和 DMA 一起上提。
+    // anchors：描述符依赖中不能移动的 op，上提不能越过它。
     llvm::SetVector<Operation *> setup;
     llvm::SmallPtrSet<Operation *, 16> anchors;
     std::function<void(Value)> collect = [&](Value value) {
@@ -804,6 +892,7 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
     };
     collect(issue.getSrc());
     collect(issue.getDst());
+    // 第 1 步：向上扫描，first 是 DMA 能到达的最早位置。
     Operation *first = issue;
     for (Operation *prev = issue->getPrevNode(); prev; prev = prev->getPrevNode()) {
       if (anchors.contains(prev)) break;
@@ -821,6 +910,7 @@ static void scheduleAsyncCopies(func::FuncOp kernel) {
     // Keep completion as late as possible, immediately before the first access
     // that may observe/write the destination or mutate the source. A barrier
     // remains a hard boundary even if it does not name the copied buffer.
+    // 第 2 步：找到同块内 token 相同的 wait，并逐条下沉。
     auto wait = dyn_cast_or_null<WaitBufferReadyOp>(issue->getNextNode());
     // Hoisting normally leaves wait at its original location; find its exact
     // same-block token match, stopping at a second issue into that tile.
@@ -867,6 +957,13 @@ public:
   }
 };
 
+// 确定 LDS 物理布局。以下顺序不能随意调整：
+//   packSharedMemory                       打包 LDS，确定每块 buffer 的形状。
+//   synchronizeSharedMemoryLoopBackedges   补回边 barrier，保护旧读者。
+//   scheduleAsyncCopies                    按物理信息再调度一次。
+//   synchronizeSharedMemoryLoopBackedges   调度改变了访问位置，再检查并补一次。
+//   reuseSharedMemory                      按最终生命周期分配物理地址，所以必须在调度之后。
+//   loopUnrollFull                         最后展开带 frisk.loopUnrollFull 的循环。
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
@@ -884,6 +981,7 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
       if (full && full.getValue())
         loops.push_back(loop);
     });
+    // 展开预算：累计最多新增 65536 个 op，且只展开 trip count <= 64 的循环。
     uint64_t remaining = 65536;
     for (auto loop : loops) {
       auto count = affine::getConstantTripCount(loop);
@@ -909,11 +1007,14 @@ class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorde
     if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
     // Restart after each mutation: nested loop handles and alias caches may
     // otherwise refer to erased operations. Each successful step removes a loop.
+    // 融合后 IR 变了，所以每次成功都中断遍历，从头重建 AliasAnalysis 再来。
+    // 每次成功都减少一个循环，因此必定终止。
     bool changed;
     do {
       if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
       changed = false;
       AliasAnalysis aliases(getOperation());
+      // a 往后找第一个循环 b，中间只能隔纯计算。
       getOperation().walk<WalkOrder::PreOrder>([&](Loop a) {
         for (Operation *next = a->getNextNode(); next; next = next->getNextNode()) {
           if (auto b = dyn_cast<Loop>(next)) {
@@ -926,6 +1027,7 @@ class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorde
         return changed ? WalkResult::interrupt() : WalkResult::advance();
       });
     } while (changed);
+    // 融合结束后再做一级 lookahead。
     SmallVector<Loop> loops;
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) { loops.push_back(loop); });
     for (auto loop : loops)

@@ -1,3 +1,18 @@
+// ===========================================================================
+// Pass: fuseMMACAccumulators（FuseMMACAccumulatorPass）   优化汇总.py 第 25 项，LLVM 阶段，math != strict
+//
+// 作用：把 MMAC 链末尾的那次 fadd 融入链的初值，省一次向量加法和一个临时值。
+//   before:  c = 0; c = mmac(a0,b0,c); ...; c = mmac(an,bn,c); r = seed + c
+//   after:   c = seed; c = mmac(a0,b0,c); ...; c = mmac(an,bn,c); r = c
+// 这是浮点重结合：(0 + 各项) + seed 变成 seed + 各项，所以 strict 模式不开启。
+//
+// 会运行两次：
+//   1. 早期由 optimizeRegisterMath 调用，simplifyCFG=false，保留 CFG 给后面的归约和生命周期匹配。
+//   2. printLLVM22CompatibleIR 里调用，simplifyCFG=true。生命周期优化折叠了常量分支后，
+//      融合需要的“同一基本块”才成立。
+//
+// sinkLoopLayoutConversions（第 6 项中调用）把布局转换移出循环后，O 和 C 的布局才一致，这个融合才会命中。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/FuseMMACAccumulator.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
@@ -11,6 +26,9 @@
 
 namespace mlir::frisk {
 namespace {
+// 识别 MMAC 调用，返回 nullptr 表示不是。接受两种形式：
+//   1. 3 个参数的 inline asm（A, B, C），由 isRegisterMMA 校验字符串。
+//   2. 5 个参数的 llvm.hcu.mmac.f32.16x16x16.f16，后两个控制位必须为 0。
 llvm::CallInst *getMMAC(llvm::Value *value) {
   auto *call = llvm::dyn_cast<llvm::CallInst>(value);
   if (!call || (call->arg_size() != 3 && call->arg_size() != 5) ||
@@ -41,6 +59,8 @@ llvm::CallInst *getMMAC(llvm::Value *value) {
   return call;
 }
 
+// seed 必须在链头之前可用。不支配时，把它的计算前移到链头之前。
+// moves：需要前移的指令，依赖顺序排列。只允许向量拼装和 fmul（如 broadcast(alpha) * O）。
 bool collectSeedComputations(llvm::Value *value, llvm::Instruction *before,
                              llvm::DominatorTree &dominance,
                              llvm::SmallVectorImpl<llvm::Instruction *> &moves) {
@@ -66,6 +86,12 @@ llvm::PreservedAnalyses FuseMMACAccumulatorPass::run(
   auto &dominance = analyses.getResult<llvm::DominatorTreeAnalysis>(function);
   unsigned fused = 0;
   for (llvm::BasicBlock &block : function) {
+    // inst 是链尾的 fadd。
+    //   side   哪个操作数是 MMAC 链尾。
+    //   last   链尾 MMAC。
+    //   first  沿 C 输入往上追到的链头。中间节点必须单使用、在同一基本块。
+    //   seed   fadd 的另一个操作数。
+    //   zero   链头的 C 初值，必须是全 0。
     for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
       if (inst.getOpcode() != llvm::Instruction::FAdd) continue;
       for (unsigned side : {0u, 1u}) {
@@ -103,6 +129,7 @@ llvm::PreservedAnalyses FuseMMACAccumulatorPass::run(
   return preserved;
 }
 
+// InstCombine 去掉 extract/insert 包装，才能看到连续的 MMAC 链；融合后再清理一次。
 void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG) {
   prepareRegisterMMAForLLVM(module);
   llvm::FunctionAnalysisManager analyses;

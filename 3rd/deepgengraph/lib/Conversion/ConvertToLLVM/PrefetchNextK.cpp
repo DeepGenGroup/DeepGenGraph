@@ -1,3 +1,22 @@
+// ===========================================================================
+// 本文件包含两个顺序相关的 Pass。详细说明见仓库根目录 SafeSoftmax最后两项优化说明.md。
+//
+// prefetchNextK（PrefetchNextKPass）   优化汇总.py 第 32 项，LLVM 阶段，--cross-bn-k0=1
+//   下一轮的 K0 DMA 原本在下一轮开头才发，只能干等。改成：
+//     第一轮的 K0 在进入循环前发（prime）。
+//     每轮的最后一片 PV 开始时，发下一轮的 K0（V3 只读 slot1，此时 slot0 已空），用 PV 的计算掩盖延迟。
+//   分母锚定（sum anchor）：改写新增了一个 if 分支，LLVM 会把分母加法全沉到分支之后，输入一直存活，
+//   导致 VGPR 256、scratch 20，反而变慢。所以每条分母加法后加一个空 asm，把它钉在原地。
+//   这两件事必须同时做。
+//
+// elideBackedgeBarrier   第 33 项，--elide-backedge-barrier=1，未实测
+//   删除循环尾的 reader barrier。必须在 prefetchNextK 之后运行，见函数前的说明。
+//
+// 流程（prefetchNextK）：
+//   run    函数级检查：kernel、1D wave64、唯一静态 LDS、控制流 uniform、只有一个顶层循环。
+//   plan   识别循环结构和 K0，证明合法。只分析，不改 IR。
+//   apply  加锚定 -> 在入口发 K0 -> 把循环体切开，插入“有下一轮才发”的分支 -> 删除原来的 K0。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "LDSAddressAnalysis.h"
@@ -22,10 +41,14 @@ using Call = CallInst;
 using detail::LDSAddress;
 using detail::addressNamed;
 using detail::addressAssembly;
+// Marker：函数属性，也标在新 DMA 上。elideBackedgeBarrier 用它确认前置 Pass 已运行。
+// SumMarker：标在分母锚定的空 asm 上。
+// MatrixRead：V 的矩阵读指令名。
 constexpr StringLiteral Marker = "frisk.cross_bn_k0";
 constexpr StringLiteral SumMarker = "frisk.cross_bn_sum_anchor";
 constexpr StringLiteral MatrixRead = "llvm.hcu.ds.read.m32x16.b16.v4i32.p3";
 
+// DMA 每 lane 的字节数：x2 为 8，x4 为 16，不是 DMA 返回 0。下面是一组 IR 形状识别函数。
 unsigned dmaWidth(Inst *i) {
   auto *a = addressAssembly(i);
   auto *c = dyn_cast<Call>(i);
@@ -55,6 +78,7 @@ bool pure(Inst *i) {
   return !isa<CallBase, PHINode, AllocaInst>(i) && !i->isTerminator() &&
       !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects() && isSafeToSpeculativelyExecute(i);
 }
+// 可以跟随 DMA 克隆的地址计算，包括 identity 和 readfirstlane。
 bool addressOp(Inst *i) {
   if (identity(i)) return i->getType()->isIntegerTy();
   if (addressNamed(i,"llvm.amdgcn.readfirstlane.i32")) return cast<Call>(i)->arg_size() == 1;
@@ -71,6 +95,7 @@ bool fence(Inst *i, AtomicOrdering order) {
   return f && f->getOrdering() == order &&
       f->getSyncScopeID() == f->getContext().getOrInsertSyncScopeID("workgroup");
 }
+// 一个同步序列：fence release + s_barrier + fence acquire，前面可能带 s_waitcnt（wait 非空）。
 struct Sync { Inst *release, *barrier, *acquire, *wait; };
 std::optional<Sync> sync(Inst *i) {
   if (!addressNamed(i,"llvm.amdgcn.s.barrier") || !cast<Call>(i)->arg_empty() ||
@@ -89,6 +114,16 @@ bool uniform(Value *v, SmallPtrSetImpl<Value *> &seen) {
   return llvm::all_of(i->operands(),[&](Value *op) { return uniform(op,seen); });
 }
 
+//   entry / header / body  入口块、循环头、计算块（兼 latch）。
+//   iv / next / limit      循环变量、iv + 1、循环上界。
+//   continuePredicate      继续循环的比较谓词（ULT 或 ULE）。
+//   anchor                 最后一片 PV 开始的位置，下一轮 K0 在这里发。
+//   copies                 循环开头的 K0 DMA。
+//   primeDeps              在入口发 K0 时要克隆的地址计算。
+//   nextDeps               在 anchor 发下一轮 K0 时要克隆的、依赖 iv 的计算。
+//   sums                   要加锚定的分母 FP32 加法。
+//   overlap                K0 在途时能执行的 MMAC 数。
+//   bytes                  K0 占用的 LDS 字节数。
 struct Plan {
   BasicBlock *entry = nullptr, *header = nullptr, *body = nullptr;
   PHINode *iv = nullptr;
@@ -101,6 +136,8 @@ struct Plan {
   unsigned overlap = 0, bytes = 0;
 };
 
+// 枚举线程，得到 DMA 写入的字节集合。这里写死了 wave64。
+// readBytes：同样地得到一次 LDS 读的字节集合。
 bool dmaBytes(Call *c, LDSAddress &addresses, unsigned threads, unsigned capacity, BitVector &bytes) {
   unsigned width = dmaWidth(c);
   if (!width) return false;
@@ -159,6 +196,9 @@ bool hint(Inst *i) {
   return v && v->isZero();
 }
 
+// 合法性证明，分 8 步，下面逐段标注。失败时 reason 写原因。
+// 第 1 步：循环必须是 entry -> header -> body -> header 的计数循环，iv 从 0 开始步长 1，
+// 并能证明至少执行一次（否则在入口发 K0 就是越界多读）。
 bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
           unsigned threads, unsigned capacity, Plan &p, std::string &reason) {
   auto fail = [&](StringRef why) { reason = why.str(); return false; };
@@ -203,6 +243,8 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   for (auto *user : p.next->users())
     if (user != p.iv) return fail("induction advance has other uses");
 
+  // 第 2 步：收集 body 中的同步序列，开头的 wait 之前必须只有 K0 DMA 和地址计算。
+  // syncs：所有同步序列。syncOps：它们包含的指令。
   SmallVector<Sync> syncs;
   SmallPtrSet<Inst *,32> syncOps;
   for (auto &i : *p.body) if (auto s = sync(&i)) {
@@ -222,6 +264,7 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   for (auto *c : p.copies) if (c->getArgOperand(2) != resource) return fail("mixed initial DMA resources");
   // The final matrix-read stage starts after the last wait/publication. Keep
   // the final read handoff, and keep the next iteration's original K0 wait.
+  // 第 3 步：最后一个带 wait 的同步就是最后一片 V 的 ready，它之后就是 anchor。
   auto finalReady = llvm::find_if(llvm::reverse(syncs),[](const Sync &s) { return s.wait; });
   if (finalReady == syncs.rend() || finalReady->barrier == syncs.front().barrier)
     return fail("missing final PV ready synchronization");
@@ -229,6 +272,8 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   if (!p.anchor || !p.anchor->comesBefore(syncs.back().release))
     return fail("final ready barrier is not followed by a matrix-read stage");
   LDSAddress addresses(f.getParent()->getDataLayout(),storage);
+  // 第 4 步：k0 = K0 写入的字节。anchor 之后的所有读都不能碰这段字节，否则 DMA 会覆盖正在读的数据。
+  // haveFinalRead：anchor 之后必须有矩阵读，这才是最后一片 PV。
   BitVector k0(capacity);
   for (auto *c : p.copies) {
     BitVector bytes;
@@ -253,6 +298,7 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   if (!haveFinalRead || !p.overlap) return fail("no final PV overlap window");
   // All moved global reads must remain ahead of global writes, and no unknown
   // LDS writer/async producer may survive into the final stage.
+  // 第 5 步：body 中不能有未知的内存操作。
   for (auto &i : *p.body) {
     if (i.isTerminator() || dmaWidth(&i) || syncOps.contains(&i) || pure(&i) || hint(&i) || knownCall(&i)) continue;
     if (isa<LoadInst>(&i) || addressNamed(&i,MatrixRead)) {
@@ -263,6 +309,9 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
     return fail("unknown memory effect or unsupported compute operation: " + stream.str());
   }
   // Priming may reuse only LDS whose prologue readers have been released.
+  // 第 6 步：入口块的 prologue（读 Q）。在入口发 K0 之前，必须已经有 reader barrier，
+  // 且这个 barrier 处没有未完成的 DMA，也就是 Q 的 LDS 读者已经释放。
+  // 循环外不能有其它 LDS 使用者。
   std::optional<Sync> entryHandoff;
   for (auto &i : *p.entry) if (auto s = sync(&i)) entryHandoff = s;
   if (!entryHandoff) return fail("missing prologue reader handoff");
@@ -289,6 +338,10 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   // Preflight both clone DAGs, without mutating IR on a failed match. Prime
   // clones loop-local address dependencies. Future clones only IV-dependent
   // expressions, reproducing the measured sum-anchor variant's lifetimes.
+  // 第 7 步：预检两种克隆。
+  // dependent / depends：值是否依赖 iv。
+  // prime = true：在入口克隆，所有循环内依赖都要克隆。
+  // prime = false：在 anchor 克隆，只克隆依赖 iv 的部分，其它直接复用。
   DenseMap<Value *,bool> dependent;
   dependent[p.iv] = true;
   std::function<bool(Value *)> depends = [&](Value *v) {
@@ -324,6 +377,9 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   // Find denominator additions through the SSA recurrence, not temporary
   // names/metadata. Stop at MMAC, exp/max calls and all loop PHIs. Output
   // accumulator recurrences therefore cannot pull QK arithmetic into this set.
+  // 第 8 步：从循环 PHI 的回边值反向追 FP32 加法，这就是分母递推。
+  // 遇到 MMAC、exp/max 和 PHI 就停止，所以输出累加器的 QK 运算不会被算进来。
+  // 只锚定 anchor 之前的加法。
   SmallPtrSet<Inst *,32> seen, sums;
   std::function<void(Value *)> collect = [&](Value *v) {
     auto *i = dyn_cast<Inst>(v);
@@ -343,6 +399,7 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
 void apply(Plan &p) {
   auto &ctx = p.body->getContext();
   auto *tag = MDNode::get(ctx,{});
+  // 分母锚定：add 后面加空 asm，其余使用者改用 asm 的结果。
   for (auto *add : p.sums) {
     auto *ft = FunctionType::get(add->getType(),{add->getType()},false);
     auto *a = InlineAsm::get(ft,"","=v,0",true);
@@ -353,6 +410,7 @@ void apply(Plan &p) {
     anchor->setMetadata(SumMarker,tag); anchor->setDebugLoc(add->getDebugLoc());
     add->replaceUsesWithIf(anchor,[&](Use &u) { return u.getUser() != anchor; });
   }
+  // 把 K0 DMA 及 deps 克隆到 before 之前，iv 替换成 index。
   auto clone = [&](ArrayRef<Inst *> deps, Value *index, Inst *before, StringRef prefix) {
     DenseMap<Value *,Value *> map; map[p.iv] = index;
     SmallPtrSet<Inst *,32> allowed(deps.begin(),deps.end());
@@ -368,7 +426,13 @@ void apply(Plan &p) {
     };
     for (auto *c : p.copies) cast<Inst>(copy(c))->setMetadata(Marker,tag);
   };
+  // 入口处发第一轮的 K0（iv = 0）。
   clone(p.primeDeps,ConstantInt::get(p.iv->getType(),0),p.entry->getTerminator(),"k0.prime.");
+  // 在 anchor 处切开 body：
+  //   body:    ...; if (next < limit) goto k0.issue; else goto k0.join
+  //   k0.issue 发 iv = next 的 K0
+  //   k0.join  最后一片 PV 和后面的指令
+  // 最后一轮不发，不会越界多读。
   p.next->moveBefore(p.anchor->getIterator());
   auto *join = p.body->splitBasicBlock(p.anchor,"k0.join");
   auto *issue = BasicBlock::Create(ctx,"k0.issue",p.body->getParent(),join);
@@ -378,6 +442,7 @@ void apply(Plan &p) {
   IRBuilder<> builder(oldBr);
   auto *hasNext = builder.CreateICmp(p.continuePredicate,p.next,p.limit,"k0.has.next");
   builder.CreateCondBr(hasNext,issue,join); oldBr->eraseFromParent();
+  // 删除循环开头原来的 K0 DMA。原来的 wait + barrier 保留，下一轮照常等待。
   for (auto *c : p.copies) c->eraseFromParent();
 }
 } // namespace
@@ -466,6 +531,8 @@ void elideBackedgeBarrier(llvm::Module &module) {
 
     // The last synchronization in the latch must have nothing but pure address
     // math after it, and must not complete any DMA.
+    // tail：latch 里的最后一个同步，必须不带 wait，也就是 reader barrier。
+    // onlyAddressMath：两点之间只有地址计算。
     std::optional<Sync> tail;
     for (auto &i : *latch) if (auto s = sync(&i)) tail = s;
     if (!tail || tail->wait) { skip("latch does not end in a reader barrier"); continue; }
@@ -482,6 +549,7 @@ void elideBackedgeBarrier(llvm::Module &module) {
     auto *body = branch ? branch->getSuccessor(loop.contains(branch->getSuccessor(0)) ? 0 : 1) : nullptr;
     if (!body || !loop.contains(body) || body == latch) { skip("noncanonical loop header"); continue; }
     if (llvm::any_of(*header,[&](Inst &i) { return !isa<PHINode,ICmpInst,CondBrInst>(i); })) { skip("noncanonical loop header"); continue; }
+    // head：下一轮开头的同步，必须带 wait。它之前只有地址计算，所以能代替 tail 保证同样的顺序。
     std::optional<Sync> head;
     for (auto &i : *body) if (auto s = sync(&i)) { head = s; break; }
     if (!head || !head->wait) { skip("next iteration does not open with wait+barrier"); continue; }

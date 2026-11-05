@@ -45,6 +45,24 @@
 // buildMappedAccessIndices -> FragmentTileLoopNest -> GemmOpTiling -> writeBackBlockTile ->
 // ThreadTileAccess / ToThreadTileFinalization。桥接本身不等于内存写回，
 // FromThreadTile 也不表示已经把所有线程的数据实际拼成一个大矩阵。
+// ===========================================================================
+// 本文件实现的 Pass 与 优化汇总.py 的对应关系（上面的导航写于 fragment IR 引入之前，只提到两个 Pass）：
+//
+//   PromoteGemmMatrixLoadsPass                第 5 项   GEMM B 改用矩阵读。
+//   ConvertFriskBaseToThreadLevelIR<true>     第 6 项   ConvertFriskBaseToFragmentIR，block tile -> typed fragment。
+//   ConvertFragmentToThreadIR                 第 13 项  typed fragment -> 寄存器 vector 和线程级访问。
+//   FinalizeThreadTiling                      第 14 项  消除 to/from_thread_tile 桥接和 buffer_view。
+//   ConvertFriskBaseToThreadLevelIR<false>    旧路径，不走 fragment IR，直接到线程级。
+//
+// 第 6 项不只是 lowering，下面这些优化决策都发生在它的 runOnOperation 里：
+//   promoteGemmMatrixLoads      选择矩阵读（matrixLoads 选项，和第 5 项是同一个函数）。
+//   sinkLoopLayoutConversions   把布局转换移出循环。优化汇总.py 把它记在第 14 项，实际在这里调用。
+//   planSharedOperandPacking    规划 LDS 打包。
+//   DMA 宽度规划                 dmaPackMode，见 runOnOperation 中的 DMAPlan。
+//   planSharedSwizzles          规划 LDS 地址 swizzle。
+//   sinkWaitBufferReady         推迟 wait。
+// 这里只是在 alloc 和 DMA 上打属性，真正改写地址的是 PackSharedMemory.cpp（第 15 项）。
+// ===========================================================================
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -121,6 +139,10 @@ using friskMs = frisk::attr::MemorySpace;
 // 同一逻辑矩阵在不同消费者处可能需要不同分布，所以不能只按 SSA 值缓存布局。
 // 第一阶段完成后清空 s_info；第二阶段依靠桥接属性恢复信息，不依赖旧分析对象。
 static LowerInfoMap *s_info = nullptr;
+// emitTypedFragments：true 时各 Tiling pattern 生成 typed fragment（第 6 项），false 时生成 vector（旧路径和第 13 项）。
+// s_hw：硬件规格，由 runOnOperation 设置。
+// 注意：只有这个变量是 thread_local，s_info、s_hw、convertLayoutInfo 都是普通全局变量，
+// 多个函数并行执行这些 Pass 时不安全。
 static thread_local bool emitTypedFragments = false;
 static HWSpecification *s_hw = nullptr;
 // 记录显式 ConvertLayoutOp 的源布局和目标布局，供该 op 的重写使用。
@@ -231,6 +253,9 @@ static bool matrixPacketsMatchProducers(const SharedBufferAliases &aliases) {
 
 // Run after instruction/layout selection and before thread tiling. A separate
 // pass exposes the same block IR boundary immediately after async promotion.
+// 第 5 项的核心。对每个 GEMM 的 B 操作数，如果硬件有匹配的矩阵读指令，就插入 ReadMatrixFromShmOp，
+// GEMM 的 B 改用读出来的结果。一次读 16 B，供两条 MMAC 使用。
+// 不满足条件时不改写，保留普通 load。
 static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
                                    HWSpecification &hw) {
   kernel.walk([&](frisk::GemmOp gemm) {
@@ -242,6 +267,7 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
     if (auto *producer = getViewBuffer(gemm.getB()).getDefiningOp();
         producer && producer->hasTrait<frisk::ComputedTile>())
       return; // A computed memref tile is not physical shared storage.
+    // selected：hw.matrixLoadInsts 中第一条形状和布局都匹配的指令。
     const WarpMatrtixCopyShmToRegInfo *selected = nullptr;
     for (const auto &inst : hw.matrixLoadInsts)
       if (matchesMatrixLoad(inst, type, *layout)) {
@@ -251,6 +277,7 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
     if (!selected) return;
     // Existing physical contracts cannot be discarded. Plain input and the
     // row-packet packing used by matrix reads are both supported.
+    // B 是自有 LDS 时，要确认现有的打包约定和矩阵读的包一致，否则不能改写。
     SharedBufferAliases aliases;
     if (aliases.collect(getViewBuffer(gemm.getB()))) {
       if (!matrixPacketsMatchProducers(aliases)) return;
@@ -267,6 +294,7 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
     OpBuilder b(gemm);
     // Preserve an explicit software-pipeline schedule: the read belongs to
     // the consumer stage, after the existing wait, immediately before GEMM.
+    // 新增一个 op 后，pipeline.stage / pipeline.order 数组要同步插入一项，否则长度对不上。
     auto loop = dyn_cast<affine::AffineForOp>(gemm->getParentOp());
     if (loop) {
       auto stages = loop->getAttrOfType<DenseI64ArrayAttr>("pipeline.stage");
@@ -285,6 +313,8 @@ static void promoteGemmMatrixLoads(func::FuncOp kernel, LowerInfoMap &layouts,
         loop->setAttr("pipeline.order", b.getDenseI64ArrayAttr(o));
       }
     }
+    // 生成矩阵读，并给它和 GEMM 补上 LowerInfo（In = 读的源，Out = 读的结果）。
+    // info.convertFrom 清空，因为读的结果已经是 GEMM 要的布局。
     auto resultType = MemRefType::get(type.getShape(), type.getElementType());
     auto read = b.create<frisk::ReadMatrixFromShmOp>(gemm.getLoc(), resultType,
         gemm.getB(), ValueRange{}, selected->m, selected->n,
@@ -314,6 +344,8 @@ static bool isGlobalToSharedCopy(frisk::CopyOp op) {
 // complete producer/consumer set is understood. This is independent of kernel
 // names, attention shapes and surrounding graph operators. A logical memref
 // remains row-major until pack-shared-memory rewrites ALL accesses together.
+// 决定每块 LDS 的物理打包方式，结果写成 alloc 属性，由 PackSharedMemory 落实。
+// 只处理所有访问都能理解的自有 LDS，遇到其它使用者就放弃这块 buffer。
 static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts) {
   auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
   if (!threads || threads.getInt() <= 0)
@@ -332,6 +364,14 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
       return;
     for (Operation *storage : aliases.allocations)
       visited.insert(storage);
+    // 一块 buffer 的打包方案。所有使用者必须给出一致的结果，不一致就放弃。
+    //   width              一个包的元素数，来自消费者的 thread_widths。
+    //   axis               沿哪个轴打包。
+    //   pairStride         配对两条 K 指令的 fragment 时的跨度。
+    //   instructionStride  一条 MMA 指令覆盖的跨度。
+    //   matrixPacket       矩阵读的包大小，非 0 表示这块 buffer 走矩阵读。
+    //   matrixPacketRows   矩阵读的行组数。
+    //   writers            写入这块 buffer 的 copy / async_copy。
     int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
     int64_t matrixPacket = 0;
     int64_t matrixPacketRows = 0;
@@ -450,6 +490,7 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
           return !getPhysicalMinorCopyAxis(cast<frisk::AsyncCopyGmToShmOp>(writer).getSrc());
         }))
       return;
+    // 把属性写到别名分量的所有 alloc 上，保证它们一起改写。
     auto set = [&](StringRef name, int64_t value) {
       for (Operation *storage : aliases.allocations)
         storage->setAttr(name, IntegerAttr::get(
@@ -524,8 +565,11 @@ static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts)
 // Final physical-layout negotiation, after DMA packing has selected its width.
 // Role names are only user-facing bindings to argument indices, never inferred
 // from an MMA position (K and V can both be operand B).
+// 落实 --swizzle-q/k/v：LDS 字节地址 dst 位 ^= src 位，用来减少 bank 冲突。只在 alloc 上打属性。
+// 用户请求了却无法保证时直接报错，不会悄悄跳过。必须在 DMA 宽度确定之后运行，因为要校验 128-bit DMA 合法。
 static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layouts,
     const HWSpecification &hw, ArrayRef<StringRef> options, ArrayRef<int> configuredArguments) {
+  // arguments[i]：Q/K/V 对应的 kernel 参数下标。-1 时从 frisk.shared_role 属性读取。
   SmallVector<int> arguments(configuredArguments);
   const StringRef roles[] = {"q", "k", "v"};
   for (unsigned i = 0; i < 3; ++i) {
@@ -537,6 +581,7 @@ static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layou
         arguments[i] = arg;
       }
   }
+  // bits[i]：Q/K/V 的 (src 位, dst 位)，-1 表示关闭。"on" 等价于 8:6。
   std::array<std::pair<int, int>, 3> bits;
   bool enabled = false;
   for (unsigned i = 0; i < 3; ++i) {
@@ -559,6 +604,7 @@ static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layou
     for (unsigned j = i + 1; j < 3; ++j)
       if (arguments[i] >= 0 && arguments[i] == arguments[j])
         return kernel.emitError("Q/K/V swizzle argument bindings must be distinct");
+  // roleOf：穿过视图找到 DMA 源对应的参数，返回 0/1/2（Q/K/V），未知返回 -1。
   auto roleOf = [&](Value value) -> int {
     while (true) {
       if (auto view = value.getDefiningOp<BufferViewOp>()) value = view.getSource();
@@ -572,6 +618,8 @@ static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layou
           value == kernel.getArgument(arguments[i])) return i;
     return -1;
   };
+  // matched[i]：Q/K/V 匹配到的 DMA 数。启用了 swizzle 却没有匹配时报错。
+  // visited：已处理的 alloc，避免别名分量重复处理。
   bool invalid = false;
   std::array<unsigned, 3> matched{};
   llvm::SmallPtrSet<Operation *, 16> visited;
@@ -1152,7 +1200,13 @@ static void insertWmmaCLayoutOps(func::FuncOp kernel, LowerInfoMap &infoMap) {
 // grouping (including the zero-initialized inner matrix reduction).
 // Match the legacy whole-vector writeback explicitly; do not move physical
 // memory, partial updates, extra carrier reads, or nonuniform initial values.
+// 优化汇总.py 第 14 项记录的“布局转换移出循环”，实际在第 6 项调用。
+//   before:  for { pv = mmac(...); s = convert(pv); O = alpha * O + s; copy(O) }
+//   after:   for { pv = mmac(...); O = alpha * O + pv; copy(O) }  然后 convert(O)
+// 跨 lane 重排（ds.bpermute）从每轮一次变成循环结束一次。
+// 额外好处：O 和 MMAC 的 C 布局一致后，fuseMMACAccumulators 才能把 alpha * O 融进 MMAC。
 static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) {
+  // 候选要求：convert 在循环体内，有 WMMA shuffle 计划，唯一使用者是 add。
   SmallVector<frisk::ConvertLayoutOp> candidates;
   kernel.walk([&](frisk::ConvertLayoutOp op) { candidates.push_back(op); });
   for (auto convert : candidates) {
@@ -1164,6 +1218,8 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     auto add = dyn_cast<frisk::AddOp>(*convert->getUsers().begin());
     if (!add || add->getBlock() != loop.getBody() || !add->hasOneUse())
       continue;
+    // carrier：循环携带的累加值（iter_arg）。add 的另一个操作数就是它，或者是 alpha * 它。
+    // scale：可选的 alpha * carrier。alpha：缩放系数。
     Value carrier = add.getLhs() == convert->getResult(0)
                         ? add.getRhs() : add.getLhs();
     // Online softmax carries alpha * O + PV. Only a single-use, row-wise
@@ -1184,6 +1240,9 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     if (!arg || arg.getOwner() != loop.getBody() || arg.getArgNumber() == 0 ||
         !isa<VectorType>(arg.getType()))
       continue;
+    // index：carrier 在 iter_args 中的下标。
+    // initial / splat：初值必须是 splat 常量，重排后不变，所以不需要转换。
+    // copy：把结果写回 carrier 的 whole-tile copy。yield：循环终结符。
     unsigned index = arg.getArgNumber() - 1;
     auto initial = loop.getInits()[index].getDefiningOp<arith::ConstantOp>();
     auto splat = initial ? dyn_cast<DenseElementsAttr>(initial.getValue())
@@ -1211,6 +1270,8 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     auto type = cast<ShapedType>(carrier.getType());
     if (type.getShape() != cast<ShapedType>(convert.getMemref().getType()).getShape())
       continue;
+    // alpha 原来按目标布局读取，现在要按 source 布局读取。
+    // 逐线程坐标必须证明不变，否则 alpha 会乘到错误的行上。
     std::optional<LowerInfo> alphaLayout;
     if (scale) {
       auto alphaType = dyn_cast<ShapedType>(alpha.getType());
@@ -1237,6 +1298,7 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
         continue;
       alphaLayout = projected;
     }
+    // 开始改写：循环结果后插入 boundary 转换，再把循环内相关值的 LowerInfo 改成 source 布局，最后删除原 convert。
     OpBuilder b(loop);
     b.setInsertionPointAfter(loop);
     Value result = loop.getResult(index);
@@ -4082,6 +4144,17 @@ static void foldThreadTilePairs(Operation *root) {
 // 共享内存复用推迟到 fragment 调度完成后。
 // 只有带 thread_num 的函数会处理；需要推断时必须存在 GEMM 布局锚点。
 // 该阶段不会统一改写循环签名，也不保证桥接已经全部消失。
+// Typed = true 是第 6 项 ConvertFriskBaseToFragmentIR，false 是旧路径。两者共用下面的流程，差别在 emitTypedFragments。
+// runOnOperation 的实际步骤（比上面的说明多）：
+//   1. 预扫描是否需要 tiling 和布局分析。
+//   2. WMMA 布局方法选择，LowerInfoAnalysis 推断布局。
+//   3. promoteGemmMatrixLoads，插入布局转换，sinkLoopLayoutConversions。
+//   4. planSharedOperandPacking -> DMA 宽度规划 -> planSharedSwizzles（有先后依赖）。
+//   5. asyncDirectOnly 时把部分 DMA 退回同步拷贝。
+//   6. sinkWaitBufferReady。
+//   7. applyPartialConversion 执行各 Tiling pattern。
+//   8. 折叠桥接并清理。
+// 这个函数约 270 行，其中 DMA 规划和 asyncDirectOnly 是内联写的。
 template <bool Typed>
 class ConvertFriskBaseToThreadLevelIR
     : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR<Typed>> {
@@ -4119,6 +4192,7 @@ public:
 
   // 对当前 func.func 执行本阶段转换；具体处理顺序见下方分支和类说明。
   void runOnOperation() override {
+    // 函数结束时自动恢复 emitTypedFragments。
     llvm::SaveAndRestore<bool> mode(emitTypedFragments, Typed);
     func::FuncOp kernel = getOperation();
     if (!kernel->hasAttr("thread_num"))
@@ -4126,6 +4200,9 @@ public:
     eraseTriviallyDeadOps(kernel);
     // 预扫描区分“有操作要改写”和“需要 GEMM 推导布局”。
     // 显式线程 copy_to_reg、global->shared 搬运、shared/global 分配可不依赖布局分析。
+    // needsTiling：存在还没 tiled 的 block 级 op。
+    // needsLayoutAnalysis：其中有 op 需要 GEMM 推导布局。
+    // hasLayoutAnchor：函数里有 GEMM，布局推断的起点。
     bool needsTiling = false;
     bool needsLayoutAnalysis = false;
     bool hasLayoutAnchor = false;
@@ -4176,6 +4253,7 @@ public:
       signalPassFailure();
       return;
     }
+    // useShuffle：WMMA C 的布局转换用 wave shuffle。method 是 wmma-layout 选项（auto/shared/shuffle/b-permute）。
     bool useShuffle = method == "auto" ? bool(wmmaShuffle) : true;
     // An explicit method overrides any earlier planner request. Legacy auto
     // preserves wmma-shuffle=false and separately planned contiguous outputs.
@@ -4215,6 +4293,10 @@ public:
       });
     if (packSharedOperands)
       planSharedOperandPacking(kernel, *s_info);
+    // DMA 宽度规划：让 GM -> LDS 的 DMA 达到硬件最大宽度（128-bit）。
+    //   useKPack  调用方把 tile 调粗，每个 lane 搬多个消费者的包。
+    //   noKPack   减少搬运的 wave 数（copying / kpack）。
+    // 先基于原始消费者信息算好所有 DMAPlan，再统一写属性，因为修改属性会影响后面的计算。
     if (dmaPackMode != "legacy") {
       if (dmaPackMode != "useKPack" && dmaPackMode != "noKPack") {
         kernel.emitError("dma-pack-mode must be legacy, useKPack, or noKPack");
@@ -4222,12 +4304,20 @@ public:
       }
       const auto *dma = s_hw->dataCopyInfo.getMaxDMATransfer();
       bool invalid = false;
+      // 一条 DMA 的规划结果。
+      //   issue    DMA op。
+      //   storage  目的 LDS 的所有 alloc。
+      //   axis     物理打包轴。
+      //   width    物理包的元素数。
+      //   kpack    一个 DMA 包里含多少个消费者的包。
+      //   copying  参与搬运的线程数。
       struct DMAPlan {
         frisk::AsyncCopyGmToShmOp issue;
         SmallVector<Operation *> storage;
         int64_t axis, width, kpack, copying;
       };
       SmallVector<DMAPlan> dmaPlans;
+      // storagePlans：alloc -> (轴, 宽度)。同一块 LDS 的多条 DMA 必须一致。
       DenseMap<Operation *, std::pair<int64_t, int64_t>> storagePlans;
       kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
         auto type = cast<MemRefType>(issue.getSrc().getType());
@@ -4250,6 +4340,7 @@ public:
           invalid = true;
           return;
         }
+        // kpack = DMA 每 lane 字节数 / 消费者包的字节数。
         int64_t kpack = dma->bytesPerLane / (consumer.getInt() * bits / 8);
         if (type.getNumElements() % (s_hw->getWarpsize() * dma->bytesPerLane * 8 / bits)) {
           issue.emitError("packed DMA export requires complete wave packets (no partial-wave tail)");
@@ -4400,6 +4491,9 @@ std::unique_ptr<mlir::Pass> createConvertFriskBaseToFragmentIRPass() {
 }
 
 namespace {
+// Pass: PromoteGemmMatrixLoads（frisk-promote-gemm-matrix-loads）   优化汇总.py 第 5 项，block 阶段
+// 作用：把 promoteGemmMatrixLoads 提到 fragment lowering 之前单独运行，让后续 Pass 能看到显式的矩阵读。
+// 它自己跑一遍布局分析（layouts），wmmaLayout 必须和后面的 ConvertFriskBaseToFragmentIR 保持一致。
 class PromoteGemmMatrixLoadsPass
     : public PassWrapper<PromoteGemmMatrixLoadsPass, OperationPass<func::FuncOp>> {
 public:
@@ -5008,6 +5102,9 @@ public:
 #include "deepgengraph/Conversion/FriskToBase/Passes.h.inc"
 
 
+// Pass: FinalizeThreadTiling（finalize-thread-tiling）   优化汇总.py 第 14 项，thread 阶段
+// 注意：优化汇总.py 在这一项记录的“布局转换移出循环”不在这个 Pass 里，见 sinkLoopLayoutConversions。
+// 这个 Pass 本身做的是 lowering：消除桥接，把逻辑访问变成实际访存。
 // 第二阶段 pass，消除线程 tiling 的中间表示。
 // 顺序有语义意义：先 cast/循环携带值重写和桥接抵消，再实际展开访存，
 // 随后消除纯暂存、检查是否仍有 To/From/view/cast。
@@ -5111,6 +5208,11 @@ std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass(){
 }
 
 namespace {
+// normalizeTypedFragmentIR 使用的规范化模式。fragment 级 Pass 开始前都会调用，让它们看到统一的形状。
+//   extract(insert(v, i), i)  ->  v
+//   pack(unpack(x))、unpack(pack(x))  抵消
+//   load_frag / to_thread(from_thread(t))  坐标证明相同时，直接取 t，省掉内存访问
+//   to_thread(物理存储)  展开成逐 fragment 的 load_frag
 // Keep memory reads explicit at the fragment level. A whole-tile bridge is
 // materialized at its original location, never sunk past an intervening write.
 class NormalizeFragmentAccess : public RewritePattern {
@@ -5202,6 +5304,8 @@ public:
 };
 } // namespace
 
+// fragment 阶段的公共规范化。FuseFragmentAccumulator、FriskFragIRReorder、RetainInvariantFragments 都调用。
+// 函数里没有 fragment 类型时直接返回。
 LogicalResult normalizeTypedFragmentIR(func::FuncOp kernel) {
   bool typed = false;
   kernel.walk([&](Operation *op) {
@@ -5217,6 +5321,16 @@ LogicalResult normalizeTypedFragmentIR(func::FuncOp kernel) {
 }
 
 namespace {
+// Pass: ConvertFragmentToThreadIR（convert-fragment-to-thread）   优化汇总.py 第 13 项，thread 阶段
+// 作用：把 typed fragment IR 落到线程级 IR。fragment 类型变成寄存器 vector，语义 op 变成实际运算：
+//   load_frag        -> to_thread_tile + 切片
+//   store_frag       -> 逐元素 affine.store
+//   gemm_frag        -> WarpMmaRROp（MMA 指令）
+//   reduce_frag      -> 跨 lane 的 shuffle 通信
+//   convert_layout_frag -> shuffle 或 LDS 交换
+//   elementwise_frag -> arith / math
+// 分两步：先统一改所有 SSA 值的类型（包括循环 carrier），再逐个改写 op。
+// 这个 Pass 不依赖布局分析，所需的布局都已序列化到 op 属性上。
 class ConvertFragmentToThreadIR
     : public PassWrapper<ConvertFragmentToThreadIR, OperationPass<func::FuncOp>> {
 public:
@@ -5242,6 +5356,8 @@ public:
         kernel.emitError("fragment function results require interprocedural type conversion");
         return signalPassFailure();
       }
+    // work：要改写的 fragment op 和它的 fragment 类型。类型要在改类型之前记下来。
+    // unsupported：遇到不认识的 fragment 使用者时报错，不留下半改写的 IR。
     struct Work { Operation *op; FragmentType type; };
     SmallVector<Work> work;
     bool unsupported = false;
@@ -5264,6 +5380,7 @@ public:
     // Fragments are internal SSA values, including affine/scf loop carriers.
     // Change their representation together, then materialize operations. No
     // analysis pointers or hardware selection are needed in this second pass.
+    // convert：fragment 类型 -> 对应的寄存器 vector 类型，其它类型不变。
     auto convert = [](Type type) -> Type {
       if (auto fragment = dyn_cast<FragmentType>(type)) return fragment.getRegisterType();
       return type;
@@ -5274,11 +5391,13 @@ public:
         for (Block &block : region)
           for (BlockArgument arg : block.getArguments()) arg.setType(convert(arg.getType()));
     });
+    // 各类 op 的数量，只用于日志。
     unsigned loads = 0, stores = 0, extracts = 0, inserts = 0, gemms = 0, elementwise = 0;
     for (auto [op, type] : work) {
       OpBuilder b(op);
       Location loc = op->getLoc();
       VectorType registers = type.getRegisterType();
+      // origins：fragment 网格坐标 * fragment 形状 = thread tile 内的起始坐标。
       auto origins = [&](ValueRange indices) {
         SmallVector<Value> result;
         for (auto [d, index] : llvm::enumerate(indices))

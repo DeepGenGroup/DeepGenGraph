@@ -1,3 +1,19 @@
+// ===========================================================================
+// LDS（shared memory）生命周期分析与物理复用。优化汇总.py 第 12、15 项的实现主体。
+//
+// 提供 4 个入口：
+//   analyzeShmLiveness                   分析每块 LDS alloc 的所有别名、访问和活跃区间（第 12 项）。
+//   planShmReuse                         根据冲突关系决定每块 buffer 的字节偏移，只生成计划。
+//   reuseSharedMemory                    执行计划：建一个大 pool，alloc 改成 view，补 barrier（第 15 项）。
+//   synchronizeSharedMemoryLoopBackedges 给循环回边补 barrier，防止下一轮写覆盖本轮还没读完的旧数据。
+//
+// 核心概念：
+//   活跃区间   一块 buffer 从第一次访问到最后一次访问，用函数入口块的 op 位置表示。
+//   迭代局部   buffer 的内容不跨越某循环的回边（iterationLocalLoops）。两块 buffer 只有都在同一个
+//              循环内迭代局部，才能在循环内部继续判断先后（findSeparation）。
+//   集合循环   边界对所有线程一致的循环（isCollectiveLoop），只有这种循环才能安全地插 barrier。
+//   交接       两块 buffer 共用同一段字节时，后者写之前前者的所有读者都要读完，需要 barrier。
+// ===========================================================================
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -22,6 +38,7 @@
 namespace mlir::frisk {
 namespace {
 
+// poolAttr：标记复用后的大 pool alloc。分析遇到它会跳过，所以 reuseSharedMemory 重复调用是安全的。
 constexpr StringLiteral poolAttr = "frisk.shm_pool";
 constexpr uint64_t maxBytes = std::numeric_limits<int64_t>::max();
 
@@ -30,6 +47,7 @@ bool isShared(MemRefType type) {
   return space && space.getInt() == 3;
 }
 
+// 这三种 op lowering 后都带跨 wave 同步，都算 barrier。
 bool isBarrier(Operation *op) {
   return isa<gpu::BarrierOp, SyncThreadsInBlockOp, WaitBufferReadyOp>(op);
 }
@@ -53,9 +71,18 @@ bool hasLocalCompletion(AsyncCopyGmToShmOp issue) {
 // Solve these AND/OR obligations to a least fixed point: an unconsumed cycle
 // cannot prove itself complete. FIFO pipelines with waits on the head and all
 // exit slots are supported without treating different iterations as sequential.
+// 沿 token 的数据流向前追，得到这条 DMA 可能存活到哪些 op，并证明它在所有路径上都被 wait 过。
+//   accesses          token 的所有使用者，都算作目的 buffer 的访问。
+//   acrossIterations  token 经过循环 carrier，说明 DMA 跨迭代。
+// 返回 false 表示 token 逃逸或不能保证完成。
 bool collectTaskLifetime(AsyncCopyGmToShmOp issue,
                          SmallVectorImpl<Operation *> &accesses,
                          bool &acrossIterations) {
+  // work：待处理的 token SSA 值。
+  // seen：已处理的值。
+  // complete：已证明“完成”的值。
+  // obligations[v]：v 完成的条件，是 OR-of-AND：任一组 targets 全部完成，v 就完成。
+  // 例如 token 传给循环 init 时，要求 iter_arg 和循环结果两者都完成（下一轮和退出路径都要 wait）。
   SmallVector<Value> work{issue.getToken()};
   DenseSet<Value> seen, complete;
   DenseMap<Value, SmallVector<SmallVector<Value, 2>>> obligations;
@@ -127,6 +154,7 @@ bool collectTaskLifetime(AsyncCopyGmToShmOp issue,
       return false; // Task escapes or has an unknown consumer.
     }
   }
+  // 最小不动点求解。没有 wait 消费的环不能自证完成。
   bool changed;
   do {
     changed = false;
@@ -146,6 +174,7 @@ bool collectTaskLifetime(AsyncCopyGmToShmOp issue,
 
 // These regions finish synchronously. async.execute and parallel regions must
 // not be treated as sequential operations when computing storage lifetimes.
+// 返回 op 在 entry 块顶层的祖先。路径上只允许同步控制流；遇到其它 region 返回 nullptr。
 Operation *getTopLevelUser(Operation *op, Block *entry) {
   while (op->getBlock() != entry) {
     op = op->getParentOp();
@@ -177,6 +206,10 @@ bool isSynchronousAccess(Operation *op) {
              vector::MaskedStoreOp>(op);
 }
 
+// 遍历一块 alloc 的所有使用，填写 info。
+// worklist 沿视图、cast、select、循环 carrier、yield 扩展别名集合；
+// 真实访问通过 recordUse 更新 firstUse / lastUse。
+// 遇到无法理解的使用就写 skipReason 并返回，此时 reusable 保持 false，这块 buffer 不参与复用。
 void analyzeUses(ShmLiveInterval &info, Block *entry,
                  const DenseMap<Operation *, unsigned> &positions) {
   SmallVector<Value> worklist{info.allocation.getResult()};
@@ -255,6 +288,7 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
         }
       }
       if (!isSynchronousAccess(user)) {
+        // DMA 的“使用”不止发起点：buffer 要一直活到 wait 才算结束，所以把 token 的使用者也计入。
         if (auto issue = dyn_cast<AsyncCopyGmToShmOp>(user);
             issue && use.getOperandNumber() == 1) {
           recordUse();
@@ -300,11 +334,13 @@ Block *getLoopBody(Operation *op) {
   return nullptr;
 }
 
+// isCollectiveLoop 和 isBlockUniform 互相递归，这里先声明。
 bool isCollectiveLoop(Operation *op, Block *entry);
 
 // Only scalar kernel arguments, block-wide GPU queries and pure arithmetic
 // derived from them are uniform. Loads, thread IDs and loop-carried values are
 // deliberately not inferred uniform, even if a loop already contains a barrier.
+// 判断 value 是否对同一 block 内所有线程都相同。
 bool isBlockUniform(Value value, Block *entry) {
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     if (arg.getOwner() == entry)
@@ -327,6 +363,7 @@ bool isBlockUniform(Value value, Block *entry) {
                       [&](Value operand) { return isBlockUniform(operand, entry); });
 }
 
+// 循环边界 uniform，且所有外层也是集合循环。只有这样所有线程才执行相同次数的 barrier。
 bool isCollectiveLoop(Operation *op, Block *entry) {
   if (!getLoopBody(op))
     return false;
@@ -346,6 +383,7 @@ bool isCollectiveLoop(Operation *op, Block *entry) {
 
 // Evaluate the common affine thread-to-storage mapping without changing IR.
 // Unknown indices conservatively disable the full-overwrite proof.
+// 把索引表达式在给定线程号下求值，用于 fullyOverwrites。
 std::optional<int64_t> evaluateIndex(Value value, int64_t thread) {
   APInt constant;
   if (matchPattern(value, m_ConstantInt(&constant)))
@@ -375,6 +413,8 @@ std::optional<int64_t> evaluateIndex(Value value, int64_t thread) {
 // across the backedge. Require the first storage access to overwrite the whole
 // allocation on every iteration. For tiled vector stores, check the actual
 // address mapping across all threads, rather than trusting the 'tiled' marker.
+// 证明 op 是这块 buffer 的“每轮第一次访问”且写满全部元素。
+// 满足时，上一轮的内容不会流到下一轮，alloc 在循环外也算迭代局部。
 bool fullyOverwrites(Operation *op, const ShmLiveInterval &info,
                      func::FuncOp kernel) {
   auto allocation = info.allocation;
@@ -408,6 +448,7 @@ bool fullyOverwrites(Operation *op, const ShmLiveInterval &info,
   if (!threads || threads.getInt() <= 0 || threads.getInt() > 1024 ||
       elements > (1 << 20) || type.getRank() == 0)
     return false;
+  // written：枚举所有线程的写入位置，必须覆盖全部元素。
   llvm::SmallBitVector written(elements);
   for (int64_t thread = 0; thread < threads.getInt(); ++thread) {
     int64_t offset = 0;
@@ -424,6 +465,8 @@ bool fullyOverwrites(Operation *op, const ShmLiveInterval &info,
   return written.all();
 }
 
+// 从内到外找满足条件的集合循环：所有访问都在循环内，且 alloc 在循环内或第一次访问写满 buffer。
+// 有多个别名或 DMA 跨迭代的 buffer 不处理，退回到整循环生命周期。
 void findIterationLocalLoops(ShmLiveInterval &info, func::FuncOp kernel) {
   if (!info.reusable || info.aliases.size() != 1 || info.asyncAcrossIterations)
     return; // Alias/iter_arg cases retain the existing whole-loop lifetime.
@@ -451,6 +494,11 @@ void findIterationLocalLoops(ShmLiveInterval &info, func::FuncOp kernel) {
   }
 }
 
+// 两块 buffer 在某个块内的先后关系，证明它们不冲突。
+//   block        判断发生在哪个块（入口块或某循环体）。
+//   order        该块内的 op 顺序。
+//   earlierFirst/earlierLast  先用的 buffer 在 order 中的首尾位置。
+//   laterFirst/laterLast      后用的 buffer 的首尾位置。
 struct Separation {
   Block *block;
   SmallVector<Operation *> order;
@@ -460,6 +508,8 @@ struct Separation {
 // Descend only when BOTH buffers are confined to one collective loop and their
 // contents do not survive its backedge. Other regions remain atomic; in
 // particular, barriers will never be inserted inside a divergent conditional.
+// 在 block 内比较两块 buffer 的区间。不相交就返回；如果都被同一个循环包住且都是迭代局部，就进入循环体
+// 递归比较。返回空表示冲突，不能共用字节。
 std::optional<Separation> findSeparation(const ShmLiveInterval &a,
                                        const ShmLiveInterval &b, Block *block) {
   Separation result;
@@ -511,6 +561,7 @@ bool ShmLivenessResult::interferes(unsigned lhs, unsigned rhs) const {
          !findSeparation(a, b, programOrder.front()->getBlock());
 }
 
+// 只处理单块函数中的静态形状、identity 布局、整数/浮点元素的 LDS alloc。
 ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel) {
   ShmLivenessResult result;
   if (kernel.isExternal())
@@ -557,6 +608,8 @@ ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel) {
   return result;
 }
 
+// 贪心分配：按大小降序，每块放到与所有冲突 buffer 不重叠的最低对齐地址（first fit）。
+// 确定性算法，大小相同时保持稳定顺序。
 ShmReusePlan planShmReuse(const ShmLivenessResult &liveness) {
   ShmReusePlan plan;
   SmallVector<unsigned> order;
@@ -624,6 +677,12 @@ bool isInBlockUniformControlFlow(Operation *op) {
   return op->getBlock() == entry || isCollectiveLoop(op->getParentOp(), entry);
 }
 
+// 循环回边保护：防止快的 wave 进入下一轮后，覆盖慢的 wave 还没读完的数据。
+// 后序遍历，内层循环自己补 barrier。
+// 规则：
+//   循环含 DMA：循环尾必须有 barrier（wait 只发布新数据，不等旧读者）。
+//   无 DMA：如果 buffer 在循环内既写又读，prefix 或 tail 要有 barrier。
+// 第 33 项 elideBackedgeBarrier 删除的就是这里插入的循环尾 barrier。
 unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
   if (kernel.isExternal() || !kernel->hasAttr("thread_num") ||
       !llvm::hasSingleElement(kernel.getBody()))
@@ -654,6 +713,8 @@ unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
     for (const auto &info : liveness.buffers) {
       if (!info.reusable)
         continue;
+      // firstWrite / lastRead：这块 buffer 在循环体内最早的写和最晚的读。
+      // barrier 只有在 firstWrite 之前或 lastRead 之后，才能保护跨回边的交接。
       Operation *firstWrite = nullptr, *lastRead = nullptr;
       for (Operation *access : info.accesses) {
         if (!loop->isProperAncestor(access))
@@ -695,6 +756,9 @@ unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
   return inserted;
 }
 
+// 真正落实 LDS 复用。分三步：算需要的 barrier；建 pool；alloc 替换成 pool 上的 view。
+// 还有 fragment 或 to/from_thread_tile 时直接返回，物理访问尚未确定。
+// 只有总字节数确实减少时才改 IR。
 bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   if (stats)
     *stats = {};
@@ -718,12 +782,17 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
     return false;
 
   // Operand liveness does not guarantee every warp has finished reading.
+  // 每个作用域块的交接需求。
+  //   order  块内 op 顺序。
+  //   gaps   (deadline, lastUse)：barrier 必须放在 (lastUse, deadline] 之间，也就是 order[deadline] 之前。
+  // scopes / scopeIndices：按作用域块归类。
   struct ScopeHandoffs {
     SmallVector<Operation *> order;
     SmallVector<std::pair<unsigned, unsigned>> gaps;
   };
   SmallVector<ScopeHandoffs> scopes;
   DenseMap<Block *, unsigned> scopeIndices;
+  // 遍历所有字节重叠的 buffer 对，已有 barrier 的跳过，否则记录 gap。
   for (auto [i, a] : llvm::enumerate(plan.placements)) {
     const auto &lhs = liveness.buffers[a.bufferIndex];
     for (auto b : ArrayRef(plan.placements).drop_front(i + 1)) {
@@ -745,6 +814,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
       // The last user of this iteration must finish before the first writer of
       // the next one. A prefix barrier also covers the wrapped handoff; otherwise
       // require a barrier at the loop tail. Even a zero-trip path stays safe.
+      // 循环内的两块 buffer 还要考虑跨回边的交接：后者的最后使用 -> 下一轮前者的第一次写。
       if (separation->block != &kernel.getBody().front() &&
           !hasBarrier(0, separation->earlierFirst) &&
           !hasBarrier(separation->laterLast + 1, scope.order.size()))
@@ -753,6 +823,8 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   }
   // One barrier can satisfy several handoffs. Process the earliest deadline
   // first, and reuse a previously selected barrier whenever it covers the gap.
+  // 经典区间选点：按 deadline 排序后贪心，一个 barrier 能满足多个交接。
+  // barrierPositions：barrier 要插在这些 op 之前。
   SmallVector<Operation *> barrierPositions;
   for (auto &scope : scopes) {
     llvm::sort(scope.gaps);
@@ -769,6 +841,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
     builder.create<gpu::BarrierOp>(before->getLoc());
   }
   builder.setInsertionPointToStart(&kernel.getBody().front());
+  // pool：memref<Nxi8, 3>，所有可复用 buffer 都变成它上面的 memref.view。
   auto poolType = MemRefType::get({int64_t(plan.pooledBytes)}, builder.getI8Type(),
                                 MemRefLayoutAttrInterface{},
                                 builder.getI64IntegerAttr(3));

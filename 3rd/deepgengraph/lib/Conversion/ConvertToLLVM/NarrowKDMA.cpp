@@ -1,3 +1,29 @@
+// ===========================================================================
+// Pass: narrowKDMA   优化汇总.py 第 28 项，LLVM 阶段，--k-dma=64-swizzle
+// 详细设计见同目录 KDMA.md。
+//
+// 作用：
+//   解决 K 的 LDS bank 冲突（本 case 15.90% -> 0.125%）。
+//   1. 把 K 的一条 128-bit DMA（16 B/lane）拆成两条 64-bit DMA（8 B/lane）。
+//      16 B 的包内部不能做 bit3 的置换，8 B 的包才可以。
+//   2. 64-swizzle 模式下，LDS 地址再做 a ^= ((a >> 9) & 1) << 3，DMA 写和 LDS 读都走这个映射。
+//
+// 模式（KDMAOptions.mode）：
+//   128         不改变。
+//   64          只拆分。
+//   64-swizzle  拆分并置换。
+//
+// 地址换算（一个 wave，原 lane L 写 16 B，新 lane l 写 8 B）：
+//   h = 0/1     第几条 DMA，目的基址 m0 + 512 * h。
+//   owner(l,h)  原来负责这段数据的 lane = wave | (l >> 1) | (h * 32)。
+//   intra(l,h)  在原 16 B 内的偏移 = (l & 1) * 8；swizzle 且 h = 1 时再异或 8。
+//   新源地址 = 原源地址表达式在 owner 上重新求值 + intra。
+//
+// 失败策略：用户显式请求的模式不能应用时，narrowKDMA 返回 false，调用方 report_fatal_error。
+// 所有函数都通过 plan 后才统一 apply。
+//
+// 注意：这里的 1024、512、8192 都是写死的数字，对应 wave64 下 16 B/lane 的包和本 case 的 8KiB 分片。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/NarrowKDMA.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/BitVector.h"
@@ -22,7 +48,9 @@ namespace {
 using namespace llvm;
 using Inst = Instruction;
 using Call = CallInst;
+// Marker：函数属性，值为 "模式:参数号"。重复运行时配置相同就跳过，不同就报错。
 constexpr StringLiteral Marker = "frisk.k_dma";
+// 下面的 named / assembly / dma / pure / uniform 与 DoubleBufferV.cpp 基本相同。
 bool named(Inst *i, StringRef name) {
   auto *c = dyn_cast_or_null<Call>(i);
   return c && !c->hasOperandBundles() && !c->isMustTailCall() &&
@@ -48,6 +76,7 @@ bool pure(Inst *i) {
   return !isa<CallBase, PHINode, AllocaInst>(i) && !i->isTerminator() &&
       !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects() && isSafeToSpeculativelyExecute(i);
 }
+// OptimizeRegisterLifetimes 生成的空 asm，语义上是恒等。
 bool identity(Call *c) {
   auto *a = assembly(c);
   return a && a->getAsmString().empty() && a->getConstraintString() == "=v,0" &&
@@ -66,6 +95,7 @@ bool uniform(Value *v, SmallPtrSetImpl<Value *> &seen) {
   return llvm::all_of(i->operands(), [&](Value *op) { return uniform(op,seen); });
 }
 
+// LDSAddressAnalysis.h 中 LDSAddress 的副本，差别只在用 named / assembly 代替 addressNamed / addressAssembly。
 // Exact restricted address evaluator (same admitted operations as V buffering).
 class LDSAddress {
   const DataLayout &dl;
@@ -191,6 +221,11 @@ public:
 // Recompute a source-offset expression for another lane in the SAME wave.
 // Uniform leaves, including key-loop PHIs, stay unchanged. No lane shuffle is
 // emitted: clone only pure thread-dependent integer expressions.
+// 把 DMA 的源偏移表达式重建到另一个 lane（owner）上。
+//   varying  值 -> 是否依赖线程号的缓存。
+//   valid    遇到不支持的表达式时置 false。
+// depends：判断 v 是否依赖线程号，同时校验表达式可重建。
+// clone：把线程号替换成 owner，重新生成依赖线程号的部分。
 class SourceMap {
   std::map<Value *, bool> varying;
 public:
@@ -230,6 +265,7 @@ public:
   }
 };
 
+// 判断 DMA 的资源描述符是否由 arg 构造，也就是这条 DMA 是否在读 K。
 bool resourceFrom(Value *v, Argument *arg, SmallPtrSetImpl<Value *> &seen, bool &found) {
   if (v == arg) { found = true; return true; }
   if (isa<Constant>(v)) return true;
@@ -238,6 +274,8 @@ bool resourceFrom(Value *v, Argument *arg, SmallPtrSetImpl<Value *> &seen, bool 
   if (!i || !pure(i)) return false;
   return llvm::all_of(i->operands(),[&](Value *op) { return resourceFrom(op,arg,seen,found); });
 }
+// ReadPlan：一个 K 的 LDS 读，以及每个线程读的字节地址（已枚举）。
+// Plan：一个函数的改写计划。copies = K 的 DMA，reads = K 的读，storage = LDS 全局变量。
 struct ReadPlan { LoadInst *load; SmallVector<uint64_t> addresses; };
 struct Plan {
   Function *function;
@@ -247,6 +285,8 @@ struct Plan {
   SmallVector<ReadPlan> reads;
 };
 
+// 合法性证明，只分析不改 IR，失败时 why 写原因。
+// options.argument 是 K 在 kernel 参数中的下标，默认 1（Q,K,V,O）。
 bool plan(Function &f, const KDMAOptions &options, Plan &p, std::string &why) {
   auto fail = [&](StringRef s) { why = s.str(); return false; };
   if (options.argument >= f.arg_size()) return fail("K ABI argument is out of range");
@@ -278,6 +318,7 @@ bool plan(Function &f, const KDMAOptions &options, Plan &p, std::string &why) {
   p.function=&f; p.storage=storage; p.threads=threads;
   // Require one compute block containing all DMA for K and all its consumers.
   // This permits a self loop or a separate PHI/condition-only loop header.
+  // compute：K 的所有 DMA 和读所在的基本块。
   BasicBlock *compute = nullptr;
   for (auto &i : instructions(f)) if (dma(&i)) {
     auto *c = cast<Call>(&i);
@@ -307,6 +348,9 @@ bool plan(Function &f, const KDMAOptions &options, Plan &p, std::string &why) {
   // Prove K ownership at every memory access, without depending on debug
   // locations, SSA names, tensor dimensions or a fixed number of K slices.
   // Reject K values live across the compute block boundary.
+  // owner[byte]：这个字节当前是否存放 K。按指令顺序模拟：K 的 DMA 置 1，其它 DMA 覆盖后清 0。
+  // 读 K 必须完全落在 owner = 1 的范围内，这就区分出了 K 的读和其它读。
+  // 循环结束时 owner 必须全 0，也就是 K 的内容不跨基本块存活。
   SmallVector<uint8_t> owner(bytes.getFixedValue(),0);
   for (auto &i : *compute) {
     if (dma(&i)) {
@@ -343,6 +387,7 @@ bool plan(Function &f, const KDMAOptions &options, Plan &p, std::string &why) {
       if (all) p.reads.push_back(std::move(read));
       continue;
     }
+    // 矩阵读的实际范围不易枚举。保守假设它覆盖对齐的 8KiB 区域，要求区域内没有 K。
     if (auto *c=dyn_cast<Call>(&i); c && named(c,"llvm.hcu.ds.read.m32x16.b16.v4i32.p3")) {
       // Matrix V has a collective footprint. Be conservative: all addresses
       // in its aligned 8KiB region must have been released by K already.
@@ -368,11 +413,13 @@ bool plan(Function &f, const KDMAOptions &options, Plan &p, std::string &why) {
   return true;
 }
 
+// 执行改写，变量名对应文件头的换算公式。
 void apply(Plan &p, const KDMAOptions &options) {
   auto &f=*p.function;
   bool swizzle=options.mode=="64-swizzle";
   // One lane remapping in the entry block; full-wave owner never leaves its
   // original wave. SourceMap handles arbitrary supported source strides.
+  // 在入口块算一次：tid、lane（wave 内）、wave（wave 基地址）、owners[h]、intras[h]。
   IRBuilder<> entry(&*f.getEntryBlock().getFirstInsertionPt());
   auto *tid=entry.CreateCall(Intrinsic::getOrInsertDeclaration(f.getParent(),Intrinsic::amdgcn_workitem_id_x),{},"kdma.tid");
   auto *lane=entry.CreateAnd(tid,63,"kdma.lane");
@@ -387,6 +434,7 @@ void apply(Plan &p, const KDMAOptions &options) {
     auto *old=assembly(c);
     auto *a=InlineAsm::get(c->getFunctionType(),
         "s_mov_b32 $0, $1\n\tbuffer_load_dwordx2 $2, $3, 0 offen lds",old->getConstraintString(),true);
+    // 一条旧 DMA 变成两条：h = 0 写前 512 B，h = 1 写后 512 B。
     for (unsigned h=0;h<2;++h) {
       DenseMap<Value *,Value *> cache;
       Value *off=sources.clone(c->getArgOperand(1),owners[h],b,cache);
@@ -398,6 +446,10 @@ void apply(Plan &p, const KDMAOptions &options) {
     c->eraseFromParent();
   }
   unsigned bases=0;
+  // 改写 K 的读地址：a ^= (a >> 6) & 8，把 bit 9 异或到 bit 3。
+  // anchors：已生成的读指针及其逐线程地址。与某个 anchor 差值恒定时，用“anchor + 常量 GEP”，
+  // 这样后面 ds_read2 的合并机会不会丢失。否则才生成新的 XOR 计算。
+  // bases：生成新基址的个数。
   if (swizzle) {
     struct Anchor { Value *pointer; SmallVector<uint64_t> offsets; };
     SmallVector<Anchor> anchors;

@@ -1,3 +1,23 @@
+// ===========================================================================
+// Pass: optimizeLocalReductions（LocalReductionPass）   优化汇总.py 第 21 项，LLVM 阶段，--local-reduce=approx
+//
+// 作用：
+//   把一条长的串行归约链（每次操作都依赖上一步结果）改写成多条独立的短链，最后两两合并。
+//   依赖深度从 N-1 降到约 N/chains + log2(chains)，指令可以连续发射，减少空转。
+//
+//   before:  t = x0; t = t+x1; t = t+x2; ...                  31 次，依赖深度 31
+//   after:   a,b,c,d 四条链交错累加，最后 (a+b)+(c+d)         31 次，依赖深度 9
+//
+// 适用操作：add/mul/and/or/xor/min/max（整数和浮点）。
+//
+// 选项（LocalReductionOptions）：
+//   chains      链数，默认 4。
+//   minInputs   输入不足这个数时不改写，默认 16。
+//   operations  允许的操作位集。
+//   approximate true 时浮点操作不再检查 fast-math 标志。
+//
+// 代价：同时存活的值变多；sum 的结合顺序改变（approx 约定）。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/Constants.h"
@@ -9,9 +29,13 @@
 
 namespace mlir::frisk {
 namespace {
+// Marker：标在新生成的指令上，防止被再次匹配。
+// MaxNodes：可处理的链长上限。
 constexpr llvm::StringLiteral Marker = "frisk.local_reduction";
 constexpr unsigned MaxNodes = 2048;
 
+// 归约操作的身份。opcode 或 intrinsic 二选一，operation 是 LocalReductionOptions 的操作位。
+// 两条指令 Kind 相同才能算同一条链。operation == 0 表示不可处理。
 struct Kind {
   unsigned opcode = 0;
   llvm::Intrinsic::ID intrinsic = llvm::Intrinsic::not_intrinsic;
@@ -63,6 +87,7 @@ Kind classify(llvm::Instruction *inst, const LocalReductionOptions &options) {
   return kind;
 }
 
+// 第 side 个操作数是否为该操作的单位元（如 sum 的 0，max 的 -inf）。
 bool hasIdentity(llvm::Instruction *inst, Kind kind, unsigned side) {
   auto *constant = llvm::dyn_cast<llvm::Constant>(inst->getOperand(side));
   if (!constant) return false;
@@ -85,9 +110,14 @@ bool hasIdentity(llvm::Instruction *inst, Kind kind, unsigned side) {
   return false;
 }
 
+// 以 root 为链尾向上匹配并改写。返回输入个数，0 表示没有改写。
 unsigned rewrite(llvm::Instruction *root, const LocalReductionOptions &options) {
   Kind kind = classify(root, options);
   if (!kind.operation) return 0;
+  // chain：链上的原指令，从 root 到链头。
+  // leaves：链的输入，反转后按计算顺序排列。
+  // positions[i]：第 i 个输入对应的原指令位置，新指令就插在那里，尽量保持原来的执行时机。
+  // current：向上走时的当前节点，结束后是链头。
   llvm::SmallVector<llvm::Instruction *> chain;
   llvm::SmallVector<llvm::Value *> leaves;
   llvm::SmallVector<llvm::Instruction *> positions;
@@ -102,6 +132,7 @@ unsigned rewrite(llvm::Instruction *root, const LocalReductionOptions &options) 
           classify(child, options) == kind) children[side] = child;
     }
     // Don't flatten already branching trees or absorb shared intermediate uses.
+    // 只处理单链：两个操作数都是同类子树时不展平；子节点有其它使用者时也不吸收。
     if ((!children[0] && !children[1]) || (children[0] && children[1])) break;
     unsigned side = children[0] ? 0 : 1;
     leaves.push_back(current->getOperand(1 - side));
@@ -110,6 +141,7 @@ unsigned rewrite(llvm::Instruction *root, const LocalReductionOptions &options) 
   }
   // Keep an explicit identity seed as the first partial. This reproduces the
   // tested -inf max initialization without any attention-specific matching.
+  // seed：链头含单位元。这条指令本身保留作为第一个输入，例如 max(-inf, x0)。
   bool seed = hasIdentity(current, kind, 0) || hasIdentity(current, kind, 1);
   if (seed) {
     leaves.push_back(current);
@@ -142,11 +174,13 @@ unsigned rewrite(llvm::Instruction *root, const LocalReductionOptions &options) 
     inst->setMetadata(Marker, marker);
     return inst;
   };
+  // partials[k]：第 k 条链的当前累积值。前 chains 个输入直接作为初值，之后第 i 个输入进第 i % chains 条链。
   llvm::SmallVector<llvm::Value *> partials(leaves.begin(), leaves.begin() + options.chains);
   for (unsigned i = options.chains; i < leaves.size(); ++i) {
     unsigned bank = i % options.chains;
     partials[bank] = emit(partials[bank], leaves[i], positions[i]);
   }
+  // 两两合并成一棵平衡树，放在 root 的位置。
   while (partials.size() > 1) {
     llvm::SmallVector<llvm::Value *> next;
     for (unsigned i = 0; i < partials.size(); i += 2)
@@ -213,6 +247,7 @@ llvm::PreservedAnalyses LocalReductionPass::run(
   for (auto &block : function)
     for (auto &inst : block) if (classify(&inst, options).operation) work.emplace_back(&inst);
   unsigned groups = 0, inputs = 0;
+  // 倒序处理，先遇到链尾。WeakTrackingVH 能识别已被删除的指令。
   for (auto &handle : llvm::reverse(work)) {
     auto *inst = llvm::dyn_cast_or_null<llvm::Instruction>(handle);
     if (!inst) continue;

@@ -1,3 +1,19 @@
+// ===========================================================================
+// Pass: bypassMaskAdds（MaskAddBypassPass）   优化汇总.py 第 20 项，LLVM 阶段，本 case 无 mask，无效果
+//
+// 作用：
+//   mask 在“完全可见”路径上是 0，此时 S + 0 白白计算一次。把加法复制到有 mask 的路径，
+//   完全可见的路径直接用 S。
+//
+//   before:  mask = phi [0, clear], [m, masked]
+//            result = score + view(mask)
+//   after:   masked 分支内算 score + view(m)
+//            result = phi [score, clear], [score + view(m), masked]
+//
+// allowSignedZero：
+//   x + 0 对 x = -0 不严格相等。true（approx）时允许忽略；false（legal）时要求指令本身有 nsz。
+//   实际判断交给 LLVM 的 simplifyFAddInst。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/MaskAddBypass.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -15,11 +31,21 @@ namespace mlir::frisk {
 namespace {
 // Deliberately exclude casts, arithmetic, loads, calls and dynamic indexing.
 // Constant folding below also rejects shuffles that select poison/undef lanes.
+// “视图”操作：只取或重排元素，不做运算，可以在 clear 路径上常量折叠。
 bool isView(llvm::Instruction *inst) {
   return llvm::isa<llvm::ExtractValueInst, llvm::ExtractElementInst,
                    llvm::ShuffleVectorInst>(inst);
 }
 
+// 一个候选 PHI 的匹配状态。
+//   root     PHI：一路是全 0 常量，另一路是真实 mask。
+//   clear / masked  两个前驱块：mask 全 0 的路径和真实 mask 的路径。
+//   incoming masked 路径上的 mask 值。
+//   zeros    root 及其视图 -> 在 clear 路径上的常量值。
+//   views    root 派生的视图指令。
+//   adds     需要改写的 fadd。
+//   corridor 允许出现使用者的块：merge 块及其后面的直线块，最多 4 个。
+//   seen     已访问的使用者。
 struct Candidate {
   llvm::PHINode *root;
   llvm::DominatorTree &dt;
@@ -32,6 +58,7 @@ struct Candidate {
   llvm::SmallPtrSet<llvm::BasicBlock *, 4> corridor;
   llvm::SmallPtrSet<llvm::Instruction *, 32> seen;
 
+  // 计算 value 在 clear 路径上的常量值，算不出就返回 nullptr。结果缓存到 zeros。
   llvm::Constant *onClear(llvm::Value *value, unsigned depth = 0) {
     if (depth > 64 || zeros.size() > 256) return nullptr;
     if (auto *c = llvm::dyn_cast<llvm::Constant>(value)) return c;
@@ -51,6 +78,8 @@ struct Candidate {
     return result;
   }
 
+  // 匹配分三步：找到“0 + mask”形状的 PHI；划定 corridor；遍历 root 的使用者，把它们分成视图和加法，
+  // 其它使用者一律导致失败。
   bool match() {
     if (root->getNumIncomingValues() != 2) return false;
     unsigned zeroIndex = 0;
@@ -111,6 +140,8 @@ struct Candidate {
           ? lhs->comesBefore(rhs)
           : dt.dominates(lhs->getParent(), rhs->getParent());
     });
+    // side：哪个操作数来自 mask。score：另一个操作数。
+    // score 必须支配两条路径的跳转，才能作为 PHI 的入值；同时必须确认 LLVM 判定 score + 0 可以化简为 score。
     for (auto *add : adds) {
       unsigned side = zeros.count(add->getOperand(0)) ? 0 : 1;
       auto *constant = onClear(add->getOperand(side));
@@ -132,6 +163,8 @@ struct Candidate {
   }
 
   unsigned rewrite() {
+    // mapped：原值 -> masked 路径上的对应值。
+    // materialize：把视图链克隆到 masked 块末尾。
     llvm::DenseMap<llvm::Value *, llvm::Value *> mapped;
     mapped[root] = incoming;
     auto materialize = [&](auto &&self, llvm::Value *value) -> llvm::Value * {
@@ -146,6 +179,7 @@ struct Candidate {
       mapped[value] = clone;
       return clone;
     };
+    // 每条加法：克隆到 masked 块，在 merge 块建 PHI，替换原加法。
     for (auto *add : adds) {
       unsigned side = zeros.count(add->getOperand(0)) ? 0 : 1;
       auto *score = add->getOperand(1 - side);

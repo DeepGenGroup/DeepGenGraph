@@ -14,6 +14,14 @@ namespace mlir::frisk {
 /// in the function entry block for diagnostics. Interference additionally
 /// resolves accesses inside collective loops when storage is iteration-local.
 struct ShmLiveInterval {
+  // allocation           这块 LDS 的 alloc。
+  // aliases              指向它的所有 SSA 值（视图、select、循环 carrier 等）。
+  // accesses             所有真实访问，含 DMA token 的使用者。
+  // iterationLocalLoops  内容不跨回边的循环，由内到外。
+  // sizeBytes/alignment  字节大小和对齐。
+  // firstUse/lastUse     入口块中的首尾位置。
+  // asyncAcrossIterations  DMA 跨迭代（FIFO 流水），不能算迭代局部。
+  // reusable             是否参与复用。false 时 skipReason 给出原因。
   memref::AllocOp allocation;
   SmallVector<Value> aliases;
   SmallVector<Operation *, 0> accesses;
@@ -28,6 +36,8 @@ struct ShmLiveInterval {
 };
 
 struct ShmLivenessResult {
+  // programOrder：入口块的 op 顺序，firstUse/lastUse 是它的下标。
+  // buffers：所有 LDS alloc 的分析结果。
   SmallVector<Operation *> programOrder;
   SmallVector<ShmLiveInterval> buffers;
 
@@ -36,11 +46,14 @@ struct ShmLivenessResult {
 };
 
 struct ShmPlacement {
+  // bufferIndex：ShmLivenessResult::buffers 的下标。offsetBytes：在 pool 内的字节偏移。
   unsigned bufferIndex;
   uint64_t offsetBytes;
 };
 
 struct ShmReusePlan {
+  // placements：每块 buffer 的放置结果。
+  // originalBytes：不复用时的总字节。pooledBytes：复用后的 pool 大小。alignment：pool 的对齐。
   SmallVector<ShmPlacement> placements;
   /// Totals cover eligible allocations only; skipped buffers are unchanged.
   uint64_t originalBytes = 0;

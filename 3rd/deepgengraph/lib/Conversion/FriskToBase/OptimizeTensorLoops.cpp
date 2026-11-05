@@ -1,3 +1,27 @@
+// ===========================================================================
+// Pass: OptimizeTensorLoops（optimize-tensor-loops）   优化汇总.py 第 1 项，tensor 阶段
+//
+// 作用：
+//   在 tensor 语义的 DeviceKernel IR 上，把“外层循环的多次迭代”jam 到同一个内层
+//   reduce 循环里，再把算出来完全相同的 carrier（iter_arg）合并，让不同迭代共享同
+//   一份不变计算：结构相同且输入相同的中间结果只算一次。
+//
+// 流程（runOnOperation）：
+//   1. canJam 过滤候选外层循环：常量 trip count、无 iter_args、内层有实际 tensor 计算、
+//      读写指针可证明不重叠。
+//   2. chooseFactor 在模块的完整克隆上试 unroll-and-jam，选 carrier 占用不超预算的
+//      最大因子。试验失败不会污染原 IR。
+//   3. 真正做 loopUnrollJamByFactor。
+//   4. cleanup 不动点：canonicalize + CSE + mergeCarriers，互相暴露新机会。
+//   5. 删除无用 ZeroOp，做不含 load 的 LICM，最后再跑一次 CSE。
+//
+// 关键选项：
+//   maxJamFactor     jam 因子上限，只尝试能整除 trip count 的因子。
+//   maxCarrierWords  每个 block 允许的嵌套 carrier 总字数（32-bit word），0 表示不限。
+//                    本 case 由 test_src 的 carrier=34816 传入。
+//
+// 注意：这里说的“合并”依赖结构等价，不做浮点重结合，所以不改变数值。
+// ===========================================================================
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
@@ -18,6 +42,9 @@ namespace dg = mlir::deepgengraph;
 namespace dgt = mlir::deepgengraph::triton;
 using Loop = affine::AffineForOp;
 
+// 返回指针的“根”，穿透 block_pointer_of / pointer_of(tensor_from) 以及 DeviceKernel 的
+// 参数映射（region 参数 = grid 坐标 + 外部 args，所以要减去 grid 大小 offset）。
+// canJam 用它判断读写是否指向同一块内存。
 // Resolve the pointer's identity, including the isolated device region ABI.
 // Different pointer arguments alone do NOT prove non-aliasing.
 static Value pointerRoot(Value value) {
@@ -36,12 +63,20 @@ static Value pointerRoot(Value value) {
   return value;
 }
 
+// 判断 op 是否可视为“纯值计算”。canJam、ValueEquivalence 和 mergeCarriers 都靠它
+// 确认挪动或合并没有副作用。
 // Computed tensors have value semantics, even though the legacy ZeroOp lacks
 // a Pure trait to keep its later destination-style buffer initialization local.
 static bool tensorValueOp(Operation *op) {
   return isa<dg::ZeroOp>(op) || isMemoryEffectFree(op);
 }
 
+// 判断外层循环能否安全且有收益地做 unroll-and-jam。
+// 遍历过程中维护：
+//   nested  循环内存在嵌套循环（否则没有可 jam 的对象）。
+//   useful  内层循环确实产生 tensor 结果（收益判定，不看 kernel 名和具体算子）。
+//   valid   所有安全条件都满足，任一违反就置 false。
+//   reads / writes  所有 block_load / block_store 的指针根，遍历后做两两不重叠检查。
 static bool canJam(Loop outer, uint64_t maxFactor) {
   auto count = affine::getConstantTripCount(outer);
   if (!count || *count < 2 || maxFactor < 2 || outer.getNumResults())
@@ -51,6 +86,8 @@ static bool canJam(Loop outer, uint64_t maxFactor) {
   outer.walk([&](Operation *op) {
     if (auto loop = dyn_cast<Loop>(op)) {
       nested |= loop != outer;
+      // 内层循环边界不能依赖外层循环内定义的值，否则 jam 后边界不再相同；
+      // 内层循环结果只能是 tensor，否则 carrier 的值语义不成立。
       if (loop != outer) {
         for (Value control : loop.getControlOperands())
           if (!outer.isDefinedOutsideOfLoop(control)) valid = false;
@@ -81,6 +118,8 @@ static bool canJam(Loop outer, uint64_t maxFactor) {
                 return isa<RankedTensorType>(t);
               });
   });
+  // 写目标必须是“新鲜”的输出（EmptyPointer，或带 frisk.fresh_output 的 pointer_of）。
+  // 读必须来自 pointer_of 输入，且不能和写是同一块内存，否则 jam 改变读写次序后结果会变。
   for (Value write : writes) {
     auto output = write.getDefiningOp<dgt::PointerOfOp>();
     if (!write.getDefiningOp<dgt::EmptyPointerOp>() &&
@@ -98,6 +137,10 @@ static bool canJam(Loop outer, uint64_t maxFactor) {
 // Prove equal recurrences by induction: identical initial values and identical
 // yielded expressions under the assumed equality of the two carrier args.
 // This is structural value equivalence, not reassociation of FP expressions.
+// 证明两个 SSA 值结构等价，mergeCarriers 用它做归纳证明。
+//   scope   block_load 只在这个循环内部才允许判等，保证两次读发生在同一个内存状态下。
+//   equal   假设等价表，预置“两个 iter_arg 相等”，比较时也把 region 参数对记录进来。
+//   budget  递归比较次数上限，防止表达式过大时证明过慢，耗尽后保守返回不等。
 class ValueEquivalence {
 public:
   Operation *scope = nullptr;
@@ -124,6 +167,8 @@ public:
   }
 };
 
+// 合并同一循环内数值恒等的 carrier（iter_arg）。这是 jam 之后真正省计算的一步。
+// 归纳证明：初值相等 + 假设两个 carrier 相等时 yield 也相等 => 每次迭代都相等。
 static bool mergeCarriers(Loop loop) {
   unsigned count = loop.getNumResults();
   if (count < 2) return false;
@@ -134,6 +179,8 @@ static bool mergeCarriers(Loop loop) {
   });
   if (!valueSemantics) return false;
   auto yield = cast<affine::AffineYieldOp>(loop.getBody()->getTerminator());
+  // representatives[i]：第 i 个 carrier 合并到哪个 carrier 上，等于 i 表示它自己是代表。
+  // 只和已确认的代表比较（下面 representatives[j] != j 时跳过），避免链式合并。
   SmallVector<unsigned> representatives;
   bool changed = false;
   for (unsigned i = 0; i < count; ++i) {
@@ -158,6 +205,8 @@ static bool mergeCarriers(Loop loop) {
     }
   }
   if (!changed) return false;
+  // affine.for 的 iter_args 不能原地删减，所以用保留下来的 carrier 新建一个循环，把循环体
+  // 克隆过去。此时被合并的 carrier 已无使用者。
   SmallVector<Value> inits, yielded;
   for (unsigned i = 0; i < count; ++i)
     if (representatives[i] == i) {
@@ -192,6 +241,8 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
   // Nested reductions overlap their carriers with the enclosing reduction.
   // Keep room for operand fragments, addresses and math temporaries (the
   // default permits 192 carrier words/thread for a 128-thread block).
+  // live：外层循环已经占用的 carrier 字数。返回沿循环嵌套路径的峰值。
+  // 遇到非静态或非 int/float 元素的 tensor 时返回 UINT64_MAX，让预算判定失败。
   static uint64_t carrierPeak(Operation *op, uint64_t live = 0) {
     if (auto loop = dyn_cast<Loop>(op)) {
       for (Type type : loop.getResultTypes()) {
@@ -214,6 +265,8 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
     return peak;
   }
 
+  // 不动点循环：canonicalize + CSE 暴露相同表达式，mergeCarriers 合并后又暴露新的 CSE。
+  // trial 克隆和原模块共用这段逻辑：原模块走 runPipeline，克隆是独立模块所以走 passes.run。
   LogicalResult cleanup(ModuleOp module) {
     bool changed;
     do {
@@ -230,10 +283,14 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
     return success();
   }
 
+  // 选 jam 因子：从大到小试能整除 trip count 的因子，用克隆模块实测 carrier 峰值。
+  // 返回 1 表示不 jam。
   uint64_t chooseFactor(Loop loop) {
     auto count = *affine::getConstantTripCount(loop);
     // Trial on an isolated copy: sharing is proven by recurrence CSE before
     // charging carriers. A failed profitability check cannot mutate input IR.
+    // 克隆没有和原模块的映射，所以靠“遍历序号”定位克隆里的同一个循环。
+    // selected 是原模块中这个循环的序号，要求两次 walk 的顺序一致。
     unsigned ordinal = 0, selected = 0;
     getOperation().walk([&](Loop candidate) {
       if (candidate == loop) selected = ordinal;
@@ -259,6 +316,7 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
   }
 
   void runOnOperation() override {
+    // candidates：通过 canJam 的外层循环，用后序收集。
     SmallVector<Loop> candidates;
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) {
       if (canJam(loop, maxJamFactor)) candidates.push_back(loop);
@@ -282,6 +340,7 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
       if (zero->use_empty()) deadZeros.push_back(zero);
     });
     for (auto zero : deadZeros) zero.erase();
+    // 自定义 LICM：只外提不含 load 的纯计算。
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) {
       moveLoopInvariantCode({&loop.getRegion()},
           [&](Value value, Region *) { return loop.isDefinedOutsideOfLoop(value); },
@@ -296,6 +355,7 @@ class OptimizeTensorLoops : public impl::OptimizeTensorLoopsBase<OptimizeTensorL
           },
           [&](Operation *op, Region *) { op->moveBefore(loop); });
     });
+    // 这个局部变量和成员函数 cleanup 同名，这里是单纯的 CSE 管线，只跑一遍。
     OpPassManager cleanup(ModuleOp::getOperationName());
     cleanup.addPass(createCSEPass());
     if (failed(runPipeline(cleanup, getOperation()))) signalPassFailure();

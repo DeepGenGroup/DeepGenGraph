@@ -26,6 +26,11 @@ inline InlineAsm *addressAssembly(Inst *i) {
   auto *a = dyn_cast<InlineAsm>(c->getCalledOperand());
   return a && !a->canThrow() && !a->isAlignStack() ? a : nullptr;
 }
+// LDSAddress：给定线程号和向量元素下标，把地址表达式精确求值成 LDS 内的字节偏移。
+// doubleBufferV 和 prefetchNextK 靠它证明读写的字节范围。
+// 注意：NarrowKDMA.cpp 里有一份几乎相同的副本。
+//   storage  唯一的 LDS 全局变量，相对地址 0。
+//   cache    (值, 线程号, 元素) -> 结果。先写入空值，所以环会判定失败。
 // Exact evaluation of the restricted integer/thread-address DAG. Unknown
 // values fail closed. A single LDS allocation is assigned relative base zero;
 // actual rewrites add a byte displacement to the original pointer/base.
@@ -34,6 +39,7 @@ class LDSAddress {
   const DataLayout &dl;
   GlobalVariable *storage;
   std::map<std::tuple<Value *, unsigned, unsigned>, std::optional<uint64_t>> cache;
+  // 参数 lane 实际是整个 workgroup 内的线程号，不是 wave 内 lane。
   std::optional<uint64_t> compute(Value *v, unsigned lane, unsigned element, unsigned depth) {
     if (depth > 128) return {};
     if (v == storage) return 0;
@@ -126,6 +132,8 @@ class LDSAddress {
     if (!c) return {};
     if (addressNamed(c, "llvm.amdgcn.workitem.id.x") && c->arg_empty()) return lane;
     if ((addressNamed(c, "llvm.amdgcn.workitem.id.y") || addressNamed(c, "llvm.amdgcn.workitem.id.z")) && c->arg_empty()) return 0;
+    // readfirstlane 取的是本 wave 第一个 lane 的值，所以用线程号 lane/64*64 求值。
+    // 这里写死了 wave64。
     if (addressNamed(c, "llvm.amdgcn.readfirstlane.i32") && c->arg_size() == 1)
       return get(c->getArgOperand(0), lane/64*64, 0, depth+1);
     auto *a = addressAssembly(c);

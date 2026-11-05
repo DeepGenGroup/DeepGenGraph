@@ -1,3 +1,14 @@
+// ===========================================================================
+// Pass: canonicalizeLDSGEPs（CanonicalizeLDSGEPsPass）   优化汇总.py 第 24 项，LLVM 阶段，开启 swizzle 后自动打开
+//
+// 作用：
+//   把地址差恒定的 LDS load 改写成“公共基址 + 常量 GEP”，并提升 load 的 align。后端看到这个形式
+//   才可能把两个 b64 读合并成 ds_read2_b64。本 Pass 只暴露这个机会，不强制合并。
+//
+// 证明差值恒定的两种手段（SCEV 优先）：
+//   1. ScalarEvolution：适合线性表达式。
+//   2. ThreadOffsets：枚举所有线程号精确求值。适合 SCEV 无法理解的 XOR / 位段，如 swizzle。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/CanonicalizeLDSGEPs.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -25,6 +36,12 @@ namespace {
 // Exact, bounded proof for nonlinear layouts. No data values, loop iterations,
 // wave scheduling or sampled threads enter the proof. Unknown inputs fall back
 // to SCEV. This complements SCEV, which treats XOR/bitfield extraction as opaque.
+// 枚举线程号求 LDS 地址。
+//   Table     表达式在每个线程号上的取值。
+//   Pointer   指针 = base（LDS 全局变量）+ 每个线程的偏移 offsets。
+//   count     线程数，来自 workitem.id.x 的范围；0 表示不可用，此时所有查询都失败。
+//   integers / pointers  已求值的缓存。
+//   unknown   正在求值或已失败的值，用来防环。
 class ThreadOffsets {
   using Table = llvm::SmallVector<llvm::APInt>;
   struct Pointer { llvm::GlobalVariable *base; Table offsets; };
@@ -50,6 +67,7 @@ class ThreadOffsets {
     else if (auto *call = llvm::dyn_cast<llvm::CallInst>(v)) {
       // The register lifetime pass's exact tied empty asm is an identity.
       // Require its marker, spelling and constraint; keep the call itself.
+      // OptimizeRegisterLifetimes 的 materialize 生成的空 asm 是恒等操作，可以穿透。
       auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
       if (!call->getMetadata("frisk.register_lifetimes") || !assembly ||
           !assembly->getAsmString().empty() || assembly->getConstraintString() != "=v,0" ||
@@ -117,6 +135,8 @@ public:
       else { count = 0; return; }
     }
   }
+  // 如果 a - b 对所有线程相同，返回这个差值。
+  // alignment：所有线程偏移的公共对齐，再和全局变量的对齐取最小。
   std::optional<llvm::APInt> difference(llvm::Value *a, llvm::Value *b) {
     auto *pa = pointer(a), *pb = pointer(b);
     if (!pa || !pb || pa->base != pb->base) return std::nullopt;
@@ -142,6 +162,9 @@ llvm::PreservedAnalyses CanonicalizeLDSGEPsPass::run(
   auto &ac = am.getResult<llvm::AssumptionAnalysis>(f);
   ThreadOffsets exact(f);
   bool changedAlignment = false;
+  // Anchor：可作为基址的指针，最多 128 个。
+  // Rewrite：待改写的 load，以及它相对于 base 的 offset。
+  // 先做完分析再改 IR，避免一边改 IR 一边使用 SCEV 结果。
   struct Anchor { llvm::Value *pointer; const llvm::SCEV *expr; };
   struct Rewrite { llvm::LoadInst *load; llvm::Value *base; llvm::APInt offset; };
   llvm::SmallVector<Anchor> anchors;
@@ -157,6 +180,7 @@ llvm::PreservedAnalyses CanonicalizeLDSGEPsPass::run(
     // a bounded workitem domain. LLVM proves alignment from pointer contracts,
     // assumptions and known bits; enumeration additionally covers nonlinear
     // thread layouts. Neither proof depends on a buffer name or attention role.
+    // ds_read2 需要 load 的 align 足够大，这里按证明的结果提升。
     auto provenAlignment = std::max(exact.alignment(pointer),
         llvm::getKnownAlignment(pointer, f.getDataLayout(), load, &ac, &dt));
     if (provenAlignment > load->getAlign()) {
@@ -165,6 +189,9 @@ llvm::PreservedAnalyses CanonicalizeLDSGEPsPass::run(
     }
     const auto *expr = se.getSCEV(pointer);
     bool found = false;
+    // 与已有 anchor 比较。必须支配当前 load 才能作为基址。
+    // 已经是“anchor + 同一常量”形式时跳过，保证重复运行结果稳定。
+    // 找不到合适的 anchor 时，当前指针成为新的 anchor。
     for (const auto &anchor : anchors) {
       if (pointer == anchor.pointer) { found = true; break; }
       auto *definition = llvm::dyn_cast<llvm::Instruction>(anchor.pointer);

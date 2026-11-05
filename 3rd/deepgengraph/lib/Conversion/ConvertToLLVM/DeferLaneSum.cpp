@@ -1,3 +1,25 @@
+// ===========================================================================
+// Pass: deferLaneSums（DeferLaneSumPass）   优化汇总.py 第 22 项，LLVM 阶段，--defer-lane-sum=approx
+//
+// 作用：
+//   循环内每轮的跨 lane 求和（ds.bpermute 蝶形）移到循环结束后只做一次。
+//   before:  for n { L = alpha * L + cross_lane_sum(local) }
+//   after:   for n { L_local = alpha * L_local + local }  然后 L = cross_lane_sum(L_local)
+//   合法的依据：alpha 在求和组内各 lane 相同，所以 alpha 可以提到求和之外。
+//   32 轮时分母的跨 lane 通信从 128 次降到 4 次。
+//
+// 蝶形形状（一个 stage）：v' = v op bpermute(v, lane ^ bit)。多个 stage 就是组内全归约。
+//
+// 代码结构：
+//   Slice / resolve / enumerate  用 (值, 路径) 表示聚合或向量里的一个字段，穿透 insert/extract。
+//   Proof                        通过枚举线程号和结构匹配，证明“这是蝶形”“这个值组内 uniform”。
+//   Plan / analyze / stateUses   判断一个循环 PHI 的某个字段能否改写，结果写入 Plan。
+//   apply                        执行改写。
+//   DeferLaneSumPass::run        函数级前置检查，然后遍历循环。
+//
+// 前置条件很严格：整个函数都必须能证明控制流不发散，所有 call 和 inline asm 都必须在白名单内，否则
+// 整个函数不优化。注意白名单里写死了 asm 字符串和 intrinsic 名字。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -18,6 +40,7 @@
 using namespace llvm;
 namespace mlir::frisk {
 namespace {
+// Path：聚合类型内的字段路径。Slice：(值, 路径)，表示这个值里的某个字段。
 using Path = std::vector<unsigned>;
 struct Slice {
   Value *value;
@@ -31,6 +54,7 @@ bool prefix(ArrayRef<unsigned> a, ArrayRef<unsigned> b) {
   return a.size() <= b.size() && std::equal(a.begin(), a.end(), b.begin());
 }
 // Resolve a field through aggregate/vector construction without changing IR.
+// 沿 extract/insert 向上追，找到这个字段真正的来源。不修改 IR。
 Slice resolve(Slice s) {
   for (unsigned budget = 0; budget < 256; ++budget) {
     if (auto *e = dyn_cast<ExtractValueInst>(s.value)) {
@@ -63,6 +87,7 @@ Slice resolve(Slice s) {
   }
   return s;
 }
+// 列出类型中所有 float/i32 标量字段的路径。超出规模或含其它类型时返回 false。
 bool enumerate(Type *type, Path path, std::vector<Path> &out) {
   if (out.size() >= 128 || path.size() > 8) return false;
   if (type->isFloatTy() || type->isIntegerTy(32)) { out.push_back(path); return true; }
@@ -85,6 +110,11 @@ StringRef callee(Value *v) {
   auto *c = dyn_cast<CallInst>(v);
   return c && c->getCalledFunction() ? c->getCalledFunction()->getName() : StringRef();
 }
+// 一棵匹配到的蝶形归约树。
+//   leaf   树的输入，也就是本 lane 的局部值。
+//   mask   参与 XOR 的 lane 位，等于求和组。mask 为 0 表示匹配失败。
+//   bits   每个 stage 的 XOR 位，顺序从外层到内层。
+//   nodes  树上的指令（add、bpermute、bitcast），改写后要删除。
 struct Reduction {
   Value *leaf = nullptr;
   unsigned mask = 0;
@@ -92,6 +122,12 @@ struct Reduction {
   SmallPtrSet<Instruction *, 32> nodes;
 };
 
+// 函数级的枚举证明器。
+//   wave             wave 大小（32/64）。
+//   threads          workgroup 总线程数。
+//   linearWorkitems  只有 x 维时才能把 workitem.id.x 当作线性线程号。
+//   masks            bpermute 地址 -> XOR 位的缓存。
+//   fixedUniformity  (值, 组) -> 是否 uniform 的缓存。
 class Proof {
   Function &function;
   const DataLayout &layout;
@@ -100,6 +136,7 @@ class Proof {
   std::map<Value *, unsigned> masks;
   std::map<std::pair<Value *, unsigned>, bool> fixedUniformity;
 
+  // 把整数表达式在线程号 tid 下求值。支持 workitem.id.x、mbcnt（lane = tid % wave）和普通运算。
   Constant *evaluate(Value *v, unsigned tid, unsigned &budget) {
     if (!budget--) return nullptr;
     if (auto *c = dyn_cast<ConstantInt>(v)) return c;
@@ -131,6 +168,7 @@ public:
   Proof(Function &f, unsigned wave, unsigned threads, bool linear)
       : function(f), layout(f.getDataLayout()), wave(wave), threads(threads), linearWorkitems(linear) {}
   void clearCaches() { masks.clear(); fixedUniformity.clear(); }
+  // 枚举所有线程，证明 v 在 group 的 XOR 变换下取值不变。
   bool fixedUniform(Value *v, unsigned group) {
     if (!v->getType()->isIntegerTy()) return false;
     auto key = std::make_pair(v, group);
@@ -149,6 +187,7 @@ public:
           return fixedUniformity[key] = false;
     return fixedUniformity[key] = true;
   }
+  // 证明 bpermute 地址对所有线程都等于 (lane ^ m) * 4，且 m 是单个位。返回 m，否则返回 0。
   unsigned xorMask(Value *address) {
     auto found = masks.find(address);
     if (found != masks.end()) return found->second;
@@ -167,6 +206,8 @@ public:
     return masks[address] = mask;
   }
   // A stage combines v with a bijective XOR permutation of exactly v.
+  // 匹配一个 stage。kind 是 opcode 或 intrinsic id。输出 previous（上一层的值）和 bit，节点加入 nodes。
+  // float 需要穿过 bitcast，因为 bpermute 操作的是 i32。
   bool stage(Value *v, unsigned kind, Value *&previous, unsigned &bit,
              SmallPtrSetImpl<Instruction *> &nodes) {
     auto *i = dyn_cast<Instruction>(v);
@@ -204,6 +245,7 @@ public:
     }
     return false;
   }
+  // 连续匹配 stage，最多 6 层（wave64）。同一位出现两次说明不是合法的组归约。
   Reduction reduction(Value *v, unsigned kind) {
     Reduction r;
     for (unsigned n = 0; n < 6; ++n) {
@@ -215,6 +257,10 @@ public:
     r.leaf = v;
     return r;
   }
+  // 证明一个字段在 group 内各 lane 相同。
+  //   collectives  是否允许把蝶形归约结果视为 uniform。
+  //   active       递归路径上的 PHI，用于归纳证明循环。
+  //   budget       查询预算。
   bool uniform(Slice s, unsigned group, bool collectives,
                std::set<Slice> &active, unsigned &budget) {
     if (!budget--) return false;
@@ -275,6 +321,15 @@ public:
   }
 };
 
+// 一个待改写的状态（PHI 的某个字段）。
+//   phi / path       状态。
+//   update           latch 中的累加指令。
+//   scale            可选的 alpha * state（FMul/Mul）。
+//   reducedOperand   update 的哪个操作数是蝶形树。
+//   stateReads       循环内对状态的读取次数，必须恰好 1 次。
+//   sum              蝶形树。
+//   outside          循环外的使用，要改成最终结果。
+//   exit             循环出口块，蝶形插到这里。
 struct Plan {
   PHINode *phi;
   Path path;
@@ -286,6 +341,8 @@ struct Plan {
   BasicBlock *exit;
 };
 
+// 检查状态的所有使用：循环外的计入 outside；循环内只能是到 update/scale 的一次读取。
+// 循环外的使用现在要拿到全局和，所以不能有遗漏。
 bool stateUses(Value *v, Path remaining, Loop *loop, Plan &plan,
                DominatorTree &dt, std::set<Slice> &seen) {
   if (!seen.insert({v, remaining}).second) return true;
@@ -329,6 +386,7 @@ bool stateUses(Value *v, Path remaining, Loop *loop, Plan &plan,
   }
   return true;
 }
+// update 的结果只能经 insert 流回 PHI，不能被别的计算使用，否则别处会拿到局部值。
 bool updateUses(Value *v, PHINode *phi, SmallPtrSetImpl<Value *> &seen) {
   if (!seen.insert(v).second) return true;
   for (User *u : v->users()) {
@@ -338,6 +396,9 @@ bool updateUses(Value *v, PHINode *phi, SmallPtrSetImpl<Value *> &seen) {
   return true;
 }
 
+// 判定模式：state 初值为 0，每轮 state = [alpha *] state + reduction(local)。
+// alpha 必须在求和组内 uniform。
+// 浮点只在 approximate 时处理，因为改写改变了求和的结合顺序。
 bool analyze(PHINode *phi, const Path &path, Loop *loop, Proof &proof,
              DominatorTree &dt, bool approximate, Plan &plan) {
   auto *pre = loop->getLoopPreheader(), *latch = loop->getLoopLatch();
@@ -366,6 +427,7 @@ bool analyze(PHINode *phi, const Path &path, Loop *loop, Proof &proof,
       Value *alpha = resolve({scale->getOperand(0), {}}) == state ? scale->getOperand(1) : scale->getOperand(0);
       if (!proof.uniform(alpha, r.mask, true)) continue;
     }
+    // 蝶形树必须只服务这条 update，且全部在 latch 内，否则不能删除。
     bool privateTree = true;
     for (auto *node : r.nodes) {
       if (node->getParent() != latch) privateTree = false;
@@ -396,6 +458,7 @@ Value *extract(IRBuilder<> &builder, Value *value, const Path &path) {
   }
   return value;
 }
+// 在出口块重新生成蝶形（内层到外层）；循环内 update 改为累加 leaf；删除原来的树。
 void apply(Plan &p, unsigned wave) {
   IRBuilder<> builder(&*p.exit->getFirstInsertionPt());
   Value *value = extract(builder, p.phi, p.path);
@@ -422,6 +485,7 @@ void apply(Plan &p, unsigned wave) {
   }
   p.update->setOperand(p.reducedOperand, p.sum.leaf);
   // Changed partials may overflow even if the original group sums did not.
+  // 局部累加值的范围与原来不同，nsw/nuw 等标志不再成立。
   p.update->dropPoisonGeneratingFlags();
   if (p.scale) p.scale->dropPoisonGeneratingFlags();
   // Delete only the matched tree, including convergent calls. General DCE does
@@ -454,6 +518,7 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
       function.getCallingConv() != CallingConv::AMDGPU_KERNEL ||
       function.hasFnAttribute(Attribute::StrictFP) || function.hasFnAttribute(Attribute::OptimizeNone))
     return PreservedAnalyses::all();
+  // 确定 wave 大小：选项和 target-features 必须一致。
   unsigned wave = options.waveSize;
   auto features = function.getFnAttribute("target-features").getValueAsString();
   SmallVector<StringRef> tokens; features.split(tokens, ',');
@@ -467,6 +532,7 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
   if (!wave) return PreservedAnalyses::all();
   if (llvm::is_contained(tokens, "-wavefrontsize" + std::to_string(wave)))
     return PreservedAnalyses::all();
+  // 枚举证明需要静态 workgroup 大小。threads：总线程数，上限 1024，且必须是 wave 的倍数。
   auto *wg = function.getMetadata("reqd_work_group_size");
   if (!wg || wg->getNumOperands() != 3) return PreservedAnalyses::all();
   unsigned dims[3], threads = 1;
@@ -480,6 +546,7 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
   Proof proof(function, wave, threads, dims[1] == 1 && dims[2] == 1);
   // A conservative whole-function convergence proof also protects a candidate
   // inside an enclosing divergent region or after an early lane return.
+  // 函数级控制流检查：所有条件分支在 wave 内 uniform；所有 call 都已知不改 EXEC。
   for (auto &bb : function) {
     if (auto *br = dyn_cast<CondBrInst>(bb.getTerminator())) {
       if (!proof.uniform(br->getCondition(), wave - 1, false)) return PreservedAnalyses::all();
@@ -528,6 +595,7 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
   auto &li = am.getResult<LoopAnalysis>(function);
   auto &dt = am.getResult<DominatorTreeAnalysis>(function);
   unsigned states = 0, shuffles = 0;
+  // 只处理最内层循环，出口在 header，出口块只有一个前驱。对 header 每个 PHI 的每个标量字段尝试。
   for (Loop *loop : li.getLoopsInPreorder()) {
     if (!loop->getSubLoops().empty() || !loop->getLoopPreheader() || !loop->getLoopLatch() ||
         !loop->getExitingBlock() || !loop->getExitBlock() ||

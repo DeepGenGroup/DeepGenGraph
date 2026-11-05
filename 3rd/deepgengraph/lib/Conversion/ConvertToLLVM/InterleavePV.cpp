@@ -1,3 +1,25 @@
+// ===========================================================================
+// Pass: interleavePVAccumulators（InterleavePVPass）   优化汇总.py 第 26 项，LLVM 阶段，--pv-interleave=4
+// 详细设计见同目录 PVInterleave.md。
+//
+// 作用：
+//   把“一条累加链做完再做下一条”改成多条链交错，相邻 MMAC 没有 C 依赖，可以连续发射。每条链内部
+//   顺序不变，所以结果逐位相同。
+//     before:  a a a ... b b b ... c c c ... d d d ...
+//     after:   a b c d a b c d ...
+//
+// width 选项：
+//   0     关闭。
+//   1     不交错，只加调度保护，作为对照。
+//   2/4   每组交错的链数。链的总数必须能被 width 整除。
+//
+// 流程：
+//   1. 在每个基本块里找 MMAC 链（getChain）。B 操作数来自同一组矩阵读包的链归为一组。
+//   2. schedule：先完整生成计划并校验，通过后才改 IR。
+//   3. 在每条 MMAC 前后加 sched.barrier(0)，防止后端调度器把顺序改回去。
+//
+// 实测收益接近噪声（优化汇总.py 第 26 项）。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/InterleavePV.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -17,8 +39,10 @@ namespace {
 using Inst = llvm::Instruction;
 using Call = llvm::CallInst;
 using Insts = llvm::SmallVector<Inst *, 32>;
+// Marker：标在已处理的 MMAC 上，值为 width。getChain 遇到它就放弃，防止重复处理。
 constexpr llvm::StringLiteral Marker = "frisk.pv_interleave";
 
+// 只接受无副作用的 inline asm 形式 MMAC。
 bool isMMAC(Inst *i) {
   auto *c = llvm::dyn_cast_or_null<Call>(i);
   if (!c || c->arg_size() != 3 || c->hasOperandBundles() ||
@@ -40,6 +64,7 @@ bool namedCall(Inst *i, llvm::StringRef name) {
       c->getCalledFunction()->getName() == name;
 }
 
+// 是否 sched.barrier(0)，也就是调度保护。
 bool isHint(Inst *i) {
   if (!namedCall(i, "llvm.amdgcn.sched.barrier")) return false;
   auto *c = llvm::cast<Call>(i);
@@ -49,6 +74,7 @@ bool isHint(Inst *i) {
 
 // Only the known low/high half of one matrix packet is accepted. No arbitrary
 // arithmetic, selects or multi-packet shuffles can disguise the producer.
+// B 操作数必须是一次矩阵读（ds.read.m32x16）的低或高 4 个 half。返回对应的读调用。
 Call *matrixPacket(llvm::Value *v) {
   auto *shuffle = llvm::dyn_cast<llvm::ShuffleVectorInst>(v);
   if (!shuffle || !llvm::isa<llvm::PoisonValue>(shuffle->getOperand(1))) return nullptr;
@@ -66,6 +92,7 @@ Call *matrixPacket(llvm::Value *v) {
       read->getArgOperand(1)->getType()->isIntegerTy(32) ? read : nullptr;
 }
 
+// 可以随依赖一起移动的纯计算。
 bool isPure(Inst *i) {
   return !llvm::isa<llvm::CallBase, llvm::PHINode, llvm::AllocaInst>(i) &&
       !i->isTerminator() && !i->mayReadOrWriteMemory() &&
@@ -74,6 +101,8 @@ bool isPure(Inst *i) {
 
 // These operations stay in order and at the same MMAC ordinal. Unknown calls,
 // stores, atomics, reads and nonzero scheduling masks reject the whole region.
+// 可以出现在区域内、但必须保持在原 MMAC 序号处的 op：fence、barrier、readfirstlane、DMA。
+// 其它有副作用的 op 会让整个区域放弃。
 bool isFixed(Inst *i) {
   if (auto *f = llvm::dyn_cast<llvm::FenceInst>(i))
     return f->getSyncScopeID() == f->getContext().getOrInsertSyncScopeID("workgroup") &&
@@ -96,10 +125,12 @@ bool isFixed(Inst *i) {
       a->getConstraintString() == "={m0},s,v,s,~{memory}" && c->arg_size() == 3;
 }
 
+// 一条累加链。mmas[k] 是第 k 条 MMAC，packets[k] 是它的 B 操作数来自哪次矩阵读。
 struct Chain {
   llvm::SmallVector<Call *, 16> mmas, packets;
 };
 
+// 从链头沿 C 输入追到链尾。任何不符合的情况都返回空链。
 Chain getChain(Call *root) {
   Chain chain;
   for (Call *c = root; c;) {
@@ -122,9 +153,13 @@ Chain getChain(Call *root) {
   return chain;
 }
 
+// 核心调度。区域定义为：最后一次矩阵读之后，到最后一条 MMAC（含其后的调度保护）之间。
 bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
   if (chains.size() < 2 || chains.size() > 16 || chains.size() % width) return false;
   auto *block = chains.front()->mmas.front()->getParent();
+  // positions：指令在块内的位置。
+  // mmas：所有链的 MMAC。
+  // lastRead / lastMMA / firstMMA：用于界定区域，并确认读都在 MMAC 之前。
   llvm::DenseMap<Inst *, unsigned> positions;
   unsigned pos = 0;
   for (auto &i : *block) positions[&i] = pos++;
@@ -145,6 +180,10 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
   Inst *end = lastMMA->getNextNode();
   // Include an existing trailing hint, so a second run cannot multiply guards.
   while (isHint(end)) end = end->getNextNode();
+  // region：区域内的全部指令。
+  // hints：区域内已有的调度保护，改写时删除后重新生成。
+  // members：region 的集合形式。
+  // fixed[k]：原本位于第 k 条 MMAC 之前的不可移动 op，新顺序里同样放在第 k 条 MMAC 之前。
   Insts region, hints;
   llvm::SmallPtrSet<Inst *, 32> members;
   llvm::SmallVector<Insts, 32> fixed(mmas.size()+1);
@@ -162,6 +201,9 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
   // Fully validate a topological schedule BEFORE mutating the IR. A requested
   // MMAC cannot pull a different MMAC, memory operation or synchronization
   // forward as a dependency; an unsupported dependency rejects the region.
+  // desired：期望的 MMAC 顺序，也就是交错后的序列。
+  // plan：最终的完整指令顺序，由 emit 做拓扑展开生成。
+  // emit：发射 i 并先发射它的依赖。依赖只能是纯计算；要求连带发射其它 MMAC 或有副作用的 op 时失败。
   Insts desired, plan;
   for (unsigned group = 0; group < chains.size(); group += width)
     for (unsigned k = 0; k < chains.front()->mmas.size(); ++k)
@@ -179,6 +221,7 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
     plan.push_back(i);
     return true;
   };
+  // 按 slot 交替放置 fixed 和 MMAC，最后补上未被依赖的纯计算。
   for (unsigned slot = 0; slot <= desired.size(); ++slot) {
     for (auto *i : fixed[slot]) if (!emit(i, true)) return false;
     if (slot < desired.size() && !emit(desired[slot], true)) return false;
@@ -187,6 +230,7 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
     if (!isHint(i) && !emit(i, false)) return false;
   if (plan.size()+hints.size() != region.size()) return false;
 
+  // 走到这里计划已通过校验，开始改 IR。
   for (auto *i : plan) i->moveBefore(end->getIterator());
   for (auto *i : hints) i->eraseFromParent();
   auto *hint = llvm::Intrinsic::getOrInsertDeclaration(block->getModule(), llvm::Intrinsic::amdgcn_sched_barrier);
@@ -226,6 +270,7 @@ llvm::PreservedAnalyses InterleavePVPass::run(llvm::Function &function, llvm::Fu
       if (chain.mmas.size() >= 2) candidates.push_back(std::move(chain));
     }
     llvm::SmallPtrSet<Chain *, 16> visited;
+    // 把 packets 完全相同的链归为一组，它们才是同一片 V 上的多条 PV 链。
     for (auto &seed : candidates) {
       if (!visited.insert(&seed).second) continue;
       llvm::SmallVector<Chain *, 8> group{&seed};

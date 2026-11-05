@@ -1,3 +1,19 @@
+// ===========================================================================
+// Pass: optimizeRegisterLifetimes   优化汇总.py 第 23 项，LLVM 阶段
+//
+// 作用：缩短值在寄存器里的存活时间，降低 VGPR 压力。实际包含 5 个相互独立的优化：
+//   exposeThreadBounds          给 workitem id 打上 !range，后续 InstCombine 能化简除法。
+//   simplifyThreadExpressions   枚举所有线程号，把长的地址表达式换成等价的“掩码 + 移位”。
+//   scheduleMathConsumers       把数学结果的消费者紧贴生产者，尽早 fptrunc 打包成 half。
+//   AddressRematerializer       把依赖线程号的地址表达式在每个基本块内就地重建，不跨块存活。
+//   compactIntegerComparisons   把一组 64-bit 比较拆成共享的高位比较 + 独立的低位比较。
+//
+// 执行顺序（文件末尾的 optimizeRegisterLifetimes）：
+//   exposeThreadBounds -> simplifyThreadExpressions -> InstCombine -> OptimizeRegisterLifetimesPass
+//   （math + address）-> DCE -> compactIntegerComparisons
+//
+// marker：函数属性 frisk.register_lifetimes，防止重复运行。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/OptimizeRegisterLifetimes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -45,6 +61,8 @@ bool isThreadID(llvm::Value *value) {
 // Establish bounds BEFORE canonicalization and rematerialization. Otherwise
 // lowering of affine floor divisions has already expanded signed correction
 // DAGs, which are then needlessly recomputed at every memory access.
+// 根据 reqd_work_group_size 给 workitem.id 添加 !range。必须在规范化之前做，否则 floordiv 的
+// 符号修正已经展开，之后再化简就晚了。
 void exposeThreadBounds(llvm::Function &function) {
   auto *size = function.getMetadata("reqd_work_group_size");
   if (!size) return;
@@ -82,7 +100,12 @@ bool isAddressExpression(llvm::Value *value) {
 // domain. This is not sampling: every legal ID is checked, including irregular
 // workgroup sizes. Unknown inputs, poison, multiple axes and non-linear bit
 // functions fall back. Never enumerate a kernel's data or specialize its shape.
+// 对每个线程号指令，枚举 [0, count) 上所有依赖它的整数表达式的值，再找更便宜的等价表达式。
+// 是对完整定义域的枚举证明，不是采样。
 unsigned simplifyThreadExpressions(llvm::Function &function) {
+  // Table：表达式在每个线程号上的取值。
+  // tables：值 -> Table，线程号自己是恒等表。
+  // candidates：能完整求值的指令，顺序是定义顺序。
   using Table = llvm::SmallVector<llvm::APInt>;
   unsigned changed = 0;
   llvm::SmallVector<llvm::IntrinsicInst *> ids;
@@ -124,6 +147,7 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
     }
     // Replace largest expressions first; their now-dead subexpressions need
     // no replacement. Constants are also useful for removing signed corrections.
+    // 从大表达式往小处理。全部相同的直接替换成常量；否则尝试下面的按位线性形式。
     for (auto *inst : llvm::reverse(candidates)) {
       if (inst->use_empty()) continue;
       const auto &values = tables[inst];
@@ -135,6 +159,8 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
       }
       unsigned bits = base.getBitWidth();
       if (bits < 32) continue;
+      // coefficients[bit] = f(1 << bit) - f(0)。
+      // linear 证明 f(t) = f(0) + sum(coefficients[bit] for t 的每个置位 bit)。
       llvm::SmallVector<llvm::APInt> coefficients;
       bool linear = true;
       for (unsigned bit = 0; (1u << bit) < count; ++bit)
@@ -148,6 +174,8 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
       if (!linear) continue;
       // Merge bits that share a shift into one mask/shift operation. Reject
       // arbitrary multipliers rather than trading one expensive DAG for another.
+      // groups[(移位量, 是否为负)] = 线程号的掩码位。
+      // 每组生成一次 (tid & mask) << shift。系数不是 2 的幂时放弃，不用乘法。
       std::map<std::pair<int, bool>, uint32_t> groups;
       for (unsigned bit = 0; bit < coefficients.size(); ++bit) {
         auto coefficient = coefficients[bit];
@@ -158,6 +186,7 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
         groups[{int(coefficient.logBase2()) - int(bit), negative}] |= 1u << bit;
       }
       if (!linear) continue;
+      // nodes：原表达式 DAG 的规模。estimated：新表达式的估计规模。不明显更小时放弃替换。
       llvm::SmallPtrSet<llvm::Value *, 32> nodes;
       llvm::SmallVector<llvm::Value *> work{inst};
       while (!work.empty()) {
@@ -170,6 +199,7 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
       for (const auto &[key, mask] : groups)
         estimated += 2 + (key.first != 0);
       if (nodes.size() <= estimated + 1) continue;
+      // width：优先用 32-bit 计算（更省寄存器），但系数放不下时保持原宽度。
       bool unsigned32 = llvm::all_of(values, [](const auto &v) { return v.isIntN(32); });
       bool signed32 = llvm::all_of(values, [](const auto &v) { return v.isSignedIntN(32); });
       unsigned width = unsigned32 || signed32 ? 32 : bits;
@@ -199,6 +229,8 @@ unsigned simplifyThreadExpressions(llvm::Function &function) {
   return changed;
 }
 
+// 产生数学结果的指令：exp/log/sqrt 类。
+// isMathConsumer：可以安全前移的消费者（fptrunc、向量拼装、浮点算术）。
 bool isMathProducer(llvm::Instruction &inst) {
   auto *call = llvm::dyn_cast<llvm::CallInst>(&inst);
   if (!call || call->getNumOperandBundles() || !call->getCalledFunction()) return false;
@@ -235,6 +267,11 @@ bool canMaterialize(llvm::Type *type, const llvm::DataLayout &layout) {
   return !bits.isScalable() && (bits == 16 || bits == 32 || bits == 64 || bits == 128);
 }
 
+// 生成一个空 inline asm：约束 "=v,0" 把值强制放进 VGPR，不产生任何指令。
+// 作用是“钉住”值的生成位置，阻止 LLVM 把计算沉到或提到别处。
+//   discriminator  非 0 时增加一个无用的立即数，避免相同的 asm 被 CSE 合并。
+//   marker         标记这是本 Pass 生成的。
+// 线程号的 identity 还要带上 !range，否则隐藏 intrinsic 后除法优化会失效。
 llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
                             llvm::StringRef name, unsigned discriminator = 0) {
   llvm::IRBuilder<> b(before);
@@ -278,6 +315,7 @@ llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
 // Strip only operations that provably leave the upper word unchanged. Unlike
 // add/sub, low-word OR/XOR cannot carry into it. This is independent of tensor
 // shapes, launch dimensions, and the interpretation of the comparison.
+// 去掉只改低 32 位的 or/xor 常量，返回高 32 位相同的根。add/sub 可能进位，不能去。
 llvm::Value *upperWordRoot(llvm::Value *value) {
   for (unsigned depth = 0; depth < 8; ++depth) {
     auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value);
@@ -290,6 +328,7 @@ llvm::Value *upperWordRoot(llvm::Value *value) {
   return value;
 }
 
+// 值是否依赖线程号（在 VGPR 里）。纯标量的比较没有优化价值。
 bool hasVectorInput(llvm::Value *value, llvm::SmallPtrSetImpl<llvm::Value *> &seen) {
   if (!seen.insert(value).second) return false;
   if (isThreadID(value)) return true;
@@ -315,11 +354,19 @@ bool hasVectorInput(llvm::Value *value, llvm::SmallPtrSetImpl<llvm::Value *> &se
 // negative values, index wraparound and inputs larger than 2^32; no truncation
 // of a pointer/index range is assumed. Signed predicates use SIGNED high-word
 // and UNSIGNED low-word comparisons.
+// 把一批 icmp i64 改写成：
+//   equal = high(lhs) == high(rhs)                   只算一次
+//   different = high(lhs) <pred> high(rhs)            只算一次
+//   每条比较: select(equal, low(l) <unsigned pred> low(r), different)
+// 这样 i64 操作数不用一直占两个 VGPR。按字典序分解，负数和回绕也成立。
 unsigned compactIntegerComparisons(llvm::Function &function) {
   constexpr llvm::StringLiteral comparisonMarker = "frisk.register_comparisons";
   if (function.hasFnAttribute(comparisonMarker)) return 0;
   unsigned changed = 0, materializationID = 0;
   for (llvm::BasicBlock &block : function) {
+    // Key：(谓词, lhs 根, rhs 根)，相同的比较分为一组。
+    // groups：每组的比较指令。
+    // order：保留出现顺序，让输出不受指针地址影响。
     using Key = std::tuple<unsigned, llvm::Value *, llvm::Value *>;
     std::map<Key, llvm::SmallVector<llvm::ICmpInst *>> groups;
     llvm::SmallVector<Key> order;
@@ -338,6 +385,7 @@ unsigned compactIntegerComparisons(llvm::Function &function) {
       auto &comparisons = groups.at(key);
       // Amortize the high-word predicates. A single comparison or repeated
       // comparisons of identical values do not justify decomposition.
+      // variants：组内实际不同的操作数。至少 4 条比较、3 个变体时才有收益。
       llvm::SmallPtrSet<llvm::Value *, 32> variants;
       auto [predicate, lhs, rhs] = key;
       for (auto *compare : comparisons)
@@ -366,6 +414,7 @@ unsigned compactIntegerComparisons(llvm::Function &function) {
       for (auto *compare : comparisons) {
         b.SetInsertPoint(compare);
         b.SetCurrentDebugLocation(compare->getDebugLoc());
+        // 在比较点按 or/xor 路径重建低 32 位。base 用 materialize 钉住，避免 InstCombine 合回去。
         auto low = [&](llvm::Value *value, llvm::Value *root, llvm::Value *base) {
           llvm::SmallVector<llvm::BinaryOperator *> path;
           while (value != root) {
@@ -410,6 +459,9 @@ unsigned compactIntegerComparisons(llvm::Function &function) {
   return changed;
 }
 
+// consumers：同一基本块内，由数学结果传递出去的消费者集合。
+// ordered：按原始顺序排列的 consumers。
+// 每个消费者移到它最晚操作数的后面；遇到 fptrunc 就用 materialize 把两侧钉住。
 unsigned scheduleMathConsumers(llvm::Function &function) {
   unsigned packed = 0;
   const auto &layout = function.getDataLayout();
@@ -452,6 +504,11 @@ unsigned scheduleMathConsumers(llvm::Function &function) {
   return packed;
 }
 
+// 把依赖线程号的地址表达式在每个基本块内重建，这样长的地址 DAG 不会跨循环占用寄存器。
+//   divergent  值 -> 是否依赖线程号的缓存。
+//   local      本基本块内已重建的值，每块清空。
+//   retained   不重建、继续共享的昂贵基址（含除法）。
+//   clones     克隆的指令数，只用于日志。
 class AddressRematerializer {
   llvm::DenseMap<llvm::Value *, bool> divergent;
   llvm::DenseMap<llvm::Value *, llvm::Value *> local;
@@ -459,6 +516,7 @@ class AddressRematerializer {
   unsigned &clones;
   // Bound code growth for arbitrary generated expressions. The limit applies
   // to newly cloned nodes, sharing expressions already rebuilt in this block.
+  // 重建新增的节点不超过 96 个。已经重建或保留的值不计入。
   bool affordable(llvm::Value *root) {
     llvm::SmallPtrSet<llvm::Value *, 32> seen;
     llvm::SmallVector<llvm::Value *> work{root};
@@ -485,6 +543,7 @@ class AddressRematerializer {
     divergent[value] = result;
     return result;
   }
+  // 递归克隆到 before 之前。retained 和线程号本身用 materialize 钉在本块。
   llvm::Value *rebuild(llvm::Value *value, llvm::Instruction *before) {
     if (!dependsOnThread(value)) return value;
     if (auto found = local.find(value); found != local.end()) return found->second;
@@ -501,6 +560,8 @@ class AddressRematerializer {
   }
 public:
   explicit AddressRematerializer(unsigned &clones) : clones(clones) {}
+  // 选择保留的基址：入口块里被循环内地址用到的除法/取模。
+  // savings[expr] 按循环深度加权：2^depth * 位宽。按收益排序，最多保留 8 个寄存器字。
   void chooseSharedBases(llvm::Function &function, llvm::LoopInfo &loops) {
     llvm::DenseMap<llvm::Instruction *, unsigned> savings;
     for (auto &block : function) {
@@ -543,11 +604,14 @@ public:
     }
     llvm::errs() << "Address shared bases: " << retained.size() << " (" << words << " register words)\n";
   }
+  // 先记下要处理的访问，再逐个重建地址操作数。包括 GM/LDS 的 load/store、DMA 源地址、readfirstlane
+  // 的输入和矩阵读指针。只重建地址，不移动访问本身。
   void run(llvm::BasicBlock &block) {
     local.clear();
     // Snapshot accesses before inserting instructions. Per-block caching
     // shares nearby addresses, but never carries their expanded DAGs through
     // another block/loop. Uniform base pointers and loop PHIs remain shared.
+    // accesses：(指令, 地址操作数下标)。
     llvm::SmallVector<std::pair<llvm::Instruction *, unsigned>> accesses;
     for (llvm::Instruction &inst : block) {
       if (llvm::isa<llvm::LoadInst, llvm::StoreInst>(inst)) {

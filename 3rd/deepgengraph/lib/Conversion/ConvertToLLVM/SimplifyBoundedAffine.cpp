@@ -1,3 +1,11 @@
+// ===========================================================================
+// Pass: SimplifyBoundedAffine（frisk-simplify-bounded-affine）   优化汇总.py 第 17 项，thread 阶段，未实测
+//
+// 作用：利用循环上下界证明 affine.apply 里的 floordiv / mod 可以消掉，去掉有符号除法，并让更多
+// 地址计算变成循环不变量，由 secondLowering 的 LICM 外提。
+//
+// 只改 affine.apply 的 map。下面是原文件头的恒等式说明。
+// ===========================================================================
 // Remove affine floordiv/mod whose result is decided by constant loop bounds.
 //
 // Tile arithmetic produces maps such as
@@ -20,6 +28,7 @@
 using namespace mlir;
 
 namespace {
+// 闭区间 [low, high]。std::optional 为空表示无界或未知。
 struct Range {
   int64_t low, high;
 };
@@ -40,6 +49,7 @@ std::optional<Range> multiply(std::optional<Range> a, std::optional<Range> b) {
   return Range{*std::min_element(values, values + 4), *std::max_element(values, values + 4)};
 }
 
+// dims / symbols：affine map 每个 dim、symbol 的范围。只有操作数是常量边界的循环 iv 时才有值。
 class BoundedSimplifier {
   ArrayRef<std::optional<Range>> dims, symbols;
 
@@ -72,6 +82,7 @@ class BoundedSimplifier {
     }
   }
 
+  // 表达式是否用到循环 iv。没有用到就不简化，这正是“线程坐标表达式不折叠”的实现方式。
   bool usesBoundedLoop(AffineExpr expr) const {
     bool found = false;
     expr.walk([&](AffineExpr leaf) {
@@ -82,6 +93,8 @@ class BoundedSimplifier {
   }
 
   // Split a sum into the part that is a multiple of `divisor` and the rest.
+  // 拆分 expr = divisor * quotient + rest。系数能被 divisor 整除的项进 quotient，其它进 rest。
+  // 符号项的系数被整除时也进 quotient，所以符号可以无界。
   static void split(AffineExpr expr, int64_t divisor, AffineExpr &quotient, AffineExpr &rest) {
     if (expr.getKind() == AffineExprKind::Add) {
       auto sum = cast<AffineBinaryOpExpr>(expr);
@@ -124,6 +137,8 @@ public:
       int64_t divisor = constant.getValue();
       AffineExpr zero = getAffineConstantExpr(0, expr.getContext()), quotient = zero, rest = zero;
       split(left, divisor, quotient, rest);
+      // bounds：rest 的范围。
+      // period：如果 rest 的整个范围都落在同一个 divisor 周期内，就是这个周期号 k，对应文件头公式的 k。
       std::optional<Range> bounds;
       if (usesBoundedLoop(rest)) bounds = range(rest);
       std::optional<int64_t> period;
@@ -134,12 +149,14 @@ public:
       if (kind == AffineExprKind::FloorDiv && period) return quotient + *period;
       if (kind == AffineExprKind::Mod && period) return rest - *period * divisor;
       // Multiples exposed by an inner proof can be dropped from an outer mod.
+      // 内层化简后暴露出的倍数项，可以直接从外层 mod 中去掉，不需要 rest 有界。
       if (kind == AffineExprKind::Mod && childChanged) return rest % divisor;
     }
     return childChanged ? getAffineBinaryOpExpr(kind, left, right) : expr;
   }
 };
 
+// value 是常量边界 affine.for 的 iv 时返回 [lb, ub-1]。忽略 step，只会让范围更宽，仍然安全。
 std::optional<Range> loopRange(Value value) {
   auto loop = affine::getForInductionVarOwner(value);
   if (!loop || !loop.hasConstantBounds()) return std::nullopt;

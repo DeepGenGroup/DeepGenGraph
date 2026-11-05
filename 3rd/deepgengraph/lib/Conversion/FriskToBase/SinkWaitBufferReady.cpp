@@ -1,3 +1,12 @@
+// ===========================================================================
+// Pass: SinkWaitBufferReady（frisk-sink-wait-buffer-ready）   不单独列在 优化汇总.py 中
+//
+// 作用：在 block 级把 wait_buffer_ready 下沉到第一个依赖它的位置，让更多无关计算和在途 DMA 重叠。
+// 由第 6 项 ConvertFriskBaseToFragmentIR 直接调用（sinkWaitBufferReady）。
+// 第 11 项 ScheduleAsyncCopies 在 fragment 阶段做类似的事，这里是更早的一次。
+//
+// 合法性判定见 BufferDependencies::canCross。
+// ===========================================================================
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Analysis/AliasAnalysis.h"
@@ -14,6 +23,9 @@ namespace {
 // LocalAliasAnalysis does not know Frisk logical views or allocations. Resolve
 // these and selects explicitly; unknown origins retain MLIR's conservative
 // answer. Different slices of the same allocation are deliberately MayAlias.
+// 判断 wait 能否越过某个 op。
+// mayAlias：穿过视图和 select 后比较两个 memref。同一 alloc 的不同切片也算可能别名。
+// aliases：MLIR 的别名分析，上面的规则判断不了时才用。
 class BufferDependencies {
 public:
   explicit BufferDependencies(func::FuncOp kernel) : aliases(kernel) {}
@@ -43,6 +55,8 @@ public:
     return !aliases.alias(a, b).isNo();
   }
 
+  // wait 能否越过 op。不允许越过：控制流、barrier、其它 wait、其它 DMA、桥接、已有手动调度的 op。
+  // 其它 op 不能读写 DMA 的目的地，也不能写 DMA 的源。
   bool canCross(Operation *op, AsyncCopyGmToShmOp issue) {
     // A wait is collective. Do not change its control-flow placement or cross
     // another collective/launch, even for disjoint tiles (backend policy).
@@ -93,6 +107,7 @@ public:
     return true;
   }
 
+  // op 带手动或流水调度标注。FriskFragIRReorder.cpp 里有两份相似的列表。
   static bool hasSchedule(Operation *op) {
     return op->hasAttr("pipeline.stage") || op->hasAttr("pipeline.order") ||
            op->hasAttr("pipeline.scheduled") || op->hasAttr("pipeline_slot") ||
@@ -133,6 +148,8 @@ public:
 };
 } // namespace
 
+// 对每个 wait：先向上找到同块内 token 相同的 issue；确认 issue 到 wait 之间的 op 都可越过；
+// 然后向下移动，直到遇到不能越过的 op。
 void mlir::frisk::sinkWaitBufferReady(func::FuncOp kernel) {
   BufferDependencies dependencies(kernel);
   SmallVector<WaitBufferReadyOp> waits;

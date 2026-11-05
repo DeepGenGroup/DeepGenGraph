@@ -1,3 +1,14 @@
+// ===========================================================================
+// 本文件包含两个方向相反的 Pass：
+//
+// PromoteGlobalToSharedAsync（frisk-promote-gm-to-shm-async）   优化汇总.py 第 4 项，block 阶段
+//   把 GM -> LDS 的同步 frisk.copy 改写成 async_copy_gm_to_shm + wait_buffer_ready 两步，
+//   发起和完成拆开，后面的调度 Pass 才能分别移动它们。这是所有“提前发 DMA”优化的前提。
+//   本 Pass 只拆分，wait 紧跟在 issue 后面，完成点不变。
+//
+// LowerFriskAsyncToSync（frisk-lower-async-to-sync）   copyMode=sync 时才运行，不是优化
+//   反向操作：把异步拷贝退回同步 copy + block 同步，作为对照配置。
+// ===========================================================================
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -16,6 +27,8 @@ struct PromoteGlobalToSharedAsyncPass
   PromoteGlobalToSharedAsyncPass() = default;
   PromoteGlobalToSharedAsyncPass(const PromoteGlobalToSharedAsyncPass &other)
       : PassWrapper(other) {}
+  // assumeAlignment：调用方保证的对齐字节数，0 表示按元素类型推断。
+  // 优先级（低到高）：元素大小 < 本选项 < copy 自身的 alignment 属性。
   Option<int64_t> assumeAlignment{*this, "assume-alignment",
       llvm::cl::desc("Caller guarantee for both tile origins in bytes; 0 infers element alignment"),
       llvm::cl::init(0)};
@@ -34,6 +47,10 @@ struct PromoteGlobalToSharedAsyncPass
     }
     // Schemes have one entry per top-level operation. Rebuild them when one
     // synchronous copy becomes issue+wait, retaining its original schedule.
+    // schedule：op -> (pipeline stage, pipeline order)。
+    // pipeline.stage / pipeline.order 属性是“循环体内每个顶层 op 一项”的数组。一条 copy 变成
+    // issue + wait 后数组长度对不上，所以先拆成 map，改写完再重建。
+    // loops：带有效流水调度标注的循环，末尾用来回写属性。
     DenseMap<Operation *, std::pair<int64_t, int64_t>> schedule;
     SmallVector<affine::AffineForOp> loops;
     getOperation().walk([&](affine::AffineForOp loop) {
@@ -52,6 +69,7 @@ struct PromoteGlobalToSharedAsyncPass
     });
     SmallVector<frisk::CopyOp> copies;
     getOperation().walk([&](frisk::CopyOp op) { copies.push_back(op); });
+    // 只处理 GM(addrspace 1) -> LDS(addrspace 3)、静态形状、元素类型相同的拷贝。
     for (auto copy : copies) {
       auto src = dyn_cast<MemRefType>(copy.getSrc().getType());
       auto dst = dyn_cast<MemRefType>(copy.getDst().getType());
@@ -63,6 +81,10 @@ struct PromoteGlobalToSharedAsyncPass
       OpBuilder b(copy);
       auto loc = copy.getLoc();
       Value source = copy.getSrc(), destination = copy.getDst();
+      // same         源和目的形状相同，不需要切片。
+      // sourceSlice  源比目的大，要在源上切片；否则如果形状不同，就是在目的上切片。
+      // sentinel     offset map 是“单个常量 = rank”的特殊写法，表示没有偏移。
+      // zero         offset map 全为 0，同样表示没有偏移。
       bool same = src.getShape() == dst.getShape();
       bool sourceSlice = !same && src.getNumElements() > dst.getNumElements();
       auto shape = sourceSlice ? dst.getShape() : src.getShape();
@@ -74,6 +96,7 @@ struct PromoteGlobalToSharedAsyncPass
         auto c = dyn_cast<AffineConstantExpr>(e);
         return c && c.getValue() == 0;
       });
+      // 有切片或偏移时，用 buffer_view 显式表达，异步 op 本身不再携带 offset map。
       if (!same || (!sentinel && !zero)) {
         auto mapped = sourceSlice ? src : dst;
         if (map.getNumResults() != mapped.getRank() ||
@@ -102,6 +125,7 @@ struct PromoteGlobalToSharedAsyncPass
       if (copy.hasValueResult()) copy.getValueResult().replaceAllUsesWith(copy.getDst());
       copy.erase();
     }
+    // 按改写后的循环体重建 pipeline.stage / pipeline.order。
     for (auto loop : loops) {
       SmallVector<int64_t> stages, orders;
       for (Operation &op : loop.getBody()->without_terminator()) {
@@ -125,6 +149,8 @@ struct LowerFriskAsyncToSyncPass
     registry.insert<frisk::FriskDialect, gpu::GPUDialect, arith::ArithDialect>();
   }
   void runOnOperation() final {
+    // sync 模式的回退 Pass。frisk.source_map 表示 packed LDS：目的形状已不等于源的逻辑形状，
+    // 不能生成普通 copy，只打 frisk.force_sync，留给后面的 lowering 按置换处理。
     if (failed(frisk::validateAsyncTaskTokens(getOperation()))) return signalPassFailure();
     SmallVector<Operation *> ops;
     getOperation().walk([&](Operation *op) {

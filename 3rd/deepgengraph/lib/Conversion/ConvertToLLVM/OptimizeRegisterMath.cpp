@@ -1,3 +1,14 @@
+// ===========================================================================
+// Pass: optimizeApproximateRegisterMath   优化汇总.py 第 19 项，LLVM 阶段，math=approx
+//
+// 作用：
+//   1. 先调用 fuseMMACAccumulators（第 25 项的函数，这里是第一次运行）。
+//   2. nativeExp2：把 __ocml_exp2_f32 换成原生 llvm.amdgcn.exp2。
+//   3. reciprocalMode：同一基本块内相同分母的 fdiv 共用一次 1/x，变成 a * (1/x)。
+//
+// 这是近似优化：原生 exp2 和“乘倒数”都不保证与原实现逐位相同，所以只在 approx 模式打开。
+// 跳过 strictfp 和 optnone 的函数。
+// ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
@@ -20,6 +31,7 @@ void optimizeRegisterMath(llvm::Module &module, bool nativeExp2, bool reciprocal
   pb.crossRegisterProxies(loops, analyses, cgscc, modules);
   llvm::FunctionPassManager canonicalize;
   canonicalize.addPass(llvm::InstCombinePass());
+  // exponentials / divisions：替换次数，只用于日志。
   unsigned exponentials = 0, divisions = 0;
   for (llvm::Function &function : module) {
     if (function.isDeclaration() || function.hasFnAttribute(llvm::Attribute::StrictFP) ||
@@ -28,6 +40,7 @@ void optimizeRegisterMath(llvm::Module &module, bool nativeExp2, bool reciprocal
     // examining actual register chains. InstCombine itself preserves FP order.
     canonicalize.run(function, analyses);
     for (llvm::BasicBlock &block : function) {
+      // reciprocals：分母 -> 已生成的 1/分母。按基本块重建，所以不会跨块共用。
       llvm::DenseMap<llvm::Value *, llvm::Value *> reciprocals;
       for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
         llvm::IRBuilder<> b(&inst);

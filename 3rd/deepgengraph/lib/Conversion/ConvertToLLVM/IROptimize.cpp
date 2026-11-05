@@ -1,3 +1,19 @@
+// ===========================================================================
+// 本文件包含两个 Pass：
+//
+// IRDeepOptimize（ir-deep-optimize，实现类 VectorOpLoopUnrollPass）  优化汇总.py 第 16 项，thread 阶段
+//   作用：
+//     1. 下标静态化：vector.insert/extract 的下标如果由小常量循环决定，就完全展开这些循环，
+//        让下标变成常量。寄存器 vector 的下标必须是静态的，否则后端只能走动态索引。
+//     2. 合并读写：展开后相邻的 LDS 标量和小向量合成更宽的包（coalesceUnrolledSharedScalars/Reads）。
+//     3. 调度：在直线代码窗口内做 list scheduling，让内存操作和计算交错（reorderUnrolledOperations）。
+//   选项 reorderAfterUnroll 控制是否执行第 3 步。
+//
+// BarrierOptimize（barrier-optimize，实现类 BarrierOptimizePass）
+//   删除前后没有跨线程内存依赖的 gpu.barrier。不在优化汇总.py 的 PIPELINE 表中。
+//
+// 文件结构：Pass 1 的主体 -> barrier 内存范围判定（调度也复用）-> 调度节点定义 -> LDS 合并 -> 调度器 -> Pass 2。
+// ===========================================================================
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
@@ -33,6 +49,10 @@ namespace {
 
 // Only unroll indices entirely determined by constants and small static loops.
 // Follow index dependencies, not the vector or its lane-dependent load address.
+// 判断下标 value 是否完全由常量和小循环决定，如果是，把需要展开的循环加入 loops。
+//   loops     需要展开的循环。
+//   visiting  当前递归路径上的值，用来断开 iter_arg 的自引用。
+// 返回 false 表示下标依赖运行期值（如线程号），展开也不能让它变成常量。
 static bool collectIndexLoops(Value value,
                               llvm::SmallPtrSetImpl<Operation *> &loops,
                               llvm::SmallDenseSet<Value, 16> &visiting) {
@@ -44,6 +64,7 @@ static bool collectIndexLoops(Value value,
   if (!visiting.insert(value).second)
     return true;
   auto guard = llvm::scope_exit([&] { visiting.erase(value); });
+  // trip count 上限 64；上下界本身也必须是静态的。
   auto collectLoop = [&](affine::AffineForOp loop) {
     auto count = affine::getConstantTripCount(loop);
     if (!count || *count == 0 || *count > 64)
@@ -87,6 +108,8 @@ static void reorderUnrolledOperations(func::FuncOp function);
 static void coalesceUnrolledSharedReads(func::FuncOp function);
 static void coalesceUnrolledSharedScalars(func::FuncOp function);
 
+// 第 16 项的 Pass 主体。主循环每次只展开一个循环，然后重新 canonicalize 并重新收集，
+// 因为展开会使嵌套循环的句柄失效。
 class VectorOpLoopUnrollPass
     : public impl::IRDeepOptimizeBase<VectorOpLoopUnrollPass> {
   void runOnOperation() override {
@@ -97,6 +120,7 @@ class VectorOpLoopUnrollPass
     FrozenRewritePatternSet frozen(std::move(patterns),
                                    unsafeVectorCanonicalizations());
     // Bound cumulative code growth, not just individual loop trip counts.
+    // maxExtraOperations：累计新增 op 的上限。extraOperations：已新增的数量。
     constexpr uint64_t maxExtraOperations = 65536;
     uint64_t extraOperations = 0;
     while (true) {
@@ -106,6 +130,7 @@ class VectorOpLoopUnrollPass
         signalPassFailure();
         return;
       }
+      // candidates：能让某个 insert/extract 下标变成常量的循环。
       llvm::SmallPtrSet<Operation *, 16> candidates;
       auto collect = [&](auto op) {
         for (OpFoldResult position : op.getMixedPosition()) {
@@ -120,6 +145,7 @@ class VectorOpLoopUnrollPass
       };
       kernel.walk([&](vector::InsertOp op) { collect(op); });
       kernel.walk([&](vector::ExtractOp op) { collect(op); });
+      // 后序遍历，取第一个未超预算的候选，内层优先。selectedCost = body * (trip - 1)。
       affine::AffineForOp selected;
       uint64_t selectedCost = 0;
       kernel.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
@@ -144,6 +170,7 @@ class VectorOpLoopUnrollPass
       extraOperations += selectedCost;
       // Recollect after every rewrite: unrolling invalidates nested op handles.
     }
+    // 先把标量合并成小包，再多轮把小包翻倍合并，最宽到 128-bit，最后调度。
     coalesceUnrolledSharedScalars(kernel);
     // Scalar packets can grow through several native widths, up to 128 bits.
     for (unsigned i = 0; i < 3; ++i)
@@ -155,6 +182,10 @@ class VectorOpLoopUnrollPass
 
 // Describe the entire memref, not an individual lane's access. Disjoint SSA
 // indices in one thread need not be disjoint between different GPU threads.
+// 一个 memref 在跨线程意义上的内存范围。
+//   base    底层对象（alloc、alloca、get_global，或无法继续追的值）。
+//   offset  相对 base 的字节偏移，未知时为空。
+//   bytes   字节大小，未知时为空。
 struct BarrierMemoryRange {
   Value base;
   std::optional<int64_t> offset;
@@ -213,6 +244,8 @@ static BarrierMemoryRange getBarrierMemoryRange(Value value) {
           fixedBase && type ? getBarrierBufferBytes(type) : std::nullopt};
 }
 
+// 证明两个 memref 在任何线程组合下都不重叠。barrier 优化和调度都用它决定是否保留依赖。
+// 规则：GM 与 LDS 不重叠；同一对象要求字节区间不相交；不同 alloc/global 不重叠；其余情况保守认为重叠。
 static bool barrierRangesAreDisjoint(Value lhs, Value rhs) {
   auto aType = cast<BaseMemRefType>(lhs.getType());
   auto bType = cast<BaseMemRefType>(rhs.getType());
@@ -246,8 +279,20 @@ static bool barrierRangesAreDisjoint(Value lhs, Value rhs) {
 // heuristic, not a GPU cycle model: instruction selection and the backend
 // scheduler still decide the machine schedule. Never rewrite arithmetic or MMA
 // operands, speculate across control flow, or remove hardware hazard padding.
+// 调度节点类型。
+//   Boundary  调度边界，结束当前窗口，比如 barrier、控制流、DMA、不透明 asm。
+//   Support   地址计算、向量打包等辅助操作。
+//   Memory    普通的同步 load/store。
+//   Compute   MMA 和浮点算术。
 enum class IssueKind { Boundary, Support, Memory, Compute };
 
+// 调度依赖图的节点。
+//   buffer / write  Memory 节点访问的 memref 和读写方向。
+//   mma             是否可调度的寄存器 MMA。所有 MMA 之间连顺序边，保持原有相对顺序。
+//   successors / predecessors  依赖边（窗口内下标）。
+//   pending         尚未调度的前驱数。
+//   readyAt         抽象就绪时钟，只用于选择顺序，不插入等待。
+//   feeds           这个节点最终支持哪种操作（位掩码：1 = Memory，2 = Compute）。
 struct IssueNode {
   Operation *op;
   IssueKind kind;
@@ -281,6 +326,7 @@ static bool isSchedulableRegisterMMA(Operation *op) {
   return isRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
 }
 
+// 把 op 分类成调度节点。LDS 合并和调度都用这里的分类。
 static IssueNode classifyIssue(Operation *op) {
   IssueNode node{op, IssueKind::Boundary, {}};
   if (op->getNumRegions() || op->getNumSuccessors() ||
@@ -331,8 +377,12 @@ static IssueNode classifyIssue(Operation *op) {
 // second read to the first is legal only within a window without writes,
 // barriers, control flow or unknown effects. Register-only MMAs are allowed,
 // but their order and hazard padding are untouched.
+// 把相邻的两条同宽 vector.load（<= 64-bit）合并成一条双倍宽的 load，再 extract 成两半。
+// 循环执行 3 轮，可以 2x -> 4x -> 8x 逐级增长。
+// 只在没有写、barrier、控制流的窗口内进行。
 static void coalesceUnrolledSharedReads(func::FuncOp function) {
   function.walk([&](Block *block) {
+    // pending：窗口内还没配对的 load，最多保留 64 条。
     SmallVector<vector::LoadOp> pending;
     SmallVector<Operation *> operations;
     for (Operation &op : *block)
@@ -359,6 +409,10 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
         if (first.getBase() != load.getBase() || first.getVectorType() != type)
           continue;
         OpBuilder b(first);
+        // difference = 第二条下标 - 第一条下标，必须恒等于 type 的元素数。证明分三层，从便宜到昂贵：
+        //   1. 化简后直接是常量。
+        //   2. 唯一操作数是线程号时，枚举所有线程号（精确，不是采样）。
+        //   3. 否则用 Presburger 约束证明差值不可能小于或大于目标值。
         SmallVector<Value> indices{load.getIndices()[0], first.getIndices()[0]};
         auto difference = AffineMap::get(2, 0, b.getAffineDimExpr(0) - b.getAffineDimExpr(1));
         affine::fullyComposeAffineMapAndOperands(&difference, &indices);
@@ -430,6 +484,7 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
 // Prove a constant displacement for every value of the affine operands. A
 // constant-folded sample only proposes a displacement; the two emptiness
 // checks prove it, including the intrinsic bounds of mod/floordiv expressions.
+// 证明 to - from 恒等于某个常量。在全 0 处求值只是提议一个候选值，真正的证明是两个空集检查。
 static std::optional<int64_t> sharedDisplacement(Value from, Value to) {
   auto *ctx = from.getContext();
   SmallVector<Value> operands{to, from};
@@ -467,6 +522,10 @@ static bool isScalarSharedBuffer(Value value) {
       type.getElementTypeBitWidth() <= 64;
 }
 
+// 合并 memref.load/store 标量。
+//   reads   待配对的标量 load，只把差值为 ±1 的两条合成一个 2 元素向量读。
+//   writes  同一 buffer 上连续的标量 store，到边界时排序，按幂次宽度打包（最宽 128-bit）。
+//           打包写放在最后一条原 store 的位置，这时所有值都可用。
 static void coalesceUnrolledSharedScalars(func::FuncOp function) {
   function.walk([&](Block *block) {
     SmallVector<Operation *> operations;
@@ -560,12 +619,14 @@ static void coalesceUnrolledSharedScalars(func::FuncOp function) {
   });
 }
 
+// 调度偏好用的位掩码：Memory = 1，Compute = 2，其余为 0。
 static unsigned issueBit(IssueKind kind) {
   return kind == IssueKind::Memory ? 1 : kind == IssueKind::Compute ? 2 : 0;
 }
 
 // A rough live-data budget, not physical VGPR accounting. Ignore index/address
 // scalars and track newly defined register data through their actual SSA uses.
+// 粗略估计类型占用的数据位数，只用于 liveBits 预算，不是物理 VGPR 统计。
 static uint64_t registerDataBits(Type type) {
   if (auto vector = dyn_cast<VectorType>(type)) {
     if (vector.isScalable())
@@ -580,6 +641,9 @@ static uint64_t registerDataBits(Type type) {
   return 0;
 }
 
+// 对一个直线窗口做 list scheduling。这是 IR 层的发射顺序启发式，不是周期模型，后端还会再调度。
+// 窗口里只有内存或只有计算时没有交错空间，直接返回。
+// 步骤：建依赖图 -> 算 feeds -> 划分读包 -> 贪心选择 -> 按结果移动 op。
 static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
   bool hasMemory = false, hasCompute = false;
   for (const auto &node : nodes) {
@@ -596,6 +660,9 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
     nodes[to].predecessors.push_back(from);
     ++nodes[to].pending;
   };
+  // accesses：已出现的内存节点。
+  // previousMMA：上一条 MMA，用于串行化所有 MMA。
+  // pairs：依赖检查次数，超过预算就放弃调度，此时还没有移动任何 IR。
   SmallVector<unsigned> accesses;
   std::optional<unsigned> previousMMA;
   uint64_t pairs = 0;
@@ -640,6 +707,9 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
   // Vector loads are already packets. Four scalar elements match the MMA
   // register fragments and preserve the SLP opportunities lost by scalar M/C
   // alternation. No load is widened and no extra address is accessed here.
+  // batches：读包，相邻的同 buffer 同类型标量读最多 4 个一组，向量读单独成组。
+  // batchOf[i]：节点 i 所属的读包，等于 nodes.size() 表示不属于任何读包。
+  // extend / buffer / element：当前读包能否继续扩展、它的 buffer 和元素类型。
   SmallVector<SmallVector<unsigned, 4>> batches;
   SmallVector<unsigned> batchOf(nodes.size(), nodes.size());
   bool extend = false;
@@ -666,6 +736,8 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
   }
   // Dependencies needed to complete an active packet. Such support/address
   // operations may move with it; no unrelated compute can split its loads.
+  // activeBatch：正在发射的读包。激活后只能发射读包成员及其依赖，无关计算不能把它拆开。
+  // needed：完成当前读包需要的节点（读包成员及其传递前驱）。
   SmallVector<bool> needed(nodes.size(), false);
   std::optional<unsigned> activeBatch;
   auto activate = [&](unsigned batch) {
@@ -680,6 +752,10 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
       todo.append(nodes[index].predecessors);
     }
   };
+  // remainingUses：结果值还剩多少个使用，用来跟踪 liveBits。
+  // order：调度结果。issued：已发射标记。
+  // liveBits：当前存活的寄存器数据量。达到 lookaheadBits（512）后优先发射计算，避免存活数据继续增长。
+  // clock：抽象时钟。preferred：下一条偏好的类型（1 = Memory，2 = Compute），用它产生交错。
   llvm::DenseMap<Value, unsigned> remainingUses;
   for (const auto &node : nodes)
     for (Value result : node.op->getResults())
@@ -690,6 +766,8 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
   constexpr uint64_t lookaheadBits = 512;
   unsigned clock = 0, preferred = 1;
   while (order.size() != nodes.size()) {
+    // rank 越小越优先：0 = 偏好类型，1 = 为偏好类型铺路的 Support，2 = 其它内存/计算，3 = 其它。
+    // 读包激活时：0 = 读包成员，1 = Support，2 = 其它。
     unsigned best = nodes.size(), bestRank = 5;
     unsigned nextReady = std::numeric_limits<unsigned>::max();
     unsigned desired = liveBits >= lookaheadBits ? 2 : preferred;
@@ -741,6 +819,7 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
     }
     // Abstract readiness distances insert no waits. Within a packet we allow
     // address dependencies but never fill an artificial wait with unrelated ops.
+    // 抽象延迟：load 和 MMA = 8，其它计算 = 2，其余 = 1。只影响选择顺序。
     unsigned latency = node.buffer && !node.write ? 8 : node.mma ? 8 :
                        node.kind == IssueKind::Compute ? 2 : 1;
     for (unsigned next : node.successors) {
@@ -755,6 +834,7 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
     nodes[index].op->moveBefore(end);
 }
 
+// 把每个基本块按 Boundary 切成窗口，再逐窗口调度。窗口上限 4096 是为了限制调度成本。
 static void reorderUnrolledOperations(func::FuncOp function) {
   // Hard window limits bound both graph construction and list scheduling.
   // Partitioning a long basic block preserves all inter-window dependencies.
@@ -788,6 +868,11 @@ struct BarrierAccess {
   bool write;
 };
 
+// BarrierAnalysis 的简化 CFG 节点。
+//   barrier       节点是集合层 barrier 时指向它。
+//   unknown       节点有未知效果，遍历到它时放弃删除。
+//   accesses      节点内的读写，条件区域被汇总到这里。
+//   predecessors / successors  CFG 边。
 struct BarrierNode {
   Operation *barrier = nullptr;
   bool unknown = false;
@@ -798,6 +883,8 @@ struct BarrierNode {
 // A small control-flow graph keeps both loop backedges and zero-trip paths.
 // Only uniform for-loops expose their barriers as collective phase boundaries.
 // Conditional regions are summarized without using their barriers as cutoffs.
+// barrier-optimize 的分析。对每个 barrier，从它出发向前向后走到相邻的 barrier，收集两侧访问，
+// 没有冲突就删除。删除后立刻更新图，否则两个各自多余的 barrier 可能被同时删掉。
 class BarrierAnalysis {
 public:
   explicit BarrierAnalysis(func::FuncOp function) : function(function) {
@@ -878,6 +965,7 @@ private:
     return nullptr;
   }
 
+  // 构造 CFG。集合循环保留循环结构（含回边和零次路径），其它区域汇总成一个节点。
   unsigned appendBlock(Block &block, unsigned previous) {
     for (Operation &op : block) {
       unsigned index = addNode();
@@ -948,6 +1036,8 @@ private:
     }
   }
 
+  // 从 barrier 沿一个方向收集访问，遇到其它 barrier 停止。
+  // 遇到 unknown 节点返回 false，表示不能删除。
   bool collect(unsigned barrier, bool forward,
                SmallVectorImpl<BarrierAccess> &accesses) {
     SmallVector<unsigned> worklist;
