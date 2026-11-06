@@ -284,34 +284,48 @@ def print_timing_summary(name, samples):
 # ============================================================
 # Attention baseline
 #
-# Q: [B,H,S,D]
-# K: [B,H,D,S]
-# V: [B,H,S,D]
+# Q: [B,H,Sq,D]
+# K: [B,H,Sk,D] (k_layout="bhsd") or [B,H,D,Sk] (k_layout="bhds")
+# V: [B,H,Sk,D]
 #
 # GEMM
 #   ->
 # scale
 #   ->
-# causal mask
+# causal mask (only when causal=True)
 #   ->
 # softmax
 #   ->
 # GEMM
 # ============================================================
 
-def attention_baseline(q,k,v,):
+def attention_baseline(q, k, v, causal=True, k_layout="bhsd"):
+    """Naive (non-SDPA) attention reference.
+
+    causal=True : query i attends to keys j <= i (top-left aligned, same
+                  semantics as SDPA's is_causal=True).
+    causal=False: full attention, no mask is built or applied.
+    """
+    if k_layout not in ("bhsd", "bhds"):
+        raise ValueError("k_layout must be 'bhsd' or 'bhds', got {!r}".format(k_layout))
     D = q.shape[-1]
-    S = q.shape[-2]
+    Sq = q.shape[-2]
+    # GEMM 1 needs K as [B,H,D,Sk]
+    k_t = k.transpose(-2, -1) if k_layout == "bhsd" else k
+    Sk = k_t.shape[-1]
+    if k_t.shape[-2] != D or v.shape[-2] != Sk:
+        raise ValueError("shape mismatch: q={}, k={} ({}), v={}".format(
+            tuple(q.shape), tuple(k.shape), k_layout, tuple(v.shape)))
     # --------------------------------------------------------
     # GEMM 1
     #
-    # [B,H,S,D] @ [B,H,D,S]
+    # [B,H,Sq,D] @ [B,H,D,Sk]
     #
     # ->
     #
-    # [B,H,S,S]
+    # [B,H,Sq,Sk]
     # --------------------------------------------------------
-    score = torch.matmul(q,k)
+    score = torch.matmul(q, k_t)
     # --------------------------------------------------------
     # scale
     # --------------------------------------------------------
@@ -326,18 +340,12 @@ def attention_baseline(q,k,v,):
     # x x -
     # x x x
     #
-    # upper triangular area becomes -inf
+    # upper triangular area becomes -inf.
+    # Non-causal: skip masking entirely (full attention).
     # --------------------------------------------------------
-
-    mask = torch.triu(
-        torch.ones(S,S,dtype=torch.bool,device=q.device),
-        diagonal=1
-    )
-
-    score = score.masked_fill(
-        mask,
-        float("-inf")
-    )
+    if causal:
+        mask = torch.ones(Sq, Sk, dtype=torch.bool, device=q.device).triu_(diagonal=1)
+        score = score.masked_fill(mask, float("-inf"))
 
     # --------------------------------------------------------
     # softmax
@@ -741,6 +749,7 @@ def main(argv=None):
         shared_mem_bytes=args.shared_mem
     ) as launch:
         baseline, time_base, time_ours = benchmark_attention(
+            # k_sdpa is always contiguous [B,H,S,D]
             lambda: attention_baseline_sdpa(q, k_sdpa, v, causal=args.causal),
             launch,
             warmup=args.warmup,
