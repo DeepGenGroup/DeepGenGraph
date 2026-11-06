@@ -14,11 +14,11 @@
 //   plan  在一个基本块上识别 stage，并证明合法性。只分析，不改 IR；失败时打印原因。
 //   apply 移动 DMA，奇数片偏移一个 slot，删除 handoff barrier。
 //
-// 识别基于指令结构和地址证明，不依赖 SSA 名字或 tile 尺寸。但 DMA 的 asm 字符串是写死的。
+// 识别基于指令结构和地址证明，不依赖 SSA 名字或 tile 尺寸。IR 形状的定义见 LateIRPatterns.h。
 // ===========================================================================
 #include "LDSAddressAnalysis.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/DoubleBufferV.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -42,60 +42,20 @@ namespace {
 using namespace llvm;
 using Inst = Instruction;
 using Call = CallInst;
+using detail::LDSAddress;
+using detail::Sync;
+using detail::analyzeWave64Kernel;
+using detail::isCallTo;
+using detail::isDMA128;
+using detail::isPureInst;
+using detail::isRegisterMMACall;
+using detail::isSchedHint;
+using detail::isWaitCall;
+using detail::matchSync;
+using detail::MatrixReadM32x16;
 // Marker：标在已改写的矩阵读上，值为 slot 字节数，防止重复处理。
-// MatrixRead：V 的矩阵读指令名。
 constexpr StringLiteral Marker = "frisk.v_double_buffer";
-constexpr StringLiteral MatrixRead = "llvm.hcu.ds.read.m32x16.b16.v4i32.p3";
 
-bool named(Inst *i, StringRef name) {
-  auto *c = dyn_cast_or_null<Call>(i);
-  return c && !c->hasOperandBundles() && !c->isMustTailCall() &&
-      c->getCalledFunction() && c->getCalledFunction()->isDeclaration() &&
-      c->getCalledFunction()->getName() == name;
-}
-InlineAsm *assembly(Inst *i) {
-  auto *c = dyn_cast<Call>(i);
-  if (!c || c->hasOperandBundles() || c->isMustTailCall()) return nullptr;
-  auto *a = dyn_cast<InlineAsm>(c->getCalledOperand());
-  return a && !a->canThrow() && !a->isAlignStack() ? a : nullptr;
-}
-// 下面是一组 IR 形状识别函数。
-// dma：lowerWideAsyncDMAToBufferAsm 生成的 128-bit DMA inline asm。
-// wait：s_waitcnt vmcnt(0)。
-// mmac：寄存器 MMAC。
-// hint：sched.barrier(0)。
-// pure：可安全投机的纯计算。
-bool dma(Inst *i) {
-  auto *a = assembly(i);
-  if (!a || !a->hasSideEffects() ||
-      a->getAsmString() != "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds" ||
-      a->getConstraintString() != "={m0},s,v,s,~{memory}") return false;
-  auto *c = cast<Call>(i);
-  return c->arg_size() == 3 && c->use_empty() && c->getType()->isIntegerTy(32) &&
-      c->getArgOperand(0)->getType()->isIntegerTy(32) &&
-      c->getArgOperand(1)->getType()->isIntegerTy(32) &&
-      c->getArgOperand(2)->getType() == FixedVectorType::get(Type::getInt32Ty(c->getContext()), 4);
-}
-bool wait(Inst *i) {
-  auto *a = assembly(i);
-  return a && a->hasSideEffects() && a->getAsmString() == "s_waitcnt vmcnt(0)" &&
-      a->getConstraintString() == "~{memory}" && cast<Call>(i)->arg_empty();
-}
-bool mmac(Inst *i) {
-  auto *a = assembly(i);
-  return a && !a->hasSideEffects() && cast<Call>(i)->doesNotAccessMemory() &&
-      isRegisterMMA(a->getAsmString(), a->getConstraintString());
-}
-bool hint(Inst *i) {
-  if (!named(i, "llvm.amdgcn.sched.barrier")) return false;
-  auto *c = cast<Call>(i);
-  auto *v = c->arg_size() == 1 ? dyn_cast<ConstantInt>(c->getArgOperand(0)) : nullptr;
-  return v && v->isZero();
-}
-bool pure(Inst *i) {
-  return !isa<CallBase, PHINode, AllocaInst>(i) && !i->isTerminator() &&
-      !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects() && isSafeToSpeculativelyExecute(i);
-}
 // Export may construct the same resource descriptor at every DMA site, before
 // CSE. Compare its pure DAG, including opcode flags/shuffle masks/constants.
 // 两个值是否由结构相同的纯计算产生。用来判断两条 DMA 的资源描述符是否同一个（是否都在读 V）。
@@ -103,43 +63,10 @@ bool sameValue(Value *a, Value *b, unsigned depth = 0) {
   if (a == b) return true;
   if (depth > 32 || a->getType() != b->getType()) return false;
   auto *ia = dyn_cast<Inst>(a), *ib = dyn_cast<Inst>(b);
-  if (!ia || !ib || !pure(ia) || !pure(ib) || !ia->isSameOperationAs(ib)) return false;
+  if (!ia || !ib || !isPureInst(ia) || !isPureInst(ib) || !ia->isSameOperationAs(ib)) return false;
   for (unsigned k = 0; k < ia->getNumOperands(); ++k)
     if (!sameValue(ia->getOperand(k),ib->getOperand(k),depth+1)) return false;
   return true;
-}
-bool workgroupFence(Inst *i, AtomicOrdering order) {
-  auto *f = dyn_cast_or_null<FenceInst>(i);
-  return f && f->getOrdering() == order &&
-      f->getSyncScopeID() == f->getContext().getOrInsertSyncScopeID("workgroup");
-}
-// 一个完整的同步序列：fence release + s_barrier + fence acquire，前面可能带 s_waitcnt。
-// 带 wait 表示“数据就绪”barrier，不带表示“读者交接”barrier。
-// sync(i)：以 i 为 s_barrier，尝试匹配这个序列。
-struct Sync {
-  Inst *release = nullptr, *barrier = nullptr, *acquire = nullptr, *wait = nullptr;
-};
-std::optional<Sync> sync(Inst *i) {
-  if (!named(i, "llvm.amdgcn.s.barrier") || !cast<Call>(i)->arg_empty() ||
-      !workgroupFence(i->getPrevNode(), AtomicOrdering::Release) ||
-      !workgroupFence(i->getNextNode(), AtomicOrdering::Acquire)) return {};
-  Sync s{i->getPrevNode(), i, i->getNextNode(), nullptr};
-  if (s.release->getPrevNode() && wait(s.release->getPrevNode())) s.wait = s.release->getPrevNode();
-  return s;
-}
-
-using detail::LDSAddress;
-
-// 值是否对同一 workgroup 的所有线程相同。只接受常量、kernel 参数、workgroup id 和它们的纯运算。
-bool uniform(Value *v, SmallPtrSetImpl<Value *> &seen) {
-  if (isa<Constant, Argument>(v)) return true;
-  if (!seen.insert(v).second) return true;
-  auto *i = dyn_cast<Inst>(v);
-  if (!i) return false;
-  if (auto *c = dyn_cast<Call>(i))
-    return named(c,"llvm.amdgcn.workgroup.id.x") || named(c,"llvm.amdgcn.workgroup.id.y") || named(c,"llvm.amdgcn.workgroup.id.z");
-  if (!isa<PHINode>(i) && !pure(i)) return false;
-  return llvm::all_of(i->operands(), [&](Value *op) { return uniform(op,seen); });
 }
 
 // V 的一片。
@@ -201,8 +128,8 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
   SmallVector<Sync,16> syncs;
   for (auto &i : block) {
     if (i.getMetadata(Marker)) return fail("already transformed");
-    if (auto s = sync(&i)) syncs.push_back(*s);
-    if (!named(&i,MatrixRead)) continue;
+    if (auto s = matchSync(&i)) syncs.push_back(*s);
+    if (!isCallTo(&i,MatrixReadM32x16)) continue;
     auto *c = cast<Call>(&i);
     if (c->arg_size() != 2 || !c->getArgOperand(0)->getType()->isPointerTy() ||
         c->getArgOperand(0)->getType()->getPointerAddressSpace() != 3 ||
@@ -217,8 +144,8 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
   for (unsigned s = 1; s < p.stages.size(); ++s) {
     auto &previous = p.stages[s-1];
     for (auto *i = previous.ready.acquire->getNextNode(); i != p.stages[s].ready.wait; i = i->getNextNode()) {
-      if (dma(i)) p.stages[s].copies.push_back(cast<Call>(i));
-      if (auto b = sync(i)) {
+      if (isDMA128(i)) p.stages[s].copies.push_back(cast<Call>(i));
+      if (auto b = matchSync(i)) {
         if (previous.handoff.barrier || b->wait) return fail("ambiguous reader handoff");
         previous.handoff = *b;
       }
@@ -231,7 +158,7 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
   Value *resource = p.stages[1].copies.front()->getArgOperand(2);
   for (auto &i : block) {
     if (&i == p.stages.front().ready.wait) break;
-    if (dma(&i) && sameValue(cast<Call>(&i)->getArgOperand(2),resource))
+    if (isDMA128(&i) && sameValue(cast<Call>(&i)->getArgOperand(2),resource))
       p.stages.front().copies.push_back(cast<Call>(&i));
   }
   // original：原来所有片共用的字节范围，必须连续。
@@ -266,14 +193,14 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
   }
   auto *lastRead = p.stages.back().reads.back();
   for (auto *i = lastRead->getNextNode(); i; i = i->getNextNode())
-    if (auto s = sync(i)) { p.finish = *s; break; }
+    if (auto s = matchSync(i)) { p.finish = *s; break; }
   if (!p.finish.barrier || p.finish.wait) return fail("missing final reader barrier");
   SmallPtrSet<Inst *,32> syncOps;
   for (auto &s : syncs)
     for (auto *i : {s.release,s.barrier,s.acquire,s.wait}) if (i) syncOps.insert(i);
   for (auto *i = p.stages.front().ready.acquire->getNextNode(); i != p.finish.acquire; i = i->getNextNode()) {
-    if (allowedMemory.contains(i) || syncOps.contains(i) || mmac(i) || hint(i) || pure(i) ||
-        named(i,"llvm.amdgcn.readfirstlane.i32")) continue;
+    if (allowedMemory.contains(i) || syncOps.contains(i) || isRegisterMMACall(i) || isSchedHint(i) || isPureInst(i) ||
+        isCallTo(i,"llvm.amdgcn.readfirstlane.i32")) continue;
     return fail("unknown operation or other live LDS user in V region");
   }
 
@@ -286,7 +213,7 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
   BitVector written(capacity);
   for (auto &i : instructions(*block.getParent())) {
     bool before = i.getParent() == &block && i.comesBefore(p.stages.front().ready.wait);
-    if (dma(&i)) {
+    if (isDMA128(&i)) {
       if (before) {
         BitVector bytes;
         if (!footprint({cast<Call>(&i)},addresses,threads,capacity,bytes)) return fail("unknown earlier DMA footprint");
@@ -318,8 +245,8 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
       continue;
     }
     if (load && load->getPointerAddressSpace() == 1) continue;
-    if (i.mayReadOrWriteMemory() && !syncOps.contains(&i) && !wait(&i) && !hint(&i) &&
-        !named(&i,"llvm.amdgcn.s.barrier") && !isa<FenceInst>(&i))
+    if (i.mayReadOrWriteMemory() && !syncOps.contains(&i) && !isWaitCall(&i) && !isSchedHint(&i) &&
+        !isCallTo(&i,"llvm.amdgcn.s.barrier") && !isa<FenceInst>(&i))
       return fail("unknown memory effect outside V region");
   }
   // Preflight the dependencies of every moved DMA. Clone only pure address
@@ -332,8 +259,8 @@ bool plan(BasicBlock &block, GlobalVariable *storage, unsigned capacity,
     std::function<bool(Value *)> visit = [&](Value *v) {
       auto *i = dyn_cast<Inst>(v);
       if (!i || (dt.dominates(i,anchor) && i != anchor) || seen.contains(i)) return true;
-      if (i->getParent() != &block || (!pure(i) && !named(i,"llvm.amdgcn.readfirstlane.i32"))) return false;
-      if (named(i,"llvm.amdgcn.readfirstlane.i32") && !addresses.get(i,0)) return false;
+      if (i->getParent() != &block || (!isPureInst(i) && !isCallTo(i,"llvm.amdgcn.readfirstlane.i32"))) return false;
+      if (isCallTo(i,"llvm.amdgcn.readfirstlane.i32") && !addresses.get(i,0)) return false;
       for (Value *op : i->operands()) if (!visit(op)) return false;
       seen.insert(i);
       p.stages[s].dependencies.push_back(i);
@@ -403,37 +330,15 @@ llvm::PreservedAnalyses DoubleBufferVPass::run(llvm::Function &f, llvm::Function
     return llvm::PreservedAnalyses::all();
   };
   if (f.getCallingConv() != llvm::CallingConv::AMDGPU_KERNEL) return skip("not an AMDGPU kernel");
-  auto *dims = f.getMetadata("reqd_work_group_size");
-  if (!dims || dims->getNumOperands() != 3) return skip("requires fixed 1D workgroup size");
-  unsigned threads = 0;
-  for (unsigned i = 0; i < 3; ++i) {
-    auto *v = llvm::mdconst::dyn_extract<llvm::ConstantInt>(dims->getOperand(i));
-    if (!v || v->getValue().getActiveBits() > 32 || (i && !v->isOne())) return skip("requires fixed 1D workgroup size");
-    if (!i) threads = v->getZExtValue();
-  }
-  if (!threads || threads > 1024 || threads%64 ||
-      f.getFnAttribute("target-features").getValueAsString().contains("+wavefrontsize32")) return skip("requires wave64 workgroups");
-  llvm::GlobalVariable *storage = nullptr;
-  for (auto &g : f.getParent()->globals()) if (g.getAddressSpace() == 3) {
-    if (storage || !g.hasInitializer()) return skip("requires one statically allocated LDS object");
-    storage = &g;
-  }
-  if (!storage) return skip("no LDS allocation");
-  auto capacity = f.getParent()->getDataLayout().getTypeAllocSize(storage->getValueType());
-  if (capacity.isScalable() || capacity.getFixedValue() > 65536) return skip("unsupported LDS allocation size");
-  for (auto &b : f) {
-    auto *br = llvm::dyn_cast<llvm::CondBrInst>(b.getTerminator());
-    if (br) {
-      llvm::SmallPtrSet<llvm::Value *,32> seen;
-      if (!uniform(br->getCondition(),seen)) return skip("cannot prove workgroup-uniform control flow");
-    } else if (!llvm::isa<llvm::UncondBrInst,llvm::ReturnInst>(b.getTerminator())) return skip("unsupported control flow");
-  }
+  std::string why;
+  auto kernel = analyzeWave64Kernel(f, why);
+  if (!kernel) return skip(why);
   llvm::DominatorTree dt(f);
   llvm::LoopInfo loops(dt);
   unsigned changed = 0;
   bool candidate = false;
   for (auto &b : f) {
-    if (!llvm::any_of(b,[](Inst &i) { return named(&i,MatrixRead); })) continue;
+    if (!llvm::any_of(b,[](Inst &i) { return isCallTo(&i,MatrixReadM32x16); })) continue;
     candidate = true;
     auto *loop = loops.getLoopFor(&b);
     if (loop) {
@@ -444,17 +349,17 @@ llvm::PreservedAnalyses DoubleBufferVPass::run(llvm::Function &f, llvm::Function
           (loop->getNumBlocks() == 2 && loop->getLoopLatch() == &b && loop->getHeader() != &b));
       for (auto *other : loop->blocks()) if (other != &b)
         for (auto &i : *other)
-          simple &= pure(&i) || llvm::isa<llvm::PHINode,llvm::CondBrInst,llvm::UncondBrInst>(&i);
+          simple &= isPureInst(&i) || llvm::isa<llvm::PHINode,llvm::CondBrInst,llvm::UncondBrInst>(&i);
       if (!simple) { skip("requires one compute block with an optional pure loop header"); continue; }
     }
     Plan p;
     std::string reason;
-    if (!plan(b,storage,capacity.getFixedValue(),threads,dt,p,reason)) { skip(reason); continue; }
+    if (!plan(b,kernel->storage,kernel->ldsBytes,kernel->threads,dt,p,reason)) { skip(reason); continue; }
     apply(p);
     ++changed;
     llvm::errs() << "V double buffer: " << p.stages.size() << " slices, slot-bytes=" << p.sliceBytes
                  << ", displacement=" << p.displacement << ", removed-barriers=" << p.stages.size()-1
-                 << ", LDS=" << capacity.getFixedValue() << ", function=" << f.getName() << "\n";
+                 << ", LDS=" << kernel->ldsBytes << ", function=" << f.getName() << "\n";
   }
   if (!candidate) return skip("no supported matrix-read stream");
   return changed ? llvm::PreservedAnalyses::none() : llvm::PreservedAnalyses::all();

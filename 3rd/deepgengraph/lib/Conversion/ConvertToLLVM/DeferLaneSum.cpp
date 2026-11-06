@@ -18,9 +18,10 @@
 //   DeferLaneSumPass::run        函数级前置检查，然后遍历循环。
 //
 // 前置条件很严格：整个函数都必须能证明控制流不发散，所有 call 和 inline asm 都必须在白名单内，否则
-// 整个函数不优化。注意白名单里写死了 asm 字符串和 intrinsic 名字。
+// 整个函数不优化。白名单用到的 asm 文本和函数名大多定义在 LateIRPatterns.h。
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -558,10 +559,9 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
         // Only known EXEC-preserving templates. Unknown assembly is opaque.
         StringRef code = assembly->getAsmString(), constraints = assembly->getConstraintString();
         bool safe = (code.empty() && (constraints == "=v,0" || constraints == "=v,0,i")) ||
-          (code == "s_waitcnt vmcnt(0)" && constraints == "~{memory}") ||
+          (code == detail::WaitAsm && constraints == detail::WaitConstraints) ||
           (code == "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\n\t" && constraints == "=v,v,v,0") ||
-          (code == "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds" &&
-           constraints == "={m0},s,v,s,~{memory}");
+          (code == detail::DMA128Asm && constraints == detail::DMAConstraints);
         if (!safe) return PreservedAnalyses::all();
         continue;
       }
@@ -583,8 +583,8 @@ PreservedAnalyses DeferLaneSumPass::run(Function &function, FunctionAnalysisMana
           errs() << "DeferLaneSum: " << function.getName() << ": skipped (unsupported call " << name << ")\n";
           return PreservedAnalyses::all();
         }
-      } else if (name != "llvm.hcu.ds.read.m32x16.b16.v4i32.p3" &&
-                 name != "llvm.hcu.global.load.dwordx4.lds") {
+      } else if (name != detail::MatrixReadM32x16 &&
+                 name != detail::HCUGlobalLoad128) {
         auto *intrinsic = dyn_cast<IntrinsicInst>(call);
         if (!intrinsic || !call->doesNotAccessMemory() || call->isConvergent() ||
             !call->hasFnAttr(Attribute::WillReturn) || !call->doesNotThrow())

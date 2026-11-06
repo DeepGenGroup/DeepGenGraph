@@ -21,7 +21,7 @@
 // 实测收益接近噪声（优化汇总.py 第 26 项）。
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/InterleavePV.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -39,38 +39,15 @@ namespace {
 using Inst = llvm::Instruction;
 using Call = llvm::CallInst;
 using Insts = llvm::SmallVector<Inst *, 32>;
+using detail::MatrixReadM32x16;
+using detail::getInlineAsm;
+using detail::isCallTo;
+using detail::isDMA128Asm;
+using detail::isPureInst;
+using detail::isSchedHint;
+using detail::isTypedRegisterMMACall;
 // Marker：标在已处理的 MMAC 上，值为 width。getChain 遇到它就放弃，防止重复处理。
 constexpr llvm::StringLiteral Marker = "frisk.pv_interleave";
-
-// 只接受无副作用的 inline asm 形式 MMAC。
-bool isMMAC(Inst *i) {
-  auto *c = llvm::dyn_cast_or_null<Call>(i);
-  if (!c || c->arg_size() != 3 || c->hasOperandBundles() ||
-      c->isMustTailCall() || !c->doesNotAccessMemory()) return false;
-  auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
-  auto &ctx = c->getContext();
-  auto *ab = llvm::FixedVectorType::get(llvm::Type::getHalfTy(ctx), 4);
-  auto *cd = llvm::FixedVectorType::get(llvm::Type::getFloatTy(ctx), 4);
-  return a && !a->hasSideEffects() && !a->isAlignStack() && !a->canThrow() &&
-      isRegisterMMA(a->getAsmString(), a->getConstraintString()) &&
-      c->getType() == cd && c->getArgOperand(0)->getType() == ab &&
-      c->getArgOperand(1)->getType() == ab && c->getArgOperand(2)->getType() == cd;
-}
-
-bool namedCall(Inst *i, llvm::StringRef name) {
-  auto *c = llvm::dyn_cast<Call>(i);
-  return c && !c->hasOperandBundles() && !c->isMustTailCall() &&
-      c->getCalledFunction() && c->getCalledFunction()->isDeclaration() &&
-      c->getCalledFunction()->getName() == name;
-}
-
-// 是否 sched.barrier(0)，也就是调度保护。
-bool isHint(Inst *i) {
-  if (!namedCall(i, "llvm.amdgcn.sched.barrier")) return false;
-  auto *c = llvm::cast<Call>(i);
-  auto *mask = c->arg_size() == 1 ? llvm::dyn_cast<llvm::ConstantInt>(c->getArgOperand(0)) : nullptr;
-  return mask && mask->isZero();
-}
 
 // Only the known low/high half of one matrix packet is accepted. No arbitrary
 // arithmetic, selects or multi-packet shuffles can disguise the producer.
@@ -84,19 +61,12 @@ Call *matrixPacket(llvm::Value *v) {
     if (mask[j] != mask[0]+int(j)) return nullptr;
   auto *cast = llvm::dyn_cast<llvm::BitCastInst>(shuffle->getOperand(0));
   auto *read = cast ? llvm::dyn_cast<Call>(cast->getOperand(0)) : nullptr;
-  if (!read || !namedCall(read, "llvm.hcu.ds.read.m32x16.b16.v4i32.p3") ||
+  if (!read || !isCallTo(read, MatrixReadM32x16) ||
       read->arg_size() != 2) return nullptr;
   auto *pointer = llvm::dyn_cast<llvm::PointerType>(read->getArgOperand(0)->getType());
   return pointer && pointer->getAddressSpace() == 3 &&
       read->getType() == llvm::FixedVectorType::get(llvm::Type::getInt32Ty(read->getContext()), 4) &&
       read->getArgOperand(1)->getType()->isIntegerTy(32) ? read : nullptr;
-}
-
-// 可以随依赖一起移动的纯计算。
-bool isPure(Inst *i) {
-  return !llvm::isa<llvm::CallBase, llvm::PHINode, llvm::AllocaInst>(i) &&
-      !i->isTerminator() && !i->mayReadOrWriteMemory() &&
-      !i->mayHaveSideEffects() && llvm::isSafeToSpeculativelyExecute(i);
 }
 
 // These operations stay in order and at the same MMAC ordinal. Unknown calls,
@@ -108,21 +78,17 @@ bool isFixed(Inst *i) {
     return f->getSyncScopeID() == f->getContext().getOrInsertSyncScopeID("workgroup") &&
         (f->getOrdering() == llvm::AtomicOrdering::Acquire ||
          f->getOrdering() == llvm::AtomicOrdering::Release);
-  if (namedCall(i, "llvm.amdgcn.s.barrier")) return llvm::cast<Call>(i)->arg_empty();
+  if (isCallTo(i, "llvm.amdgcn.s.barrier")) return llvm::cast<Call>(i)->arg_empty();
   // Fresh MyTest export still contains DMA-address readfirstlane calls that
   // O3 folds/hoists in the archived baseline. Keep these wave operations fixed;
   // never treat them as speculative scalar arithmetic or move across a fence.
-  if (namedCall(i, "llvm.amdgcn.readfirstlane.i32")) {
+  if (isCallTo(i, "llvm.amdgcn.readfirstlane.i32")) {
     auto *c = llvm::cast<Call>(i);
     return c->arg_size() == 1 && c->getType()->isIntegerTy(32) &&
         c->getArgOperand(0)->getType()->isIntegerTy(32);
   }
-  auto *c = llvm::dyn_cast<Call>(i);
-  if (!c || c->hasOperandBundles() || c->isMustTailCall()) return false;
-  auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
-  return a && !a->canThrow() && !a->isAlignStack() && a->hasSideEffects() &&
-      a->getAsmString() == "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds" &&
-      a->getConstraintString() == "={m0},s,v,s,~{memory}" && c->arg_size() == 3;
+  auto *a = getInlineAsm(i);
+  return a && a->hasSideEffects() && isDMA128Asm(a) && llvm::cast<Call>(i)->arg_size() == 3;
 }
 
 // 一条累加链。mmas[k] 是第 k 条 MMAC，packets[k] 是它的 B 操作数来自哪次矩阵读。
@@ -143,7 +109,7 @@ Chain getChain(Call *root) {
     Call *next = nullptr;
     for (auto *u : c->users()) {
       auto *candidate = llvm::dyn_cast<Call>(u);
-      if (isMMAC(candidate) && candidate->getArgOperand(2) == c) {
+      if (isTypedRegisterMMACall(candidate) && candidate->getArgOperand(2) == c) {
         if (next || !c->hasOneUse() || candidate->getParent() != root->getParent()) return {};
         next = candidate;
       }
@@ -179,7 +145,7 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
   if (positions[lastMMA]-positions[lastRead] > 2048) return false;
   Inst *end = lastMMA->getNextNode();
   // Include an existing trailing hint, so a second run cannot multiply guards.
-  while (isHint(end)) end = end->getNextNode();
+  while (isSchedHint(end)) end = end->getNextNode();
   // region：区域内的全部指令。
   // hints：区域内已有的调度保护，改写时删除后重新生成。
   // members：region 的集合形式。
@@ -192,8 +158,8 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
     region.push_back(i);
     members.insert(i);
     if (mmas.contains(i)) ++count;
-    else if (isHint(i)) hints.push_back(i);
-    else if (!isPure(i)) {
+    else if (isSchedHint(i)) hints.push_back(i);
+    else if (!isPureInst(i)) {
       if (!isFixed(i)) return false;
       fixed[count].push_back(i);
     }
@@ -212,7 +178,7 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
   llvm::SmallPtrSet<Inst *, 32> emitted, visiting;
   std::function<bool(Inst *, bool)> emit = [&](Inst *i, bool explicitOp) {
     if (!members.contains(i) || emitted.contains(i)) return true;
-    if ((!explicitOp && !isPure(i)) || !visiting.insert(i).second) return false;
+    if ((!explicitOp && !isPureInst(i)) || !visiting.insert(i).second) return false;
     for (auto &operand : i->operands())
       if (auto *dep = llvm::dyn_cast<Inst>(operand.get()))
         if (!emit(dep, false)) return false;
@@ -227,7 +193,7 @@ bool schedule(llvm::ArrayRef<Chain *> chains, unsigned width) {
     if (slot < desired.size() && !emit(desired[slot], true)) return false;
   }
   for (auto *i : region)
-    if (!isHint(i) && !emit(i, false)) return false;
+    if (!isSchedHint(i) && !emit(i, false)) return false;
   if (plan.size()+hints.size() != region.size()) return false;
 
   // 走到这里计划已通过校验，开始改 IR。
@@ -263,9 +229,9 @@ llvm::PreservedAnalyses InterleavePVPass::run(llvm::Function &function, llvm::Fu
   for (auto &block : function) {
     llvm::SmallVector<Chain, 16> candidates;
     for (auto &i : block) {
-      if (!isMMAC(&i)) continue;
+      if (!isTypedRegisterMMACall(&i)) continue;
       auto *call = llvm::cast<Call>(&i);
-      if (isMMAC(llvm::dyn_cast<Inst>(call->getArgOperand(2)))) continue;
+      if (isTypedRegisterMMACall(llvm::dyn_cast<Inst>(call->getArgOperand(2)))) continue;
       auto chain = getChain(call);
       if (chain.mmas.size() >= 2) candidates.push_back(std::move(chain));
     }

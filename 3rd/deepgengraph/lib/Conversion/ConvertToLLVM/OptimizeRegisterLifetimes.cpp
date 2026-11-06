@@ -16,6 +16,7 @@
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/OptimizeRegisterLifetimes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/SimplifyQuery.h"
@@ -39,7 +40,7 @@
 
 namespace mlir::frisk {
 namespace {
-constexpr llvm::StringLiteral marker = "frisk.register_lifetimes";
+constexpr llvm::StringLiteral marker = detail::RegisterLifetimesMarker;
 
 bool isAMDGPU(const llvm::Function &function) {
   const auto &triple = function.getParent()->getTargetTriple();
@@ -632,8 +633,8 @@ public:
         // ABI independently. Only rebuild the pointer, never the collective.
         auto *callee = call->getCalledFunction();
         if (callee && call->arg_size() == 2 &&
-            (callee->getName() == "llvm.hcu.ds.read.m32x16.b16.v4i32.p3" ||
-             callee->getName() == "llvm.hcu.ds.read.m32x8.b32.v4i32.p3") &&
+            (callee->getName() == detail::MatrixReadM32x16 ||
+             callee->getName() == detail::MatrixReadM32x8) &&
             call->getArgOperand(0)->getType()->isPointerTy() &&
             call->getArgOperand(0)->getType()->getPointerAddressSpace() == 3)
           accesses.push_back({&inst, 0});

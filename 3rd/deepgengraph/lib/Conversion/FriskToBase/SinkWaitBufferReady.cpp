@@ -8,6 +8,7 @@
 // 合法性判定见 BufferDependencies::canCross。
 // ===========================================================================
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "ScheduleAttrs.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -107,12 +108,8 @@ public:
     return true;
   }
 
-  // op 带手动或流水调度标注。FriskFragIRReorder.cpp 里有两份相似的列表。
-  static bool hasSchedule(Operation *op) {
-    return op->hasAttr("pipeline.stage") || op->hasAttr("pipeline.order") ||
-           op->hasAttr("pipeline.scheduled") || op->hasAttr("pipeline_slot") ||
-           op->hasAttr("frisk.pipelined") || op->hasAttr("frisk.pipeline_stage");
-  }
+  // op 带手动或流水调度标注。
+  static bool hasSchedule(Operation *op) { return hasAnyScheduleAttr(op); }
 
 private:
   static bool isAllocation(Value value) {

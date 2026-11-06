@@ -22,7 +22,7 @@
 // 实测 VGPR 从 220 升到 228，收益不是来自省寄存器（优化汇总.py 第 30 项）。
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/IRBuilder.h"
@@ -47,20 +47,12 @@ constexpr llvm::StringLiteral marker = "frisk.softmax_fragments";
 bool identity(Inst *inst) {
   auto *c = llvm::dyn_cast_or_null<llvm::CallInst>(inst);
   if (!c || c->arg_size() != 1 || c->getNumOperandBundles() ||
-      !c->getMetadata("frisk.register_lifetimes") || !c->doesNotAccessMemory())
+      !c->getMetadata(detail::RegisterLifetimesMarker) || !c->doesNotAccessMemory())
     return false;
   auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
   return a && a->getAsmString().empty() && a->getConstraintString() == "=v,0" &&
          !a->canThrow() && !a->isAlignStack() &&
          c->getType() == c->getArgOperand(0)->getType();
-}
-bool mma(Inst *inst) {
-  auto *c = llvm::dyn_cast<llvm::CallInst>(inst);
-  if (!c || c->arg_size() != 3 || !c->doesNotAccessMemory() ||
-      c->getNumOperandBundles()) return false;
-  auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
-  return a && !a->hasSideEffects() && !a->canThrow() && !a->isAlignStack() &&
-         isRegisterMMA(a->getAsmString(), a->getConstraintString());
 }
 // 一个 fragment 的 P。
 //   packed  最后的 half identity，是这个 packet 的出口。
@@ -85,7 +77,7 @@ bool matchPacket(llvm::FPTruncInst *cast, Packet &p) {
   if (!identity(packed) || packed->use_empty()) return false;
   for (auto *u : packed->users()) {
     auto *i = llvm::dyn_cast<Inst>(u);
-    if (!i || i->getParent() != cast->getParent() || !mma(i) ||
+    if (!i || i->getParent() != cast->getParent() || !detail::isRegisterMMACall(i) ||
         llvm::cast<llvm::CallInst>(i)->getArgOperand(0) != packed) return false;
   }
   p.packed = packed;
@@ -135,19 +127,17 @@ bool knownFixed(Inst *i) {
     return l->isSimple() && l->getPointerAddressSpace() == 3;
   if (auto *c = llvm::dyn_cast<llvm::CallInst>(i)) {
     if (c->getNumOperandBundles() || c->isMustTailCall()) return false;
-    if (identity(i) || mma(i)) return true;
+    if (identity(i) || detail::isRegisterMMACall(i)) return true;
     if (auto *f = c->getCalledFunction()) {
       auto n = f->getName();
       return n == "llvm.amdgcn.s.barrier" || n == "llvm.amdgcn.sched.barrier" ||
-             n == "llvm.hcu.ds.read.m32x16.b16.v4i32.p3" ||
+             n == detail::MatrixReadM32x16 ||
              n == "llvm.amdgcn.exp2.f32";
     }
     auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
     if (!a || !a->hasSideEffects() || a->canThrow() || a->isAlignStack()) return false;
-    return (a->getAsmString() == "s_waitcnt vmcnt(0)" &&
-            a->getConstraintString() == "~{memory}" && c->arg_empty()) ||
-           (a->getAsmString() == "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds" &&
-            a->getConstraintString() == "={m0},s,v,s,~{memory}" && c->arg_size() == 3);
+    return (detail::isWaitAsm(a) && c->arg_empty()) ||
+           (detail::isDMA128Asm(a) && c->arg_size() == 3);
   }
   return !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects();
 }

@@ -23,7 +23,9 @@
 // 文件内的证明方法：循环边界都是小常量，所以把每次迭代的坐标直接求值出来比较，是
 // “有界证明”而不是启发式。求值不出来或超预算就放弃优化。
 // ===========================================================================
+#include "deepgengraph/Conversion/AffineLoopEval.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "ScheduleAttrs.h"
 #include "mlir/Analysis/AliasAnalysis.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
@@ -59,31 +61,7 @@ using Footprint = std::set<Coordinate>;
 // Evaluation is a bounded proof, not a heuristic. Unknown/dynamic coordinates
 // cause rejection. Small static fragment loops are the intended workload.
 // 可枚举的最大迭代次数，超过就放弃证明。
-// evaluate：把 value 在 iv 取某值时求成常量。支持 iv、常量、affine.apply。
 static constexpr int64_t maxIterations = 256;
-static std::optional<int64_t> evaluate(Value value, Loop loop, int64_t iv,
-                                      unsigned depth = 0) {
-  if (depth > 64)
-    return std::nullopt;
-  if (value == loop.getInductionVar())
-    return iv;
-  APInt constant;
-  if (matchPattern(value, m_ConstantInt(&constant)))
-    return constant.getSExtValue();
-  if (auto apply = value.getDefiningOp<affine::AffineApplyOp>()) {
-    SmallVector<Attribute> inputs;
-    for (Value operand : apply.getMapOperands()) {
-      auto result = evaluate(operand, loop, iv, depth + 1);
-      if (!result)
-        return std::nullopt;
-      inputs.push_back(IntegerAttr::get(IndexType::get(value.getContext()), *result));
-    }
-    SmallVector<Attribute> results;
-    if (succeeded(apply.getAffineMap().constantFold(inputs, results)))
-      return cast<IntegerAttr>(results.front()).getInt();
-  }
-  return std::nullopt;
-}
 
 // 把一组索引（常量或 SSA 值）求值成坐标。
 static std::optional<Coordinate> position(ArrayRef<OpFoldResult> indices,
@@ -92,7 +70,7 @@ static std::optional<Coordinate> position(ArrayRef<OpFoldResult> indices,
   for (OpFoldResult index : indices) {
     if (auto attr = dyn_cast<Attribute>(index))
       result.push_back(cast<IntegerAttr>(attr).getInt());
-    else if (auto number = evaluate(cast<Value>(index), loop, iv))
+    else if (auto number = evaluateAtIteration(cast<Value>(index), loop, iv))
       result.push_back(*number);
     else
       return std::nullopt;
@@ -702,11 +680,8 @@ private:
   // op 或其祖先已有手动/流水调度，不能再动。
   static bool scheduled(Operation *op) {
     for (; op; op = op->getParentOp())
-      for (StringRef name : {"pipeline.stage", "pipeline.order",
-                            "pipeline.scheduled", "pipeline_slot",
-                            "frisk.pipelined", "frisk.pipeline_stage"})
-        if (op->hasAttr(name))
-          return true;
+      if (hasAnyScheduleAttr(op))
+        return true;
     return false;
   }
 
@@ -794,13 +769,11 @@ private:
   AliasAnalysis &aliases;
 };
 
-// op 或其祖先带手动流水标注。注意这里的属性列表比 DirectDMAWaitMotion::scheduled 少两项。
+// op 或其祖先带手动流水标注。注意它不包含 frisk.pipelined，比 DirectDMAWaitMotion::scheduled 宽松。
 static bool hasExplicitSchedule(Operation *op) {
   for (; op; op = op->getParentOp())
-    for (StringRef name : {"pipeline.stage", "pipeline.order",
-                          "pipeline.scheduled", "pipeline_slot"})
-      if (op->hasAttr(name))
-        return true;
+    if (hasPipelineScheduleAttr(op))
+      return true;
   return false;
 }
 

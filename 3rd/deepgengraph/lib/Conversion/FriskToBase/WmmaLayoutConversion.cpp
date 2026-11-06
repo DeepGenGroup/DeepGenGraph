@@ -14,6 +14,7 @@ void selectGemmAInputLayoutMethod(func::FuncOp kernel, StringRef method) {
     if (gemm->hasAttr("tiled"))
       return;
     gemm->removeAttr("frisk.b_permute");
+    gemm->removeAttr("frisk.inner_inst_b_permute");
     gemm->removeAttr("frisk.wmma_layout_applied");
     gemm->removeAttr("frisk.a_input_layout_method");
     worklist.push_back(gemm.getA());
@@ -42,6 +43,8 @@ void selectGemmAInputLayoutMethod(func::FuncOp kernel, StringRef method) {
         gemm->setAttr("frisk.a_input_layout_method", StringAttr::get(kernel.getContext(), method));
         if (method == "b-permute")
           gemm->setAttr("frisk.b_permute", UnitAttr::get(kernel.getContext()));
+        else if (method == "inner-inst-b-permute")
+          gemm->setAttr("frisk.inner_inst_b_permute", UnitAttr::get(kernel.getContext()));
         // Do not traverse through a GEMM into its A/B operands.
         continue;
       }

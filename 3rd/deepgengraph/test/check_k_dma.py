@@ -88,6 +88,33 @@ class KDMATest(unittest.TestCase):
         self.assertNotIn('packets=',twice.stderr)
         self.export(first.stdout,'--k-dma=64',ok=False)
 
+    def test_select_in_lds_address(self):
+        def with_read_address(code):
+            return fixture().replace('  %value = load', code + '\n  %value = load').replace(
+                'ptr addrspace(3) %ptr, align 8', 'ptr addrspace(3) %read.ptr, align 8')
+        code = ('  %test = icmp ult i32 %lane, 32\n'
+                '  %upper = add i32 %dst, 8\n'
+                '  %offset = select i1 %test, i32 %dst, i32 %upper\n'
+                '  %read.ptr = getelementptr i8, ptr addrspace(3) @scratch, i32 %offset')
+        self.export(with_read_address(code), '--k-dma=64-swizzle')
+        # All threads must be checked: only the upper half selects out of bounds.
+        self.export(with_read_address(code.replace('i32 %upper\n', 'i32 16384\n')),
+                    '--k-dma=64-swizzle', ok=False)
+        # Signed and unsigned predicates use the original integer width.
+        for pred in ('eq', 'ne', 'slt', 'sle', 'sgt', 'sge', 'ult', 'ule', 'ugt', 'uge'):
+            truth = pred in ('ne', 'slt', 'sle', 'ugt', 'uge')  # i8 -1 versus 0
+            arms = 'i32 %dst, i32 poison' if truth else 'i32 poison, i32 %dst'
+            known = (f'  %test = icmp {pred} i8 -1, 0\n'
+                     f'  %offset = select i1 %test, {arms}\n'
+                     '  %read.ptr = getelementptr i8, ptr addrspace(3) @scratch, i32 %offset')
+            with self.subTest(predicate=pred):
+                self.export(with_read_address(known), '--k-dma=64-swizzle')
+        # A violated samesign promise yields poison, not a provable predicate.
+        self.export(with_read_address(known.replace('icmp uge', 'icmp samesign uge')),
+                    '--k-dma=64-swizzle', ok=False)
+        unknown = code.replace('icmp ult i32 %lane, 32', 'icmp eq ptr addrspace(1) %other, %out')
+        self.export(with_read_address(unknown), '--k-dma=64-swizzle', ok=False)
+
     def test_reject_unsafe_shapes_and_footprints(self):
         for source in [fixture(32), fixture().replace('i32 64, i32 1, i32 1','i32 64, i32 2, i32 1'),
                        fixture().replace('[16384 x i8]','[512 x i8]'),

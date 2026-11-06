@@ -1,3 +1,5 @@
+#include "deepgengraph/Conversion/ConvertToLLVM/LazySoftmaxBase.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
@@ -389,7 +391,8 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
                              unsigned kTailPrefetch = 0, bool crossBNK0 = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
-                             bool dumpPasses = false) {
+                             bool lazySoftmaxBase = false, float lazyBaseThreshold = 8.0f,
+                             bool dumpPasses = false, bool softmaxCvtPack = false) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes, reuseLeaderRead);
@@ -430,6 +433,11 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // Only legal after prefetchNextK: see the comment on elideBackedgeBarrier.
   if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(module);
   dumpLLVMPass(module, dumpPasses, "elideBackedgeBarrier");
+  // 放在依赖 analyzeWave64Kernel 的 Pass 之后；后续纯寄存器转换不需要该分析。
+  mlir::frisk::lazySoftmaxBase(module, lazySoftmaxBase, lazyBaseThreshold);
+  dumpLLVMPass(module, dumpPasses, "lazySoftmaxBase");
+  mlir::frisk::softmaxCvtPack(module, softmaxCvtPack);
+  dumpLLVMPass(module, dumpPasses, "softmaxCvtPack");
 
   std::string text;
   llvm::raw_string_ostream buffer(text);
@@ -478,12 +486,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   unsigned kLDSPrefetch = 0;
   unsigned kTailPrefetch = 0;
   bool crossBNK0 = false;
+  bool lazySoftmaxBase = false;
+  bool softmaxCvtPack = false;
+  float lazyBaseThreshold = 8.0f;
   bool simplifyBoundedAffine = true, hoistLDSBases = true, hoistLaneShuffles = true;
   bool elideBackedgeBarrier = true;
   bool dumpLLVMPasses = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
   StringRef maskAddBypass = "off";
+  StringRef causalMask = "off";
   StringRef localReduce = "off";
   frisk::LocalReductionOptions localReductionOptions;
   llvm::StringRef deferLaneSum = "off";
@@ -494,6 +506,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
     bool consumed = false;
+    if (option.consume_front("--causal-mask=")) {
+      if (option != "off" && option != "i32" && option != "finite") {
+        llvm::errs() << "use --causal-mask=off|i32|finite (finite assumes finite scores and ignores signed zero)\n";
+        return 1;
+      }
+      causalMask = option;
+      continue;
+    }
     if (!frisk::parseSoftmaxFragmentOption(option, softmaxFragments, consumed)) {
       llvm::errs() << "use --softmax-fragments=off|fragment|pv\n"; return 1;
     }
@@ -508,6 +528,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     if (consumed) continue;
     if (!frisk::parseCrossBNK0Option(option, crossBNK0, consumed)) {
       llvm::errs() << "use --cross-bn-k0=0|1\n"; return 1;
+    }
+    if (consumed) continue;
+    if (!frisk::parseLazySoftmaxBaseOption(option, lazySoftmaxBase, lazyBaseThreshold, consumed)) {
+      llvm::errs() << "use --lazy-softmax-base=off|<threshold in (0,15]>\n"; return 1;
+    }
+    if (consumed) continue;
+    if (!frisk::parseSoftmaxCvtPackOption(option, softmaxCvtPack, consumed)) {
+      llvm::errs() << "use --softmax-cvt-pack=off|rtz (rtz changes rounding)\n"; return 1;
     }
     if (consumed) continue;
     if (!frisk::parseKDMAOption(option, kDMA, consumed)) {
@@ -743,8 +771,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (wmmaLayout == "3.1") wmmaLayout = "shared";
   if (wmmaLayout == "3.2") wmmaLayout = "shuffle";
   if (wmmaLayout == "3.3") wmmaLayout = "b-permute";
-  if (wmmaLayout != "shared" && wmmaLayout != "shuffle" && wmmaLayout != "b-permute") {
-    llvm::errs() << "WMMA layout must be 3.1/shared, 3.2/shuffle, or 3.3/b-permute\n";
+  if (wmmaLayout == "3.4") wmmaLayout = "inner-inst-b-permute";
+  if (wmmaLayout != "shared" && wmmaLayout != "shuffle" && wmmaLayout != "b-permute" &&
+      wmmaLayout != "inner-inst-b-permute") {
+    llvm::errs() << "WMMA layout must be 3.1/shared, 3.2/shuffle, 3.3/b-permute, or 3.4/inner-inst-b-permute\n";
     return 1;
   }
   if (argc > 5 && StringRef(argv[5]) != "0" && StringRef(argv[5]) != "1") {
@@ -947,6 +977,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       (packSharedEnabled ? "true" : "false") + " wmma-layout=" + wmmaLayout.str();
   tilingOptions += std::string(" uniform-masks=") + (uniformMasks ? "true" : "false");
   tilingOptions += std::string(" fuse-mask-add=") + (fuseMaskAdd ? "true" : "false");
+  tilingOptions += " causal-mask=" + causalMask.str();
   tilingOptions += std::string(" async-direct-only=") + (copyMode == "hybrid" ? "true" : "false");
   tilingOptions += " dma-pack-mode=" + dmaPackMode.str() + swizzleOptions;
   if (failed(tiling->initializeOptions(
@@ -1138,7 +1169,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
       dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
-      hoistLDSBases, elideBackedgeBarrier, dumpLLVMPasses);
+      hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
@@ -1424,7 +1455,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

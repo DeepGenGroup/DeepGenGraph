@@ -1,5 +1,6 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "LateIRPatterns.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
@@ -164,7 +165,7 @@ void protectAsyncDMASourceAddresses(llvm::Module &module) {
         auto *dma = llvm::dyn_cast<llvm::CallInst>(&inst);
         if (!dma || !dma->getCalledFunction() ||
             (dma->getCalledFunction()->getName() != "llvm.amdgcn.global.load.async.lds" &&
-             dma->getCalledFunction()->getName() != "llvm.hcu.global.load.dwordx4.lds"))
+             dma->getCalledFunction()->getName() != detail::HCUGlobalLoad128))
           continue;
         llvm::Value *source = dma->getArgOperand(0);
         // Recognize the structural identity as well as our own exports, so
@@ -204,7 +205,7 @@ void lowerWideAsyncDMAToHCU(llvm::Module &module) {
   // IntrinsicsHCU.td / HCUGlobalLoadLDS: (global AS1, LDS AS3,
   // imm offset, aux/cpol, bps). Width is encoded in the intrinsic name.
   // bps=0 selects the ordinary M0-based, non-swizzled LDS packet layout.
-  auto hcu = module.getOrInsertFunction("llvm.hcu.global.load.dwordx4.lds",
+  auto hcu = module.getOrInsertFunction(detail::HCUGlobalLoad128,
                                        generic->getFunctionType());
   auto *declaration = llvm::cast<llvm::Function>(hcu.getCallee());
   declaration->addFnAttr(llvm::Attribute::Convergent);
@@ -278,8 +279,7 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bo
     // register definition to codegen and avoids the reserved clobber warning.
     auto *type = llvm::FunctionType::get(i32, {i32, i32, v4i32}, false);
     auto *assembly = llvm::InlineAsm::get(type,
-        "s_mov_b32 $0, $1\n\tbuffer_load_dwordx4 $2, $3, 0 offen lds",
-        "={m0},s,v,s,~{memory}", true);
+        detail::DMA128Asm, detail::DMAConstraints, true);
     auto *issue = b.CreateCall(type, assembly, {lds, byteOffset, rsrc});
     issue->addFnAttr(llvm::Attribute::Convergent);
     issue->setDoesNotThrow();
@@ -303,7 +303,7 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bo
         b.SetCurrentDebugLocation(call->getDebugLoc());
         auto *type = llvm::FunctionType::get(b.getVoidTy(), false);
         auto *wait = b.CreateCall(type, llvm::InlineAsm::get(type,
-            "s_waitcnt vmcnt(0)", "~{memory}", true));
+            detail::WaitAsm, detail::WaitConstraints, true));
         wait->addFnAttr(llvm::Attribute::Convergent);
         wait->setDoesNotThrow();
       }

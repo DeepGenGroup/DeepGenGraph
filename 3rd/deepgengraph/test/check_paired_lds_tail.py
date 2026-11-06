@@ -101,6 +101,31 @@ class PairedLDSTail(unittest.TestCase):
         self.assertIn('"frisk.k_lds_prefetch"="8"', result.stdout)
         self.assertIn('"frisk.k_tail_prefetch"="4"', result.stdout)
 
+    def test_causal_mask_select_and_predicate(self):
+        for boundary in ('', 'call void @llvm.amdgcn.s.barrier()'):
+            text = fixture(boundary=boundary).replace(
+                'ptr %out)', 'ptr %out, i32 %row, i32 %col)')
+            for i in range(8):
+                extract = f'  %x{i} = extractelement <4 x float> %m{i}, i32 0'
+                text = text.replace(extract, extract +
+                    f'\n  %limit{i} = add i32 %row, {i + 1}' +
+                    f'\n  %future{i} = icmp uge i32 %col, %limit{i}' +
+                    f'\n  %masked{i} = select i1 %future{i}, float 0xFFF0000000000000, float %x{i}')
+                text = text.replace(f'@llvm.maxnum.f32(float %x{i},',
+                                    f'@llvm.maxnum.f32(float %masked{i},')
+            before = self.export(text, '0').stdout
+            result = self.export(text)
+            a, b = instructions(before), instructions(result.stdout)
+            self.assertEqual(Counter(a), Counter(b))
+            self.assertEqual([l for l in a if ' = load ' not in l],
+                             [l for l in b if ' = load ' not in l])
+            if boundary:
+                self.assertIn('moved=0, anchors=0', result.stderr)
+                self.assertEqual(a, b)
+            else:
+                self.assertIn('pairs=4', result.stderr)
+                self.assertLess(result.stdout.index('%k2 ='), result.stdout.index('%m1 ='))
+
     def test_boundaries(self):
         boundaries = ['call void @opaque()', 'call void @pure_unknown()',
             'call void @llvm.amdgcn.s.barrier()', 'call void @llvm.amdgcn.sched.barrier(i32 0)',

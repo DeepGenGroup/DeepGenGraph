@@ -20,6 +20,7 @@
 //   frisk.fragment_accumulate  标在融合后的 add 上。
 //   frisk.accumulator_fused    标在 producer 循环上。
 // ===========================================================================
+#include "deepgengraph/Conversion/AffineLoopEval.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -42,26 +43,6 @@ namespace {
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
 
 using Loop = affine::AffineForOp;
-
-// 把 value 在循环变量 = iv 时求值成常量。支持 iv、整型常量、affine.apply。求值不了返回空。
-// FriskFragIRReorder.cpp 的 evaluate 是同样的逻辑。
-static std::optional<int64_t> coordinate(Value value, Loop loop, int64_t iv,
-                                         unsigned depth = 0) {
-  if (depth > 64) return {};
-  if (value == loop.getInductionVar()) return iv;
-  APInt constant;
-  if (matchPattern(value, m_ConstantInt(&constant))) return constant.getSExtValue();
-  auto apply = value.getDefiningOp<affine::AffineApplyOp>();
-  if (!apply) return {};
-  SmallVector<Attribute> args, results;
-  for (Value operand : apply.getMapOperands()) {
-    auto n = coordinate(operand, loop, iv, depth + 1);
-    if (!n) return {};
-    args.push_back(IntegerAttr::get(IndexType::get(value.getContext()), *n));
-  }
-  if (failed(apply.getAffineMap().constantFold(args, results))) return {};
-  return cast<IntegerAttr>(results.front()).getInt();
-}
 
 // 沿循环结果向上追，判断 value 最终是否来自 GemmFragOp（MMA 产物）。
 static bool mmaResult(Value value) {
@@ -139,10 +120,10 @@ static bool fuseTypedAccumulator(Loop consumer) {
       if (++count > 256) { valid = false; break; }
       SmallVector<int64_t> point;
       for (unsigned d = 0; d < payload.getRank(); ++d) {
-        auto p = coordinate(insertion.getIndices()[d], producer, iv);
-        auto q = coordinate(delta.getIndices()[d], consumer, iv);
-        auto r = coordinate(old.getIndices()[d], consumer, iv);
-        auto s = coordinate(output.getIndices()[d], consumer, iv);
+        auto p = evaluateAtIteration(insertion.getIndices()[d], producer, iv);
+        auto q = evaluateAtIteration(delta.getIndices()[d], consumer, iv);
+        auto r = evaluateAtIteration(old.getIndices()[d], consumer, iv);
+        auto s = evaluateAtIteration(output.getIndices()[d], consumer, iv);
         if (!p || !q || !r || !s || *p != *q || *p != *r || *p != *s ||
             *p < 0 || *p >= tile.getDimSize(d) / payload.getDimSize(d)) { valid = false; break; }
         point.push_back(*p);

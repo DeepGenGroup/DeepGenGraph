@@ -1,34 +1,14 @@
 #ifndef DEEPGENGRAPH_LDSADDRESSANALYSIS_H
 #define DEEPGENGRAPH_LDSADDRESSANALYSIS_H
-#include "llvm/IR/Constants.h"
+#include "LateIRPatterns.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
-#include "llvm/IR/InlineAsm.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include <map>
-#include <optional>
 #include <tuple>
 namespace mlir::frisk::detail {
-using namespace llvm;
-using Inst = Instruction;
-using Call = CallInst;
-inline bool addressNamed(Inst *i, StringRef name) {
-  auto *c = dyn_cast_or_null<Call>(i);
-  return c && !c->hasOperandBundles() && !c->isMustTailCall() &&
-      c->getCalledFunction() && c->getCalledFunction()->isDeclaration() &&
-      c->getCalledFunction()->getName() == name;
-}
-inline InlineAsm *addressAssembly(Inst *i) {
-  auto *c = dyn_cast<Call>(i);
-  if (!c || c->hasOperandBundles() || c->isMustTailCall()) return nullptr;
-  auto *a = dyn_cast<InlineAsm>(c->getCalledOperand());
-  return a && !a->canThrow() && !a->isAlignStack() ? a : nullptr;
-}
 // LDSAddress：给定线程号和向量元素下标，把地址表达式精确求值成 LDS 内的字节偏移。
-// doubleBufferV 和 prefetchNextK 靠它证明读写的字节范围。
-// 注意：NarrowKDMA.cpp 里有一份几乎相同的副本。
+// doubleBufferV、narrowKDMA 和 prefetchNextK 靠它证明读写的字节范围。
 //   storage  唯一的 LDS 全局变量，相对地址 0。
 //   cache    (值, 线程号, 元素) -> 结果。先写入空值，所以环会判定失败。
 // Exact evaluation of the restricted integer/thread-address DAG. Unknown
@@ -87,6 +67,26 @@ class LDSAddress {
       if (ix < 0) return {};
       return get(s->getOperand(ix >= int(n)), lane, ix % n, depth+1);
     }
+    // Swizzle address simplification can produce an integer predicate/select
+    // instead of an XOR. Evaluate the predicate at this exact thread ID, and
+    // only evaluate the selected arm (the other arm may contain poison).
+    if (auto *s = dyn_cast<SelectInst>(v)) {
+      auto condition = get(s->getCondition(), lane, element, depth+1);
+      if (!condition) return {};
+      return get(*condition ? s->getTrueValue() : s->getFalseValue(),
+                 lane, element, depth+1);
+    }
+    if (auto *c = dyn_cast<ICmpInst>(v)) {
+      unsigned bits = c->getOperand(0)->getType()->getScalarSizeInBits();
+      if (!c->getOperand(0)->getType()->isIntOrIntVectorTy() || !bits || bits > 64)
+        return {};
+      auto a = get(c->getOperand(0), lane, element, depth+1);
+      auto b = get(c->getOperand(1), lane, element, depth+1);
+      if (!a || !b) return {};
+      APInt left(bits, *a), right(bits, *b);
+      if (c->hasSameSign() && left.isNegative() != right.isNegative()) return {};
+      return ICmpInst::compare(left, right, c->getPredicate());
+    }
     auto *op = dyn_cast<Operator>(v);
     if (op && Instruction::isCast(op->getOpcode())) {
       auto a = get(op->getOperand(0), lane, element, depth+1);
@@ -130,13 +130,13 @@ class LDSAddress {
     }
     auto *c = dyn_cast<Call>(v);
     if (!c) return {};
-    if (addressNamed(c, "llvm.amdgcn.workitem.id.x") && c->arg_empty()) return lane;
-    if ((addressNamed(c, "llvm.amdgcn.workitem.id.y") || addressNamed(c, "llvm.amdgcn.workitem.id.z")) && c->arg_empty()) return 0;
+    if (isCallTo(c, "llvm.amdgcn.workitem.id.x") && c->arg_empty()) return lane;
+    if ((isCallTo(c, "llvm.amdgcn.workitem.id.y") || isCallTo(c, "llvm.amdgcn.workitem.id.z")) && c->arg_empty()) return 0;
     // readfirstlane 取的是本 wave 第一个 lane 的值，所以用线程号 lane/64*64 求值。
     // 这里写死了 wave64。
-    if (addressNamed(c, "llvm.amdgcn.readfirstlane.i32") && c->arg_size() == 1)
+    if (isCallTo(c, "llvm.amdgcn.readfirstlane.i32") && c->arg_size() == 1)
       return get(c->getArgOperand(0), lane/64*64, 0, depth+1);
-    auto *a = addressAssembly(c);
+    auto *a = getInlineAsm(c);
     if (a && (a->getConstraintString() == "=v,0" || a->getConstraintString() == "=v,0,i") &&
         a->getAsmString().empty() && c->arg_size() >= 1)
       return get(c->getArgOperand(0), lane, element, depth+1);

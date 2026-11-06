@@ -749,6 +749,22 @@ coordXY_t LowerInfoAnalysis::getNewBufferSenamtic(coordXY_t semantic){
   return {LowerInfoAnalysis::gemmCount * semantic[0],LowerInfoAnalysis::gemmCount* semantic[1]};
 }
 
+// Pick the GEMM C layout requested by the frisk.*b_permute attributes. A shape
+// neither permutation can express keeps the contiguous C shuffle.
+static void applyWmmaCLayoutMethod(LowerInfo &info, Operation *gemm, OpBuilder &b) {
+  bool permute = gemm->hasAttr("frisk.b_permute");
+  bool innerPermute = gemm->hasAttr("frisk.inner_inst_b_permute");
+  if (permute && makeWmmaBPermutedC(info)) {
+    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("b-permute"));
+  } else if (innerPermute && makeWmmaInnerInstBPermutedC(info)) {
+    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("inner-inst-b-permute"));
+  } else if (gemm->hasAttr("frisk.contiguous_c")) {
+    makeWmmaCContiguous(info);
+    if (permute || innerPermute)
+      gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("shuffle-fallback"));
+  }
+}
+
 LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem &problem,
                                                  MMAInstInfo *mma, uint64_t thread_num,
                                                  HWSpecification *hw,
@@ -778,14 +794,7 @@ LowerInfo LowerInfoAnalysis::makeDirectGemmCInfo(OpBuilder b, const GemmProblem 
   }
   // Infer consumers from the public, contiguous C layout. Thread tiling
   // materializes the raw instruction -> public layout boundary explicitly.
-  auto *gemm = problem.C.getDefiningOp();
-  if (gemm->hasAttr("frisk.b_permute") && makeWmmaBPermutedC(info))
-    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("b-permute"));
-  else if (gemm->hasAttr("frisk.contiguous_c")) {
-    makeWmmaCContiguous(info);
-    if (gemm->hasAttr("frisk.b_permute"))
-      gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("shuffle-fallback"));
-  }
+  applyWmmaCLayoutMethod(info, problem.C.getDefiningOp(), b);
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
   info.pos = LowerInfo::BufPos::Out;
@@ -818,14 +827,7 @@ LowerInfo LowerInfoAnalysis::makeRelyGemmCInfo(OpBuilder b, const GemmProblem &p
   }
   info.block_repeat = {problem.bm / info.get_block_widths()[0],
                        problem.bn / info.get_block_widths()[1]};
-  auto *gemm = problem.C.getDefiningOp();
-  if (gemm->hasAttr("frisk.b_permute") && makeWmmaBPermutedC(info))
-    gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("b-permute"));
-  else if (gemm->hasAttr("frisk.contiguous_c")) {
-    makeWmmaCContiguous(info);
-    if (gemm->hasAttr("frisk.b_permute"))
-      gemm->setAttr("frisk.wmma_layout_applied", b.getStringAttr("shuffle-fallback"));
-  }
+  applyWmmaCLayoutMethod(info, problem.C.getDefiningOp(), b);
   // 对于gemmC，单个线程持有的数据应考虑wmmaInst在block-level buffer上滑动的情况。每次计算得到一个inst区域的C
   info.thread_own_data_size = getThreadOwnDataSize(info, true);
   info.pos = LowerInfo::BufPos::Out;

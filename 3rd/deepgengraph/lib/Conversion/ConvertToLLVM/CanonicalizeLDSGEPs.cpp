@@ -11,6 +11,7 @@
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/CanonicalizeLDSGEPs.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -69,7 +70,7 @@ class ThreadOffsets {
       // Require its marker, spelling and constraint; keep the call itself.
       // OptimizeRegisterLifetimes 的 materialize 生成的空 asm 是恒等操作，可以穿透。
       auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
-      if (!call->getMetadata("frisk.register_lifetimes") || !assembly ||
+      if (!call->getMetadata(detail::RegisterLifetimesMarker) || !assembly ||
           !assembly->getAsmString().empty() || assembly->getConstraintString() != "=v,0" ||
           call->arg_size() != 1 || call->getArgOperand(0)->getType() != call->getType()) return nullptr;
       auto *input = integer(call->getArgOperand(0), depth + 1);

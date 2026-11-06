@@ -85,6 +85,7 @@
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "SharedBufferAliases.h"
 #include "WmmaLayoutConversion.h"
+#include "CausalMaskLowering.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -1008,6 +1009,20 @@ static void adaptGemmReductionLayouts(func::FuncOp kernel, LowerInfoMap &infos) 
     Value bStorage = matrixRead ? matrixRead.getSrc() : gemm.getB();
     auto aType = dyn_cast<MemRefType>(gemm.getA().getType());
     auto bType = dyn_cast<MemRefType>(bStorage.getType());
+    // Layout 3.4: the producer's registers already are a conventional A tile, so
+    // no conversion and no B change is needed. Proven per element, not by method.
+    if (aType && aType.getRank() == 2 && aType.hasStaticShape()) {
+      auto sourceTile = getFullThreadTileType(gemm.getA(), *source);
+      auto targetTile = getFullThreadTileType(gemm.getA(), *a);
+      if (succeeded(sourceTile) && succeeded(targetTile) && *sourceTile == *targetTile &&
+          sameThreadTileCoordinates(
+              effectiveThreadTileMap(*source, aType, *sourceTile, kernel.getContext()),
+              effectiveThreadTileMap(*a, aType, *targetTile, kernel.getContext()),
+              *targetTile, threads.getInt())) {
+        a->convertFrom = nullptr;
+        return;
+      }
+    }
     if (!aType || !bType || aType.getRank() != 2 || bType.getRank() != 2 ||
         !aType.hasStaticShape() || !bType.hasStaticShape() ||
         aType.getDimSize(1) != bType.getDimSize(0) ||
@@ -2405,6 +2420,8 @@ struct MaskTileElement {
   Value addend;
   bool maskOnLhs = false;
   Value clear;
+  StringRef causalMask = "off";
+  unsigned compactCount = 0, selectCount = 0;
   // 计算 mask 中一个线程拥有的元素；IRMapping 仅用于本次 region 克隆。
   Value emit(ArrayRef<Value> tileIvs, Value initVector) {
     Value scalar = clear;
@@ -2418,11 +2435,50 @@ struct MaskTileElement {
         regionArgs.push_back(addIndexValues(rewriter, loc, start, accessIndex));
       }
 
+      Value compactPredicate;
+      auto triangle = causalMask != "off" ? causal_mask::match(body) : std::nullopt;
+      if (triangle) {
+        auto row = causal_mask::indexRange(regionArgs[0]);
+        auto col = causal_mask::indexRange(regionArgs[1]);
+        auto shifted = causal_mask::combine(row,
+            causal_mask::Range{triangle->diagonal,triangle->diagonal}, '+');
+        // Keep all arithmetic inside nonnegative signed i32. The original
+        // unsigned index comparison then has exactly the same result, without
+        // relying on launch sizes guessed from names or a particular MMA tile.
+        if (row && col && shifted && row->lo >= 0 && col->lo >= 0 &&
+            shifted->hi <= INT32_MAX && col->hi <= INT32_MAX) {
+          auto i32 = rewriter.getI32Type();
+          Value r = rewriter.create<arith::IndexCastOp>(loc,i32,regionArgs[0]);
+          Value c = rewriter.create<arith::IndexCastOp>(loc,i32,regionArgs[1]);
+          Value d = rewriter.create<arith::ConstantIntOp>(loc,triangle->diagonal,32);
+          Value end = rewriter.create<arith::AddIOp>(loc,r,d);
+          auto cmp = rewriter.create<arith::CmpIOp>(loc,arith::CmpIPredicate::ule,end,c);
+          cmp->setAttr("frisk.causal_mask_i32",rewriter.getUnitAttr());
+          compactPredicate = cmp;
+          ++compactCount;
+          if (causalMask == "finite" && addend && causal_mask::isNegativeInfinityAndZero(*triangle)) {
+            SmallVector<OpFoldResult> positions(tileIvs.begin(),tileIvs.end());
+            Value score = rewriter.create<vector::ExtractOp>(loc,addend,positions);
+            Value masked = rewriter.create<arith::ConstantOp>(loc,
+                triangle->masked.getDefiningOp<arith::ConstantOp>().getValue());
+            auto selected = rewriter.create<arith::SelectOp>(loc,compactPredicate,masked,score);
+            selected->setAttr("frisk.causal_mask_select",rewriter.getUnitAttr());
+            ++selectCount;
+            return selected;
+          }
+        }
+      }
+
       IRMapping mapper;
       for (auto [oldArg, newArg] : llvm::zip(body->getArguments(), regionArgs)) {
         mapper.map(oldArg, newArg);
       }
       for (auto &childOp : body->without_terminator()) {
+        if (compactPredicate && &childOp ==
+            yieldOp->getOperand(0).getDefiningOp<arith::SelectOp>().getCondition().getDefiningOp()) {
+          mapper.map(childOp.getResult(0),compactPredicate);
+          continue;
+        }
         auto *cloned = rewriter.clone(childOp, mapper);
         for (auto [oldResult, newResult] :
              llvm::zip(childOp.getResults(), cloned->getResults())) {
@@ -2448,14 +2504,15 @@ struct MaskTileElement {
 
 static Value lowerFragmentMask(OpBuilder &rewriter, Location loc, MemRefType resultTy,
     VectorType vecTy, LowerInfo resultInfo, ValueRange starts, Block *body,
-    Value addend, bool maskOnLhs, bool uniformMasks, ArrayRef<int64_t> fragmentShape) {
+    Value addend, bool maskOnLhs, bool uniformMasks, ArrayRef<int64_t> fragmentShape,
+    StringRef causalMask = "off") {
     auto vectorShape = vecTy.getShape();
     Value resultVector = rewriter.create<arith::ConstantOp>(loc, vecTy, rewriter.getZeroAttr(vecTy));
     auto yieldOp = cast<MaskYieldOp>(body->getTerminator());
     Value tidx = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
     MaskTileElement element{rewriter, loc,     &resultInfo, tidx,
                             resultTy, starts, body,       yieldOp,
-                            addend, maskOnLhs, {}};
+                            addend, maskOnLhs, {}, causalMask};
     auto emitMask = [&]() -> Value {
       return
         FragmentTileLoopNest(rewriter, loc, vectorShape, {"tiled", "mask_fragment"},
@@ -2517,6 +2574,10 @@ static Value lowerFragmentMask(OpBuilder &rewriter, Location loc, MemRefType res
     } else {
       resultVector = emitMask();
     }
+    if (causalMask != "off")
+      llvm::errs() << "Causal mask lowering: mode=" << causalMask
+                   << ", i32-elements=" << element.compactCount
+                   << ", direct-selects=" << element.selectCount << "\n";
     return resultVector;
 }
 
@@ -2526,9 +2587,10 @@ static Value lowerFragmentMask(OpBuilder &rewriter, Location loc, MemRefType res
 // 创建线程 vector，并通过 MaskTileElement 遍历填充，最终桥接回原结果类型。
 class MaskOpTiling : public OpConversionPattern<frisk::MaskOp> {
   bool uniformMasks, fuseMaskAdd;
+  std::string causalMask;
 public:
-  MaskOpTiling(MLIRContext *context, bool uniformMasks, bool fuseMaskAdd)
-      : OpConversionPattern(context), uniformMasks(uniformMasks), fuseMaskAdd(fuseMaskAdd) {}
+  MaskOpTiling(MLIRContext *context, bool uniformMasks, bool fuseMaskAdd, StringRef causalMask)
+      : OpConversionPattern(context), uniformMasks(uniformMasks), fuseMaskAdd(fuseMaskAdd), causalMask(causalMask.str()) {}
 
   LogicalResult
   matchAndRewrite(frisk::MaskOp op, OpAdaptor adaptor,
@@ -2554,13 +2616,24 @@ public:
     // Coordinates are derived from the CONSUMER layout, not a fixed MMA shape.
     frisk::AddOp add;
     Value other;
-    if (fuseMaskAdd && op.getResult().hasOneUse() &&
+    auto triangle = causal_mask::match(&op.getRegion().front());
+    bool finiteFusion = causalMask == "finite" && triangle &&
+                        causal_mask::isNegativeInfinityAndZero(*triangle);
+    if ((fuseMaskAdd || finiteFusion) && op.getResult().hasOneUse() &&
         isa<FloatType>(resultTy.getElementType()) &&
         llvm::all_of(op.getRegion().front().without_terminator(),
                      [](Operation &child) { return isMemoryEffectFree(&child); })) {
       auto candidate = dyn_cast<frisk::AddOp>(*op.getResult().getUsers().begin());
+      auto candidateTy = candidate ? dyn_cast<MemRefType>(candidate.getResult().getType()) : MemRefType{};
+      // The score addition may carry the downstream reduction's shared-memory
+      // annotation. It still denotes a register tile here; preserve its type
+      // on the replacement bridge and derive coordinates from its LowerInfo.
+      bool compatibleResult = candidateTy == resultTy ||
+          (finiteFusion && candidateTy && candidateTy.getShape() == resultTy.getShape() &&
+           candidateTy.getElementType() == resultTy.getElementType() &&
+           candidateTy.getLayout() == resultTy.getLayout());
       if (candidate && op->getNextNode() == candidate.getOperation() && !isTiled(candidate) &&
-          candidate.getResult().getType() == resultTy) {
+          compatibleResult) {
         Value operand = candidate.getLhs() == op.getResult() ? candidate.getRhs() : candidate.getLhs();
         auto info = findLowerInfoForValue(candidate.getResult(), candidate);
         auto shape = dyn_cast<ShapedType>(operand.getType());
@@ -2574,6 +2647,7 @@ public:
           add = candidate;
           other = operand;
           resultInfo = info;
+          resultTy = candidateTy;
         }
       }
     }
@@ -2617,15 +2691,17 @@ public:
           rewriter.getDenseI64ArrayAttr(getFragmentShape(vectorShape, *resultInfo)),
           rewriter.getBoolAttr(add && add.getLhs() == op.getResult()),
           rewriter.getBoolAttr(uniformMasks));
+      if (causalMask != "off")
+        mask->setAttr("frisk.causal_mask_mode",rewriter.getStringAttr(causalMask));
       IRMapping mapping;
       rewriter.cloneRegionBefore(op.getRegion(), mask.getRegion(), mask.getRegion().end(), mapping);
       resultVector = unpackFragment(rewriter, loc, mask);
     } else {
       resultVector = lowerFragmentMask(rewriter, loc, resultTy, vecTy, *resultInfo,
           adaptor.getStarts(), body, addend, add && add.getLhs() == op.getResult(),
-          uniformMasks, getFragmentShape(vectorShape, *resultInfo));
+          uniformMasks, getFragmentShape(vectorShape, *resultInfo), causalMask);
     }
-    Value block = fromThreadTile(resultVector, op.getResult().getType(),
+    Value block = fromThreadTile(resultVector, add ? add.getResult().getType() : op.getResult().getType(),
                                 *resultInfo, rewriter, loc);
     if (add) {
       rewriter.replaceOp(add, block);
@@ -4171,6 +4247,7 @@ class ConvertFriskBaseToThreadLevelIR
   using Base::swizzleVArg;
   using Base::uniformMasks;
   using Base::fuseMaskAdd;
+  using Base::causalMask;
   using Base::wmmaShuffle;
   using Base::wmmaLayout;
   using Base::getOperation;
@@ -4195,6 +4272,10 @@ public:
     // 函数结束时自动恢复 emitTypedFragments。
     llvm::SaveAndRestore<bool> mode(emitTypedFragments, Typed);
     func::FuncOp kernel = getOperation();
+    if (causalMask != "off" && causalMask != "i32" && causalMask != "finite") {
+      kernel.emitError("causal-mask must be off, i32, or finite");
+      return signalPassFailure();
+    }
     if (!kernel->hasAttr("thread_num"))
       return;
     eraseTriviallyDeadOps(kernel);
@@ -4248,8 +4329,8 @@ public:
     LowerInfoMap emptyInfo;
     StringRef method = wmmaLayout;
     if (method != "auto" && method != "shared" && method != "shuffle" &&
-        method != "b-permute") {
-      kernel.emitError("wmma-layout must be auto, shared, shuffle, or b-permute");
+        method != "b-permute" && method != "inner-inst-b-permute") {
+      kernel.emitError("wmma-layout must be auto, shared, shuffle, b-permute, or inner-inst-b-permute");
       signalPassFailure();
       return;
     }
@@ -4451,7 +4532,7 @@ public:
       return !isBlockTileOperation(op) || isTiled(op);
     });
     RewritePatternSet patterns(context);
-    patterns.add<MaskOpTiling>(context, uniformMasks, fuseMaskAdd);
+    patterns.add<MaskOpTiling>(context, uniformMasks, fuseMaskAdd, causalMask);
     patterns.add<ReadMatrixFromShmOpTiling, GemmOpTiling, Exp2OpTiling, CastOpTiling, FillOpTiling,
         ZeroOpTiling, AllocBufferOpTiling, CopyOpTiling, CopyToRegOpTiling,
         ReduceOpTiling, BlockOpTiling, ConvertLayoutOpTiling>(context);
@@ -4520,8 +4601,8 @@ public:
     if (!kernel->hasAttr("thread_num") || !hasGemm) return;
     StringRef method = wmmaLayout;
     if (method != "auto" && method != "shared" && method != "shuffle" &&
-        method != "b-permute") {
-      kernel.emitError("wmma-layout must be auto, shared, shuffle, or b-permute");
+        method != "b-permute" && method != "inner-inst-b-permute") {
+      kernel.emitError("wmma-layout must be auto, shared, shuffle, b-permute, or inner-inst-b-permute");
       return signalPassFailure();
     }
     if (method != "auto") {
@@ -5462,11 +5543,19 @@ public:
             simplifyAffineMap(mask.getLayout().getAs<AffineMapAttr>("tile_layout").getValue())) {
           op->emitError("invalid serialized mask layout"); return signalPassFailure();
         }
+        StringRef causalMode = "off";
+        if (Attribute attr = mask->getAttr("frisk.causal_mask_mode")) {
+          auto value = dyn_cast<StringAttr>(attr);
+          if (!value || (value.getValue() != "off" && value.getValue() != "i32" && value.getValue() != "finite")) {
+            op->emitError("invalid causal mask mode"); return signalPassFailure();
+          }
+          causalMode = value.getValue();
+        }
         result = lowerFragmentMask(b, loc, cast<MemRefType>(mask.getBlockType()),
             registers, *info, mask.getStarts(), &mask.getRegion().front(),
             op->getNumOperands() > mask.getStarts().size()
                 ? op->getOperand(mask.getStarts().size()) : Value{},
-            mask.getMaskOnLhs(), mask.getUniform(), mask.getFragmentShape());
+            mask.getMaskOnLhs(), mask.getUniform(), mask.getFragmentShape(), causalMode);
       } else if (auto broadcast = dyn_cast<BroadcastFragOp>(op)) {
         Value source = op->getOperand(0);
         if (!isa<VectorType>(source.getType()))

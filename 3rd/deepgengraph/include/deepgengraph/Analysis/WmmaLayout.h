@@ -50,5 +50,29 @@ inline bool makeWmmaBPermutedC(LowerInfo &info) {
   info.logicalTransform = AffineMap::get(2, 0, {row, logicalCol}, ctx);
   return true;
 }
+
+// Layout 3.4: permute the g^2 B columns inside each single N instruction.
+// Physical column n = g*reg + lane becomes logical column g*lane + reg.
+// For g=4 B reads 0,4,8,12,1,5,9,13,...; lane q's C registers, which hold physical
+// columns q,q+4,q+8,q+12, then hold the contiguous logical columns 4q..4q+3.
+// That is exactly the WMMA A contract (K = g*lane + reg per instruction), so C
+// registers can feed the next MMA's A in place, and the next MMA's B is untouched.
+// Unlike 3.3 this needs no K permutation and no g^3 column group.
+inline bool makeWmmaInnerInstBPermutedC(LowerInfo &info) {
+  if (!isWmmaCTransposeLayout(info) || !info.mmaInst)
+    return false;
+  int64_t g = info.get_warp_layout()[1];
+  int64_t n = g * g;
+  auto type = dyn_cast<ShapedType>(info.buffer.getType());
+  if (!type || type.getRank() != 2 || !type.hasStaticShape() ||
+      type.getDimSize(1) % n != 0 || info.mmaInst->n != n ||
+      info.mmaInst->m != info.get_warp_layout()[0])
+    return false;
+  auto *ctx = info.buffer.getContext();
+  auto row = getAffineDimExpr(0, ctx), col = getAffineDimExpr(1, ctx);
+  auto logicalCol = col.floorDiv(n) * n + (col % g) * g + (col.floorDiv(g)) % g;
+  info.logicalTransform = AffineMap::get(2, 0, {row, logicalCol}, ctx);
+  return true;
+}
 } // namespace mlir::frisk
 #endif

@@ -1,5 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -49,7 +49,7 @@ bool isMatrixRead(Inst *inst) {
   auto *callee = call->getCalledFunction();
   auto *pointer = llvm::dyn_cast<llvm::PointerType>(call->getArgOperand(0)->getType());
   return callee && callee->isDeclaration() &&
-         callee->getName() == "llvm.hcu.ds.read.m32x16.b16.v4i32.p3" &&
+         callee->getName() == detail::MatrixReadM32x16 &&
          pointer && pointer->getAddressSpace() == 3 &&
          call->getArgOperand(1)->getType()->isIntegerTy(32) &&
          call->getType() == llvm::FixedVectorType::get(llvm::Type::getInt32Ty(call->getContext()), 4);

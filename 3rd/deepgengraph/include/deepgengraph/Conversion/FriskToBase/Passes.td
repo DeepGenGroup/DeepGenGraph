@@ -94,10 +94,12 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
       "Skip elementwise upper-triangular masks for provably complete tiles">,
     Option<"fuseMaskAdd", "fuse-mask-add", "bool", "true",
       "Generate single-use masks with their adjacent addition inside each fragment">,
+    Option<"causalMask", "causal-mask", "std::string", "\"off\"",
+      "off, i32 (proven bounded triangular coordinates), or finite (also fuse score/-inf selection; assumes finite scores and ignores signed zero)">,
     Option<"wmmaShuffle", "wmma-shuffle", "bool", "true",
       "Legacy auto-mode switch for contiguous WMMA C and shuffle conversions">,
     Option<"wmmaLayout", "wmma-layout", "std::string", "\"auto\"",
-      "GEMM A-input producer layout (attention P): shared (3.1), shuffle (3.2), b-permute (3.3; unsupported shapes use shuffle), auto (legacy switch). Terminal C outputs retain shuffle.">];
+      "GEMM A-input producer layout (attention P): shared (3.1), shuffle (3.2), b-permute (3.3; unsupported shapes use shuffle), inner-inst-b-permute (3.4; B columns permuted inside each instruction, unsupported shapes use shuffle), auto (legacy switch). Terminal C outputs retain shuffle.">];
 
   let dependentDialects = [
     "mlir::frisk::FriskDialect"

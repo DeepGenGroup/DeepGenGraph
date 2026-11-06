@@ -15,7 +15,7 @@
 // MMAC 的相对顺序始终不变，只移动 LDS 读及其地址计算。
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "LateIRPatterns.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -36,6 +36,7 @@ namespace mlir::frisk {
 namespace {
 using namespace llvm;
 using Inst = Instruction;
+using detail::isTypedRegisterMMACall;
 // Order：一段指令的顺序。规划都在这个“虚拟顺序”上做，校验通过后才移动真实指令。
 // Marker：函数属性，第 29 项已运行，值为 distance。
 // TailMarker：函数属性，第 31 项已运行。
@@ -45,19 +46,6 @@ constexpr StringLiteral Marker = "frisk.k_lds_prefetch";
 constexpr StringLiteral TailMarker = "frisk.k_tail_prefetch";
 constexpr StringLiteral TailPair = "frisk.k_tail_pair";
 
-bool mma(Inst *i) {
-  auto *c = dyn_cast_or_null<CallInst>(i);
-  if (!c || c->arg_size()!=3 || c->hasOperandBundles() || c->isMustTailCall() ||
-      !c->doesNotAccessMemory()) return false;
-  auto *a = dyn_cast<InlineAsm>(c->getCalledOperand());
-  auto &ctx=c->getContext();
-  auto *ab=FixedVectorType::get(Type::getHalfTy(ctx),4);
-  auto *cd=FixedVectorType::get(Type::getFloatTy(ctx),4);
-  return a && !a->hasSideEffects() && !a->canThrow() && !a->isAlignStack() &&
-      isRegisterMMA(a->getAsmString(),a->getConstraintString()) &&
-      c->getType()==cd && c->getArgOperand(0)->getType()==ab &&
-      c->getArgOperand(1)->getType()==ab && c->getArgOperand(2)->getType()==cd;
-}
 // 可以跟随 load 一起移动的纯地址计算。
 // b64：简单的 8 字节 LDS 读，类型 <4 x half>，对齐不小于 8。
 // candidate：b64 读，且所有使用者都是同一基本块内 MMAC 的 B 操作数。
@@ -76,7 +64,7 @@ bool candidate(LoadInst *l) {
   if (!b64(l) || l->use_empty()) return false;
   for (auto &u:l->uses()) {
     auto *c=dyn_cast<CallInst>(u.getUser());
-    if (!mma(c) || u.getOperandNo()!=1 || c->getParent()!=l->getParent()) return false;
+    if (!isTypedRegisterMMACall(c) || u.getOperandNo()!=1 || c->getParent()!=l->getParent()) return false;
   }
   return true;
 }
@@ -137,7 +125,7 @@ void schedule(Order region, unsigned distance, Stats &stats,
   for (unsigned n=0;n<region.size();++n) {
     auto *i=region[n]; pos[i]=n;
     if (auto *l=dyn_cast<LoadInst>(i)) loads.push_back(l);
-    if (mma(i)) mmas.push_back(cast<CallInst>(i));
+    if (isTypedRegisterMMACall(i)) mmas.push_back(cast<CallInst>(i));
   }
   if (loads.size()<2 || mmas.size()<2) { stats.unpaired+=loads.size(); return; }
   for (auto *l:loads) {
@@ -243,7 +231,7 @@ void schedule(Order region, unsigned distance, Stats &stats,
 // pure integer address dependencies move across them. In particular, no FP
 // reassociation, speculation of calls, or relaxation of FP flags is needed.
 // 第 31 项允许出现在区域内的局部归约指令。它们保持原有顺序，只有 LDS 读和地址计算越过它们。
-// reductionWrapper：归约周围的向量/聚合包装。
+// reductionWrapper：归约周围的向量/聚合包装及纯寄存器 mask 比较/选择。
 // unprotectedCandidate：还没被任何配对保护的候选读。
 bool localReduction(Inst *i) {
   if (i->getOpcode() == Instruction::FAdd) return true;
@@ -261,8 +249,11 @@ bool localReduction(Inst *i) {
   }
 }
 bool reductionWrapper(Inst *i) {
+  // Causal masks lowered directly to score/-inf selects must not split the
+  // QK-tail region. These instructions stay in place, like the reductions;
+  // only independent LDS reads and their checked address dependencies move.
   return isa<ExtractElementInst, InsertElementInst, ShuffleVectorInst,
-             ExtractValueInst, InsertValueInst>(i);
+             ExtractValueInst, InsertValueInst, ICmpInst, SelectInst>(i);
 }
 bool unprotectedCandidate(Inst *i) {
   auto *l = dyn_cast<LoadInst>(i);
@@ -288,7 +279,7 @@ llvm::PreservedAnalyses PrefetchPairedLDSPass::run(llvm::Function &f,llvm::Funct
   for (auto &block:f) {
     Order region;
     for (auto &i:block) {
-      if (address(&i) || candidate(dyn_cast<LoadInst>(&i)) || mma(&i)) region.push_back(&i);
+      if (address(&i) || candidate(dyn_cast<LoadInst>(&i)) || isTypedRegisterMMACall(&i)) region.push_back(&i);
       else if (!region.empty()) { regions.push_back(std::move(region)); region.clear(); }
     }
     if (!region.empty()) regions.push_back(std::move(region));
@@ -355,7 +346,7 @@ PreservedAnalyses PrefetchPairedLDSTailPass::run(Function &f, FunctionAnalysisMa
     };
     for (auto &i : block) {
       bool reduction = localReduction(&i);
-      if (address(&i) || unprotectedCandidate(&i) || mma(&i) ||
+      if (address(&i) || unprotectedCandidate(&i) || isTypedRegisterMMACall(&i) ||
           reduction || reductionWrapper(&i)) {
         region.push_back(&i);
         hasReduction |= reduction;
