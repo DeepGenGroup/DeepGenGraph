@@ -166,6 +166,8 @@ static bool space(Value v, unsigned n) {
 
 // No unknown effects or potentially aliasing global writes may change the
 // producer between iterations (or before its original first execution).
+// 能否证明循环执行期间，source 指向的 GM（全局内存）数据不会被修改。
+// 这是把 DMA 外提到循环外的前提：只有源数据不变，才可以只搬运一次，在后续迭代中复用。
 static bool immutableSource(Loop loop, Value source, AliasAnalysis &aa) {
   bool safe = true;
   // barrier、wait、写 LDS 的 DMA 都不会改变 GM 源，可以放行。
@@ -354,6 +356,8 @@ class RetainInvariantFragments
       for (auto copy : copies) {
         if (used == maxWords) break;
         AliasAnalysis aa(getOperation());
+        // 能否证明循环执行期间，source 指向的 GM（全局内存）数据不会被修改。
+        // 这是把 DMA 外提到循环外的前提：只有源数据不变，才可以只搬运一次，在后续迭代中复用。
         if (!immutableSource(loop, copy.getSrc(), aa)) continue;
         Candidate candidate{loop, copy};
         auto words = candidate.analyze();

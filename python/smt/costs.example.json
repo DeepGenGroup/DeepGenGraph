@@ -1,0 +1,12 @@
+{
+  "dma": 10,
+  "shm_reg": 5,
+  "alu": 1,
+  "wmma": 1,
+  "issue": 1,
+  "wait": 1,
+  "scale_work": false,
+  "reference_bytes": 8192,
+  "reference_alu_ops": 4096,
+  "reference_wmma_ops": 262144
+}

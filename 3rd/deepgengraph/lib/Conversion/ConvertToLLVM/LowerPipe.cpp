@@ -256,12 +256,10 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 }
 
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
-                    Target target, bool useAsyncCopy, bool coalesceWaits) {
+                    Target target, bool coalesceWaits) {
   mlir::PassManager pm(context);
-  // Keep the tile/readiness contract through scheduling and storage planning.
-  // The synchronous form is also valid for non-ROCm targets.
-  pm.addPass(mlir::frisk::createLowerFriskAsyncCopyPass(
-      useAsyncCopy && target == Target::ROCm));
+  // DMA and shuffle lowering run before firstLowering, while their invariant
+  // setup can still be hoisted using structured loops.
 
   // 1. 结构与高阶方言转换 (SCF, Affine, Vector -> SCF)
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createLoopInvariantCodeMotionPass());

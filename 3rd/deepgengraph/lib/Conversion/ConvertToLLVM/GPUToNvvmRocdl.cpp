@@ -248,6 +248,15 @@ struct GPUShuffleOpToROCDLLowering : public OpConversionPattern<gpu::ShuffleOp> 
     Location loc = op->getLoc();
     Value initShflValue = adaptor.getValue();
 
+    // This pattern also runs before general type conversion. LLVM bitcasts
+    // cannot consume higher-rank or scalable vectors.
+    Type valueType = initShflValue.getType();
+    if (!LLVM::isCompatibleType(valueType) ||
+        (!valueType.isIntOrFloat() && !isa<VectorType>(valueType)))
+      return rewriter.notifyMatchFailure(op, "expected an LLVM-compatible scalar or vector");
+    if (auto vector = dyn_cast<VectorType>(valueType); vector && vector.isScalable())
+      return rewriter.notifyMatchFailure(op, "scalable shuffle is unsupported");
+
     auto int32Type = rewriter.getI32Type();
     Value srcLaneId = getLaneId(rewriter, loc);
 
@@ -312,6 +321,29 @@ struct GPUShuffleOpToROCDLLowering : public OpConversionPattern<gpu::ShuffleOp> 
         composeValue(rewriter, loc, swizzled, initShflValue.getType());
     rewriter.replaceOp(op, {shflValue, isActiveSrcLane});
     return success();
+  }
+};
+
+// Expose lane/index arithmetic while affine/scf loops and the other GPU ops
+// retain their original representation. Share the pattern with late lowering.
+struct LowerGPUShuffleToROCDLPass
+    : PassWrapper<LowerGPUShuffleToROCDLPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerGPUShuffleToROCDLPass)
+  StringRef getArgument() const final { return "frisk-lower-gpu-shuffle"; }
+  StringRef getDescription() const final {
+    return "Lower only GPU shuffles to ROCDL, preserving structured control flow";
+  }
+  void getDependentDialects(DialectRegistry &registry) const final {
+    registry.insert<arith::ArithDialect, LLVM::LLVMDialect, ROCDL::ROCDLDialect>();
+  }
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<GPUShuffleOpToROCDLLowering>(&getContext());
+    ConversionTarget target(getContext());
+    target.addIllegalOp<gpu::ShuffleOp>();
+    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))
+      signalPassFailure();
   }
 };
 
@@ -668,6 +700,9 @@ struct LLVMFuncOpAddGPUAttrPass : public PassWrapper<LLVMFuncOpAddGPUAttrPass, O
 
 
 namespace mlir::frisk {
+  std::unique_ptr<Pass> createLowerGPUShuffleToROCDLPass() {
+    return std::make_unique<LowerGPUShuffleToROCDLPass>();
+  }
   std::unique_ptr<OperationPass<ModuleOp>> createAmendAllocaOpAddrSpacePass(Target target) {
     return std::make_unique<AmendAllocaOpAddrSpacePass>(target);
   }

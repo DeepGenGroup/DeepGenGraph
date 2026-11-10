@@ -7,6 +7,7 @@
 namespace mlir::frisk {
 
 std::unique_ptr<Pass> createGPUToROCDLOrNVVMPass(Target target, unsigned indexBitwidth);
+std::unique_ptr<Pass> createLowerGPUShuffleToROCDLPass();
 std::unique_ptr<mlir::Pass> createThreadLevelIRLegalizePass();
 
 std::unique_ptr<OperationPass<ModuleOp>> createLLVMFuncOpAddGPUAttrPass(Target target);
@@ -23,7 +24,7 @@ std::unique_ptr<mlir::Pass> createHoistWaveInvariantsPass(bool ldsBases = true, 
 // -------- Lower Pipeline ----------
 bool firstLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context) ;
 bool secondLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context, Target target,
-                    bool useAsyncCopy = true, bool coalesceWaits = true);
+                    bool coalesceWaits = true);
 std::string translate(mlir::ModuleOp& mod, mlir::frisk::Target target) ;
 
 #define GEN_PASS_REGISTRATION

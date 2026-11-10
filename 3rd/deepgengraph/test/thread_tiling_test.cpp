@@ -5,6 +5,7 @@
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
+#include "mlir/Pass/PassManager.h"
 
 namespace {
 struct TestAsyncToLLVMPass
@@ -17,6 +18,13 @@ struct TestAsyncToLLVMPass
   }
   void runOnOperation() final {
     auto module = getOperation();
+    mlir::PassManager early(&getContext());
+    early.addPass(mlir::frisk::createLowerFriskAsyncCopyPass());
+    early.addPass(mlir::frisk::createLowerGPUShuffleToROCDLPass());
+    early.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    early.addPass(mlir::createCSEPass());
+    early.addPass(mlir::frisk::createHoistWaveInvariantsPass());
+    if (failed(early.run(module))) return signalPassFailure();
     if (!mlir::frisk::firstLowering(module, &getContext()) ||
         !mlir::frisk::secondLowering(module, &getContext(), mlir::frisk::Target::ROCm))
       signalPassFailure();
@@ -80,6 +88,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
+  mlir::registerPass([] { return mlir::frisk::createLowerGPUShuffleToROCDLPass(); });
   mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });
   mlir::registerPass([] { return mlir::pipeline::createAutoPipelinePass(); });
   mlir::registerPass([] { return mlir::pipeline::createSimplifyLoopControlPass(); });

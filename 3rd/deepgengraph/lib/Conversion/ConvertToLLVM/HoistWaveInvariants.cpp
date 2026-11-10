@@ -1,37 +1,46 @@
 // ===========================================================================
-// Pass: HoistWaveInvariants（frisk-hoist-wave-invariants）   优化汇总.py 第 18 项，LLVM dialect 阶段，未实测
+// Pass: HoistWaveInvariants (frisk-hoist-wave-invariants).
 //
-// 作用：把循环里每轮重算、但在一个 wave 内其实不变的计算提到函数入口块。
+// 作用：把每轮重算的 LDS 基址和 lane 索引移到满足不变性条件的循环外。
 //   hoistBases         每条 DMA 的 LDS 基址（readfirstlane 链）。
 //   hoistShuffleSetup  mbcnt 的 lane 号和由它算出的 bpermute 索引。
 //
-// 运行时机：secondLowering 之后，翻译到 LLVM IR 之前。
+// 运行时机：DMA/shuffle 局部 lowering 之后、firstLowering 之前。
 //
 // 下游依赖：lowerWideAsyncDMAToBufferAsm 的 reuseLeaderRead 依赖这里提到入口的基址。
 // 下面是原文件头的合法性说明。
 // ===========================================================================
-// Hoist wave-invariant setup out of a uniform kernel loop on LLVM-dialect IR.
+// Hoist wave-invariant setup out of structured affine/scf loops. A legacy CFG
+// path remains available for already-lowered LLVM functions.
 //
-// Upstream LICM cannot do this. The loop is already a CFG here, and
-// rocdl.readfirstlane declares no memory effects, so it is treated as unknown.
+// Generic LICM does not prove execution-mask equivalence for readfirstlane,
+// whose missing memory-effect declaration also prevents ordinary CSE.
 //
 //   lds-bases:     the readfirstlane chain that selects a DMA's LDS wave base.
 //   lane-shuffles: the mbcnt lane ID and the bpermute index computed from it.
 //
-// readfirstlane depends on the execution mask, so moving it needs a proof that
-// the mask cannot change. Only a two-block loop directly after the entry block,
-// with a constant-start, constant-step counter against a constant bound, is
-// accepted. Uniform branches leave exec untouched, so the entry block and loop
-// body run under the same mask. Anything else is left unchanged.
+// readfirstlane depends on the execution mask. Structured loops must be in
+// provably block-uniform control flow; slices never cross a conditional region.
+// The legacy CFG path only accepts a two-block counted loop after entry.
+// Mbcnt with a fixed all-ones mask computes a physical lane ID; arbitrary mbcnt
+// operands must still pass the ordinary loop-invariance dependency checks.
 //
 // Lane-shuffle hoisting keeps the bpermute indices in VGPRs across the loop.
 // That trades a few registers for fewer ALU instructions per iteration, so it
 // has its own option for A/B measurement.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "mlir/Analysis/CFGLoopInfo.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/CSE.h"
 #include "llvm/ADT/SetVector.h"
@@ -42,18 +51,27 @@ using namespace mlir;
 
 namespace {
 bool isConstant(Value value) {
-  return value.getDefiningOp<LLVM::ConstantOp>() != nullptr;
+  return matchPattern(value, m_Constant());
 }
 
 // Side-effect free and unable to trap. Division needs a nonzero constant
 // divisor, because a zero-trip loop must not gain a trapping instruction.
-// 可外提的 op 白名单。这里包含 readfirstlane 和 mbcnt，它们依赖 exec，合法性由 isUniformCountedLoop 保证。
+// readfirstlane additionally requires the control-flow proof at the caller.
 bool isHoistablePure(Operation *op) {
-  if (isa<LLVM::UDivOp, LLVM::SDivOp, LLVM::URemOp, LLVM::SRemOp>(op)) {
-    auto divisor = op->getOperand(1).getDefiningOp<LLVM::ConstantOp>();
-    auto value = divisor ? dyn_cast<IntegerAttr>(divisor.getValue()) : IntegerAttr{};
-    return value && !value.getValue().isZero() && !value.getValue().isAllOnes();
+  if (isa<LLVM::UDivOp, LLVM::SDivOp, LLVM::URemOp, LLVM::SRemOp,
+          arith::DivUIOp, arith::DivSIOp, arith::RemUIOp, arith::RemSIOp>(op)) {
+    APInt divisor;
+    return matchPattern(op->getOperand(1), m_ConstantInt(&divisor)) &&
+           !divisor.isZero() && !divisor.isAllOnes();
   }
+  if (isa<arith::ConstantOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
+          arith::ShLIOp, arith::ShRUIOp, arith::ShRSIOp, arith::AndIOp,
+          arith::OrIOp, arith::XOrIOp, arith::ExtUIOp, arith::ExtSIOp,
+          arith::TruncIOp, arith::IndexCastOp, arith::IndexCastUIOp,
+          arith::CmpIOp, arith::SelectOp, affine::AffineApplyOp,
+          UnrealizedConversionCastOp, memref::CastOp, memref::SubViewOp,
+          memref::ReinterpretCastOp, gpu::ThreadIdOp, gpu::BlockIdOp>(op))
+    return true;
   return isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::ZeroOp, LLVM::AddOp, LLVM::SubOp, LLVM::MulOp,
              LLVM::ShlOp, LLVM::LShrOp, LLVM::AShrOp, LLVM::AndOp, LLVM::OrOp, LLVM::XOrOp,
              LLVM::ZExtOp, LLVM::SExtOp, LLVM::TruncOp, LLVM::PtrToIntOp, LLVM::IntToPtrOp,
@@ -108,6 +126,86 @@ void moveInOrder(Block *body, const llvm::SetVector<Operation *> &slice, Operati
     if (slice.contains(&op)) op.moveBefore(before);
 }
 
+// Reject induction/iter arguments, nested regions, memory reads, and partial
+// slices. Values defined outside the loop already dominate the insertion point.
+bool collectStructuredSlice(Value root, Operation *loop, Block *body,
+                            llvm::SetVector<Operation *> &slice) {
+  Operation *op = root.getDefiningOp();
+  if (!op) {
+    auto arg = cast<BlockArgument>(root);
+    Operation *owner = arg.getOwner()->getParentOp();
+    return owner != loop && !loop->isAncestor(owner);
+  }
+  if (!loop->isAncestor(op) || slice.contains(op)) return true;
+  if (op->getBlock() != body || !isHoistablePure(op)) return false;
+  for (Value operand : op->getOperands())
+    if (!collectStructuredSlice(operand, loop, body, slice)) return false;
+  slice.insert(op);
+  return true;
+}
+
+// Constant/lane-only setup can live at the very beginning of the entry block.
+// This also keeps setup icmp/select ahead of the late K0 prologue handoff.
+// No arguments, thread IDs, pointers, or readfirstlane may be pulled here.
+bool collectEntrySetup(Value value, Block *entry,
+                       llvm::SetVector<Operation *> &slice) {
+  Operation *op = value.getDefiningOp();
+  if (!op || op->getBlock() != entry) return false;
+  if (slice.contains(op)) return true;
+  if (!isConstant(value) &&
+      (!isHoistablePure(op) || op->getNumOperands() == 0 ||
+       isa<ROCDL::ReadfirstlaneOp>(op))) return false;
+  for (Value operand : op->getOperands())
+    if (!collectEntrySetup(operand, entry, slice)) return false;
+  slice.insert(op);
+  return true;
+}
+
+void moveEntryShuffleSetup(Block *entry) {
+  llvm::SetVector<Operation *> slice;
+  llvm::SmallPtrSet<Operation *, 16> derived;
+  for (Operation &op : *entry) {
+    bool seed = isa<ROCDL::MbcntLoOp, ROCDL::MbcntHiOp>(op);
+    if (op.getNumResults() != 1 ||
+        (!seed && !llvm::any_of(op.getOperands(), [&](Value v) {
+          return derived.contains(v.getDefiningOp());
+        }))) continue;
+    llvm::SetVector<Operation *> candidate;
+    if (!collectEntrySetup(op.getResult(0), entry, candidate)) continue;
+    derived.insert(&op);
+    slice.insert(candidate.begin(), candidate.end());
+  }
+  if (slice.empty()) return;
+  OpBuilder builder(entry, entry->begin());
+  Operation *anchor = builder.create<LLVM::UndefOp>(entry->front().getLoc(), builder.getI32Type());
+  moveInOrder(entry, slice, anchor);
+  anchor->erase();
+}
+
+unsigned mergeEntryReads(Operation *function, Block *entry) {
+  IRRewriter rewriter(function->getContext());
+  DominanceInfo dominance(function);
+  eliminateCommonSubExpressions(rewriter, dominance, function);
+  DenseMap<Value, Value> leaders;
+  unsigned merged = 0;
+  for (Operation &op : llvm::make_early_inc_range(*entry)) {
+    // Do not infer execution-mask equivalence across structured control flow
+    // or opaque calls. Reconverging normal loop/if regions are deliberately
+    // treated conservatively here.
+    if (op.getNumRegions() || isa<func::CallOp, LLVM::CallOp, LLVM::InlineAsmOp>(op))
+      leaders.clear();
+    auto read = dyn_cast<ROCDL::ReadfirstlaneOp>(op);
+    if (!read) continue;
+    auto [known, inserted] = leaders.try_emplace(read.getOperand(), read.getResult());
+    if (inserted) continue;
+    read.getResult().replaceAllUsesWith(known->second);
+    read.erase();
+    ++merged;
+  }
+  if (merged) eliminateCommonSubExpressions(rewriter, dominance, function);
+  return merged;
+}
+
 struct HoistWaveInvariantsPass
     : PassWrapper<HoistWaveInvariantsPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HoistWaveInvariantsPass)
@@ -125,7 +223,63 @@ struct HoistWaveInvariantsPass
     return "Hoist LDS wave bases and lane-shuffle setup out of uniform kernel loops";
   }
   void getDependentDialects(DialectRegistry &registry) const final {
-    registry.insert<LLVM::LLVMDialect, ROCDL::ROCDLDialect>();
+    registry.insert<LLVM::LLVMDialect, ROCDL::ROCDLDialect,
+                    affine::AffineDialect, arith::ArithDialect>();
+  }
+
+  void hoistStructured(func::FuncOp function) {
+    if (function.isExternal()) return;
+    unsigned bases = 0, setup = 0;
+    // Inner loops first: a chain may move across several uniform loop levels,
+    // but stops at the first induction-variable or control-flow dependency.
+    function.walk<WalkOrder::PostOrder>([&](Operation *loop) {
+      Block *body = nullptr;
+      if (auto affineLoop = dyn_cast<affine::AffineForOp>(loop))
+        body = affineLoop.getBody();
+      else if (auto scfLoop = dyn_cast<scf::ForOp>(loop))
+        body = scfLoop.getBody();
+      if (!body || !frisk::isInBlockUniformControlFlow(body->getTerminator())) return;
+      llvm::SetVector<Operation *> slice;
+      if (ldsBases) {
+        // Include copies in inner loops: their base may already have moved
+        // into this body during the preceding postorder visit.
+        SmallVector<ROCDL::GlobalLoadAsyncLDSOp> copies;
+        body->walk([&](ROCDL::GlobalLoadAsyncLDSOp copy) { copies.push_back(copy); });
+        for (auto copy : copies) {
+          auto pointer = copy.getLdsPtr().getDefiningOp<LLVM::IntToPtrOp>();
+          auto read = pointer ? pointer.getOperand().getDefiningOp<ROCDL::ReadfirstlaneOp>()
+                              : ROCDL::ReadfirstlaneOp{};
+          if (!read || read->getBlock() != body) continue;
+          llvm::SetVector<Operation *> candidate;
+          if (!collectStructuredSlice(pointer.getResult(), loop, body, candidate)) continue;
+          slice.insert(candidate.begin(), candidate.end());
+          ++bases;
+        }
+      }
+      if (laneShuffles) {
+        llvm::SmallPtrSet<Operation *, 16> derived;
+        for (Operation &op : *body) {
+          bool seed = isa<ROCDL::MbcntLoOp, ROCDL::MbcntHiOp>(op);
+          if (op.getNumResults() != 1 ||
+              (!seed && !llvm::any_of(op.getOperands(), [&](Value v) {
+                return derived.contains(v.getDefiningOp());
+              }))) continue;
+          llvm::SetVector<Operation *> candidate;
+          if (!collectStructuredSlice(op.getResult(0), loop, body, candidate)) continue;
+          derived.insert(&op);
+          slice.insert(candidate.begin(), candidate.end());
+          ++setup;
+        }
+      }
+      moveInOrder(body, slice, loop);
+    });
+    if (!bases && !setup) return;
+    Block *entry = &function.getBody().front();
+    if (laneShuffles) moveEntryShuffleSetup(entry);
+    unsigned merged = mergeEntryReads(function, entry);
+    llvm::errs() << "HoistWaveInvariants: " << function.getName() << ": " << bases
+                 << " LDS bases (" << merged << " merged), " << setup
+                 << " shuffle setup ops (structured)\n";
   }
 
   // 匹配 DMA 的 lds 指针 = inttoptr(readfirstlane(...))，把整条链移到 entry 末尾。
@@ -210,6 +364,7 @@ struct HoistWaveInvariantsPass
   }
 
   void runOnOperation() final {
+    getOperation().walk([&](func::FuncOp function) { hoistStructured(function); });
     getOperation().walk([&](LLVM::LLVMFuncOp function) {
       if (function.isExternal()) return;
       Block *entry = &function.getBody().front();

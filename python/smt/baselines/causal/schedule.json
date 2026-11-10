@@ -1,0 +1,505 @@
+{
+  "buffers": [
+    {
+      "id": 0,
+      "slots": 1
+    },
+    {
+      "id": 1,
+      "slots": 1
+    },
+    {
+      "id": 2,
+      "slots": 1
+    },
+    {
+      "id": 3,
+      "slots": 1
+    },
+    {
+      "id": 4,
+      "slots": 1
+    },
+    {
+      "id": 5,
+      "slots": 1
+    },
+    {
+      "id": 6,
+      "slots": 1
+    },
+    {
+      "id": 7,
+      "slots": 1
+    },
+    {
+      "id": 8,
+      "slots": 1
+    },
+    {
+      "id": 9,
+      "slots": 1
+    },
+    {
+      "id": 10,
+      "slots": 1
+    },
+    {
+      "id": 11,
+      "slots": 1
+    },
+    {
+      "id": 12,
+      "slots": 1
+    },
+    {
+      "id": 13,
+      "slots": 1
+    },
+    {
+      "id": 14,
+      "slots": 1
+    },
+    {
+      "id": 15,
+      "slots": 1
+    },
+    {
+      "id": 16,
+      "slots": 1
+    },
+    {
+      "id": 17,
+      "slots": 1
+    },
+    {
+      "id": 18,
+      "slots": 1
+    },
+    {
+      "id": 19,
+      "slots": 1
+    },
+    {
+      "id": 20,
+      "slots": 1
+    },
+    {
+      "id": 21,
+      "slots": 1
+    },
+    {
+      "id": 22,
+      "slots": 1
+    },
+    {
+      "id": 23,
+      "slots": 1
+    },
+    {
+      "id": 24,
+      "slots": 1
+    },
+    {
+      "id": 25,
+      "slots": 1
+    },
+    {
+      "id": 26,
+      "slots": 1
+    },
+    {
+      "id": 27,
+      "slots": 1
+    },
+    {
+      "id": 28,
+      "slots": 1
+    },
+    {
+      "id": 29,
+      "slots": 1
+    },
+    {
+      "id": 30,
+      "slots": 1
+    },
+    {
+      "id": 31,
+      "slots": 1
+    },
+    {
+      "id": 32,
+      "slots": 1
+    },
+    {
+      "id": 33,
+      "slots": 1
+    },
+    {
+      "id": 34,
+      "slots": 1
+    },
+    {
+      "id": 35,
+      "slots": 1
+    },
+    {
+      "id": 36,
+      "slots": 1
+    },
+    {
+      "id": 37,
+      "slots": 1
+    },
+    {
+      "id": 38,
+      "slots": 1
+    },
+    {
+      "id": 39,
+      "slots": 1
+    },
+    {
+      "id": 40,
+      "slots": 1
+    },
+    {
+      "id": 41,
+      "slots": 1
+    },
+    {
+      "id": 42,
+      "slots": 1
+    },
+    {
+      "id": 43,
+      "slots": 1
+    },
+    {
+      "id": 44,
+      "slots": 1
+    },
+    {
+      "id": 45,
+      "slots": 1
+    },
+    {
+      "id": 46,
+      "slots": 1
+    },
+    {
+      "id": 47,
+      "slots": 1
+    },
+    {
+      "id": 48,
+      "slots": 1
+    },
+    {
+      "id": 49,
+      "slots": 1
+    },
+    {
+      "id": 50,
+      "slots": 1
+    },
+    {
+      "id": 51,
+      "slots": 1
+    }
+  ],
+  "fingerprint": "dd545cb4576b7c3f81439d9f1220e34520957daf13d664bb54bd42be4e944594",
+  "loop_id": "Attn_p2:0",
+  "mode": "intra",
+  "operations": [
+    {
+      "id": 0,
+      "order": 0,
+      "stage": 0
+    },
+    {
+      "id": 1,
+      "order": 1,
+      "stage": 0
+    },
+    {
+      "id": 2,
+      "order": 2,
+      "stage": 0
+    },
+    {
+      "id": 3,
+      "order": 3,
+      "stage": 0
+    },
+    {
+      "id": 4,
+      "order": 4,
+      "stage": 0
+    },
+    {
+      "id": 5,
+      "order": 5,
+      "stage": 0
+    },
+    {
+      "id": 6,
+      "order": 6,
+      "stage": 0
+    },
+    {
+      "id": 7,
+      "order": 7,
+      "stage": 0
+    },
+    {
+      "id": 8,
+      "order": 8,
+      "stage": 0
+    },
+    {
+      "id": 9,
+      "order": 9,
+      "stage": 0
+    },
+    {
+      "id": 10,
+      "order": 10,
+      "stage": 0
+    },
+    {
+      "id": 11,
+      "order": 11,
+      "stage": 0
+    },
+    {
+      "id": 12,
+      "order": 12,
+      "stage": 0
+    },
+    {
+      "id": 13,
+      "order": 13,
+      "stage": 0
+    },
+    {
+      "id": 14,
+      "order": 14,
+      "stage": 0
+    },
+    {
+      "id": 15,
+      "order": 15,
+      "stage": 0
+    },
+    {
+      "id": 16,
+      "order": 16,
+      "stage": 0
+    },
+    {
+      "id": 17,
+      "order": 17,
+      "stage": 0
+    },
+    {
+      "id": 18,
+      "order": 18,
+      "stage": 0
+    },
+    {
+      "id": 19,
+      "order": 19,
+      "stage": 0
+    },
+    {
+      "id": 20,
+      "order": 20,
+      "stage": 0
+    },
+    {
+      "id": 21,
+      "order": 21,
+      "stage": 0
+    },
+    {
+      "id": 22,
+      "order": 22,
+      "stage": 0
+    },
+    {
+      "id": 23,
+      "order": 23,
+      "stage": 0
+    },
+    {
+      "id": 24,
+      "order": 24,
+      "stage": 0
+    },
+    {
+      "id": 25,
+      "order": 25,
+      "stage": 0
+    },
+    {
+      "id": 26,
+      "order": 26,
+      "stage": 0
+    },
+    {
+      "id": 27,
+      "order": 27,
+      "stage": 0
+    },
+    {
+      "id": 28,
+      "order": 28,
+      "stage": 0
+    },
+    {
+      "id": 29,
+      "order": 29,
+      "stage": 0
+    },
+    {
+      "id": 30,
+      "order": 30,
+      "stage": 0
+    },
+    {
+      "id": 31,
+      "order": 31,
+      "stage": 0
+    },
+    {
+      "id": 32,
+      "order": 32,
+      "stage": 0
+    },
+    {
+      "id": 33,
+      "order": 33,
+      "stage": 0
+    },
+    {
+      "id": 34,
+      "order": 34,
+      "stage": 0
+    },
+    {
+      "id": 35,
+      "order": 35,
+      "stage": 0
+    },
+    {
+      "id": 36,
+      "order": 36,
+      "stage": 0
+    },
+    {
+      "id": 37,
+      "order": 37,
+      "stage": 0
+    },
+    {
+      "id": 38,
+      "order": 38,
+      "stage": 0
+    },
+    {
+      "id": 39,
+      "order": 39,
+      "stage": 0
+    },
+    {
+      "id": 40,
+      "order": 40,
+      "stage": 0
+    },
+    {
+      "id": 41,
+      "order": 41,
+      "stage": 0
+    },
+    {
+      "id": 42,
+      "order": 42,
+      "stage": 0
+    },
+    {
+      "id": 43,
+      "order": 43,
+      "stage": 0
+    },
+    {
+      "id": 44,
+      "order": 44,
+      "stage": 0
+    },
+    {
+      "id": 45,
+      "order": 45,
+      "stage": 0
+    },
+    {
+      "id": 46,
+      "order": 46,
+      "stage": 0
+    },
+    {
+      "id": 47,
+      "order": 47,
+      "stage": 0
+    },
+    {
+      "id": 48,
+      "order": 48,
+      "stage": 0
+    },
+    {
+      "id": 49,
+      "order": 49,
+      "stage": 0
+    },
+    {
+      "id": 50,
+      "order": 50,
+      "stage": 0
+    },
+    {
+      "id": 51,
+      "order": 51,
+      "stage": 0
+    },
+    {
+      "id": 52,
+      "order": 52,
+      "stage": 0
+    },
+    {
+      "id": 53,
+      "order": 53,
+      "stage": 0
+    },
+    {
+      "id": 54,
+      "order": 54,
+      "stage": 0
+    },
+    {
+      "id": 55,
+      "order": 55,
+      "stage": 0
+    },
+    {
+      "id": 56,
+      "order": 56,
+      "stage": 0
+    }
+  ],
+  "schema": "deepgengraph.cpsat.schedule",
+  "status": "BASELINE",
+  "version": 1
+}

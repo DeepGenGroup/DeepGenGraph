@@ -18,6 +18,7 @@
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
+#include "deepgengraph/Pipeline/ScheduleJSON.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
@@ -475,6 +476,8 @@ void frisk::AppendNameToLoc(mlir::Operation* targetOp){
 }
 
 int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
+  pipeline::ScheduleJSONOptions cpsat;
+  bool cpsatStopAfter = false;
   // Named tuning options do not shift the historical positional interface.
   std::string swizzleOptions, workgroupOptions;
   bool canonicalizeLDS = false;
@@ -505,6 +508,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
+    if (option.consume_front("--cpsat-export=")) { cpsat.exportPath = option.str(); continue; }
+    if (option.consume_front("--cpsat-import=")) { cpsat.importPath = option.str(); continue; }
+    if (option.consume_front("--cpsat-baseline=")) { cpsat.baselinePath = option.str(); continue; }
+    if (option.consume_front("--cpsat-loop=")) { cpsat.loopSelector = option.str(); continue; }
+    if (option.consume_front("--cpsat-dump-ir=")) { cpsat.dumpIRPath = option.str(); continue; }
+    if (option.consume_front("--cpsat-stop-after=")) {
+      if (option != "0" && option != "1") { llvm::errs() << "use --cpsat-stop-after=0|1\n"; return 1; }
+      cpsatStopAfter = option == "1"; continue;
+    }
+    if (option.starts_with("--cpsat-")) { llvm::errs() << "unknown CP-SAT option: " << option << '\n'; return 1; }
     bool consumed = false;
     if (option.consume_front("--causal-mask=")) {
       if (option != "off" && option != "i32" && option != "finite") {
@@ -650,7 +663,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
-  StringRef copyMode = copyModeEnv ? copyModeEnv : "legacy";
+  // CP-SAT needs explicit block-level DMA tasks, before fragment lowering.
+  // An explicitly selected legacy/sync mode still retains its own semantics.
+  StringRef copyMode = copyModeEnv ? copyModeEnv : (cpsat.enabled() ? "async" : "legacy");
   StringRef dmaPackMode = argc > 16 ? argv[16] : "legacy";
   // gfx936's DTK rejects the wide HCU global-load intrinsic. Packed DMA
   // uses the hardware-validated buffer inline asm unless explicitly overridden.
@@ -681,6 +696,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   bool explicitTiles = qkTile || voTile;
   bool isPipelineSched = argc > 2 && StringRef(argv[2]) == "1";
+  if ((cpsat.enabled() && isPipelineSched) || (cpsatStopAfter && !cpsat.enabled())) {
+    llvm::errs() << "CP-SAT requires pipeline positional switch 0; stop-after needs export/import/baseline\n";
+    return 1;
+  }
   // Preserve the historical <input> <output.ll> spelling as well as the
   // numeric pipeline switch. Expose independent reorder A/B runs explicitly.
   const char *outputPath = argc > 3 ? argv[3] :
@@ -948,7 +967,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
 
   // A hint is the opt-in switch, independently of the older manual schedule.
-  {
+  if (!cpsat.enabled()) {
     PassManager pipelinePM(ctx.get());
     pipelinePM.addNestedPass<func::FuncOp>(mlir::pipeline::createAutoPipelinePass());
     if (failed(pipelinePM.run(*src)))
@@ -960,6 +979,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(frisk::createPromoteGemmMatrixLoadsPass(wmmaLayout.str()));
   llvm::outs() << "\n---------- after promote-gemm-matrix-loads ---------\n";
   llvm::outs().flush(); src->dump();
+
+  // The JSON contract describes Frisk Base operations, before fragment tiling.
+  // CP-SAT owns this scheduling region; do not pre-expand AutoPipeline above.
+  if (cpsat.enabled()) {
+    // Model the actual synchronous issue occupancy when sync was requested;
+    // otherwise the exported graph would promise nonexistent DMA overlap.
+    if (copyMode == "sync") AddFuncPass(frisk::createLowerFriskAsyncToSyncPass());
+    if (failed(pipeline::processScheduleJSON(*src, cpsat))) return 1;
+    llvm::outs() << "\n---------- after cpsat-schedule ---------\n";
+    llvm::outs().flush(); src->dump();
+    if (cpsatStopAfter) return 0;
+  }
 
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
@@ -1091,21 +1122,24 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---- after frisk-simplify-bounded-affine -----\n"; llvm::outs().flush(); src->dump();
   }
 
-  // mlir::affine::loopUnrollByFactor
-
-  mlir::ModuleOp mod = *src;
-  if (!frisk::firstLowering(mod, src->getContext()) ||
-      !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
-                            copyMode != "sync", coalesceWaits))
-    return 1;
-  llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush(); 
-  // Needs the CFG and the mbcnt/readfirstlane ops that lowering just created,
-  // and must precede LLVM translation, whose late passes rely on dominance only.
+  // Storage planning and scheduling are complete. Expose wave setup before
+  // firstLowering destroys affine loops; preserve all other high-level ops.
+  AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
+  AddPass(frisk::createLowerGPUShuffleToROCDLPass());
+  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+  AddPass(mlir::createCSEPass());
+  llvm::outs() << "\n---- after early wave lowering -----\n"; llvm::outs().flush(); src->dump();
   if (hoistLDSBases || hoistLaneShuffles) {
     AddPass(frisk::createHoistWaveInvariantsPass(hoistLDSBases, hoistLaneShuffles));
     AddPass(mlir::createCSEPass());
     llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
   }
+  mlir::ModuleOp mod = *src;
+  if (!frisk::firstLowering(mod, src->getContext()) ||
+      !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
+                            coalesceWaits))
+    return 1;
+  llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush();
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
   attachLLVMDebugScopes(mod, argv[1]);
   

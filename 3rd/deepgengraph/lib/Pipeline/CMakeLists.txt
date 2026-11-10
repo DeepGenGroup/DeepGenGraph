@@ -1,5 +1,6 @@
 add_deepgengraph_library(FriskPipeline
     PipelineSchedule.cpp
+    ScheduleJSON.cpp
     AutoPipeline.cpp
     SimplifyLoopControl.cpp
 
@@ -24,7 +25,12 @@ add_executable(FriskPipelineTest
     test/pipeline_schedule_test.cpp
 )
 
+add_executable(FriskScheduleJSONTest test/schedule_json_test.cpp)
+
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+target_link_libraries(FriskScheduleJSONTest PRIVATE
+    ${dialect_libs} MLIRRegisterAllDialects FriskPipeline FriskIR DeepgengraphIR
+    MLIRParser MLIRIR MLIRSupport LLVMSupport)
 
 target_link_libraries(FriskPipelineTest PRIVATE
     ${dialect_libs}

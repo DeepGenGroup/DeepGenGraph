@@ -409,7 +409,7 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
         if (first.getBase() != load.getBase() || first.getVectorType() != type)
           continue;
         OpBuilder b(first);
-        // difference = 第二条下标 - 第一条下标，必须恒等于 type 的元素数。证明分三层，从便宜到昂贵：
+        // difference = 第二条下标 - 第一条下标，必须恒等于 type 的元素数。（即两个vector.load 访问的[data1,data2] 在shm上连续，紧挨着）证明分三层，从便宜到昂贵：
         //   1. 化简后直接是常量。
         //   2. 唯一操作数是线程号时，枚举所有线程号（精确，不是采样）。
         //   3. 否则用 Presburger 约束证明差值不可能小于或大于目标值。

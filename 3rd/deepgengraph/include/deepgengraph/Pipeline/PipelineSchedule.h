@@ -22,6 +22,10 @@ struct PipelineScheduleOptions {
   /// Maximum number of copies a stage-crossing buffer is split into.  v1
   /// supports 2, i.e. plain double buffering.
   int64_t maxSlots = 2;
+
+  /// JSON planner mode: standard SSA iter_args/yields, all computation in the
+  /// final stage. The legacy FA3 mode uses destination-style vector updates.
+  bool ssaCarriers = false;
 };
 
 /// Rewrites the annotated `affine.for` of `func` into a software pipeline.

@@ -26,7 +26,7 @@ def run_pass(text, *flags):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'input.mlir'
         path.write_text(text)
-        result = subprocess.run([OPT_TOOL, *flags, path], text=True, capture_output=True)
+        result = subprocess.run([OPT_TOOL, *flags, '--verify-each', path], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr[-4000:]
     return result.stdout, result.stderr
 
@@ -191,6 +191,175 @@ class HoistWaveInvariants(unittest.TestCase):
         output, _ = run_pass(text, '--frisk-hoist-wave-invariants=lane-shuffles=false')
         _, loop, _ = blocks(output)
         self.assertIn('rocdl.readfirstlane', loop)
+
+
+EARLY_WAVE = '''module {
+func.func @kernel(%src: memref<256xi32, 1>, %dst: memref<256xi32, 3>,
+                  %out: memref<4xi32, 1>) attributes {thread_num = 128 : i32} {
+  %zero = arith.constant 0 : index
+  %offset = arith.constant 16 : i32
+  %width = arith.constant 64 : i32
+  affine.for %i = 0 to 4 {
+    %task = frisk.async_copy_gm_to_shm %src to %dst {alignment = 4 : i64}
+      : memref<256xi32, 1>, memref<256xi32, 3> -> !frisk.async_task
+    frisk.wait_buffer_ready %task : !frisk.async_task
+    %v = memref.load %dst[%zero] : memref<256xi32, 3>
+    %y, %valid = gpu.shuffle xor %v, %offset, %width : i32
+    memref.store %y, %out[%i] : memref<4xi32, 1>
+  }
+  return
+}
+}
+'''
+
+# Mixed dialect fixture independent of DMA planning. The target pointer is an
+# argument so tests can distinguish loop dependence from descriptor conversion.
+STRUCTURED_WAVE = '''func.func @kernel(%src: !llvm.ptr<1>, %n: index, %pred: i1) {{
+  %start = arith.constant 0 : index
+  %end = arith.constant 4 : index
+  %step = arith.constant 1 : index
+  %zero = arith.constant 0 : i32
+  %ones = arith.constant -1 : i32
+  %width = arith.constant 64 : i32
+  %offset = arith.constant 16 : i32
+  {prefix}
+  {loop} {{
+    {address}
+    %leader = rocdl.readfirstlane %address : i32
+    %pointer = llvm.inttoptr %leader : i32 to !llvm.ptr<3>
+    rocdl.global.load.async.lds %src, %pointer, 4, 0, 0 : !llvm.ptr<1>, !llvm.ptr<3>
+    %y, %valid = gpu.shuffle xor %leader, %offset, %width : i32
+    "test.use"(%y, %valid) : (i32, i1) -> ()
+  }}
+  {suffix}
+  return
+}}
+'''
+
+
+class StructuredWaveInvariants(unittest.TestCase):
+    def lower(self, source=EARLY_WAVE, options='', hoist=True):
+        flags = ['--allow-unregistered-dialect', '--frisk-lower-async-copy',
+                 '--frisk-lower-gpu-shuffle']
+        if hoist:
+            flags.append('--frisk-hoist-wave-invariants' + ('=' + options if options else ''))
+        return run_pass(source, *flags)
+
+    def fixture(self, loop='affine.for %i = 0 to 4',
+                address='%address = arith.constant 0 : i32', prefix='', suffix=''):
+        return STRUCTURED_WAVE.format(loop=loop, address=address, prefix=prefix, suffix=suffix)
+
+    def test_partial_lowering_preserves_affine_and_other_operations(self):
+        output, _ = self.lower(hoist=False)
+        self.assertIn('func.func @kernel', output)
+        self.assertIn('affine.for', output)
+        for op in ('rocdl.readfirstlane', 'rocdl.mbcnt.lo', 'rocdl.ds_bpermute',
+                   'rocdl.global.load.async.lds', 'memref.load', 'memref.store', 'gpu.barrier'):
+            self.assertIn(op, output)
+        self.assertNotIn('gpu.shuffle', output)
+
+    def test_hoists_mixed_descriptor_and_lane_chains(self):
+        output, log = self.lower()
+        entry, loop = output.split('affine.for', 1)
+        for op in ('rocdl.readfirstlane', 'rocdl.mbcnt.lo', 'rocdl.mbcnt.hi', 'llvm.shl'):
+            self.assertIn(op, entry)
+            self.assertNotIn(op, loop)
+        for op in ('rocdl.global.load.async.lds', 'rocdl.ds_bpermute', 'memref.load', 'memref.store'):
+            self.assertIn(op, loop)
+        self.assertIn('(structured)', log)
+
+    def test_scf_uniform_dynamic_bound_and_options(self):
+        source = self.fixture(loop='scf.for %i = %start to %n step %step')
+        for options, bases, shuffles in [('', True, True), ('lds-bases=false', False, True),
+                                         ('lane-shuffles=false', True, False)]:
+            with self.subTest(options=options):
+                entry, loop = self.lower(source, options)[0].split('scf.for', 1)
+                for op, moved in [('rocdl.readfirstlane', bases), ('rocdl.mbcnt.lo', shuffles)]:
+                    self.assertEqual(op in entry, moved)
+                    self.assertEqual(op in loop, not moved)
+
+    def test_refuses_induction_dependent_base(self):
+        source = self.fixture(address='%address = arith.index_cast %i : index to i32')
+        entry, loop = self.lower(source)[0].split('affine.for', 1)
+        self.assertNotIn('rocdl.readfirstlane', entry)
+        self.assertIn('rocdl.readfirstlane', loop)
+        self.assertIn('rocdl.mbcnt.lo', entry)
+
+    def test_refuses_loop_carried_base_and_memory_read(self):
+        carried = self.fixture(
+            loop='%r = scf.for %i = %start to %end step %step '
+                 'iter_args(%carry = %zero) -> (i32)',
+            address='%address = arith.addi %carry, %offset : i32').replace(
+                '"test.use"(%y, %valid) : (i32, i1) -> ()',
+                '"test.use"(%y, %valid) : (i32, i1) -> ()\n'
+                '    scf.yield %address : i32')
+        loaded = self.fixture(address='%address = llvm.load %src : !llvm.ptr<1> -> i32')
+        for source, marker in [(carried, 'scf.for'), (loaded, 'affine.for')]:
+            with self.subTest(marker=marker):
+                entry, loop = self.lower(source)[0].split(marker, 1)
+                self.assertNotIn('rocdl.readfirstlane', entry)
+                self.assertIn('rocdl.readfirstlane', loop)
+
+    def test_refuses_divergent_loop_and_conditional_scope(self):
+        sources = [self.fixture(prefix='%tid = gpu.thread_id x',
+                                loop='scf.for %i = %start to %tid step %step'),
+                   self.fixture(prefix='scf.if %pred {', suffix='}')]
+        for source in sources:
+            with self.subTest(source=source):
+                output, log = self.lower(source)
+                prefix, loop = output.split('scf.', 1)
+                self.assertNotIn('rocdl.readfirstlane', prefix)
+                self.assertNotIn('rocdl.mbcnt.lo', prefix)
+                self.assertIn('rocdl.readfirstlane', loop)
+                self.assertNotIn('(structured)', log)
+
+    def test_nested_uniform_loops_hoist_to_outer_preheader(self):
+        source = self.fixture(prefix='affine.for %outer = 0 to 3 {', suffix='}')
+        entry, loops = self.lower(source)[0].split('affine.for', 1)
+        self.assertIn('rocdl.readfirstlane', entry)
+        self.assertIn('rocdl.mbcnt.lo', entry)
+        self.assertNotIn('rocdl.readfirstlane', loops)
+        self.assertNotIn('rocdl.mbcnt.lo', loops)
+
+    def test_rejects_unsafe_division_in_zero_trip_loop(self):
+        for divisor in (0, -1):
+            source = self.fixture(loop='affine.for %i = 0 to 0',
+                address=f'%divisor = arith.constant {divisor} : i32\n'
+                        '%address = arith.divsi %offset, %divisor : i32')
+            entry, loop = self.lower(source)[0].split('affine.for', 1)
+            self.assertNotIn('rocdl.readfirstlane', entry)
+            self.assertIn('rocdl.readfirstlane', loop)
+
+    def test_mbcnt_with_varying_operand_stays_in_loop(self):
+        source = self.fixture().replace(
+            '%y, %valid = gpu.shuffle xor %leader, %offset, %width : i32',
+            '%varying = arith.index_cast %i : index to i32\n'
+            '%y = rocdl.mbcnt.lo %ones, %varying : (i32, i32) -> i32\n'
+            '%valid = arith.constant true')
+        entry, loop = self.lower(source)[0].split('affine.for', 1)
+        self.assertNotIn('rocdl.mbcnt.lo', entry)
+        self.assertIn('rocdl.mbcnt.lo', loop)
+
+    def test_idempotent_and_complete_llvm_pipeline(self):
+        early, _ = self.lower()
+        repeated, log = run_pass(early, '--frisk-hoist-wave-invariants')
+        self.assertEqual(repeated, early)
+        self.assertNotIn('(structured)', log)
+        llvm_bin = LLVM_OPT.parent
+        for sync in (False, True):
+            with self.subTest(sync=sync):
+                flags = ['--frisk-lower-async-copy=use-async-copy=false'] if sync else []
+                lowered, _ = run_pass(EARLY_WAVE, *flags, '--test-async-to-llvm')
+                self.assertNotIn('unrealized_conversion_cast', lowered)
+                self.assertNotIn('affine.for', lowered)
+                self.assertNotIn('gpu.shuffle', lowered)
+                self.assertEqual('rocdl.global.load.async.lds' in lowered, not sync)
+                translated = subprocess.run([llvm_bin / 'mlir-translate', '--mlir-to-llvmir'],
+                                            input=lowered, text=True, capture_output=True)
+                self.assertEqual(translated.returncode, 0, translated.stderr)
+                verified = subprocess.run([LLVM_OPT, '-passes=default<O3>,verify', '-disable-output'],
+                                         input=translated.stdout, text=True, capture_output=True)
+                self.assertEqual(verified.returncode, 0, verified.stderr)
 
 
 class ElideBackedgeBarrier(unittest.TestCase):

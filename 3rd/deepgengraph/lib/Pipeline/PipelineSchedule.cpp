@@ -975,6 +975,14 @@ LogicalResult PipelineScheduler::build() {
     // 寄存器完成的，SSA 值本身不变，所以直接转发——和原循环 affine.yield
     // %arg5, %arg6 的写法一致
     SmallVector<Value> yielded(args.take_front(originalCarriers));
+    if (options.ssaCarriers) {
+      // The last emitted statement may belong to the next tile; a direct
+      // yield of the induction variable still denotes the current tile.
+      map.map(loop.getInductionVar(), iv);
+      yielded.clear();
+      for (Value value : loop.getBody()->getTerminator()->getOperands())
+        yielded.push_back(map.lookupOrDefault(value));
+    }
     llvm::append_range(yielded, advanceTasks());
     nb.create<affine::AffineYieldOp>(bodyLoc, yielded);
   };
@@ -1016,12 +1024,15 @@ LogicalResult PipelineScheduler::build() {
                   newLoop.getResults(), /*dropLoopCarriedWrites=*/true, Value(),
                   map, &epilogueWritten, &slotHandles);
   }
+  if (options.ssaCarriers)
+    map.map(loop.getInductionVar(), ubMinusStep);
   // 取出第一个 iter_arg 的 epilogue 结果，类型不符时补 copy_to_reg
   auto it = epilogueWritten.find(loop.getRegionIterArgs()[0]);
-  if (it == epilogueWritten.end())
+  if (!options.ssaCarriers && it == epilogueWritten.end())
     return loop.emitError()
            << "the epilogue does not update the first loop carried value";
-  Value epilogueResult = it->second;
+  Value epilogueResult = options.ssaCarriers
+      ? map.lookupOrDefault(loop.getBody()->getTerminator()->getOperand(0)) : it->second;
   Type want = loop.getRegionIterArgs()[0].getType();
   if (epilogueResult.getType() != want) {
     if (!isa<MemRefType>(epilogueResult.getType()) || !isa<VectorType>(want))
@@ -1044,8 +1055,9 @@ LogicalResult PipelineScheduler::build() {
   // 结果 #0（acc）用 epilogue 的结果，其余用新循环的结果。这就是「epilogue 收尾 O」的落地
   for (auto [index, result] : llvm::enumerate(loop.getResults())) {
     (void)result;
-    replacements.push_back(index == 0 ? epilogueResult
-                                      : newLoop.getResult(index));
+    replacements.push_back(options.ssaCarriers
+        ? map.lookupOrDefault(loop.getBody()->getTerminator()->getOperand(index))
+        : index == 0 ? epilogueResult : newLoop.getResult(index));
   }
   for (auto [index, result] : llvm::enumerate(loop.getResults()))
     result.replaceAllUsesWith(replacements[index]);

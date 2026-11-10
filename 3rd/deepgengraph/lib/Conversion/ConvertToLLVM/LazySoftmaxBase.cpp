@@ -538,6 +538,10 @@ void apply(Plan &p, float threshold) {
   // LoopInfo 在切块后就过期了，join 和 slow 都不在它的块集合里，所以先记下来再补上。
   SmallPtrSet<BasicBlock *, 8> inLoop(p.loop->block_begin(), p.loop->block_end());
   BasicBlock *join = p.split->splitBasicBlock(p.splitAt, "lazy.join");
+  // A Base schedule may place the rescale in the latch itself. Splitting it
+  // moves the backedge into join and updates the header PHIs accordingly.
+  if (p.latch == p.split)
+    p.latch = join;
   inLoop.insert(join);
   BasicBlock *slow = BasicBlock::Create(ctx, "lazy.slow", p.split->getParent(), join);
   Value *first = nullptr, *take = nullptr;
