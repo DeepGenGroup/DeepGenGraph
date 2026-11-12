@@ -1,202 +1,219 @@
 #!/usr/bin/env python3
-"""Mask bypass legality, fallbacks, idempotence and native CPU edge cases."""
-import argparse
+"""ThreadIR mask bypass: vector view DAGs, multiple users, FP/SSA guards and CPU execution."""
 import ctypes
-import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
-
-def scalar(name, flags="", attrs="", left=False, extra="", score="%score"):
-    operands = f"%m, {score}" if left else f"{score}, %m"
-    return f"""define float @{name}(float %score, float %mask, i1 %visible, ptr %out) {attrs} {{
-entry:
-  br i1 %visible, label %clear, label %masked
-clear:
-  br label %join
-masked:
-  br label %join
-join:
-  %m = phi float [ 0.0, %clear ], [ %mask, %masked ]
-{extra}  %result = fadd {flags}float {operands}
-  ret float %result
-}}
-"""
+TOOL = Path(sys.argv[1]).resolve()
+LLVM = Path(os.environ.get('LLVM_BIN', '/data2/xsl/install/bin'))
+V = 'vector<4xf32>'
 
 
-def aggregate(name, width, poison=False):
-    # Different shapes from the attention fixture, two consumers of a common
-    # aggregate mask, plus an empty join-to-consumer block.
-    ty = f"[2 x <{width} x float>]"
-    indices = "<i32 0, i32 poison>" if poison else "<i32 0, i32 1>"
-    return f"""define <2 x float> @{name}(<2 x float> %score, {ty} %mask, i1 %visible) {{
-entry:
-  br i1 %visible, label %clear, label %masked
-clear:
-  br label %join
-masked:
-  br label %join
-join:
-  %m = phi {ty} [ zeroinitializer, %clear ], [ %mask, %masked ]
-  br label %use
-use:
-  %a = extractvalue {ty} %m, 0
-  %b = extractvalue {ty} %m, 1
-  %av = shufflevector <{width} x float> %a, <{width} x float> poison, <2 x i32> {indices}
-  %bv = shufflevector <{width} x float> %b, <{width} x float> poison, <2 x i32> <i32 0, i32 1>
-  %x = fadd nsz <2 x float> %score, %av
-  %y = fadd nsz <2 x float> %bv, %score
-  %z = fmul <2 x float> %x, %y
-  ret <2 x float> %z
-}}
-"""
+def fixture(name, source='branch', view='direct', left=False, clear='0.0',
+            attrs='', extra='', escape=False, late=False, invert=False):
+    declarations = f'%zero = arith.constant dense<{clear}> : {V}\n'
+    if view == 'multi':
+        declarations += f'%otherScore = arith.mulf %score, %score : {V}\n'
+    if source == 'branch':
+        yes, no = ('%mask', '%zero') if invert else ('%zero', '%mask')
+        root = f'%m = scf.if %condition -> ({V}) {{ scf.yield {yes} : {V} }} else {{ scf.yield {no} : {V} }}'
+    else:
+        condition = '%condition'
+        if source == 'vector':
+            declarations += '%predicate = vector.broadcast %condition : i1 to vector<4xi1>\n'
+            declarations += '%alternating = arith.constant dense<[true, false, true, false]> : vector<4xi1>\n'
+            declarations += '%conditions = arith.xori %predicate, %alternating : vector<4xi1>\n'
+            condition = '%conditions'
+        yes, no = ('%mask', '%zero') if invert else ('%zero', '%mask')
+        types = f'vector<4xi1>, {V}' if source == 'vector' else V
+        root = f'%m = arith.select {condition}, {yes}, {no} : {types}'
+    value, score, result_type = '%m', '%score', V
+    views = ''
+    if view == 'shuffle':
+        views = f'%view = vector.shuffle %m, %zero [2, 4, 1, 0] : {V}, {V}\n'
+        value = '%view'
+    elif view == 'extract':
+        views = f'%shaped = vector.shape_cast %m : {V} to vector<2x2xf32>\n'
+        views += '%view = vector.extract %shaped[1] : vector<2xf32> from vector<2x2xf32>\n'
+        declarations += '%smallscore = vector.broadcast %scalar : f32 to vector<2xf32>\n'
+        value, score, result_type = '%view', '%smallscore', 'vector<2xf32>'
+    elif view == 'transpose':
+        views = f'%shaped = vector.shape_cast %m : {V} to vector<2x2xf32>\n'
+        views += '%transposed = vector.transpose %shaped, [1, 0] : vector<2x2xf32> to vector<2x2xf32>\n'
+        views += '%view = vector.shape_cast %transposed : vector<2x2xf32> to vector<4xf32>\n'
+        value = '%view'
+    elif view == 'pack':
+        for lane in range(4):
+            views += f'%e{lane} = vector.extract %m[{lane}] : f32 from {V}\n'
+        views += f'%view = vector.from_elements %e2, %e0, %e3, %e1 : {V}\n'
+        value = '%view'
+    elif view == 'slice':
+        views = f'%view = vector.extract_strided_slice %m offsets = [1], sizes = [2], strides = [1] : {V} to vector<2xf32>\n'
+        declarations += '%smallscore = vector.broadcast %scalar : f32 to vector<2xf32>\n'
+        value, score, result_type = '%view', '%smallscore', 'vector<2xf32>'
+    elif view == 'dynamic':
+        views = f'%view = vector.extract %m[%index] : f32 from {V}\n'
+        value, score, result_type = '%view', '%scalar', 'f32'
+    elif view == 'poison':
+        declarations += f'%poison = ub.poison : {V}\n'
+        views = f'%view = vector.shuffle %m, %poison [0, 4, 1, 5] : {V}, {V}\n'
+        value = '%view'
+    if late:
+        extra += f'%late = arith.mulf {score}, {score} : {result_type}\n'
+        score = '%late'
+    operands = (value, score) if left else (score, value)
+    add = f'%sum = arith.addf {operands[0]}, {operands[1]} : {result_type}\n'
+    if escape:
+        # Return the mask as well: the entire candidate must remain untouched.
+        ret = f'return %sum, %m : {result_type}, {V}'
+        ret_type = f'({result_type}, {V})'
+    elif view == 'multi':
+        add += f'%other = arith.addf %m, %otherScore : {V}\n'
+        ret = f'return %sum, %other : {V}, {V}'
+        ret_type = f'({V}, {V})'
+    else:
+        ret, ret_type = f'return %sum : {result_type}', result_type
+    return f'''func.func @{name}(%score: {V}, %mask: {V}, %scalar: f32,
+          %condition: i1, %index: index) -> {ret_type} attributes {{{attrs}}} {{
+        {declarations}
+        {root}
+        {views}
+        {extra}
+        {add}
+        {ret}
+    }}'''
 
 
-def body(module, name):
-    return re.search(r"define [^\n]+@" + name + r"\([^\n]*\).*?\n}", module, re.S)[0]
+def execute_cpu(tmp, run):
+    # Run compiled output for per-lane select masks and structured masks, with
+    # both zero arms and both addition orders. Expose scalar/raw-bit C ABIs.
+    variants = [(source, view, lhs, invert) for source in ('branch', 'scalar', 'vector')
+                for view in ('direct', 'shuffle', 'extract', 'transpose', 'slice', 'pack')
+                for lhs in (False, True) for invert in (False, True)]
+    functions = []
+    for i, (source, view, lhs, invert) in enumerate(variants):
+        text = fixture(f'case{i}', source, view, lhs, invert=invert)
+        text = re.sub(r'func.func @case\d+\(.*?attributes \{\} \{',
+            f'''func.func @case{i}(%bits: i32, %maskbits: i32, %condition: i1, %index: index) -> i32 {{
+              %scalar = arith.bitcast %bits : i32 to f32
+              %masked = arith.bitcast %maskbits : i32 to f32
+              %score = vector.broadcast %scalar : f32 to {V}
+              %mask = vector.broadcast %masked : f32 to {V}''', text, count=1, flags=re.S)
+        result_type = 'vector<2xf32>' if view in ('extract', 'slice') else V
+        text = text.replace(f'return %sum : {result_type}',
+            f'%selected = vector.extract %sum[%index] : f32 from {result_type}\n'
+            '%out = arith.bitcast %selected : f32 to i32\nreturn %out : i32')
+        functions.append(text)
+    module = 'module {\n' + '\n'.join(functions) + '\n}'
+    objects = []
+    for mode in ('off', 'approx'):
+        source = re.sub(r'@case(\d+)', rf'@case\1_{mode}', module)
+        native, log = run(source, ['--frisk-bypass-mask-adds=mode=' + mode])
+        if mode == 'approx':
+            assert native.count('frisk.mask_add_bypass') == len(variants), log
+        path, lowered, ll, obj = [tmp / (mode + ext) for ext in ('.mlir', '.llvm.mlir', '.ll', '.o')]
+        path.write_text(native)
+        def command(args):
+            p = subprocess.run(list(map(str, args)), capture_output=True, text=True, timeout=120)
+            assert p.returncode == 0, p.stderr[-6000:]
+        command([LLVM/'mlir-opt', path, '--lower-affine', '--convert-scf-to-cf',
+                 '--convert-vector-to-llvm', '--convert-arith-to-llvm', '--convert-func-to-llvm',
+                 '--convert-cf-to-llvm', '--convert-ub-to-llvm', '--reconcile-unrealized-casts', '-o', lowered])
+        command([LLVM/'mlir-translate', lowered, '--mlir-to-llvmir', '-o', ll])
+        command([LLVM/'opt', '-passes=default<O3>,verify', ll, '-disable-output'])
+        command([LLVM/'llc', '-filetype=obj', '-relocation-model=pic', ll, '-o', obj])
+        objects.append(obj)
+    library = tmp/'masks.so'
+    command(['cc', '-shared', *objects, '-o', library])
+    lib = ctypes.CDLL(str(library))
+    edge = [0, 0x80000000, 1, 0x80000001, 0x7f800000, 0xff800000,
+            0x7fc12345, 0x7fa12345, 0x3f800000, 0xbf800000, 0x7f7fffff]
+    nan = lambda v: (v & 0x7f800000) == 0x7f800000 and bool(v & 0x7fffff)
+    comparisons = 0
+    for i, (_, view, _, _) in enumerate(variants):
+        before, after = [getattr(lib, f'case{i}_{mode}') for mode in ('off', 'approx')]
+        for fn in (before, after):
+            fn.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint64]
+            fn.restype = ctypes.c_uint32
+        for score in edge:
+            for mask in edge:
+                for condition in (False, True):
+                    for lane in range(2 if view in ('extract', 'slice') else 4):
+                        a, b = [fn(score, mask, condition, lane) for fn in (before, after)]
+                        assert a == b or (nan(a) and nan(b)) or (
+                            (a & 0x7fffffff) == 0 and (b & 0x7fffffff) == 0), (
+                            variants[i], hex(score), hex(mask), condition, lane, hex(a), hex(b))
+                        comparisons += 1
+    print('PASS', comparisons, 'native CPU comparisons of scalar/vector selects, branches and lane views', flush=True)
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("tool", type=Path)
-    p.add_argument("--llvm", type=Path, default=Path("/data2/xsl/install/bin"))
-    p.add_argument("--output", type=Path)
-    a = p.parse_args()
-    a.tool = a.tool.resolve()
-    declarations = ("declare float @llvm.experimental.constrained.fadd.f32(float, float, metadata, metadata)\n"
-                    "declare float @llvm.fabs.f32(float)\n")
-    cases = {
-        "plain": scalar("plain"),
-        "nsz": scalar("nsz", "nsz "),
-        "lhs": scalar("lhs", "nsz ", left=True),
-        "strict": scalar("strict", "nsz ", "strictfp"),
-        "optnone": scalar("optnone", "nsz ", "noinline optnone"),
-        "multi_use": scalar("multi_use", "nsz ", extra="  store float %m, ptr %out\n"),
-        "late_score": scalar("late_score", "nsz ", extra="  %late = fmul float %score, 2.0\n", score="%late"),
-        "nonzero": scalar("nonzero", "nsz ").replace("[ 0.0, %clear ]", "[ 1.0, %clear ]"),
-        "aggregate4": aggregate("aggregate4", 4),
-        "aggregate8": aggregate("aggregate8", 8),
-        "poison": aggregate("poison", 4, poison=True),
-        "constrained": scalar("constrained").replace("fadd float %score, %m", "call float @llvm.experimental.constrained.fadd.f32(float %score, float %m, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")"),
-        "loop": """define float @loop(float %score, float %mask, i1 %again) {
-entry:
-  br label %join
-join:
-  %m = phi float [ 0.0, %entry ], [ %mask, %latch ]
-  %r = fadd nsz float %score, %m
-  br i1 %again, label %latch, label %exit
-latch:
-  br label %join
-exit:
-  ret float %r
-}
-""",
-    }
-    # A masked predecessor with another exit must not receive a sunk add.
-    cases["other_exit"] = scalar("other_exit", "nsz ").replace(
-        "masked:\n  br label %join", "masked:\n  br i1 %visible, label %join, label %exit").replace(
-        "  ret float %result\n}", "  ret float %result\nexit:\n  ret float %score\n}")
-    cases["double"] = scalar("double", "nsz ").replace("float", "double")
-    cases["half"] = scalar("half", "nsz ").replace("float", "half")
-    cases["known_positive"] = scalar("known_positive", score="%positive").replace(
-        "entry:\n", "entry:\n  %positive = call float @llvm.fabs.f32(float %score)\n")
-    cases["dynamic_index"] = """define float @dynamic_index(float %score, <4 x float> %mask, i1 %visible, i32 %index) {
-entry:
-  br i1 %visible, label %clear, label %masked
-clear:
-  br label %join
-masked:
-  br label %join
-join:
-  %m = phi <4 x float> [ zeroinitializer, %clear ], [ %mask, %masked ]
-  %element = extractelement <4 x float> %m, i32 %index
-  %result = fadd nsz float %score, %element
-  ret float %result
-}
-"""
-    source = declarations + "\n".join(cases.values())
-    expected_legal = {"nsz", "lhs", "aggregate4", "aggregate8", "double", "half", "known_positive"}
-    outputs = {}
-    with tempfile.TemporaryDirectory() as directory:
-        directory = Path(directory)
-        src = directory / "input.ll"
-        src.write_text(source)
-
-        def run(mode, path):
-            result = subprocess.run([str(a.tool), "--mask-add-bypass=" + mode, str(path)],
-                                    capture_output=True, text=True, check=True)
-            return result.stdout
-
-        original = run("off", src)
-        for mode in ("off", "legal", "approx"):
-            out = run(mode, src)
-            expected = set() if mode == "off" else expected_legal | ({"plain"} if mode == "approx" else set())
-            for name in cases:
-                fn = body(out, name)
-                transformed = ".masked = fadd" in fn
-                assert transformed == (name in expected), (mode, name, fn)
-                if name not in expected:
-                    assert fn == body(original, name), (mode, name, "fallback changed")
-                else:
-                    # No floating additions on the clear branch; aggregate
-                    # extraction and shuffles must remain in the masked arm.
-                    assert "fadd" not in fn.split("clear:", 1)[1].split("masked:", 1)[0]
-                    assert not re.search(r"phi .*zeroinitializer", fn), (mode, name)
-            path = directory / (mode + ".ll")
-            path.write_text(out)
-            again = run(mode, path)
-            # Ignore only LLVM's path-derived ModuleID comment.
-            clean = lambda s: re.sub(r"^; ModuleID.*\n", "", s)
-            assert clean(out) == clean(again), (mode, "not idempotent")
-            subprocess.run([str(a.llvm / "opt"), "-passes=default<O3>,verify", str(path),
-                            "-disable-output"], check=True)
-            outputs[mode] = out
-            print("PASS", mode, "transformed", sorted(expected), flush=True)
-
-        # Execute unoptimized and transformed scalar slices on native CPU,
-        # passing raw FP bits to preserve signed zero, subnormals and NaNs.
-        functions = []
-        for prefix, text in (("before", original), ("after", outputs["approx"])):
-            for name in ("plain", "nsz", "lhs"):
-                renamed = prefix + "_" + name
-                functions.append(body(text, name).replace("@" + name + "(", "@" + renamed + "("))
-                functions.append(f"""define i32 @{renamed}_bits(i32 %s, i32 %m, i1 %visible) {{
-  %sf = bitcast i32 %s to float
-  %mf = bitcast i32 %m to float
-  %r = call float @{renamed}(float %sf, float %mf, i1 %visible, ptr null)
-  %bits = bitcast float %r to i32
-  ret i32 %bits
-}}""")
-        path = directory / "execute.ll"
-        path.write_text("\n".join(functions))
-        obj, library = directory / "execute.o", directory / "execute.so"
-        subprocess.run([str(a.llvm / "llc"), "-filetype=obj", "-relocation-model=pic", str(path), "-o", str(obj)], check=True)
-        subprocess.run(["cc", "-shared", str(obj), "-o", str(library)], check=True)
-        lib = ctypes.CDLL(str(library))
-        edge = [0, 0x80000000, 1, 0x80000001, 0x7f800000, 0xff800000,
-                0x7fc12345, 0x3f800000, 0xbf800000, 0x7f7fffff]
-        comparisons = 0
-        for name in ("plain", "nsz", "lhs"):
-            before, after = [getattr(lib, prefix + "_" + name + "_bits") for prefix in ("before", "after")]
-            for fn in (before, after):
-                fn.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_bool]
-                fn.restype = ctypes.c_uint32
-            for s in edge:
-                for m in edge:
-                    for visible in (False, True):
-                        x, y = before(s, m, visible), after(s, m, visible)
-                        nan = lambda v: (v & 0x7f800000) == 0x7f800000 and bool(v & 0x7fffff)
-                        assert x == y or (nan(x) and nan(y)) or (
-                            visible and (x & 0x7fffffff) == 0 and (y & 0x7fffffff) == 0), (name, s, m, visible, hex(x), hex(y))
-                        comparisons += 1
-        print("PASS", comparisons, "native CPU FP edge comparisons", flush=True)
-    report = {"cases": len(cases), "modes": ["off", "legal", "approx"],
-              "cpu_comparisons": comparisons, "o3_verified": True, "idempotent": True}
-    if a.output:
-        a.output.write_text(json.dumps(report, indent=2) + "\n")
+    cases = {}
+    for source in ('branch', 'scalar', 'vector'):
+        for view in ('direct', 'shuffle', 'extract', 'transpose', 'slice', 'pack', 'multi'):
+            for invert in (False, True):
+                name = f'{source}_{view}_{int(invert)}'
+                cases[name] = (fixture(name, source, view, invert=invert), True)
+    # Static score views after the mask may be duplicated; score arithmetic
+    # or loads may not. Preserve original branch effects when adding yields.
+    score_view = fixture('score_view', view='extract')
+    score_view = score_view.replace('%smallscore = vector.broadcast %scalar : f32 to vector<2xf32>\n', '')
+    score_view = score_view.replace('%sum =',
+        '%smallscore = vector.extract_strided_slice %score offsets = [0], sizes = [2], strides = [1] : vector<4xf32> to vector<2xf32>\n%sum =')
+    cases['score_view'] = (score_view, True)
+    effects = fixture('branch_effects').replace('scf.yield %zero',
+        'func.call @touch() : () -> ()\nscf.yield %zero').replace('scf.yield %mask',
+        'func.call @touch() : () -> ()\nscf.yield %mask')
+    cases['branch_effects'] = ('func.func private @touch()\n' + effects, True)
+    for element in ('f16', 'f64'):
+        cases[element] = (fixture(element).replace('f32', element), True)
+    for name, options in {
+        'escape': dict(escape=True), 'late_score': dict(late=True),
+        'barrier': dict(extra='gpu.barrier\n'), 'dynamic': dict(view='dynamic'),
+        'poison': dict(view='poison'), 'nonzero': dict(clear='1.0'),
+        'negative_zero': dict(clear='-0.0'), 'strict': dict(attrs='strictfp'),
+        'llvm_strict': dict(attrs='llvm.strictfp'), 'optnone': dict(attrs='optnone'),
+        'llvm_optnone': dict(attrs='llvm.optnone'),
+        'passthrough': dict(attrs='passthrough = ["strictfp"]'),
+        'denormals': dict(attrs='passthrough = [["denormal-fp-math", "preserve-sign"]]'),
+    }.items():
+        cases[name] = (fixture(name, **options), False)
+    with tempfile.TemporaryDirectory(prefix='thread-mask-add-bypass-') as directory:
+        tmp = Path(directory)
+        src, out = tmp/'input.mlir', tmp/'out.mlir'
+        def run(text, passes, ok=True):
+            src.write_text(text)
+            p = subprocess.run([str(TOOL), str(src), *passes, '--verify-each', '-o', str(out)],
+                               capture_output=True, text=True, timeout=120)
+            assert (p.returncode == 0) == ok, p.stderr[-8000:]
+            return (out.read_text() if ok else ''), p.stderr
+        for name, (source, expected) in cases.items():
+            original, _ = run('module {\n' + source + '\n}', [])
+            disabled, _ = run(original, ['--frisk-bypass-mask-adds=mode=off'])
+            assert disabled == original, name
+            result, log = run(original, ['--frisk-bypass-mask-adds'])
+            assert ('frisk.mask_add_bypass' in result) == expected, (name, log, result)
+            if not expected: assert result == original, (name, 'fallback changed IR')
+            else:
+                assert 'fastmath' not in result, name
+                assert ('scf.if' in result) == (name.startswith('branch_') or name in ('score_view', 'f16', 'f64')), name
+                if name == 'branch_effects':
+                    assert result.count('call @touch') == 2
+                if '_multi_' in name:
+                    assert '2 additions bypassed' in log, log
+            parsed, _ = run(result, [])
+            repeated, _ = run(result, ['--frisk-bypass-mask-adds'])
+            assert parsed == repeated, (name, 'not idempotent')
+            print('PASS', name, flush=True)
+        for mode in ('legal', 'invalid'):
+            _, error = run('module {func.func @f() {return}}', ['--frisk-bypass-mask-adds=mode=' + mode], False)
+            assert 'legal mode has been removed' in error
+        execute_cpu(tmp, run)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -577,13 +577,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     }
     if (consumed) continue;
     if (option.consume_front("--mask-add-bypass=")) {
-      if (option != "off" && option != "legal" && option != "approx") {
-        llvm::errs() << "mask-add-bypass must be off, legal, or approx\n";
+      if (option != "off" && option != "approx") {
+        llvm::errs() << "mask-add-bypass must be off or approx; legal mode has been removed\n";
         return 1;
       }
       maskAddBypass = option;
     } else if (option.starts_with("--mask-add-bypass")) {
-      llvm::errs() << "use --mask-add-bypass=off|legal|approx\n";
+      llvm::errs() << "use --mask-add-bypass=off|approx\n";
       return 1;
     } else if (option.consume_front("--retain-fragment-words=")) {
       if (option.getAsInteger(10, retainFragmentWords)) {
@@ -736,7 +736,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   if (maskAddBypass == "approx" && mathMode != "approx") {
-    llvm::errs() << "mask-add-bypass=approx requires math=approx; use legal for strict math\n";
+    llvm::errs() << "mask-add-bypass=approx requires math=approx; use off for strict math\n";
     return 1;
   }
   bool optimizeLifetimes = argc < 12 || StringRef(argv[11]) == "1";
@@ -1146,6 +1146,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // Static vector lanes and register SSA are exposed; keep mask branches
+  // structured and finish bypass before any LLVM dialect conversion.
+  if (maskAddBypass == "approx") {
+    AddFuncPass(frisk::createThreadMaskAddBypassPass());
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-bypass-mask-adds -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1187,9 +1197,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (mathMode != "strict")
     frisk::fuseMMACAccumulators(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");
-  if (maskAddBypass != "off")
-    frisk::bypassMaskAdds(*llvmModule, maskAddBypass == "approx");
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "bypassMaskAdds");
   if (localReduce != "off")
     frisk::optimizeLocalReductions(*llvmModule, localReductionOptions);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeLocalReductions");

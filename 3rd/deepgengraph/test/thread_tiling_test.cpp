@@ -109,6 +109,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createApproximateThreadMathPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadMaskAddBypassPass(); });
+  mlir::registerPass([] { return mlir::frisk::createIRDeepOptimizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerGPUShuffleToROCDLPass(); });
   mlir::registerPass([] { return mlir::pipeline::createPipelineSchedulePass(); });

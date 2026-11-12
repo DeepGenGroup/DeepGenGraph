@@ -45,6 +45,14 @@ def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
   let dependentDialects = ["mlir::arith::ArithDialect", "mlir::vector::VectorDialect"];
 }
 
+def ThreadMaskAddBypass: Pass<"frisk-bypass-mask-adds", "func::FuncOp"> {
+  let summary = "Bypass zero-mask additions in thread SSA before LLVM lowering";
+  let constructor = "mlir::frisk::createThreadMaskAddBypassPass()";
+  let options = [Option<"mode", "mode", "std::string", "\"approx\"",
+      "off or approx; approx explicitly permits signed-zero differences in matched mask additions">];
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::vector::VectorDialect", "mlir::scf::SCFDialect"];
+}
+
 def ApproximateThreadMath: Pass<"frisk-approximate-thread-math", "func::FuncOp"> {
   let summary = "Share FP32 reciprocals in thread IR (explicit approximate mode only)";
   let constructor = "mlir::frisk::createApproximateThreadMathPass()";

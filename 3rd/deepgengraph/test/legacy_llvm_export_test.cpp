@@ -62,7 +62,6 @@ int main(int argc, char **argv) {
   bool lazySoftmaxBase = false, lazySoftmaxBaseSpecified = false;
   bool softmaxCvtPack = false, softmaxCvtPackSpecified = false;
   float lazyBaseThreshold = 8.0f;
-  llvm::StringRef maskAddBypass;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
   llvm::StringRef deferLaneSum;
@@ -125,14 +124,8 @@ int main(int argc, char **argv) {
       return 1;
     }
     if (consumed) continue;
-    if (option.consume_front("--mask-add-bypass=")) {
-      if (option != "off" && option != "legal" && option != "approx") {
-        llvm::errs() << "mask-add-bypass must be off, legal, or approx\n";
-        return 1;
-      }
-      maskAddBypass = option;
-    } else if (option.starts_with("--mask-add-bypass")) {
-      llvm::errs() << "use --mask-add-bypass=off|legal|approx\n";
+    if (option.starts_with("--mask-add-bypass")) {
+      llvm::errs() << "mask-add-bypass moved to ThreadIR; use MyTest --mask-add-bypass=off|approx or ThreadTilingTest --frisk-bypass-mask-adds\n";
       return 1;
     } else if (option.consume_front("--frag-prefetch=")) {
       if (option != "0" && option != "1") {
@@ -160,9 +153,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (softmaxFragmentsSpecified || !maskAddBypass.empty() || !localReduce.empty() || !deferLaneSum.empty() || pvInterleaveSpecified || vDoubleBufferSpecified || kDMASpecified || kLDSPrefetchSpecified || kTailPrefetchSpecified || crossBNK0Specified || lazySoftmaxBaseSpecified || softmaxCvtPackSpecified) {
+  if (softmaxFragmentsSpecified || !localReduce.empty() || !deferLaneSum.empty() || pvInterleaveSpecified || vDoubleBufferSpecified || kDMASpecified || kLDSPrefetchSpecified || kTailPrefetchSpecified || crossBNK0Specified || lazySoftmaxBaseSpecified || softmaxCvtPackSpecified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--mask-add-bypass=off|legal|approx] [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--lazy-softmax-base=off|<threshold>] [--softmax-fragments=off|fragment|pv] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--lazy-softmax-base=off|<threshold>] [--softmax-fragments=off|fragment|pv] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -172,8 +165,6 @@ int main(int argc, char **argv) {
       diagnostic.print(argv[0], llvm::errs());
       return 1;
     }
-    if (!maskAddBypass.empty() && maskAddBypass != "off")
-      mlir::frisk::bypassMaskAdds(*module, maskAddBypass == "approx");
     if (!localReduce.empty() && localReduce != "off")
       mlir::frisk::optimizeLocalReductions(*module, localReductionOptions);
     if (!deferLaneSum.empty() && deferLaneSum != "off")

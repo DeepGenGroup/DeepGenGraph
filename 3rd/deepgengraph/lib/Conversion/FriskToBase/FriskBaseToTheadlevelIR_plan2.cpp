@@ -2743,8 +2743,10 @@ class MaskOpTiling : public OpConversionPattern<frisk::MaskOp> {
   bool uniformMasks, fuseMaskAdd;
   std::string causalMask;
 public:
-  MaskOpTiling(MLIRContext *context, bool uniformMasks, bool fuseMaskAdd, StringRef causalMask)
-      : OpConversionPattern(context), uniformMasks(uniformMasks), fuseMaskAdd(fuseMaskAdd), causalMask(causalMask.str()) {}
+  MaskOpTiling(MLIRContext *context, bool uniformMasks, bool fuseMaskAdd,
+               StringRef causalMask)
+      : OpConversionPattern(context), uniformMasks(uniformMasks), fuseMaskAdd(fuseMaskAdd),
+        causalMask(causalMask.str()) {}
 
   LogicalResult
   matchAndRewrite(frisk::MaskOp op, OpAdaptor adaptor,
