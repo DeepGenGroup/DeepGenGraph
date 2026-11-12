@@ -1,5 +1,6 @@
 // ===========================================================================
-// Pass: optimizeApproximateRegisterMath   优化汇总.py 第 19 项，LLVM 阶段，math=approx
+// Legacy LLVM-only compatibility for LegacyLLVMExportTest.
+// MyTest performs reciprocal sharing in frisk-approximate-thread-math.
 //
 // 作用：
 //   1. 先调用 fuseMMACAccumulators（第 25 项的函数，这里是第一次运行）。

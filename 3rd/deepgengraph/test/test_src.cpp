@@ -1135,6 +1135,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---- after frisk-simplify-bounded-affine -----\n"; llvm::outs().flush(); src->dump();
   }
 
+  // Register vectors and repeated denominators are exposed after unrolling.
+  // Perform approximate division here, before any LLVM dialect conversion.
+  if (mathMode == "approx" || mathMode == "mmac-recip") {
+    AddPass(mlir::createCSEPass());
+    AddFuncPass(frisk::createApproximateThreadMathPass());
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-approximate-thread-math -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1171,11 +1182,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   llvmModule->setSourceFileName(argv[1]);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
-  if (mathMode == "approx")
-    frisk::optimizeApproximateRegisterMath(*llvmModule);
-  else if (mathMode == "mmac-exp2" || mathMode == "mmac-recip")
-    frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-recip");
-  else if (mathMode == "mmac")
+  // Approximate division is complete in thread IR; native exp2 is selected
+  // by MLIR lowering. Keep the independent legacy MMAC fusion fallback.
+  if (mathMode != "strict")
     frisk::fuseMMACAccumulators(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");
   if (maskAddBypass != "off")

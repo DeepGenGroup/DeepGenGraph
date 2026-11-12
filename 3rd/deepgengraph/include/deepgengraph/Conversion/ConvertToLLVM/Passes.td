@@ -45,4 +45,10 @@ def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
   let dependentDialects = ["mlir::arith::ArithDialect", "mlir::vector::VectorDialect"];
 }
 
+def ApproximateThreadMath: Pass<"frisk-approximate-thread-math", "func::FuncOp"> {
+  let summary = "Share FP32 reciprocals in thread IR (explicit approximate mode only)";
+  let constructor = "mlir::frisk::createApproximateThreadMathPass()";
+  let dependentDialects = ["mlir::arith::ArithDialect"];
+}
+
 #endif // THREADIR_TO_LLVM_CONVERSION_PASSES
