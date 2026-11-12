@@ -639,16 +639,16 @@ public:
       auto regCTy = VectorType::get(regCShape, typeC.getElementType());
       auto tempVecTy =
           VectorType::get(regC_singleInstShape, typeC.getElementType());
-      auto regCInit = rewriter.create<arith::ConstantOp>(
-          op->getLoc(), regCTy,
-          mlir::cast<TypedAttr>(rewriter.getZeroAttr(regCTy)));
+      auto regCInit = requireGemmLocalVector(adaptor.getAcc(), "acc", op, rewriter);
+      if (failed(regCInit) || (*regCInit).getType() != regCTy)
+        return rewriter.notifyMatchFailure(op, "accumulator thread tile type mismatch");
 
       // A fragment contains thread_creg * warp_repeat elements. Its position
       // in the packed thread tile is static even though its LDS address depends
       // on the lane. Enumerate MN here, retaining the K reduction as a loop.
       int mnLoopCount = br0 * br1 * wiu0 * wiu1;
       int kLoopCount = kloopCount * kWarpInstUnroll;
-      Value regC = regCInit;
+      Value regC = *regCInit;
       SmallVector<Operation *, 2> materializedCastsToErase;
       for (int mn = 0; mn < mnLoopCount; ++mn) {
         int tmp = mn;
@@ -663,9 +663,12 @@ public:
         Value cBr0 = createIndexConstant(rewriter, op->getLoc(), repeat0);
         Value cBr1 = createIndexConstant(rewriter, op->getLoc(), repeat1);
 
-        auto tempVecInit = rewriter.create<arith::ConstantOp>(
-            op->getLoc(), tempVecTy,
-            mlir::cast<TypedAttr>(rewriter.getZeroAttr(tempVecTy)));
+        SmallVector<int64_t, 2> offsets{
+            (repeat0 * wiu0 + iu0) * regC_singleInstShape[0],
+            (repeat1 * wiu1 + iu1) * regC_singleInstShape[1]};
+        auto tempVecInit = rewriter.create<vector::ExtractStridedSliceOp>(
+            op->getLoc(), *regCInit, offsets, regC_singleInstShape,
+            SmallVector<int64_t, 2>{1, 1});
         auto kFor = rewriter.create<affine::AffineForOp>(
             op->getLoc(), 0, kLoopCount, 1, ValueRange{tempVecInit.getResult()});
         kFor->setAttr("iterLabel", rewriter.getStringAttr("k"));
@@ -748,10 +751,6 @@ public:
         rewriter.create<affine::AffineYieldOp>(op->getLoc(), wmma.getResult());
 
         rewriter.setInsertionPointAfter(kFor);
-
-        SmallVector<int64_t, 2> offsets{
-            (repeat0 * wiu0 + iu0) * regC_singleInstShape[0],
-            (repeat1 * wiu1 + iu1) * regC_singleInstShape[1]};
         auto insert = rewriter.create<vector::InsertStridedSliceOp>(
             op->getLoc(), kFor.getResult(0), regC, offsets,
             SmallVector<int64_t, 2>{1, 1});

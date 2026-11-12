@@ -78,7 +78,15 @@ fragment 为 `vector<1x4xf32>`；PV 的 `vector<2x32xf32>` 包含 16 个片段�
 `GemmOpConversion` 在编译期枚举 `block_repeat` 和 `warpInstUnroll` 的 MN
 坐标。每维的静态切片起点是 `(br * instUnroll + iu) * fragmentShape`。
 这与 `buildThreadTileOffsetMap` 的线程内坐标一致，不改变带 lane ID 的 LDS 映射。
-每个片段仍有独立、零初始化的 K 累加循环。
+每个片段有独立的 K 累加循环，初值从 `frisk.gemm(A, B, acc)` 的 `acc` 中提取。
+`acc` 与结果类型相同，表示 `C = A @ B + acc`；纯乘积显式传入 `frisk.zero`。
+plan2 的 typed fragment 与 vector 路径也使用同一约定。
+
+显式 accumulator 的 GEMM 直接生成三输入 MMA，不需要下面的融合 pass。
+上游 `PreciseDot` 仍表示零初值乘积；`FriskOpFusePass` 在允许重结合时融合其转换后的
+GEMM + Add。其余独立的 `Add` 不能在严格浮点模式下
+自动变成非零初值 GEMM，因为这会改变求和顺序。因此保留 `FuseFragmentAccumulator`
+处理独立加法，并保留非 strict 模式的 `FuseMMACAccumulator` 作为旧表达式的优化。
 
 完整 thread lowering 后，先 canonicalize 恒等提取循环，再执行
 `createFuseFragmentAccumulatorPass()`。它匹配带 `frisk.mma_fragment` 标记的

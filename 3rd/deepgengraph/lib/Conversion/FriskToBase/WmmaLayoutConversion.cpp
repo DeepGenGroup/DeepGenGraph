@@ -114,10 +114,13 @@ void annotateWmmaLayoutConversion(ConvertLayoutOp op, const LowerInfo &from,
   if (!from.mmaInst)
     return;
   const auto &c = from.mmaInst->desc_c;
-  if (from.get_thread_widths() != c.thread_creg ||
-      from.get_warp_repeat() != c.warp_repeat ||
-      from.get_warp_layout() != c.warp_layout ||
-      from.base_layout.warp_layout_order != c.warp_layout_order)
+  auto nativeC = [&](const LowerInfo &layout) {
+    return layout.get_thread_widths() == c.thread_creg &&
+           layout.get_warp_repeat() == c.warp_repeat &&
+           layout.get_warp_layout() == c.warp_layout &&
+           layout.base_layout.warp_layout_order == c.warp_layout_order;
+  };
+  if (!nativeC(from) && !nativeC(to))
     return;
   op->setAttr("frisk.layout_role", b.getStringAttr("wmmaC"));
   NamedAttrList inst;
@@ -157,6 +160,15 @@ DictionaryAttr getWmmaShufflePlan(ConvertLayoutOp op) {
       !inst.getAs<StringAttr>("name"))
     return {};
   int64_t rows = lanes[0], group = lanes[1];
+  // Transposing the lane/register square is an involution. Normalize the
+  // proof to native -> contiguous; the same shuffle serves an acc seed in
+  // the reverse direction without allocating shared scratch.
+  if (pair(src, "thread_widths", {1, group}) &&
+      pair(src, "warp_repeat", {1, 1}) &&
+      pair(dst, "thread_widths", {1, 1}) &&
+      pair(dst, "warp_repeat", {1, group}))
+    std::swap(src, dst);
+
   if (rows <= 0 || group <= 1 || rows > 64 || group > 64 ||
       !llvm::isPowerOf2_64(rows) || !llvm::isPowerOf2_64(group) ||
       rows * group != 64 || shape[0] != rows ||

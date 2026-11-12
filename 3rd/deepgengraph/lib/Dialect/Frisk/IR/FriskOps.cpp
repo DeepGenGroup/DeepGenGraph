@@ -1580,22 +1580,25 @@ void WarpGroupOp::print(OpAsmPrinter &printer) {
 // -- GemmOp --
 //===----------------------------------------------------------------------===//
 LogicalResult GemmOp::verify() {
-  auto AType = dyn_cast<MemRefType>(getA().getType());
-  auto BType = dyn_cast<MemRefType>(getB().getType());
-  auto CType = dyn_cast<MemRefType>(getC().getType());
-  // 基础类型检查
-  if (AType.getElementType() != BType.getElementType()) {
-      return emitOpError("A and B operands must have the same element type");
-  }
-  // 维度兼容性检查
-  if (AType.getDimSize(1) != BType.getDimSize(0)) {
-      return emitOpError("A columns must equal B rows for matrix multiplication");
-  }
-  // 输出维度检查
-  if (AType.getDimSize(0) != CType.getDimSize(0) ||
-      BType.getDimSize(1) != CType.getDimSize(1)) {
-      return emitOpError("C dimensions must match matrix multiplication result");
-  }
+  auto a = dyn_cast<ShapedType>(getA().getType());
+  auto b = dyn_cast<ShapedType>(getB().getType());
+  auto c = dyn_cast<ShapedType>(getC().getType());
+  if (!a || !b || !c || !a.hasRank() || !b.hasRank() || !c.hasRank() ||
+      a.getRank() != 2 || b.getRank() != 2 || c.getRank() != 2)
+    return emitOpError("A, B and C must be rank-two shaped values");
+  if (getAcc().getType() != getC().getType())
+    return emitOpError("accumulator type must match result type");
+  if (a.getElementType() != b.getElementType())
+    return emitOpError("A and B operands must have the same element type");
+  auto compatible = [](int64_t x, int64_t y) {
+    return ShapedType::isDynamic(x) || ShapedType::isDynamic(y) || x == y;
+  };
+  if (!compatible(a.getDimSize(getTransA() ? 0 : 1),
+                  b.getDimSize(getTransB() ? 1 : 0)))
+    return emitOpError("A columns must equal B rows after transpose");
+  if (!compatible(a.getDimSize(getTransA() ? 1 : 0), c.getDimSize(0)) ||
+      !compatible(b.getDimSize(getTransB() ? 0 : 1), c.getDimSize(1)))
+    return emitOpError("C dimensions must match matrix multiplication result");
   return success();
 }
 
@@ -1730,6 +1733,7 @@ LogicalResult GemmOp::inferLayout(OpBuilder &builder,
   updated |= layoutMap.try_emplace(getA(), layoutA).second;
   updated |= layoutMap.try_emplace(getB(), layoutB).second;
   updated |= layoutMap.try_emplace(getC(), layoutC).second;
+  updated |= layoutMap.try_emplace(getAcc(), layoutC).second;
   return success(updated);
   #else
   return success();

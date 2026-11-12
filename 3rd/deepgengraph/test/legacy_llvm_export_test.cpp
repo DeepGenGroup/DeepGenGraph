@@ -11,12 +11,37 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/NarrowKDMA.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+
+// Compatibility for old .ll experiments only. Production exp2 selection happens
+// in MLIR lowering, before translation to LLVM IR.
+static void replaceLegacyExp2(llvm::Module &module) {
+  for (llvm::Function &function : module) {
+    if (function.isDeclaration() || function.hasFnAttribute(llvm::Attribute::StrictFP) ||
+        function.hasFnAttribute(llvm::Attribute::OptimizeNone)) continue;
+    for (llvm::BasicBlock &block : function)
+      for (llvm::Instruction &inst : llvm::make_early_inc_range(block)) {
+        auto *call = llvm::dyn_cast<llvm::CallInst>(&inst);
+        if (!call) continue;
+        auto *callee = call->getCalledFunction();
+        if (!callee || callee->getName() != "__ocml_exp2_f32" ||
+            call->arg_size() != 1 || !call->getType()->isFloatTy() ||
+            call->getNumOperandBundles()) continue;
+        llvm::IRBuilder<> b(call);
+        auto *native = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, llvm::Intrinsic::amdgcn_exp2, {b.getFloatTy()});
+        call->replaceAllUsesWith(b.CreateCall(native, {call->getArgOperand(0)}));
+        call->eraseFromParent();
+      }
+  }
+}
 
 int main(int argc, char **argv) {
   mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off;
@@ -220,6 +245,8 @@ int main(int argc, char **argv) {
     return 0;
   }
   mlir::frisk::prepareRegisterMMAForLLVM(*module);
+  if (approximate || nativeExp2)
+    replaceLegacyExp2(*module);
   if (ldsGeps)
     mlir::frisk::canonicalizeLDSGEPs(*module);
   else if (approximate)
@@ -229,7 +256,7 @@ int main(int argc, char **argv) {
   else if (lifetimes)
     mlir::frisk::optimizeRegisterLifetimes(*module);
   else if (nativeExp2 || reciprocal)
-    mlir::frisk::optimizeRegisterMath(*module, nativeExp2, reciprocal);
+    mlir::frisk::optimizeRegisterMath(*module, reciprocal);
   else if (prefetch)
     mlir::frisk::prefetchGlobalPackets(*module);
   else if (ldsReuse)

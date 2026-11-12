@@ -1,6 +1,9 @@
 // ===========================================================================
 // Pass: FuseFragmentAccumulator（fuse-fragment-accumulator）   优化汇总.py 第 7 项，fragment 阶段
 //
+// 显式 frisk.gemm(A, B, acc) 已直接携带 MMA 初值，不依赖本 pass。
+// 本 pass 仍优化独立的 gemm(A, B, zero) + old，保持原浮点运算顺序。
+//
 // 作用：
 //   把“先算完整个 part tile，再用一个循环逐 fragment 加到 S 上”合并成一个循环，每算完一个
 //   fragment 立刻加。part 不用整块保存，中间结果生命周期更短。

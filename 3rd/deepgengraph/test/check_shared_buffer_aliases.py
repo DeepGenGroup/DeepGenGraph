@@ -132,7 +132,7 @@ def main():
     scf.yield %other : {ty}
   }}
   %selected = arith.select %choose, %branch, %other : {ty}
-  %c = frisk.gemm''').replace("gemm(%a, %b)", "gemm(%a, %selected)")
+  %c = frisk.gemm''').replace("gemm(%a, %b, %c_init)", "gemm(%a, %selected, %c_init)")
             path, out = work/"gemm.mlir", work/"gemm.out.mlir"
             path.write_text(src)
             run([TOOL, path, "--convert-friskbase-to-thread", "--finalize-thread-tiling",
@@ -147,7 +147,7 @@ def main():
     %next = arith.select %choose, %slot, %other : {ty}
     scf.yield %next : {ty}
   }}
-  %c = frisk.gemm''').replace("gemm(%a, %selected)", "gemm(%a, %carried)")
+  %c = frisk.gemm''').replace("gemm(%a, %selected, %c_init)", "gemm(%a, %carried, %c_init)")
             path.write_text(carried)
             run([TOOL, path, "--convert-friskbase-to-thread", "--finalize-thread-tiling",
                  "--pack-shared-memory", "--verify-each", "-o", out])
@@ -158,12 +158,14 @@ def main():
         # destination's consumers must not force an extra FP32 layout scratch.
         a, p, c = "memref<32x32xf16, 3>", "memref<32x64xf16, 3>", "memref<32x64xf32>"
         src = f'''func.func @computed(%choose: i1, %a: {a}, %b: {p}, %rhs: memref<64x32xf16, 3>, %out: memref<32x32xf32, 1>) attributes {{thread_num = 64 : i32}} {{
-  %value = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {p} -> {c}
+  %value_init = frisk.zero : {c}
+  %value = frisk.gemm(%a, %b, %value_init) {{transA = false, transB = false}} : {a}, {p}, {c} -> {c}
   %first = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {p}
   %second = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {p}
   %selected = arith.select %choose, %first, %second : {p}
   frisk.copy %value to %selected [affine_map<() -> (2)>] : {c}, {p}
-  %r = frisk.gemm(%selected, %rhs) {{transA = false, transB = false}} : {p}, memref<64x32xf16, 3> -> memref<32x32xf32>
+  %r_init = frisk.zero : memref<32x32xf32>
+  %r = frisk.gemm(%selected, %rhs, %r_init) {{transA = false, transB = false}} : {p}, memref<64x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
   frisk.copy %r to %out [affine_map<() -> (2)>] : memref<32x32xf32>, memref<32x32xf32, 1>
   return
 }}'''

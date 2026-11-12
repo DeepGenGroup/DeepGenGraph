@@ -587,15 +587,46 @@ struct ReadMatrixFromShmLowering
   }
 };
 
-// 将上述 3 个重写加到这个pass中
+// Registered only for explicitly approximate exp2 modes. The existing ROCDL
+// scalarization pattern handles vectors before this scalar pattern is retried.
+// Higher benefit wins over the default OCML call pattern for f32 only.
+struct NativeExp2Lowering : ConvertOpToLLVMPattern<math::Exp2Op> {
+  explicit NativeExp2Lowering(const LLVMTypeConverter &converter)
+      : ConvertOpToLLVMPattern(converter, /*benefit=*/2) {}
+
+  LogicalResult matchAndRewrite(math::Exp2Op op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (!op.getType().isF32())
+      return rewriter.notifyMatchFailure(op, "native exp2 requires scalar f32");
+    // Preserve the exclusions of the former LLVM call-replacement pass.
+    if (auto function = op->getParentOfType<LLVM::LLVMFuncOp>()) {
+      if (function.getOptimizeNone())
+        return failure();
+      if (auto attrs = function.getPassthrough())
+        for (Attribute attr : *attrs) {
+          if (auto pair = dyn_cast<ArrayAttr>(attr))
+            if (!pair.empty()) attr = pair[0];
+          if (auto name = dyn_cast<StringAttr>(attr))
+            if (name.getValue() == "strictfp" || name.getValue() == "optnone")
+              return failure();
+        }
+    }
+    rewriter.replaceOpWithNewOp<ROCDL::ROCDLExp2>(
+        op, adaptor.getOperand().getType(), adaptor.getOperand());
+    return success();
+  }
+};
+
+// 将上述重写加到这个pass中
 struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(GPUToROCDLOrNVVMPass)
 
-  explicit GPUToROCDLOrNVVMPass(Target target_, unsigned indexBitwidth_) : 
-                                target(target_), indexBitwidth(indexBitwidth_) {};
+  explicit GPUToROCDLOrNVVMPass(Target target_, unsigned indexBitwidth_, bool nativeExp2_) :
+      target(target_), indexBitwidth(indexBitwidth_), nativeExp2(nativeExp2_) {};
   private:
     Target target;
     unsigned indexBitwidth;
+    bool nativeExp2;
     StringRef amdgcnDataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32"
     "-p7:160:256:256:32-p8:128:128-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:"
@@ -634,6 +665,8 @@ struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, Operation
       patterns.add<GPUShuffleOpToROCDLLowering>(typeConverter, &getContext());
       patterns.add<GPUBarrierToROCDLLowering>(&getContext());
       populateMathToROCDLConversionPatterns(typeConverter, patterns, std::nullopt);  // exp仅支持fp64/16
+      if (nativeExp2)
+        patterns.add<NativeExp2Lowering>(typeConverter);
     } else if (target == Target::CUDA) {
       // populateGpuToNVVMConversionPatterns(typeConverter, patterns, 10);
       patterns.add<GPUIndexIntrinsicOpLowering<gpu::BlockIdOp, NVVM::BlockIdXOp, 
@@ -707,8 +740,9 @@ namespace mlir::frisk {
     return std::make_unique<AmendAllocaOpAddrSpacePass>(target);
   }
   
-  std::unique_ptr<Pass> createGPUToROCDLOrNVVMPass(Target target, unsigned indexBitwidth) {
-    return std::make_unique<GPUToROCDLOrNVVMPass>(target, indexBitwidth);
+  std::unique_ptr<Pass> createGPUToROCDLOrNVVMPass(Target target, unsigned indexBitwidth,
+                                               bool nativeExp2) {
+    return std::make_unique<GPUToROCDLOrNVVMPass>(target, indexBitwidth, nativeExp2);
   }
   
   std::unique_ptr<OperationPass<ModuleOp>> createLLVMFuncOpAddGPUAttrPass(Target target) {

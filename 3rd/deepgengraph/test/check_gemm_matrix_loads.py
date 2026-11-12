@@ -30,7 +30,8 @@ def fixture(k=32, n=64, element='f16', threads=128, owned=False):
     return f'''func.func @gemm(%a: {a}, %{'input' if owned else 'b'}: {arg}, %out: {output})
         attributes {{thread_num = {threads} : i32}} {{
       {setup}
-      %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+      %g_init = frisk.zero : {c}
+      %g = frisk.gemm(%a, %b, %g_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
       frisk.copy %g to %out [affine_map<() -> (2)>] : {c}, {output}
       return
     }}'''
@@ -171,7 +172,7 @@ def main():
     print('PASS f16/f32, multi-tile B, 1/2/4 waves, idempotence and LLVM export')
 
     for source in (fixture(n=16, threads=64), fixture(k=4, element='f32', threads=64),
-                   fixture().replace('transB = false', 'transB = true')):
+                   fixture(n=32).replace('transB = false', 'transB = true')):
         selected = lower(source, '--frisk-promote-gemm-matrix-loads')
         assert 'frisk.read_matrix_from_shm' not in selected
     print('PASS unsupported shape, instruction K and transposed-B fallbacks')
@@ -196,7 +197,7 @@ def main():
         for mode, expected in (('b-permute', [False, True]), ('shuffle', [True, True])):
             selected = lower(source, '--frisk-promote-gemm-matrix-loads=wmma-layout=' + mode)
             reads = set(re.findall(r'(%\w+) = frisk.read_matrix_from_shm', selected))
-            operands = re.findall(r'frisk.gemm\(%\w+, (%\w+)\)', selected)
+            operands = re.findall(r'frisk.gemm\(%\w+, (%\w+), %\w+\)', selected)
             assert [operand in reads for operand in operands] == expected, selected
             assert lower(selected, '--frisk-promote-gemm-matrix-loads=wmma-layout=' + mode) == selected
             tiled = lower(selected, '--convert-friskbase-to-thread=wmma-layout=' + mode)
@@ -265,12 +266,12 @@ def main():
         command([LLVM / 'opt', '-passes=verify', '-disable-output'], ir)
         # An authored matrix read still requests row packets, even when that
         # choice needs staging. Automatic selection must not undo this IR.
-        explicit = source.replace('      %g = frisk.gemm(%a, %b)', '''
+        explicit = source.replace('      %g = frisk.gemm(%a, %b, %g_init)', '''
       %r = frisk.read_matrix_from_shm %b[] {m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64}
         : memref<32x64xf16, 3> -> memref<32x64xf16>
-      %g = frisk.gemm(%a, %r)''').replace(
-            ': memref<32x32xf16, 3>, memref<32x64xf16, 3> ->',
-            ': memref<32x32xf16, 3>, memref<32x64xf16> ->')
+      %g = frisk.gemm(%a, %r, %g_init)''').replace(
+            ': memref<32x32xf16, 3>, memref<32x64xf16, 3>, memref<32x64xf32> ->',
+            ': memref<32x32xf16, 3>, memref<32x64xf16>, memref<32x64xf32> ->')
         ir = export(finalize(explicit, mode))
         assert '@llvm.hcu.ds.read.m32x16.b16.v4i32.p3' in ir
         assert '@async_lds_staging_' in ir

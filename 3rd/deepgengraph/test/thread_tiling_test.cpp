@@ -8,6 +8,25 @@
 #include "mlir/Pass/PassManager.h"
 
 namespace {
+struct TestExp2ToROCDLPass
+    : mlir::PassWrapper<TestExp2ToROCDLPass, mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestExp2ToROCDLPass)
+  TestExp2ToROCDLPass() = default;
+  TestExp2ToROCDLPass(const TestExp2ToROCDLPass &other) : PassWrapper(other) {}
+  Option<bool> nativeExp2{*this, "native-exp2", llvm::cl::init(false)};
+  llvm::StringRef getArgument() const final { return "test-exp2-to-rocdl"; }
+  llvm::StringRef getDescription() const final { return "Exercise native and OCML exp2 lowering"; }
+  void getDependentDialects(mlir::DialectRegistry &registry) const final {
+    mlir::registerAllDialects(registry);
+  }
+  void runOnOperation() final {
+    mlir::PassManager pm(&getContext());
+    pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(
+        mlir::frisk::Target::ROCm, 64, nativeExp2));
+    if (failed(pm.run(getOperation()))) signalPassFailure();
+  }
+};
+
 struct TestAsyncToLLVMPass
     : mlir::PassWrapper<TestAsyncToLLVMPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAsyncToLLVMPass)
@@ -80,10 +99,12 @@ int main(int argc, char **argv) {
   registry.insert<mlir::frisk::FriskDialect,
                   mlir::deepgengraph::triton::DeepgengraphTritonDialect,
                   mlir::deepgengraph::DeepgengraphDialect>();
+  mlir::registerPass([] { return mlir::frisk::createFriskOpFusePass(); });
   mlir::registerPass([] { return mlir::frisk::createReorderWorkgroupsPass(); });
   mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();
+  mlir::PassRegistration<TestExp2ToROCDLPass>();
   mlir::registerPass([] { return mlir::frisk::createVectorSafeCanonicalizerPass(); });
   mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });

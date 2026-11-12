@@ -279,11 +279,16 @@ def Frisk_EndOp : Frisk_Op<"end", [Terminator, ReturnLike]> {
 
 // gemmOp
 def Frisk_GemmOp: Frisk_Op<"gemm", [Frisk_ComputedTile, MemoryEffects<[MemWrite]>, MemoryEffects<[MemRead]>]> {
-  let summary = "General matrix multiplication operation";
-  let description = [{}];
+  let summary = "Matrix multiply-accumulate: C = A @ B + acc";
+  let description = [{
+    Computes C = op(A) @ op(B) + acc, with transA/transB selecting transpose.
+    The accumulator seeds the matrix reduction directly and is not mutated.
+    Its type must match C exactly. Use frisk.zero for a standalone product.
+  }];
   let arguments = (ins
     Frisk_ScalarOrMemRefOrVector:$A,  // shm
     Frisk_ScalarOrMemRefOrVector:$B,
+    Frisk_ScalarOrMemRefOrVector:$acc,
 
     BoolAttr:$transA,
     BoolAttr:$transB
@@ -305,7 +310,7 @@ def Frisk_GemmOp: Frisk_Op<"gemm", [Frisk_ComputedTile, MemoryEffects<[MemWrite]
   }];
 
   let hasVerifier = 1;
-  let assemblyFormat = " `(` $A `,` $B `)` attr-dict `:` type($A) `,` type($B) `->` type($C)";
+  let assemblyFormat = " `(` $A `,` $B `,` $acc `)` attr-dict `:` type($A) `,` type($B) `,` type($acc) `->` type($C)";
 }
 
 // ifOp

@@ -43,7 +43,8 @@ def check(source, directory, name):
 
 COMBINED = r"""module {
 func.func @combined(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %out: memref<32x32xf32, 3>, %red: memref<32x1xf32, 3>) -> memref<32x32xf32, 3> attributes {thread_num = 64 : i32} {
-  %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32, 3>
+  %g_init = frisk.zero : memref<32x32xf32, 3>
+  %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32, 3> -> memref<32x32xf32, 3>
   %e = frisk.exp2 %g : memref<32x32xf32, 3> -> memref<32x32xf32, 3>
   %s = frisk.add %e, %g : memref<32x32xf32, 3>, memref<32x32xf32, 3> -> memref<32x32xf32, 3>
   %d = frisk.sub %s, %g : memref<32x32xf32, 3>, memref<32x32xf32, 3> -> memref<32x32xf32, 3>
@@ -60,7 +61,8 @@ func.func @combined(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %out: me
 
 BLOCK = r"""module {
 func.func @block(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %out: memref<32x32xf32, 3>) attributes {thread_num = 64 : i32} {
-  %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+  %g_init = frisk.zero : memref<32x32xf32>
+  %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
   "frisk.block"() ({
   ^bb0(%i: index, %j: index):
     %x = affine.load %g[%i, %j] : memref<32x32xf32>
@@ -76,7 +78,8 @@ func.func @block(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %out: memre
 def gemm(m, n, k, threads, space=3):
     a, b, c = f"memref<{m}x{k}xf16, {space}>", f"memref<{k}x{n}xf16, 3>", f"memref<{m}x{n}xf32>"
     return f"""func.func @gemm(%a: {a}, %b: {b}) -> {c} attributes {{thread_num = {threads} : i32}} {{
-      %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+      %g_init = frisk.zero : {c}
+      %g = frisk.gemm(%a, %b, %g_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
       return %g : {c}
     }}"""
 
@@ -84,7 +87,8 @@ def gemm(m, n, k, threads, space=3):
 LOOP = """
 func.func @loop(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %init: vector<32x32xf32>) -> vector<32x32xf32> attributes {thread_num = 64 : i32} {
   %out = affine.for %i = 0 to 3 iter_args(%acc = %init) -> vector<32x32xf32> {
-    %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+    %g_init = frisk.zero : memref<32x32xf32>
+    %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
     %next = frisk.add %acc, %g : vector<32x32xf32>, memref<32x32xf32> -> memref<32x32xf32>
     frisk.copy %next to %acc [affine_map<() -> (2)>] : memref<32x32xf32>, vector<32x32xf32>
     affine.yield %acc : vector<32x32xf32>
@@ -95,11 +99,13 @@ func.func @loop(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %init: vecto
 
 DIRECT_SHARED_COPY = """
 func.func @direct_copy(%q: memref<64x128xf16, 3>, %k: memref<128x32xf16, 3>, %v: memref<32x128xf16, 3>) -> memref<64x128xf32> attributes {thread_num = 128 : i32} {
-  %qk = frisk.gemm(%q, %k) {transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16, 3> -> memref<64x32xf32>
+  %qk_init = frisk.zero : memref<64x32xf32>
+  %qk = frisk.gemm(%q, %k, %qk_init) {transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16, 3>, memref<64x32xf32> -> memref<64x32xf32>
   %e = frisk.exp2 %qk : memref<64x32xf32> -> memref<64x32xf32, 3>
   %p = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>
   frisk.copy %e to %p [affine_map<() -> (2)>] : memref<64x32xf32, 3>, memref<64x32xf16, 3>
-  %o = frisk.gemm(%p, %v) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3> -> memref<64x128xf32>
+  %o_init = frisk.zero : memref<64x128xf32>
+  %o = frisk.gemm(%p, %v, %o_init) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3>, memref<64x128xf32> -> memref<64x128xf32>
   return %o : memref<64x128xf32>
 }
 """
@@ -135,8 +141,10 @@ func.func @pipeline_slots(%q: memref<64x128xf16, 3>,
     frisk.copy %kg to %s#0 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
   }
   frisk.copy %vg to %s#1 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
-  %qk = frisk.gemm(%q, %s#2) {transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16, 3> -> memref<64x32xf32>
-  %pv = frisk.gemm(%s#5, %s#3) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3> -> memref<64x128xf32>
+  %qk_init = frisk.zero : memref<64x32xf32>
+  %qk = frisk.gemm(%q, %s#2, %qk_init) {transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16, 3>, memref<64x32xf32> -> memref<64x32xf32>
+  %pv_init = frisk.zero : memref<64x128xf32>
+  %pv = frisk.gemm(%s#5, %s#3, %pv_init) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16, 3>, memref<64x128xf32> -> memref<64x128xf32>
   %p = frisk.exp2 %qk : memref<64x32xf32> -> memref<64x32xf32, 3>
   frisk.copy %p to %s#4 [affine_map<() -> (2)>] : memref<64x32xf32, 3>, memref<64x32xf16, 3>
   %result = frisk.copy_to_reg %pv [affine_map<() -> (2)>] : memref<64x128xf32> -> vector<64x128xf32>
@@ -146,7 +154,8 @@ func.func @pipeline_slots(%q: memref<64x128xf16, 3>,
 
 LOCAL_FILL = """
 func.func @local_fill(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>) -> memref<32x32xf32> attributes {thread_num = 64 : i32} {
-  %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+  %g_init = frisk.zero : memref<32x32xf32>
+  %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
   %t = frisk.alloc_buffer {scope = "local", alignment = 16} -> memref<32x32xf32>
   %f = frisk.fill %t {value = 2.0 : f32} : memref<32x32xf32> -> memref<32x32xf32>
   %sum = frisk.add %g, %f : memref<32x32xf32>, memref<32x32xf32> -> memref<32x32xf32>
@@ -157,7 +166,8 @@ func.func @local_fill(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>) -> mem
 
 PARTIAL_COPY = """
 func.func @partial_copy(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %dst: memref<64x64xf32, 3>) -> memref<64x64xf32, 3> attributes {thread_num = 64 : i32} {
-  %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+  %g_init = frisk.zero : memref<32x32xf32>
+  %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
   %copy = frisk.copy %g to %dst [affine_map<() -> (16, 16)>] : memref<32x32xf32>, memref<64x64xf32, 3> -> memref<64x64xf32, 3>
   return %copy : memref<64x64xf32, 3>
 }
@@ -274,11 +284,13 @@ def check_computed_tile_stores(directory):
         rhs = f"memref<{n}x{out}xf16, 3>"
         result = f"memref<{m}x{out}xf32>"
         source = f'''func.func @matmul_cast_matmul(%a: {a}, %b: {b}, %rhs: {rhs}) -> ({result}, {p}) attributes {{thread_num = {threads} : i32}} {{
-  %c = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+  %c_init = frisk.zero : {c}
+  %c = frisk.gemm(%a, %b, %c_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
   %value = frisk.cast %c : {c} -> {p}
   %storage = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {p}
   %alias = frisk.copy %value to %storage [affine_map<() -> (2)>] : {p}, {p} -> {p}
-  %r = frisk.gemm(%alias, %rhs) {{transA = false, transB = false}} : {p}, {rhs} -> {result}
+  %r_init = frisk.zero : {result}
+  %r = frisk.gemm(%alias, %rhs, %r_init) {{transA = false, transB = false}} : {p}, {rhs}, {result} -> {result}
   return %r, %alias : {result}, {p}
 }}'''
         name = f"computed-store-{m}-{k}-{n}-{out}-{threads}"
@@ -317,7 +329,8 @@ def check_computed_tile_stores(directory):
         multiple = source.replace(f"%rhs: {rhs})", f"%rhs: {rhs}, %left: {left})")
         multiple = multiple.replace(f"-> ({result}, {p})", f"-> ({result}, {other}, {p})")
         multiple = multiple.replace(f"  return %r, %alias : {result}, {p}", f'''
-  %other = frisk.gemm(%left, %alias) {{transA = false, transB = false}} : {left}, {p} -> {other}
+  %other_init = frisk.zero : {other}
+  %other = frisk.gemm(%left, %alias, %other_init) {{transA = false, transB = false}} : {left}, {p}, {other} -> {other}
   return %r, %other, %alias : {result}, {other}, {p}''')
         shared = check(multiple, directory, name + "-multiple-consumers")
         assert shared.count("memref.alloc()") == 1

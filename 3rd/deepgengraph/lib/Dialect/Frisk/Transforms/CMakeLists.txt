@@ -2,6 +2,7 @@ add_deepgengraph_library(FriskTransforms
     DeepgengraphToFrisk.cpp
     DeepgengraphSimplify.cpp
     DgMemspaceAnalyze.cpp
+    FriskOpFuse.cpp
     FriskCanonicalize.cpp
     FriskLayoutInfer.cpp
     overlap.cpp

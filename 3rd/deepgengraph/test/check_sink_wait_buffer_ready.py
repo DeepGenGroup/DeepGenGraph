@@ -98,7 +98,8 @@ def main():
       %task_k = frisk.async_copy_gm_to_shm %src to %k : memref<16x16xf16, 1>, memref<16x16xf16, 3> -> !frisk.async_task
       frisk.wait_buffer_ready %task_k : !frisk.async_task
       %scaled = frisk.mul %q, %x : memref<16x16xf16, 3>, f16 -> memref<16x16xf16, 3>
-      %r = frisk.gemm(%scaled, %k) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", transA = false, transB = false} : memref<16x16xf16, 3>, memref<16x16xf16, 3> -> memref<16x16xf32>
+      %r_init = frisk.zero : memref<16x16xf32>
+      %r = frisk.gemm(%scaled, %k, %r_init) {inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", transA = false, transB = false} : memref<16x16xf16, 3>, memref<16x16xf16, 3>, memref<16x16xf32> -> memref<16x16xf32>
       return
     }'''
     result = run(source)

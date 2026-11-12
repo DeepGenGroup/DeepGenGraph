@@ -944,6 +944,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
 
+  // All executable kernel computations are now Frisk block IR. Preserve
+  // strict sums; the modes that already permit MMAC reassociation fuse here.
+  auto opFuse = frisk::createFriskOpFusePass();
+  if (failed(opFuse->initializeOptions(
+          std::string("allow-reassociation=") + (mathMode != "strict" ? "true" : "false"),
+          [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
+    return 1;
+  AddFuncPass(std::move(opFuse));
+  llvm::outs() << "\n---------- after frisk-op-fuse ---------\n";
+  llvm::outs().flush(); src->dump();
+
   if (!workgroupOptions.empty()) {
     auto reorder = frisk::createReorderWorkgroupsPass();
     if (failed(reorder->initializeOptions(workgroupOptions, [&](const llvm::Twine &m) {
@@ -1023,6 +1034,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // Optimize typed fragment SSA before materializing register vectors/accesses.
   AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+  // Explicit GEMM accumulators already seed MMA. Retain this optimization
+  // for remaining GEMM + Add (strict sums or block-level fusion fallbacks).
   AddFuncPass(frisk::createFuseFragmentAccumulatorPass());
   llvm::outs() << "\n---- after fragment-level fuse-fragment-accumulator -----\n";
   llvm::outs().flush(); src->dump();
@@ -1137,7 +1150,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::ModuleOp mod = *src;
   if (!frisk::firstLowering(mod, src->getContext()) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
-                            coalesceWaits))
+                            coalesceWaits, mathMode == "approx" || mathMode == "mmac-exp2"))
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush();
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
@@ -1161,7 +1174,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (mathMode == "approx")
     frisk::optimizeApproximateRegisterMath(*llvmModule);
   else if (mathMode == "mmac-exp2" || mathMode == "mmac-recip")
-    frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-exp2", mathMode == "mmac-recip");
+    frisk::optimizeRegisterMath(*llvmModule, mathMode == "mmac-recip");
   else if (mathMode == "mmac")
     frisk::fuseMMACAccumulators(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");

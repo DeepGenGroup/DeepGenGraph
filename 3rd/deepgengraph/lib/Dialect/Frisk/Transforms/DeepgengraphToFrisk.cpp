@@ -1312,7 +1312,10 @@ struct MatmulOpConversionPattern : public OpConversionPattern<dg::PreciseDotOp> 
     if(CalcOpToFriskOption::useTensorCore){
       // tensorcore 计算 gemm
       auto typeC = getTypeConverter()->convertType(op.getType());
-      auto friskGEMM = rewriter.create<frisk::GemmOp>(op->getLoc(), typeC, adaptor.getLhs(), adaptor.getRhs(),  false,false);
+      // PreciseDot is a standalone product; preserve its zero-seeded reduction.
+      auto acc = rewriter.create<frisk::ZeroOp>(op->getLoc(), typeC);
+      auto friskGEMM = rewriter.create<frisk::GemmOp>(op->getLoc(), typeC,
+          adaptor.getLhs(), adaptor.getRhs(), acc, false, false);
       rewriter.replaceOp(op, friskGEMM);
     }
     else{

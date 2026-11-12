@@ -180,7 +180,8 @@ def execute(nodes, env, grid):
             continue
         elif op.startswith("frisk.gemm"):
             assert "transA = false, transB = false" in op
-            value = env[args[0]].astype(np.float32) @ env[args[1]].astype(np.float32)
+            value = (env[args[0]].astype(np.float32) @ env[args[1]].astype(np.float32)
+                     + env[args[2]])
         elif op.startswith("frisk.exp2"):
             value = np.exp2(env[args[0]])
         elif op.startswith("frisk.cast"):
@@ -209,10 +210,17 @@ def check_numerics(log, bm, seed=0, blocks=None):
     if blocks is None:
         blocks = [(b, h, m) for b in range(shape[0]) for h in range(shape[1])
                   for m in range(shape[2] // bm)]
+    # Query/head axes are configurable in the input template. Read the query
+    # axis from the causal loop bound instead of assuming query=y, head=x.
+    block_axes = dict(re.findall(r"(" + SSA + r") = gpu.block_id ([xyz])", function))
+    query_id = re.search(r"affine.for .*?to affine_map<.*?>\(\)\[(" + SSA + r")\]", function)[1]
+    query_axis = block_axes[query_id]
+    assert query_axis in ("x", "y")
+    head_axis = "y" if query_axis == "x" else "x"
     max_error = 0.0
     for batch, head, block in blocks:
         execute(nodes, dict(zip(("%arg0", "%arg1", "%arg2", "%arg3"), (q, k, v, output))),
-                {"x": head, "y": block, "z": batch})
+                {head_axis: head, query_axis: block, "z": batch})
         start, end = block * bm, (block + 1) * bm
         scores = (q[batch, head, start:end].astype(np.float32)
                   @ k[batch, head, :end].astype(np.float32).T) / np.sqrt(shape[3])

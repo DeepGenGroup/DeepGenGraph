@@ -94,4 +94,21 @@ def friskOverlap: Pass<"frisk-overlap", "::mlir::frisk::KernelOp"> {
   ];
 }
 
+def FriskOpFuse: Pass<"frisk-op-fuse", "::mlir::func::FuncOp"> {
+  let summary = "Fuse compatible operations in Frisk block IR";
+  let description = [{
+    Fuse a single-use zero-seeded GEMM followed by a same-shaped add into
+    GEMM(A, B, acc). Run after conversion to Frisk block IR, before layout
+    inference, scheduling and fragment tiling. Both add operand orders and
+    same-element vector/memref tile representations are supported.
+    Floating-point reassociation requires explicit permission. Broadcasts,
+    nonzero GEMM seeds, multiple users, writes/synchronization between the
+    GEMM and add, and already scheduled or tiled operations are left intact.
+  }];
+  let constructor = "mlir::frisk::createFriskOpFusePass()";
+  let dependentDialects = ["mlir::frisk::FriskDialect"];
+  let options = [Option<"allowReassociation", "allow-reassociation", "bool", "false",
+      "Allow changing GEMM/add floating-point accumulation order">];
+}
+
 #endif // FRISK_PASSES

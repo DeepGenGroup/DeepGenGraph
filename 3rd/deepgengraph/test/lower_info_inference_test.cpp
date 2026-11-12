@@ -27,13 +27,15 @@ module {
                        %old: vector<128x32xf32>)
       attributes {thread_num = 256 : i32,
                   frisk.block_warps = array<i64: 4, 1>} {
-    %scores = frisk.gemm(%q, %k) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+    %scores_init = frisk.zero : memref<128x128xf32>
+    %scores = frisk.gemm(%q, %k, %scores_init) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3>, memref<128x128xf32> -> memref<128x128xf32>
     %shared = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x128xf32, 3>
     %copied = frisk.copy %scores to %shared [affine_map<() -> (2)>] : memref<128x128xf32>, memref<128x128xf32, 3> -> memref<128x128xf32, 3>
     %row = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x1xf32, 3>
     frisk.reduce %copied, %row {dim = 1 : i64, kind = "max"} : memref<128x128xf32, 3>, memref<128x1xf32, 3>
     %scaled = frisk.mul %old, %row : vector<128x32xf32>, memref<128x1xf32, 3> -> memref<128x32xf32>
-    %pv = frisk.gemm(%p, %v) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3> -> memref<128x32xf32>
+    %pv_init = frisk.zero : memref<128x32xf32>
+    %pv = frisk.gemm(%p, %v, %pv_init) {transA = false, transB = false} : memref<128x128xf16, 3>, memref<128x32xf16, 3>, memref<128x32xf32> -> memref<128x32xf32>
     %sum = frisk.add %scaled, %pv : memref<128x32xf32>, memref<128x32xf32> -> memref<128x32xf32>
     return
   }
@@ -50,7 +52,8 @@ static void testIndependentLoopAxes(MLIRContext &context) {
         %out:2 = affine.for %i = 0 to 2
             iter_args(%lhs = %a, %rhs = %b)
             -> (memref<32x32xf16, 3>, memref<32x32xf16, 3>) {
-          %c = frisk.gemm(%lhs, %rhs) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+          %c_init = frisk.zero : memref<32x32xf32>
+          %c = frisk.gemm(%lhs, %rhs, %c_init) {transA = false, transB = false} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
           affine.yield %lhs, %rhs : memref<32x32xf16, 3>, memref<32x32xf16, 3>
         }
         return
@@ -89,9 +92,11 @@ static void testChainedGemm(MLIRContext &context) {
                        %d: memref<128x32xf16, 3>)
           attributes {thread_num = 256 : i32,
                       frisk.block_warps = array<i64: 2, 2>} {
-        %c = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3> -> memref<128x128xf32>
+        %c_init = frisk.zero : memref<128x128xf32>
+        %c = frisk.gemm(%a, %b, %c_init) {transA = false, transB = false} : memref<128x32xf16, 3>, memref<32x128xf16, 3>, memref<128x128xf32> -> memref<128x128xf32>
         %half = frisk.cast %c : memref<128x128xf32> -> memref<128x128xf16>
-        %e = frisk.gemm(%half, %d) {transA = false, transB = false} : memref<128x128xf16>, memref<128x32xf16, 3> -> memref<128x32xf32>
+        %e_init = frisk.zero : memref<128x32xf32>
+        %e = frisk.gemm(%half, %d, %e_init) {transA = false, transB = false} : memref<128x128xf16>, memref<128x32xf16, 3>, memref<128x32xf32> -> memref<128x32xf32>
         return
       }
     }
@@ -103,6 +108,16 @@ static void testChainedGemm(MLIRContext &context) {
   func.walk([&](GemmOp op) { gemms.push_back(op); });
   func.walk([&](CastOp op) { castOp = op; });
   auto *layouts = LowerInfoAnalysis::run(func);
+  for (auto gemm : gemms) {
+    auto *seed = layouts->getLowerInfo(gemm.getAcc(), gemm);
+    auto *result = layouts->getLowerInfo(gemm.getC(), gemm);
+    check(seed && result && seed->pos == LowerInfo::BufPos::In &&
+              seed->get_thread_own_data_size() == result->get_thread_own_data_size() &&
+              seed->get_thread_widths() == result->get_thread_widths() &&
+              seed->get_warp_repeat() == result->get_warp_repeat() &&
+              seed->get_warp_layout() == result->get_warp_layout(),
+          "GEMM accumulator inherits C's register layout");
+  }
   auto *c = layouts->getLowerInfo(gemms.front().getResult(), gemms.front());
   auto *castInput = layouts->getLowerInfo(castOp->getOperand(0), castOp);
   auto *castOutput = layouts->getLowerInfo(castOp->getResult(0), castOp);
@@ -150,6 +165,63 @@ static void testChainedGemm(MLIRContext &context) {
   check(candidates.getLowerInfo(normal.buffer, gemms.back())->calculateAttr ==
             std::array<Attr, 2>{Attr::Normal, Attr::CrossWarpReduce},
         "calculation attribute resolution is idempotent");
+}
+
+// The acc edge must carry the public distribution. Native C is an explicit
+// instruction constraint, including any logical B permutation, not another
+// competing inference candidate for the same SSA value.
+static void testGemmLayoutContracts(MLIRContext &context) {
+  for (int mode = 0; mode != 5; ++mode) {
+    std::string source = R"mlir(
+      module {
+        func.func @contracts(%a: memref<32x32xf16, 3>,
+                             %b: memref<32x64xf16, 3>,
+                             %acc: memref<32x64xf32>)
+            attributes {thread_num = 64 : i32} {
+          %c = frisk.gemm(%a, %b, %acc) {transA = false, transB = false}
+              : memref<32x32xf16, 3>, memref<32x64xf16, 3>,
+                memref<32x64xf32> -> memref<32x64xf32>
+          return
+        }
+      }
+    )mlir";
+    // Inter-instruction B permutation requires 64 columns. Unsupported N
+    // still needs distinct native/result layouts for its shuffle fallback.
+    if (mode == 4)
+      for (size_t pos = 0; (pos = source.find("x64", pos)) != std::string::npos;)
+        source.replace(pos, 3, "x32");
+    auto module = parseSourceString<ModuleOp>(source, &context);
+    check(bool(module), "parse GEMM layout contracts fixture");
+    auto func = *module->getOps<func::FuncOp>().begin();
+    GemmOp gemm;
+    func.walk([&](GemmOp op) { gemm = op; });
+    if (mode)
+      gemm->setAttr("frisk.contiguous_c", UnitAttr::get(&context));
+    if (mode == 2 || mode == 4)
+      gemm->setAttr("frisk.b_permute", UnitAttr::get(&context));
+    if (mode == 3)
+      gemm->setAttr("frisk.inner_inst_b_permute", UnitAttr::get(&context));
+    auto *infos = LowerInfoAnalysis::run(func);
+    auto *layouts = infos->getGemmLayouts(gemm);
+    check(layouts, "every inferred GEMM records both layout contracts");
+    auto computation = layouts->computation;
+    auto result = layouts->result;
+    auto *acc = infos->getLowerInfo(gemm.getAcc(), gemm);
+    auto *output = infos->getLowerInfo(gemm.getC(), gemm);
+    check(acc && output && acc->getAffineMap() == result.getAffineMap() &&
+              output->getAffineMap() == result.getAffineMap(),
+          "acc and downstream inference use the public result contract");
+    check(computation.base_layout.thread_creg == computation.mmaInst->desc_c.thread_creg &&
+              computation.base_layout.warp_repeat == computation.mmaInst->desc_c.warp_repeat,
+          "computation C retains the hardware register distribution");
+    bool permuted = mode == 2 || mode == 3;
+    check(bool(computation.logicalTransform) == permuted &&
+              computation.logicalTransform == result.logicalTransform,
+          "both contracts preserve the selected B permutation's logical columns");
+    check((computation.getAffineMap() != result.getAffineMap()) ==
+              (mode == 1 || mode == 4),
+          "only contiguous C/fallback require an explicit layout boundary");
+  }
 }
 
 int main(int argc, char **argv) {
@@ -229,6 +301,7 @@ int main(int argc, char **argv) {
             layouts->getLowerInfo(reduce.getDst(), reduce)->calculateAttr[1] ==
                 Attr::Normal,
         "a reduction across column waves is not classified as warp-local");
+  testGemmLayoutContracts(context);
   testChainedGemm(context);
   testIndependentLoopAxes(context);
   llvm::outs() << "LowerInfo deferred broadcast inference tests passed\n";

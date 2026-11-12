@@ -18,6 +18,7 @@ std::unique_ptr<Pass> createDeepgenGraphMemspaceAnalyzePass();
 std::unique_ptr<Pass> createConvertScfForOpPass();
 std::unique_ptr<Pass> createMemspaceAnalyzePass();
 std::unique_ptr<Pass> createFriskCanonicalizePass();
+std::unique_ptr<Pass> createFriskOpFusePass();
 
 std::unique_ptr<Pass> createFriskFuseBlockOpsPass();
 std::unique_ptr<Pass> createFuseBlockOpWithDTypeConvertOpPass();

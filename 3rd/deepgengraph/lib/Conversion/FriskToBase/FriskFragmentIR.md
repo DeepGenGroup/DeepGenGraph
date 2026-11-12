@@ -2,6 +2,47 @@
 
 当前实现：`FriskBaseToTheadlevelIR_plan2.cpp`、`FriskFragIRReorder.cpp`。
 
+## Block GEMM 的累加器
+
+`%res = frisk.gemm(%a, %b, %acc)` 表示 `res = a @ b + acc`。文本格式中依次列出
+A、B、acc 的类型，再以 `->` 指定结果类型；acc 与结果必须同类型。纯乘积使用
+`%zero = frisk.zero : memref<MxNxf32>` 并将其作为第三个操作数。
+
+Tiling 把 acc 转为 C 的线程布局，提取每个 MN 位置的片段作为 K 循环初值，
+再把最终 MMA 片段插入结果。typed 和 vector 两条路径均如此，不修改输入 acc。
+因此显式累加器不依赖 `fuse-fragment-accumulator` 或 LLVM `FuseMMACAccumulator`。
+
+这两个优化仍保留给独立的 `gemm(a, b, zero) + old`：前者缩短中间值生命周期，
+保持先乘积后加法的顺序；后者只在允许重结合时把 old 放入 MMA 初值。
+`PreciseDot` lowering 先产生零累加器；随后 `FriskOpFusePass` 在 block IR 层将
+可融合的 `gemm(a, b, zero) + acc` 改成 `gemm(a, b, acc)`。独立命令为
+`--frisk-op-fuse=allow-reassociation=true`；默认不允许浮点重结合。
+MyTest 在 `convert-frisk-to-base` 之后、layout 推断和 fragment tiling 之前执行它，
+依据 `math` 模式启用：`strict` 保持原顺序，`mmac` / `approx` 等非 strict 模式融合。
+
+该融合支持加法两侧互换、同形同元素类型的 vector/memref 累加器，以及 GEMM
+之后计算的 seed（例如 `alpha * old`）。GEMM 必须仅由该 add 使用且初值为零；
+广播、非零初值、多用户、跨 block、跨写内存/同步操作、已 tiled 或已设置 pipeline
+调度的 IR 均保留原形式。已融合路径无需后端 accumulator fusion；剩余路径仍可
+使用现有 fragment/LLVM 优化。
+
+`LowerInfoMap::GemmLayouts` 分别记录 `computation`（指令实际使用的 C 布局）和
+`result`（向下游提供的结果布局）。普通布局推断在 acc 和 C 两侧都传播 result，
+避免增加 acc 操作数后把循环出口或全局写回悄悄改成硬件布局。B-permute 和
+inner-inst-b-permute 的逻辑列映射保存在两套布局中；不支持置换的形状仍使用
+contiguous C 结果布局和显式转换。
+
+Tiling 按该记录插入 acc 的 result→computation 和 C 的 computation→result
+边界；零初值直接生成计算布局的零。合法的循环递推可把这两次转换移至循环出口，
+循环内维持 computation，出口恢复 result。此优化同时支持独立 Add 和已经融合的
+GEMM 累加器，不依赖 Add 存在。只对 splat 初值、完整写回、无额外 carrier 读取、
+布局映射可证明兼容的行缩放进行移动；其他情况保留显式转换。
+反向 C 转换也可使用已证明的 XOR transpose，无需额外 LDS scratch。
+
+回归：`python3 3rd/deepgengraph/test/check_frisk_op_fuse.py`。
+
+回归：`python3 3rd/deepgengraph/test/check_gemm_accumulator.py`。
+
 ## 显式 typed fragment 中间层
 
 MyTest 现在默认执行以下阶段（原 `convert-friskbase-to-thread` 保留作兼容和对照）：

@@ -101,7 +101,8 @@ def gemm(m, n, k, threads, extra=''):
   %b = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {b}
   frisk.copy %global to %b [affine_map<() -> (2)>] : memref<{k}x{n}xf16, 1>, {b}
   {extra}
-  %c = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+  %c_init = frisk.zero : {c}
+  %c = frisk.gemm(%a, %b, %c_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
   frisk.copy %c to %out [affine_map<() -> (2)>] : {c}, memref<{m}x{n}xf32, 1>
   return
 }}'''
@@ -224,11 +225,13 @@ def main():
             rhs = f'memref<{n}x{outcols}xf16, 3>'
             r, dst = f'memref<{m}x{outcols}xf32>', f'memref<{m}x{outcols}xf32, 1>'
             source = f'''func.func @matmul_cast_matmul(%a: {a}, %b: {b}, %rhs: {rhs}, %out: {dst}) attributes {{thread_num = {threads} : i32}} {{
-  %c = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+  %c_init = frisk.zero : {c}
+  %c = frisk.gemm(%a, %b, %c_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
   %value = frisk.cast %c : {c} -> {p}
   %storage = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {p}
   frisk.copy %value to %storage [affine_map<() -> (2)>] : {p}, {p}
-  %r = frisk.gemm(%storage, %rhs) {{transA = false, transB = false}} : {p}, {rhs} -> {r}
+  %r_init = frisk.zero : {r}
+  %r = frisk.gemm(%storage, %rhs, %r_init) {{transA = false, transB = false}} : {p}, {rhs}, {r} -> {r}
   frisk.copy %r to %out [affine_map<() -> (2)>] : {r}, {dst}
   return
 }}'''
@@ -284,7 +287,7 @@ def main():
   frisk.copy %src to %a [affine_map<() -> (2)>] : {a}, {a}
   %b =''', 1)
         for name, operands in [('same', '%a, %b'), ('conflicting', '%b, %a')]:
-            two = source.replace('  frisk.copy %c to', f'''  %c2 = frisk.gemm({operands}) {{transA = false, transB = false}} : {a}, {a} -> {c}
+            two = source.replace('  frisk.copy %c to', f'''  %c2 = frisk.gemm({operands}, %c_init) {{transA = false, transB = false}} : {a}, {a}, {c} -> {c}
   %sum = frisk.add %c, %c2 : {c}, {c} -> {c}
   frisk.copy %sum to''')
             path.write_text(two)
@@ -293,7 +296,7 @@ def main():
         print('PASS A with multiple consumers: compatible layouts share packing; conflicting layouts fall back')
 
         a, b, c = 'memref<32x16xf16, 3>', 'memref<16x32xf16, 3>', 'memref<32x32xf32>'
-        two = gemm(32,32,16,64, f'%c2 = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}')
+        two = gemm(32,32,16,64, f'%c2_init = frisk.zero : {c}\n  %c2 = frisk.gemm(%a, %b, %c2_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}')
         two = two.replace('  frisk.copy %c to',
                           f'  %sum = frisk.add %c, %c2 : {c}, {c} -> {c}\n  frisk.copy %sum to')
         path.write_text(two)

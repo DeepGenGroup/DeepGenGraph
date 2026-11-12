@@ -29,12 +29,13 @@ def run(directory, name, source, *passes):
 def gemm(m, n, k, threads):
     a, b, c = f"memref<{m}x{k}xf16, 3>", f"memref<{k}x{n}xf16, 3>", f"memref<{m}x{n}xf32>"
     return f'''func.func @gemm(%a: {a}, %b: {b}) -> {c} attributes {{thread_num = {threads} : i32}} {{
-      %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+      %g_init = frisk.zero : {c}
+      %g = frisk.gemm(%a, %b, %g_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
       return %g : {c}
     }}'''
 
 
-def execute_shuffle(ir, threads=256):
+def execute_shuffle(ir, threads=256, reverse=False):
     # Trace the flat SSA shuffle sequence through its final register insertion.
     # Select the four extracts feeding the first shuffle, then the four inserts
     # which construct its result. No scheduling region is needed.
@@ -63,7 +64,8 @@ def execute_shuffle(ir, threads=256):
                 return cache[key]
             if name == fragment:
                 return [base + (tid // 64) * 256 + (tid % 16) * 16 +
-                        (tid % 64) // 16 + 4 * reg for reg in range(4)]
+                        (4 * ((tid % 64) // 16) + reg if reverse else
+                         (tid % 64) // 16 + 4 * reg) for reg in range(4)]
             expr = definitions[name]
             operands = re.findall(SSA, expr)
             if expr.startswith("gpu.thread_id"):
@@ -98,7 +100,8 @@ def execute_shuffle(ir, threads=256):
         result_name = re.findall(rf"({SSA}) = vector.insert", body)[-1]
         for tid in range(threads):
             expected = [base + (tid // 64) * 256 + (tid % 16) * 16 +
-                        4 * ((tid % 64) // 16) + reg for reg in range(4)]
+                        ((tid % 64) // 16 + 4 * reg if reverse else
+                         4 * ((tid % 64) // 16) + reg) for reg in range(4)]
             assert value(result_name, tid) == expected, (tid, value(result_name, tid), expected)
 
 
@@ -123,6 +126,16 @@ def main():
         assert 'xor_masks = array<i64: 16, 32>' in log
         execute_shuffle(small)
         print("PASS emitted dataflow: 256 threads, 4 registers, distinct matrix coordinates")
+        seeded = gemm(16, 16, 16, 64).replace(
+            '%b: memref<16x16xf16, 3>)',
+            '%b: memref<16x16xf16, 3>, %g_init: memref<16x16xf32>)').replace(
+            '%g_init = frisk.zero : memref<16x16xf32>', '')
+        reverse, _ = run(directory, "nonzero-seed", seeded,
+                         "--convert-friskbase-to-thread")
+        assert reverse.count("gpu.shuffle") == 8 and "memref.alloc" not in reverse
+        execute_shuffle(reverse, reverse=True)
+        print("PASS emitted nonuniform accumulator transpose back to native C")
+
 
         fixture = planner_fixture(log)
         planned, _ = run(directory, "plan", fixture, "--plan-wmma-layout-conversions")
@@ -177,7 +190,8 @@ def main():
             source = f'''func.func @scaled(%a: memref<32x32xf16, 3>, %b: memref<32x32xf16, 3>, %alpha: memref<{factor_shape}xf32>) -> vector<32x32xf32> attributes {{thread_num = 64 : i32}} {{
   %init = arith.constant dense<0.0> : vector<32x32xf32>
   %out = affine.for %i = 0 to 3 iter_args(%acc = %init) -> vector<32x32xf32> {{
-    %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : memref<32x32xf16, 3>, memref<32x32xf16, 3> -> memref<32x32xf32>
+    %g_init = frisk.zero : memref<32x32xf32>
+    %g = frisk.gemm(%a, %b, %g_init) {{transA = false, transB = false}} : memref<32x32xf16, 3>, memref<32x32xf16, 3>, memref<32x32xf32> -> memref<32x32xf32>
     %scaled = frisk.mul {lhs}, {rhs} : {lhs_ty}, {rhs_ty} -> memref<32x32xf32>
     %next = frisk.add %scaled, %g : memref<32x32xf32>, memref<32x32xf32> -> memref<32x32xf32>
     frisk.copy %next to %acc [affine_map<() -> (2)>] : memref<32x32xf32>, vector<32x32xf32>
@@ -188,14 +202,26 @@ def main():
             _, log = run(directory, f'scaled-{reverse}-{factor_shape}', source,
                          '--convert-friskbase-to-thread')
             assert ('"loop_result"' in log) == (factor_shape == '32x1'), log[-6000:]
-        print('PASS row-scaled loop layout sinking in both operand orders; column-scale fallback')
+            _, fused_log = run(directory, f'fused-scaled-{reverse}-{factor_shape}', source,
+                         '--frisk-op-fuse=allow-reassociation=true',
+                         '--convert-friskbase-to-thread')
+            assert ('"loop_result"' in fused_log) == (factor_shape == '32x1'), fused_log[-6000:]
+        print('PASS legacy/fused row-scaled loop layout sinking in both orders; column-scale fallback')
 
         attention, _ = run(directory, "attention", (HERE / "test_friskBaseDebug.mlir").read_text(),
                            "--convert-friskbase-to-thread", "--finalize-thread-tiling",
                            "--frisk-frag-ir-reorder", "--lower-frisk-fragments")
         assert 'frisk.layout_role = "wmmaC"' in attention
         assert not re.search(r"frisk\.(?:to_threadTile|from_threadTile|convert_layout)\b", attention)
-        print("PASS full attention tiling, finalization and fragment scheduling")
+        fused_attention, _ = run(directory, "fused-attention",
+                           (HERE / "test_friskBaseDebug.mlir").read_text(),
+                           "--frisk-op-fuse=allow-reassociation=true",
+                           "--convert-friskbase-to-thread", "--finalize-thread-tiling",
+                           "--frisk-frag-ir-reorder", "--lower-frisk-fragments")
+        assert 'frisk.layout_role = "wmmaC"' in fused_attention
+        assert not re.search(r"memref.alloc\(\).*memref<64x128xf32, 3>", fused_attention)
+        assert not re.search(r"frisk\.(?:to_threadTile|from_threadTile|convert_layout)\b", fused_attention)
+        print("PASS legacy/fused full attention finalization, with no accumulator LDS exchange")
 
 
 if __name__ == "__main__":

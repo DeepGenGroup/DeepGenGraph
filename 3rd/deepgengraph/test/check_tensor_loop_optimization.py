@@ -69,7 +69,8 @@ def recurrence_fixture(nonsplat=False, extra_use=False):
       attributes {{thread_num = 128 : i32}} {{
       %z = arith.constant {initial} : vector<64x64xf32>
       %r = affine.for %k = 0 to 5 iter_args(%acc = %z) -> vector<64x64xf32> {{
-        %g = frisk.gemm(%a, %b) {{transA = false, transB = false}} : memref<64x32xf16, 3>, memref<32x64xf16, 3> -> memref<64x64xf32>
+        %g_init = frisk.zero : memref<64x64xf32>
+        %g = frisk.gemm(%a, %b, %g_init) {{transA = false, transB = false}} : memref<64x32xf16, 3>, memref<32x64xf16, 3>, memref<64x64xf32> -> memref<64x64xf32>
         %s = frisk.add %acc, %g : vector<64x64xf32>, memref<64x64xf32> -> memref<64x64xf32>
         {extra}
         frisk.copy {value} to %acc [affine_map<() -> (2)>] : memref<64x64xf32>, vector<64x64xf32>

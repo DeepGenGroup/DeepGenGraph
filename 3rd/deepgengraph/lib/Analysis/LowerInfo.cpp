@@ -1163,6 +1163,36 @@ bool LowerInfoAnalysis::checkGemmProblem(LowerInfoAnalysis::GemmProblem p, HWSpe
   return true;
 }
 
+// Propagate the public contract through acc producers as well as consumers.
+// Hardware constraints are recorded separately in GemmLayouts, so a new acc
+// edge cannot silently change the loop result or final store distribution.
+static void addGemmAccumulatorInfo(GemmOp gemm, LowerInfoMap &infos,
+                                   LowerInfo info) {
+  info.buffer = gemm.getAcc();
+  info.pos = LowerInfo::BufPos::In;
+  infos.addLowerInfo(gemm, info);
+}
+
+const LowerInfoMap::GemmLayouts *LowerInfoMap::getGemmLayouts(GemmOp op) const {
+  auto it = gemmLayouts.find(op);
+  return it == gemmLayouts.end() ? nullptr : &it->second;
+}
+
+void LowerInfoMap::resolveGemmLayouts(Operation *root) {
+  gemmLayouts.clear();
+  root->walk([&](GemmOp gemm) {
+    auto *result = getLowerInfo(gemm.getC(), gemm);
+    if (!result || !result->mmaInst) return;
+    LowerInfo computation = *result;
+    // B permutation changes logical columns, not the hardware register
+    // descriptor. Preserve its logicalTransform on both C and the acc seed.
+    if (gemm->hasAttr("frisk.contiguous_c") && !result->logicalTransform)
+      computation.base_layout = result->mmaInst->desc_c;
+    computation.convertFrom = nullptr;
+    gemmLayouts.try_emplace(gemm, GemmLayouts{computation, *result});
+  });
+}
+
 bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
                                     HWSpecification *hw) {
   auto gemmOp = dyn_cast<GemmOp>(op);
@@ -1203,6 +1233,7 @@ bool LowerInfoAnalysis::inferGemmOp(Operation *op, LowerInfoMap &buf_info_maps,
   ic.mmaInst = instInfo;
   
   buf_info_maps.addLowerInfo(op, ic);
+  addGemmAccumulatorInfo(gemmOp, buf_info_maps, ic);
 
   auto zero = b.getAffineConstantExpr(0);
   LowerInfo aInfo = ic;
@@ -1250,6 +1281,7 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
     buf_info_maps.addLowerInfo(op, sourceA);
     auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceA, true);
     buf_info_maps.addLowerInfo(op, ic);
+    addGemmAccumulatorInfo(gemmOp, buf_info_maps, ic);
     // C->B
     LowerInfo bInfo = ic;
     applyGemmBInfo(bInfo, problem, mma, zero, hw);
@@ -1268,6 +1300,7 @@ bool LowerInfoAnalysis::inferRelyGemmOp(Operation *op, LowerInfoMap &buf_info_ma
       buf_info_maps.addLowerInfo(op, sourceB);
       auto ic = makeRelyGemmCInfo(b, problem, mma, thread_num, hw, sourceB, false);
       buf_info_maps.addLowerInfo(op, ic);
+      addGemmAccumulatorInfo(gemmOp, buf_info_maps, ic);
       // C->A
       LowerInfo aInfo = ic;
       applyRelyGemmAInfo(aInfo, problem, mma, zero);
@@ -1704,6 +1737,7 @@ LowerInfoMap* LowerInfoAnalysis::run(mlir::Operation* kernelOp, const std::strin
   }
   // 冲突解决
   buf_info_maps.conflictResolve();
+  buf_info_maps.resolveGemmLayouts(kernelOp);
 
   return &buf_info_maps;
 }

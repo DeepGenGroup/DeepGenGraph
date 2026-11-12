@@ -1171,18 +1171,49 @@ static void insertConvertLayoutOps(LowerInfoMap &infoMap) {
 // explicit, once per GEMM result (including branched uses).
 static void insertWmmaCLayoutOps(func::FuncOp kernel, LowerInfoMap &infoMap) {
   kernel.walk([&](frisk::GemmOp gemm) {
-    if (!gemm->hasAttr("frisk.contiguous_c"))
+    const auto *layouts = infoMap.getGemmLayouts(gemm);
+    if (!layouts)
       return;
-    auto *info = infoMap.getLowerInfo(gemm.getC(), gemm);
-    if (!info || !info->mmaInst || info->logicalTransform)
+    LowerInfo source = layouts->computation, target = layouts->result;
+    auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+    auto block = cast<ShapedType>(gemm.getC().getType());
+    auto sourceTile = getFullThreadTileType(gemm.getC(), source);
+    auto targetTile = getFullThreadTileType(gemm.getC(), target);
+    if (threads && succeeded(sourceTile) && succeeded(targetTile) &&
+        *sourceTile == *targetTile && sameThreadTileCoordinates(
+            effectiveThreadTileMap(source, block, *sourceTile, kernel.getContext()),
+            effectiveThreadTileMap(target, block, *targetTile, kernel.getContext()),
+            *sourceTile, threads.getInt()))
       return;
-    LowerInfo target = *info, source = target;
-    source.base_layout = info->mmaInst->desc_c;
-    LowerInfo contiguous = source;
-    if (!makeWmmaCContiguous(contiguous) ||
-        target.get_thread_widths() != contiguous.get_thread_widths() ||
-        target.get_warp_repeat() != contiguous.get_warp_repeat())
-      return;
+    // Inference keeps the public contract on both acc and C. Materialize the
+    // instruction boundary in both directions; loop sinking may subsequently
+    // keep the carrier in computation layout and restore the public exit.
+    OpBuilder seedBuilder(gemm);
+    Value acc = gemm.getAcc();
+    Value seed;
+    if (acc.getDefiningOp<frisk::ZeroOp>()) {
+      // A zero has no lane ownership constraint. Give this use a native
+      // zero without altering the layout of other users of the public zero.
+      seed = seedBuilder.create<frisk::ZeroOp>(gemm.getLoc(), acc.getType());
+    } else {
+      auto convert = seedBuilder.create<frisk::ConvertLayoutOp>(gemm.getLoc(),
+          acc.getType(), acc, seedBuilder.getStringAttr("wmma_acc"));
+      annotateWmmaLayoutConversion(convert, target, source);
+      convertLayoutInfo.insert({convert, {target, source}});
+      LowerInfo seedIn = target;
+      seedIn.buffer = acc;
+      seedIn.pos = LowerInfo::BufPos::In;
+      seedIn.convertFrom = nullptr;
+      infoMap.addLowerInfo(convert, seedIn);
+      seed = convert->getResult(0);
+    }
+    LowerInfo seedOut = source;
+    seedOut.buffer = seed;
+    seedOut.pos = LowerInfo::BufPos::Out;
+    infoMap.addLowerInfo(seed.getDefiningOp(), seedOut);
+    seedOut.pos = LowerInfo::BufPos::In;
+    infoMap.addLowerInfo(gemm, seedOut);
+    gemm.getAccMutable().assign(seed);
     OpBuilder b(gemm);
     b.setInsertionPointAfter(gemm);
     auto convert = b.create<frisk::ConvertLayoutOp>(gemm.getLoc(),
@@ -1209,10 +1240,58 @@ static void insertWmmaCLayoutOps(func::FuncOp kernel, LowerInfoMap &infoMap) {
   });
 }
 
+// Adjacent inverse boundaries (e.g. between GEMMs) need no exchange. Prove
+// equality of every lane/register coordinate before removing them; equal
+// shapes alone are not sufficient. Loop exits still retain their public contract.
+static void foldInverseLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) {
+  auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+  if (!threads) return;
+  SmallVector<frisk::ConvertLayoutOp> candidates;
+  kernel.walk([&](frisk::ConvertLayoutOp op) { candidates.push_back(op); });
+  // Consumers first so erased producers cannot remain in the candidate list.
+  for (auto outer : llvm::reverse(candidates)) {
+    auto inner = outer.getMemref().getDefiningOp<frisk::ConvertLayoutOp>();
+    if (!inner || !inner->hasOneUse()) continue;
+    auto a = convertLayoutInfo.find(inner), b = convertLayoutInfo.find(outer);
+    if (a == convertLayoutInfo.end() || b == convertLayoutInfo.end()) continue;
+    Value input = inner.getMemref(), result = outer->getResult(0);
+    auto block = dyn_cast<ShapedType>(input.getType());
+    if (!block || input.getType() != result.getType()) continue;
+    auto fromType = getFullThreadTileType(input, a->second.first);
+    auto toType = getFullThreadTileType(result, b->second.second);
+    if (failed(fromType) || failed(toType) || *fromType != *toType ||
+        !sameThreadTileCoordinates(
+            effectiveThreadTileMap(a->second.first, block, *fromType, kernel.getContext()),
+            effectiveThreadTileMap(b->second.second, block, *toType, kernel.getContext()),
+            *toType, threads.getInt())) continue;
+    SmallVector<LowerInfo, 4> uses;
+    for (auto &entry : infos)
+      if (entry.second.buffer == result && entry.second.op != outer) {
+        auto info = entry.second;
+        info.buffer = input;
+        info.convertFrom = nullptr;
+        uses.push_back(info);
+      }
+    for (auto &info : uses) infos.addLowerInfo(info.op, info);
+    result.replaceAllUsesWith(input);
+    // Leave the now-dead inner op until the traversal has finished.
+    convertLayoutInfo.erase(outer);
+    outer.erase();
+  }
+  SmallVector<frisk::ConvertLayoutOp> dead;
+  kernel.walk([&](frisk::ConvertLayoutOp op) {
+    if (op->use_empty()) dead.push_back(op);
+  });
+  for (auto op : dead) {
+    convertLayoutInfo.erase(op);
+    op.erase();
+  }
+}
+
 // A layout permutation commutes with an elementwise recurrence. Keep the
-// carrier in the producer's layout and convert only the loop result. Unlike
-// seeding MMA with the outer accumulator, this preserves the FP addition
-// grouping (including the zero-initialized inner matrix reduction).
+// carrier in the producer's layout and convert only the loop result. Support
+// both GEMM + Add and the explicit GEMM acc recurrence, without changing their
+// respective FP grouping or requiring an Add to recover the public contract.
 // Match the legacy whole-vector writeback explicitly; do not move physical
 // memory, partial updates, extra carrier reads, or nonuniform initial values.
 // 优化汇总.py 第 14 项记录的“布局转换移出循环”，实际在第 6 项调用。
@@ -1221,9 +1300,12 @@ static void insertWmmaCLayoutOps(func::FuncOp kernel, LowerInfoMap &infoMap) {
 // 跨 lane 重排（ds.bpermute）从每轮一次变成循环结束一次。
 // 额外好处：O 和 MMAC 的 C 布局一致后，fuseMMACAccumulators 才能把 alpha * O 融进 MMAC。
 static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) {
-  // 候选要求：convert 在循环体内，有 WMMA shuffle 计划，唯一使用者是 add。
+  // 候选为 GEMM 的结果转换；后续同时匹配 Add 递推和已融合的 acc 递推。
   SmallVector<frisk::ConvertLayoutOp> candidates;
-  kernel.walk([&](frisk::ConvertLayoutOp op) { candidates.push_back(op); });
+  kernel.walk([&](frisk::ConvertLayoutOp op) {
+    if (op.getMemref().getDefiningOp<frisk::GemmOp>())
+      candidates.push_back(op);
+  });
   for (auto convert : candidates) {
     auto loop = dyn_cast<affine::AffineForOp>(convert->getParentOp());
     auto found = convertLayoutInfo.find(convert);
@@ -1231,12 +1313,57 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
         !getWmmaShufflePlan(convert) || !convert->hasOneUse())
       continue;
     auto add = dyn_cast<frisk::AddOp>(*convert->getUsers().begin());
-    if (!add || add->getBlock() != loop.getBody() || !add->hasOneUse())
+    auto gemm = convert.getMemref().getDefiningOp<frisk::GemmOp>();
+    frisk::ConvertLayoutOp seedConvert;
+    frisk::CastOp seedCast;
+    Value carrier;
+    Value writeback;
+    Operation *recurrence = nullptr;
+    if (add && add->getBlock() == loop.getBody() && add->hasOneUse()) {
+      carrier = add.getLhs() == convert->getResult(0)
+                    ? add.getRhs() : add.getLhs();
+      writeback = add.getResult();
+      recurrence = add;
+    } else if (gemm && gemm->getBlock() == loop.getBody() && gemm->hasOneUse()) {
+      seedConvert = gemm.getAcc().getDefiningOp<frisk::ConvertLayoutOp>();
+      if (!seedConvert || !seedConvert->hasOneUse())
+        continue;
+      auto seedLayout = convertLayoutInfo.find(seedConvert);
+      auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
+      if (seedLayout == convertLayoutInfo.end() || !threads)
+        continue;
+      // The input and output boundaries must be exact inverses, not merely
+      // same-shaped tiles. Check both endpoints, including logical transforms.
+      auto equivalent = [&](LowerInfo lhs, LowerInfo rhs) {
+        Value value = convert.getMemref();
+        auto type = cast<ShapedType>(value.getType());
+        auto l = getFullThreadTileType(value, lhs);
+        auto r = getFullThreadTileType(value, rhs);
+        return succeeded(l) && succeeded(r) && *l == *r &&
+            sameThreadTileCoordinates(
+                effectiveThreadTileMap(lhs, type, *l, kernel.getContext()),
+                effectiveThreadTileMap(rhs, type, *r, kernel.getContext()),
+                *l, threads.getInt());
+      };
+      if (!equivalent(seedLayout->second.first, found->second.second) ||
+          !equivalent(seedLayout->second.second, found->second.first))
+        continue;
+      carrier = seedConvert.getMemref();
+      seedCast = carrier.getDefiningOp<frisk::CastOp>();
+      if (seedCast) {
+        auto src = dyn_cast<ShapedType>(seedCast->getOperand(0).getType());
+        auto dst = dyn_cast<ShapedType>(carrier.getType());
+        if (!seedCast->hasOneUse() || seedCast->getBlock() != loop.getBody() ||
+            !src || !dst || src.getShape() != dst.getShape() ||
+            src.getElementType() != dst.getElementType())
+          continue;
+        carrier = seedCast->getOperand(0);
+      }
+      writeback = convert->getResult(0);
+      recurrence = seedCast ? seedCast.getOperation() : seedConvert.getOperation();
+    } else {
       continue;
-    // carrier：循环携带的累加值（iter_arg）。add 的另一个操作数就是它，或者是 alpha * 它。
-    // scale：可选的 alpha * carrier。alpha：缩放系数。
-    Value carrier = add.getLhs() == convert->getResult(0)
-                        ? add.getRhs() : add.getLhs();
+    }
     // Online softmax carries alpha * O + PV. Only a single-use, row-wise
     // scale is eligible; prove that projecting the C permutation onto rows
     // leaves alpha's lane/register coordinates unchanged before moving it.
@@ -1262,9 +1389,9 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     auto initial = loop.getInits()[index].getDefiningOp<arith::ConstantOp>();
     auto splat = initial ? dyn_cast<DenseElementsAttr>(initial.getValue())
                          : DenseElementsAttr{};
-    auto copy = dyn_cast<frisk::CopyOp>(*add->getUsers().begin());
+    auto copy = dyn_cast<frisk::CopyOp>(*writeback.getUsers().begin());
     Operation *yield = loop.getBody()->getTerminator();
-    if (!splat || !splat.isSplat() || !copy || copy.getSrc() != add.getResult() ||
+    if (!splat || !splat.isSplat() || !copy || copy.getSrc() != writeback ||
         copy.getDst() != carrier || copy->getBlock() != loop.getBody() ||
         !copy->use_empty() || yield->getOperand(index) != carrier)
       continue;
@@ -1273,7 +1400,7 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
         map.getResult(0) != getAffineConstantExpr(2, kernel.getContext()))
       continue;
     if (llvm::any_of(carrier.getUses(), [&](OpOperand &use) {
-          return use.getOwner() != (scale ? scale.getOperation() : add.getOperation()) &&
+          return use.getOwner() != (scale ? scale.getOperation() : recurrence) &&
                  use.getOwner() != copy &&
                  use.getOwner() != yield;
         }))
@@ -1288,7 +1415,7 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     // alpha 原来按目标布局读取，现在要按 source 布局读取。
     // 逐线程坐标必须证明不变，否则 alpha 会乘到错误的行上。
     std::optional<LowerInfo> alphaLayout;
-    if (scale) {
+    if (scale && isa<ShapedType>(alpha.getType())) {
       auto alphaType = dyn_cast<ShapedType>(alpha.getType());
       auto *oldAlpha = infos.getLowerInfo(alpha, scale);
       auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
@@ -1326,7 +1453,8 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     // Initial splats are permutation-invariant; other uses retain their layout.
     for (auto &entry : infos) {
       auto &info = entry.second;
-      if (info.buffer != carrier && info.buffer != add.getResult() &&
+      if (info.buffer != carrier && info.buffer != writeback &&
+          !(seedCast && info.buffer == seedCast->getResult(0)) &&
           !(scale && info.buffer == scale.getResult()) &&
           !(info.buffer == result && info.op == loop) &&
           !(info.buffer == loop.getInits()[index] && info.op == loop))
@@ -1343,7 +1471,33 @@ static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) 
     LowerInfo input = source;
     input.buffer = convert.getMemref();
     input.pos = LowerInfo::BufPos::In;
-    infos.addLowerInfo(add, input);
+    Operation *inputUser = add ? add.getOperation() : copy.getOperation();
+    input.op = inputUser;
+    input.convertFrom = nullptr;
+    // addLowerInfo appends inference candidates; it does not overwrite an
+    // already-resolved use. Restoring the original C SSA edge must replace
+    // that use's old public layout as well, or Copy recreates an implicit
+    // exchange and changes the loop carrier back to the public distribution.
+    if (auto *existing = infos.getLowerInfo(input.buffer, inputUser))
+      *existing = input;
+    else
+      infos.addLowerInfo(inputUser, input);
+    if (seedConvert) {
+      LowerInfo seed = source;
+      seed.buffer = seedConvert.getMemref();
+      seed.pos = LowerInfo::BufPos::In;
+      seed.convertFrom = nullptr;
+      // This key may already exist for acc; update the resolved entry too.
+      if (auto *existing = infos.getLowerInfo(seed.buffer, gemm)) {
+        seed.op = gemm;
+        *existing = seed;
+      } else {
+        infos.addLowerInfo(gemm, seed);
+      }
+      seedConvert->getResult(0).replaceAllUsesWith(seedConvert.getMemref());
+      convertLayoutInfo.erase(seedConvert);
+      seedConvert.erase();
+    }
     if (alphaLayout)
       infos.addLowerInfo(scale, *alphaLayout);
     convert->getResult(0).replaceAllUsesWith(convert.getMemref());
@@ -4055,12 +4209,8 @@ public:
     auto typedB = mmaFragmentType(rewriter, fragmentB, *infoB, "B", instName);
     auto typedC = mmaFragmentType(rewriter, fragmentC, *infoC, "C", instName);
     auto loc = op.getLoc();
-    Value initial = rewriter.create<arith::ConstantOp>(
-        loc, threadTileC, rewriter.getZeroAttr(threadTileC));
-    Value zeroFragment = rewriter.create<arith::ConstantOp>(
-        loc, fragmentC, rewriter.getZeroAttr(fragmentC));
-    if (emitTypedFragments)
-      zeroFragment = packFragment(rewriter, loc, zeroFragment, typedC);
+    Value initial = toThreadTile(adaptor.getAcc(), threadTileC, *infoC,
+                                 rewriter, loc);
     // 外层枚举 C 的 (m,n) 片段；cOrigin 是线程 vector 坐标，除以片段宽度
     // 才得到片段编号 m/n。MN 与 K 循环保留到后续融合、调度完成之后。
     Value result = FragmentTileLoopNest(rewriter, loc, threadTileC.getShape(),
@@ -4068,10 +4218,16 @@ public:
         [&](ArrayRef<Value> cOrigin, Value output) -> Value {
           Value m = floorDivBy(rewriter, loc, cOrigin[0], cFragmentShape[0]);
           Value n = floorDivBy(rewriter, loc, cOrigin[1], cFragmentShape[1]);
-          // 每个 C[m,n] 的累加器独立从零开始，K 循环执行
-          // acc = MMA(A[m,k], B[k,n], acc)，iter_args 保存上一轮 fragment。
+          // Seed each independent K reduction with the corresponding acc
+          // fragment. The outer MN carrier preserves every other fragment.
+          Value seed;
+          if (emitTypedFragments)
+            seed = rewriter.create<ExtractFragOp>(loc, typedC, initial,
+                                                 ValueRange{m, n});
+          else
+            seed = transferFragment(rewriter, loc, initial, fragmentC, cOrigin);
           auto kFor = rewriter.create<affine::AffineForOp>(
-              loc, 0, aCounts[1], 1, ValueRange{zeroFragment});
+              loc, 0, aCounts[1], 1, ValueRange{seed});
           kFor->setAttr("iterLabel", rewriter.getStringAttr("gemm_k"));
           kFor->setAttr("frisk.fragment_loop", rewriter.getUnitAttr());
           kFor->setAttr("frisk.loopUnrollFull", rewriter.getBoolAttr(true));
@@ -4365,6 +4521,7 @@ public:
       promoteGemmMatrixLoads(kernel, *s_info, *s_hw);
     insertConvertLayoutOps(*s_info);
     insertWmmaCLayoutOps(kernel, *s_info);
+    foldInverseLayoutConversions(kernel, *s_info);
     sinkLoopLayoutConversions(kernel, *s_info);
     if (useShuffle)
       planWmmaLayoutConversions(kernel, /*contiguousOutputs=*/false);
@@ -4844,8 +5001,9 @@ public:
 // keeps only owned registers live across iterations and also exposes layout
 // changes at loop exits as To(From(...)), where they can be handled explicitly.
 // 在满足条件时，把 affine.for 的 block vector 携带值缩为 thread vector。
-// 要求 yield 来自 From、两侧都是不同类型的 vector，且 iter_arg/循环结果
-// 仅被 To 使用。不是对任意循环、memref 携带值或 scf.for 的通用类型转换。
+// 要求 yield 来自 From，线程侧为 vector，且 iter_arg/循环结果仅被 To 使用。
+// memref 形状的 SSA tile 还要求 init 来自 From(vector)，避免把可变物理内存
+// 的读取移出循环。不是对任意 memref 携带值或 scf.for 的通用类型转换。
 // 循环前对 init 加 To；新循环携带线程值；循环体入口暂加 From 兼容旧用户；
 // yield 改交线程值；循环出口再 From 恢复外部接口，之后折叠冗余桥接。
 // 这解释了第一阶段为何能先保留 block 签名，第二阶段再收缩活跃寄存器集合。
@@ -4864,7 +5022,11 @@ public:
     };
     for (unsigned i = 0; i < op.getNumResults(); ++i) {
       auto from = yield.getOperand(i).getDefiningOp<frisk::FromThreadTileOp>();
-      if (from && isa<VectorType>(from.getResult().getType()) &&
+      auto init = op.getInits()[i].getDefiningOp<frisk::FromThreadTileOp>();
+      bool valueCarrier = isa<VectorType>(op.getResult(i).getType()) ||
+          (isa<MemRefType>(op.getResult(i).getType()) && init &&
+           isa<VectorType>(init.getThreadTile().getType()));
+      if (from && valueCarrier &&
           isa<VectorType>(from.getThreadTile().getType()) &&
           from.getResult().getType() != from.getThreadTile().getType() &&
           onlyToUsers(op.getRegionIterArgs()[i]) && onlyToUsers(op.getResult(i))) {

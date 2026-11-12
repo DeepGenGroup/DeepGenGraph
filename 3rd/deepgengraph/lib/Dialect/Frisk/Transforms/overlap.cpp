@@ -87,6 +87,7 @@ private:
     if (auto gemm = dyn_cast<GemmOp>(op)) {
       reads.push_back(gemm.getA());
       reads.push_back(gemm.getB());
+      reads.push_back(gemm.getAcc());
       return reads;
     }
     if (auto reduce = dyn_cast<ReduceOp>(op)) {

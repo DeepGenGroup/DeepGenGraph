@@ -222,8 +222,8 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
       continue;
     info.aliases.push_back(value);
     for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      Operation *top = getTopLevelUser(user, entry);
+      Operation *user = use.getOwner();  // 包含这个operand的op
+      Operation *top = getTopLevelUser(user, entry);  // 检查控制流是否合规，返回user在 entry块内的top 祖先
       if (!top) {
         info.skipReason = "use inside unsupported/async control flow";
         return;
@@ -250,7 +250,9 @@ void analyzeUses(ShmLiveInterval &info, Block *entry,
           continue; // Constructing a descriptor does not touch storage.
         }
       }
-      if (isa<memref::CastOp, arith::SelectOp>(user)) {
+      if (isa<memref::CastOp, arith::SelectOp>(user)) {  
+        // memref.castOp 改变类型描述，仍指向同一块内存。不改变元素类型。如%b = memref.cast %a : memref<16xf32, 3> to memref<?xf32, 3> 
+        // arith.select : 用到了这个memref，运行时可能指向也可能不。按保守策略来
         worklist.push_back(user->getResult(0));
         continue;
       }
@@ -584,7 +586,7 @@ ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel) {
       return skip("multi-block function");
     if (alloc->hasAttr(poolAttr))
       return skip("existing shared-memory pool");
-    if (!getTopLevelUser(alloc, entry))
+    if (!getTopLevelUser(alloc, entry))  // 是否途径不支持的控制流（如async.execute 等）
       return skip("allocation inside unsupported control flow");
     if (!type.hasStaticShape() || !type.getLayout().isIdentity())
       return skip("dynamic shape or non-identity layout");

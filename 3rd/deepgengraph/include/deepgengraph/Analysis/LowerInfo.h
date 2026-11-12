@@ -434,6 +434,15 @@ private:
 
 class LowerInfoMap {
 public:
+  // The instruction consumes/produces computation C. Ordinary inference
+  // propagates result C, the distribution promised to downstream operations.
+  // Keep both snapshots even when they coincide (e.g. B-permuted C).
+  struct GemmLayouts {
+    LowerInfo computation;
+    LowerInfo result;
+  };
+  const GemmLayouts *getGemmLayouts(GemmOp op) const;
+  void resolveGemmLayouts(Operation *root);
   using LowerInfoMapTy = DenseMap<std::pair<Value, Operation*> , LowerInfo>;  // key: Value+op 标记某op的某个Value的Layout  v: Layout信息
   // 进行op顺序分析
   const SmallVector<Operation*>& getOpsOrder(mlir::Operation* rootNode);
@@ -453,6 +462,7 @@ public:
   auto end() { return infoMap.end(); }
   void print();
 private:
+  DenseMap<Operation *, GemmLayouts> gemmLayouts;
   LowerInfoMapTy infoMap;  // 存放解决完冲突后的 LowerInfo 信息
   DenseMap<mlir::Value, SmallVector<LowerInfo, 4>> m_candidates;  // 先存放所有LowerInfo
 

@@ -137,7 +137,9 @@ ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int6
     auto K_view = builder.create<frisk::BufferViewOp>(loc, K, ValueRange({bz, by, iv}), mapKV, ArrayRef<int64_t>{1, 1, BN, d});
     builder.create<frisk::CopyOp>(loc, K_view, smemK.getResult());
     // gemm
-    builder.create<frisk::GemmOp>(loc, smemQ, smemK, acc_s, false, true);
+    auto product = builder.create<frisk::GemmOp>(loc, acc_s.getType(),
+        smemQ, smemK, builder.create<frisk::ZeroOp>(loc, acc_s.getType()), false, true);
+    builder.create<frisk::CopyOp>(loc, product.getResult(), acc_s);
     // ====== softmax ======
     // copy perv_max to max
     builder.create<frisk::CopyOp>(loc, scores_max, scores_max_prev);
@@ -193,7 +195,9 @@ ModuleOp createFriskAttn(MLIRContext &ctx, int64_t b, int64_t h, int64_t s, int6
     auto V_view = builder.create<frisk::BufferViewOp>(loc, V, ValueRange({bz, by, iv}), mapKV, ArrayRef<int64_t>{1, 1, BN, d});
     builder.create<frisk::CopyOp>(loc, V_view, smemV);
     // gemm
-    builder.create<frisk::GemmOp>(loc, acc_s_cast, smemV, acc_o, false, false);
+    auto product = builder.create<frisk::GemmOp>(loc, acc_o.getType(),
+        acc_s_cast, smemV, acc_o, false, false);
+    builder.create<frisk::CopyOp>(loc, product.getResult(), acc_o);
   });
   // acc_o = acc_o / logsum
   builder.create<frisk::BlockOp>(loc, ArrayRef<int64_t>{BM, d}, [&](ValueRange blockIvs) {
@@ -255,7 +259,9 @@ ModuleOp createFriskMatmul(MLIRContext &ctx, int64_t M, int64_t N, int64_t K) {
     auto B_view = builder.create<frisk::BufferViewOp>(loc, B, ValueRange({bx, iv}), mapB, ArrayRef<int64_t>{BK, BN});
     builder.create<frisk::CopyOp>(loc, B_view, smemB.getResult());
     // gemm
-    builder.create<frisk::GemmOp>(loc, smemA, smemB, acc, false, false);
+    auto product = builder.create<frisk::GemmOp>(loc, acc.getType(),
+        smemA, smemB, acc, false, false);
+    builder.create<frisk::CopyOp>(loc, product.getResult(), acc);
   });
   auto C_view = builder.create<frisk::BufferViewOp>(loc, C, ValueRange({by, bx}), mapC, ArrayRef<int64_t>{BM, BN});
   builder.create<frisk::CopyOp>(loc, acc, C_view);

@@ -256,7 +256,7 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 }
 
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
-                    Target target, bool coalesceWaits) {
+                    Target target, bool coalesceWaits, bool nativeExp2) {
   mlir::PassManager pm(context);
   // DMA and shuffle lowering run before firstLowering, while their invariant
   // setup can still be hoisted using structured loops.
@@ -293,7 +293,8 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
 
   // 3. GPU / ROCDL / NVVM 降级
   pm.addPass(mlir::frisk::createLLVMFuncOpAddGPUAttrPass(target));
-  pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(target, kLLVMIndexBitwidth));
+  pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(target, kLLVMIndexBitwidth,
+                                                 nativeExp2));
 
   // 4. Vector lowering can create arith constants and UB poison values, so it
   // must run before the scalar dialects are finalized.

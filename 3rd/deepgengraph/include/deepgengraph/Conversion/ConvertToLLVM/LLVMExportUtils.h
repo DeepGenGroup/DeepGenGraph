@@ -67,11 +67,11 @@ void optimizeRegisterLifetimes(llvm::Module &module);
 void canonicalizeLDSGEPs(llvm::Module &module);
 
 /// Explicit approximate mode: reassociate single-use MMA accumulator chains,
-/// use native f32 exp2 (flushes subnormals), and share reciprocal divisions.
+/// and share reciprocal divisions. Native f32 exp2 is selected during MLIR lowering.
 /// Never enabled by the strict export path; no nnan/ninf assumptions are made.
 void optimizeApproximateRegisterMath(llvm::Module &module);
-/// Independently selectable approximation experiments, both include MMAC fusion.
-void optimizeRegisterMath(llvm::Module &module, bool nativeExp2, bool reciprocal);
+/// Optional reciprocal approximation, including MMAC fusion and canonicalization.
+void optimizeRegisterMath(llvm::Module &module, bool reciprocal);
 /// Hoist a bounded batch of global loads across pure exp2 work, before lifetime scheduling.
 void prefetchGlobalPackets(llvm::Module &module, unsigned maxWords = 8);
 /// Reuse identical vector LDS reads within a synchronization-free block phase.

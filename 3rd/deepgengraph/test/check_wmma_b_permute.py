@@ -36,11 +36,13 @@ def gemm(m, n, k, threads, chain=True):
     p, v, o = f'memref<{m}x{n}xf16, 3>', f'memref<{n}x64xf16, 3>', f'memref<{m}x64xf32>'
     args, results = (f', %v: {v}', f'({c}, {o})') if chain else ('', c)
     suffix = f'''%p = frisk.cast %c : {c} -> {p}
-      %o = frisk.gemm(%p, %v) {{transA = false, transB = false}} : {p}, {v} -> {o}
+      %o_init = frisk.zero : {o}
+      %o = frisk.gemm(%p, %v, %o_init) {{transA = false, transB = false}} : {p}, {v}, {o} -> {o}
       return %c, %o : {c}, {o}''' if chain else f'return %c : {c}'
     return f'''func.func @gemm(%a: {a}, %b: {b}{args}) -> {results}
       attributes {{thread_num = {threads} : i32}} {{
-      %c = frisk.gemm(%a, %b) {{transA = false, transB = false}} : {a}, {b} -> {c}
+      %c_init = frisk.zero : {c}
+      %c = frisk.gemm(%a, %b, %c_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}
       {suffix}
     }}'''
 
@@ -199,9 +201,11 @@ def main():
         assert outputs[0] == outputs[1] == outputs[2]
         b_only = '''func.func @b_only(%a: memref<32x16xf16, 3>, %b: memref<16x64xf16, 3>,
             %x: memref<64x32xf16, 3>) -> memref<64x64xf32> attributes {thread_num = 64 : i32} {
-          %g = frisk.gemm(%a, %b) {transA = false, transB = false} : memref<32x16xf16, 3>, memref<16x64xf16, 3> -> memref<32x64xf32>
+          %g_init = frisk.zero : memref<32x64xf32>
+          %g = frisk.gemm(%a, %b, %g_init) {transA = false, transB = false} : memref<32x16xf16, 3>, memref<16x64xf16, 3>, memref<32x64xf32> -> memref<32x64xf32>
           %p = frisk.cast %g : memref<32x64xf32> -> memref<32x64xf16, 3>
-          %o = frisk.gemm(%x, %p) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x64xf16, 3> -> memref<64x64xf32>
+          %o_init = frisk.zero : memref<64x64xf32>
+          %o = frisk.gemm(%x, %p, %o_init) {transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x64xf16, 3>, memref<64x64xf32> -> memref<64x64xf32>
           return %o : memref<64x64xf32>
         }'''
         b_ir, b_log = run(directory, 'b-only', b_only, 'b-permute')
@@ -210,9 +214,9 @@ def main():
         # ownership merely by changing its read coordinates.
         source = gemm(32, 64, 16, 64)
         vtype = 'memref<64x64xf16, 3>'
-        source = source.replace('%o = frisk.gemm(%p, %v)',
+        source = source.replace('%o = frisk.gemm(%p, %v, %o_init)',
             f'%vv = frisk.add %v, %v : {vtype}, {vtype} -> {vtype}\n'
-            '      %o = frisk.gemm(%p, %vv)')
+            '      %o = frisk.gemm(%p, %vv, %o_init)')
         computed, _ = run(directory, 'computed-b', source, 'b-permute')
         assert 'memref.alloc' in computed, 'computed B must keep the safe layout conversion'
         print('PASS P-only selection, terminal/unrelated GEMMs unchanged, 3.1/3.2 and 3.3 fallback')
