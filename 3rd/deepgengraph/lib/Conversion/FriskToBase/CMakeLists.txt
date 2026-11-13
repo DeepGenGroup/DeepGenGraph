@@ -12,6 +12,7 @@ add_deepgengraph_library(FriskToBase
   PackSharedMemory.cpp
   PromoteGlobalToSharedAsync.cpp
   SinkWaitBufferReady.cpp
+  ThreadDoubleBufferV.cpp
   
   DEPENDS
   FriskToBaseConversionPassIncGen

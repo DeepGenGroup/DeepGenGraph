@@ -19,6 +19,8 @@ std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
 std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass();
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();
+std::unique_ptr<mlir::Pass> createThreadDoubleBufferVPass();
+bool parseVDoubleBufferOption(llvm::StringRef argument, bool &enabled, bool &consumed);
 std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();
 std::unique_ptr<mlir::Pass> createPromoteGlobalToSharedAsyncPass();
 std::unique_ptr<mlir::Pass> createPromoteGemmMatrixLoadsPass(std::string wmmaLayout = "auto");

@@ -8,7 +8,7 @@
 #include <tuple>
 namespace mlir::frisk::detail {
 // LDSAddress：给定线程号和向量元素下标，把地址表达式精确求值成 LDS 内的字节偏移。
-// doubleBufferV、narrowKDMA 和 prefetchNextK 靠它证明读写的字节范围。
+// narrowKDMA 和 prefetchNextK 靠它证明读写的字节范围。
 //   storage  唯一的 LDS 全局变量，相对地址 0。
 //   cache    (值, 线程号, 元素) -> 结果。先写入空值，所以环会判定失败。
 // Exact evaluation of the restricted integer/thread-address DAG. Unknown

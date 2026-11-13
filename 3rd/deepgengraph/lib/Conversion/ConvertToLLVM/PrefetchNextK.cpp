@@ -440,8 +440,8 @@ void prefetchNextK(llvm::Module &module, bool enabled) {
 // That second barrier therefore orders the same accesses. On the last iteration
 // the loop exits without any later LDS user, so no ordering is needed at all.
 //
-// This cannot be done on MLIR. There, V is not yet double buffered and K0 has not
-// moved, so the K0 DMA sits between the two barriers and writes the slot V3 reads,
+// Keep this after LLVM next-K0 prefetch. Even with Thread IR V double buffering,
+// K0 has not moved yet and may write a slot used by the preceding iteration,
 // and this barrier is required. prefetchNextK also anchors on it, so it must stay
 // until that pass has run.
 //

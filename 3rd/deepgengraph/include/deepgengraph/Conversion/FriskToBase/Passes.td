@@ -3,6 +3,11 @@
 
 include "mlir/Pass/PassBase.td"
 
+def ThreadDoubleBufferV: Pass<"frisk-thread-double-buffer-v", "::mlir::func::FuncOp"> {
+  let summary = "Double buffer matrix-read DMA in existing Thread IR LDS storage";
+  let constructor = "mlir::frisk::createThreadDoubleBufferVPass()";
+}
+
 def OptimizeTensorLoops: Pass<"optimize-tensor-loops", "::mlir::ModuleOp"> {
   let summary = "Share invariant tensor work through checked unroll-and-jam, recurrence CSE and LICM";
   let constructor = "mlir::frisk::createOptimizeTensorLoopsPass()";

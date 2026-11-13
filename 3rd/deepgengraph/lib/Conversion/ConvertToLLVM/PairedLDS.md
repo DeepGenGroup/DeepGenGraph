@@ -136,7 +136,7 @@ and unsupported memory/address expressions are skipped with diagnostics.
 
 The first exact buffer_load_dwordx2/x4-to-LDS group is K0. The pass evaluates
 the restricted LDS address DAG for every workgroup lane, including swizzles
-and readfirstlane, using the same evaluator as DoubleBufferV. It rejects
+and readfirstlane, using the shared LDS address evaluator. It rejects
 overlapping packet writes, unknown addresses and any overlap with final-PV
 reads. It requires the original K0 ready wait/publication, final-PV ready
 wait/publication, final reader handoff and a released prologue LDS region.

@@ -11,7 +11,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/InterleavePV.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/DoubleBufferV.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -388,7 +387,7 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
-                             bool fuseAccumulators, unsigned pvInterleave = 0, bool vDoubleBuffer = false,
+                             bool fuseAccumulators, unsigned pvInterleave = 0,
                              const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0,
                              mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
                              unsigned kTailPrefetch = 0, bool crossBNK0 = false,
@@ -413,12 +412,9 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   dumpLLVMPass(module, dumpPasses, "fuseMMACAccumulators");
 
   // Final scheduling: subsequent fusion/lifetime passes must not undo the
-  // requested accumulator order. Interleave first, then independently prove
-  // V ownership and advance DMA into the alternate LDS slot when requested.
+  // requested accumulator order. V storage/scheduling is already fixed in Thread IR.
   mlir::frisk::interleavePVAccumulators(module, pvInterleave);
   dumpLLVMPass(module, dumpPasses, "interleavePVAccumulators");
-  mlir::frisk::doubleBufferV(module, vDoubleBuffer);
-  dumpLLVMPass(module, dumpPasses, "doubleBufferV");
   if (!mlir::frisk::narrowKDMA(module, kDMA))
     llvm::report_fatal_error("cannot apply requested K DMA configuration");
   dumpLLVMPass(module, dumpPasses, "narrowKDMA");
@@ -1099,6 +1095,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after lower-frisk-fragments -----\n";
   llvm::outs().flush(); src->dump();
+  if (vDoubleBuffer) {
+    AddFuncPass(frisk::createThreadDoubleBufferVPass());
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after thread-double-buffer-v -----\n";
+    llvm::outs().flush(); src->dump();
+  }
 
   #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
@@ -1255,7 +1258,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, vDoubleBuffer, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
       hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {

@@ -140,6 +140,7 @@ int main(int argc, char **argv) {
     return mlir::frisk::createFriskFragIRReorderPass();
   });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskFragmentsPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadDoubleBufferVPass(); });
   mlir::registerPass([] { return mlir::frisk::createRetainInvariantFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createFuseFragmentAccumulatorPass(); });
   mlir::registerPass([] { return mlir::frisk::createPackSharedMemoryPass(); });
