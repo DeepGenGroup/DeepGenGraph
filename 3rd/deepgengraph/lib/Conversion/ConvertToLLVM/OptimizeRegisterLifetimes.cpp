@@ -1,15 +1,15 @@
 // ===========================================================================
 // Pass: optimizeRegisterLifetimes   优化汇总.py 第 23 项，LLVM 阶段
 //
-// 作用：缩短值在寄存器里的存活时间，降低 VGPR 压力。实际包含 5 个相互独立的优化：
-//   exposeThreadBounds          给 workitem id 打上 !range，后续 InstCombine 能化简除法。
+// 作用：缩短值在寄存器里的存活时间，降低 VGPR 压力。实际包含 4 个相互独立的优化：
+//   线程号范围由 GPU→ROCDL lowering 从 thread_num 传递，不在这里重新推导。
 //   simplifyThreadExpressions   枚举所有线程号，把长的地址表达式换成等价的“掩码 + 移位”。
 //   scheduleMathConsumers       把数学结果的消费者紧贴生产者，尽早 fptrunc 打包成 half。
 //   AddressRematerializer       把依赖线程号的地址表达式在每个基本块内就地重建，不跨块存活。
 //   compactIntegerComparisons   把一组 64-bit 比较拆成共享的高位比较 + 独立的低位比较。
 //
 // 执行顺序（文件末尾的 optimizeRegisterLifetimes）：
-//   exposeThreadBounds -> simplifyThreadExpressions -> InstCombine -> OptimizeRegisterLifetimesPass
+//   simplifyThreadExpressions -> InstCombine -> OptimizeRegisterLifetimesPass
 //   （math + address）-> DCE -> compactIntegerComparisons
 //
 // marker：函数属性 frisk.register_lifetimes，防止重复运行。
@@ -56,32 +56,6 @@ bool isThreadID(llvm::Value *value) {
   case llvm::Intrinsic::amdgcn_workitem_id_y:
   case llvm::Intrinsic::amdgcn_workitem_id_z: return true;
   default: return false;
-  }
-}
-
-// Establish bounds BEFORE canonicalization and rematerialization. Otherwise
-// lowering of affine floor divisions has already expanded signed correction
-// DAGs, which are then needlessly recomputed at every memory access.
-// 根据 reqd_work_group_size 给 workitem.id 添加 !range。必须在规范化之前做，否则 floordiv 的
-// 符号修正已经展开，之后再化简就晚了。
-void exposeThreadBounds(llvm::Function &function) {
-  auto *size = function.getMetadata("reqd_work_group_size");
-  if (!size) return;
-  for (llvm::Instruction &inst : llvm::instructions(function)) {
-    if (!isThreadID(&inst)) continue;
-    auto id = llvm::cast<llvm::IntrinsicInst>(inst).getIntrinsicID();
-    unsigned axis = id == llvm::Intrinsic::amdgcn_workitem_id_x ? 0 :
-                    id == llvm::Intrinsic::amdgcn_workitem_id_y ? 1 : 2;
-    if (axis >= size->getNumOperands()) continue;
-    auto *bound = llvm::mdconst::dyn_extract<llvm::ConstantInt>(size->getOperand(axis));
-    if (!bound || bound->getValue().getActiveBits() > 11 ||
-        bound->isZero() || bound->getZExtValue() > 1024) continue;
-    auto range = llvm::computeConstantRange(
-        &inst, false, llvm::SimplifyQuery(function.getDataLayout())).intersectWith(
-        llvm::ConstantRange(llvm::APInt(32, 0), llvm::APInt(32, bound->getZExtValue())));
-    if (!range.isEmptySet() && !range.isFullSet())
-      inst.setMetadata(llvm::LLVMContext::MD_range,
-          llvm::MDBuilder(function.getContext()).createRange(range.getLower(), range.getUpper()));
   }
 }
 
@@ -294,18 +268,8 @@ llvm::CallInst *materialize(llvm::Value *value, llvm::Instruction *before,
   if (isThreadID(value)) {
     auto range = llvm::computeConstantRange(
         value, false, llvm::SimplifyQuery(before->getDataLayout()));
-    // The identity must retain known thread bounds, otherwise constant-index
-    // divisions may become much more expensive after hiding the intrinsic.
-    if (auto *size = before->getFunction()->getMetadata("reqd_work_group_size")) {
-      auto id = llvm::cast<llvm::IntrinsicInst>(value)->getIntrinsicID();
-      unsigned axis = id == llvm::Intrinsic::amdgcn_workitem_id_x ? 0 :
-                      id == llvm::Intrinsic::amdgcn_workitem_id_y ? 1 : 2;
-      if (axis < size->getNumOperands())
-        if (auto *bound = llvm::mdconst::dyn_extract<llvm::ConstantInt>(size->getOperand(axis)))
-          if (bound->getZExtValue() > 0 && bound->getZExtValue() <= 1024)
-            range = range.intersectWith(llvm::ConstantRange(
-                llvm::APInt(32, 0), llvm::APInt(32, bound->getZExtValue())));
-    }
+    // Preserve the range exported by GPU lowering on this new SSA value;
+    // hiding the intrinsic must not discard its known thread bounds.
     if (!range.isFullSet() && !range.isEmptySet())
       call->setMetadata(llvm::LLVMContext::MD_range,
           llvm::MDBuilder(before->getContext()).createRange(range.getLower(), range.getUpper()));
@@ -685,7 +649,6 @@ void optimizeRegisterLifetimes(llvm::Module &module) {
         function.hasFnAttribute(llvm::Attribute::StrictFP) ||
         function.hasFnAttribute(llvm::Attribute::OptimizeNone) || !isAMDGPU(function)) continue;
     if (!function.hasFnAttribute(marker)) {
-      exposeThreadBounds(function);
       unsigned simplified = simplifyThreadExpressions(function);
       llvm::errs() << "Compact thread indices: " << simplified << " proven replacements\n";
       pipeline.run(function, analyses);

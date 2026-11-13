@@ -15,6 +15,7 @@
 // 文件结构：Pass 1 的主体 -> barrier 内存范围判定（调度也复用）-> 调度节点定义 -> LDS 合并 -> 调度器 -> Pass 2。
 // ===========================================================================
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
+#include "deepgengraph/Analysis/ThreadBounds.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
@@ -418,18 +419,20 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
         affine::fullyComposeAffineMapAndOperands(&difference, &indices);
         affine::canonicalizeMapAndOperands(&difference, &indices);
         difference = simplifyAffineMap(difference);
+        std::optional<frisk::ThreadIdRange> threadRange;
+        if (indices.size() == 1)
+          if (auto id = indices[0].getDefiningOp<gpu::ThreadIdOp>())
+            threadRange = frisk::getThreadIdRange(id, id.getDimension());
         if (auto constant = dyn_cast<AffineConstantExpr>(difference.getResult(0))) {
           if (constant.getValue() != type.getNumElements())
             continue;
-        } else if (auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
-                   threads && threads.getInt() > 0 && threads.getInt() <= 1024 &&
-                   indices.size() == 1 && indices[0].getDefiningOp<gpu::ThreadIdOp>()) {
+        } else if (threadRange) {
           // A composed K permutation plus physical LDS packing can make the
           // unbounded Presburger proof extremely expensive. Check EVERY legal
           // thread coordinate instead; this is an exact finite-domain proof,
-          // not sampling. The block's total thread count bounds each axis.
+          // not sampling. Use the axis range from the shared launch contract.
           bool adjacent = true;
-          for (int64_t tid = 0; tid < threads.getInt(); ++tid) {
+          for (int64_t tid = threadRange->lower; tid < threadRange->upper; ++tid) {
             SmallVector<Attribute> folded;
             if (failed(difference.constantFold({b.getIndexAttr(tid)}, folded)) ||
                 folded.size() != 1 ||

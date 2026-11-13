@@ -174,12 +174,12 @@ exit:
     assert '@llvm.amdgcn.exp2.f32' in approximate
     print('PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal')
 
-    # Reproduce the ordering dependency, including the pass that proves the
-    # thread guard true. Early CFG cleanup alone cannot expose this fusion.
+    # Supply the thread range that GPU lowering now exports. Check that the
+    # existing cleanup/fusion pipeline can use it without late range inference.
     guarded = f'''declare i32 @llvm.amdgcn.workitem.id.x()
-define amdgpu_kernel void @thread_guard(<4 x half> %a, <4 x half> %b, <4 x float> %acc, ptr addrspace(3) %out) !reqd_work_group_size !0 {{
+define amdgpu_kernel void @thread_guard(<4 x half> %a, <4 x half> %b, <4 x float> %acc, ptr addrspace(3) %out) {{
 entry:
-  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+  %tid = call i32 @llvm.amdgcn.workitem.id.x(), !range !1
   %x = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> zeroinitializer)
   %y = call <4 x float> {asm}(<4 x half> %a, <4 x half> %b, <4 x float> %x)
   %leader = icmp ult i32 %tid, 256
@@ -191,10 +191,10 @@ writeback:
 exit:
   ret void
 }}
-!0 = !{{i32 256, i32 1, i32 1}}
+!1 = !{{i32 0, i32 256}}
 '''
     early = run([tool, '--approx-register-math', '-'], guarded)
-    assert 'fadd' in run([tool, '--fuse-mmac-accumulator', '-'], early)
+    assert 'fadd' not in run([tool, '--fuse-mmac-accumulator', '-'], early)
     bounded = run([tool, '--optimize-register-lifetimes', '-'], early)
     assert 'br i1 true' in bounded and 'fadd' in bounded
     final = run([tool, '--fuse-mmac-accumulator', '-'], bounded)

@@ -29,8 +29,8 @@ def main():
     for count in (32, 64, 192, 256, 512, 1024):
         source = f'''target triple = "amdgcn-amd-amdhsa"
 declare i32 @llvm.amdgcn.workitem.id.x()
-define i64 @index(i32 %input) !reqd_work_group_size !0 {{
-  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+define i64 @index(i32 %input) {{
+  %tid = call i32 @llvm.amdgcn.workitem.id.x(), !range !1
   %t = sext i32 %tid to i64
   %a = mul i64 %t, 18
   %b = sdiv i64 %a, 16
@@ -43,7 +43,7 @@ define i64 @index(i32 %input) !reqd_work_group_size !0 {{
   %out = add i64 %e, %h
   ret i64 %out
 }}
-!0 = !{{i32 {count}, i32 1, i32 1}}
+!1 = !{{i32 0, i32 {count}}}
 '''
         output = run([tool, '--optimize-register-lifetimes', '-'], source)
         assert 'sdiv ' not in output and 'srem ' not in output

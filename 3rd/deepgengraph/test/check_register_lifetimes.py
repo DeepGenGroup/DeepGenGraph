@@ -69,8 +69,8 @@ declare i32 @llvm.amdgcn.workitem.id.y()
 declare i32 @llvm.amdgcn.workitem.id.z()
 define amdgpu_kernel void @axes(ptr addrspace(1) %out, i1 %cond) "amdgpu-flat-work-group-size"="256,256" !reqd_work_group_size !0 {
 entry:
-  %y = call i32 @llvm.amdgcn.workitem.id.y()
-  %z = call i32 @llvm.amdgcn.workitem.id.z()
+  %y = call i32 @llvm.amdgcn.workitem.id.y(), !range !1
+  %z = call i32 @llvm.amdgcn.workitem.id.z(), !range !2
   %stride = mul i32 %z, 8
   %index = add i32 %stride, %y
   %p = getelementptr float, ptr addrspace(1) %out, i32 %index
@@ -82,6 +82,8 @@ exit:
   ret void
 }
 !0 = !{i32 32, i32 4, i32 2}
+!1 = !{i32 0, i32 4}
+!2 = !{i32 0, i32 2}
 '''
     # Different vector widths and unrelated intervening work. The sum's
     # association must survive exactly, and casts should precede opaque().

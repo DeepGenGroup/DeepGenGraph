@@ -1,6 +1,7 @@
 add_deepgengraph_library(DeepgengraphAnalysis
   Parallelism.cpp
   ThreadAnalysis.cpp
+  ThreadBounds.cpp
   LowerInfo.cpp
   ShmDataIODesc.cpp
   HardwareSpecification.cpp
@@ -16,6 +17,7 @@ add_deepgengraph_library(DeepgengraphAnalysis
   MLIRTransforms
   MLIRDataLayoutInterfaces
   MLIRControlFlowInterfaces
+  MLIRFunctionInterfaces
   MLIRLoopLikeInterface
   MLIRLLVMDialect
   MLIRIR

@@ -1,4 +1,5 @@
 #include "deepgengraph/Common.h"
+#include "deepgengraph/Analysis/ThreadBounds.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -9,6 +10,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include <dlfcn.h>
+#include <type_traits>
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 
 using namespace mlir;
@@ -113,11 +115,25 @@ public:
       function = Func;
     if (auto llvmFunc = op->template getParentOfType<LLVM::LLVMFuncOp>())
       function = llvmFunc;
-    if (!boundsAttrName.empty() && function) {
+    if constexpr (std::is_same_v<Op, gpu::ThreadIdOp> &&
+                  std::is_same_v<XOp, ROCDL::ThreadIdXOp>) {
+      // The launch contract is already known in ThreadIR. Export it on the
+      // intrinsic itself, before the index extension and LLVM optimizations.
+      if (auto range = getThreadIdRange(op, op.getDimension()))
+        newOp->setAttr("range", LLVM::ConstantRangeAttr::get(
+            context, 32, range->lower, range->upper));
+    } else if (!boundsAttrName.empty() && function) {
       if (auto attr = function->template getAttrOfType<DenseI64ArrayAttr>(
               boundsAttrName)) {
-        int32_t maximum = attr[static_cast<uint32_t>(op.getDimension())];
-        newOp->setAttr("range", rewriter.getDenseI64ArrayAttr({0, maximum}));
+        unsigned axis = static_cast<unsigned>(op.getDimension());
+        if (axis < attr.size() && attr[axis] > 0 && attr[axis] <= INT32_MAX) {
+          int64_t maximum = attr[axis];
+          if constexpr (std::is_same_v<XOp, ROCDL::BlockIdXOp>)
+            newOp->setAttr("range", LLVM::ConstantRangeAttr::get(
+                context, 32, 0, maximum));
+          else
+            newOp->setAttr("range", rewriter.getDenseI64ArrayAttr({0, maximum}));
+        }
       }
     }
 
