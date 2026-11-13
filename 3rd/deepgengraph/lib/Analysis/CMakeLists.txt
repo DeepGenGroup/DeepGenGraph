@@ -5,12 +5,19 @@ add_deepgengraph_library(DeepgengraphAnalysis
   ShmDataIODesc.cpp
   HardwareSpecification.cpp
   LivelinessAnalyze.cpp
+  RegisterPressure.cpp
 
   DEPENDS
   DeepgengraphTableGen
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
+  MLIRPass
+  MLIRTransforms
+  MLIRDataLayoutInterfaces
+  MLIRControlFlowInterfaces
+  MLIRLoopLikeInterface
+  MLIRLLVMDialect
   MLIRIR
   MLIRAffineDialect
   MLIRArithDialect

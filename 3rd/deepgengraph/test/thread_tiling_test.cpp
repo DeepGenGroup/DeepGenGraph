@@ -1,6 +1,7 @@
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
+#include "deepgengraph/Analysis/RegisterPressure.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
@@ -34,6 +35,7 @@ struct TestAsyncToLLVMPass
   llvm::StringRef getDescription() const final { return "Exercise the complete GPU lowering"; }
   void getDependentDialects(mlir::DialectRegistry &registry) const final {
     mlir::registerAllDialects(registry);
+    registry.insert<mlir::frisk::FriskDialect>();
   }
   void runOnOperation() final {
     auto module = getOperation();
@@ -110,6 +112,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createApproximateThreadMathPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadMaskAddBypassPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadLocalReductionPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
   mlir::registerPass([] { return mlir::frisk::createIRDeepOptimizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerGPUShuffleToROCDLPass(); });
@@ -146,6 +150,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncToSyncPass(); });
   mlir::registerPass([] { return mlir::frisk::createScheduleAsyncCopiesPass(); });
   mlir::registerPass([] { return mlir::frisk::createAnalyzeShmLivenessPass(); });
+  mlir::registerPass([] { return mlir::frisk::createAnalyzeRegisterPressurePass(); });
   mlir::registerPass([] { return mlir::frisk::createSinkWaitBufferReadyPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Thread tiling tests\n", registry));

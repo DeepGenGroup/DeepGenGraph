@@ -1,6 +1,50 @@
 LocalReductionPass
 ==================
 
+Main pipeline: tagged thread IR reductions
+-----------------------------------------
+MyTest now runs createThreadLocalReductionPass after thread loop unrolling,
+register SSA cleanup and mask-add bypass, before early wave/LLVM lowering.
+Implementation: lib/Conversion/ConvertToLLVM/ThreadLocalReduction.cpp
+Factory: include/deepgengraph/Conversion/ConvertToLLVM/Passes.h
+
+Reduce lowering (both typed fragment and direct thread routes) annotates the
+local scalar recurrence with the unit attribute frisk.try_multichain. Unrolling
+clones it onto the SSA chain. Cross-lane shuffle combines are not annotated.
+Callers may also explicitly annotate scalar arith.addf/mulf/minnumf/maxnumf.
+Every absorbed operation must carry the attribute; an untagged operation is a
+boundary. The attribute only selects candidates, not permission to reassociate
+floating point. legal/approx still control that permission as described below.
+
+This initial version deliberately supports only those four scalar FP ops.
+Integer/vector operations and other arithmetic are left untouched, even when
+tagged. The existing ops filter still applies; selecting unsupported kinds does
+not enable a fallback LLVM rewrite. Single-use and same-block boundaries,
+identity seeds, insertion positions, fixed chain counts and thresholds follow
+the legacy algorithm. Rewritten nodes carry frisk.local_reduction and no longer
+carry frisk.try_multichain; the pass is idempotent. New nodes have no fast-math
+assumptions. Unchanged candidates retain their original attributes and flags.
+
+The chain count is manual (default 4). Register-lifetime hotspot analysis is not
+used to select it or predict spills; this pass makes no spill-avoidance claim.
+Tune chain count using actual backend register/spill reports and measurements.
+
+Standalone MLIR invocation:
+  build/test/ThreadTilingTest input.mlir \
+    '--frisk-thread-local-reduction=approximate=true chains=4 min-inputs=16 ops=add,max'
+For embedding, pass LocalReductionOptions to createThreadLocalReductionPass.
+The LocalReduction diagnostic format is unchanged for TuneAttention.py.
+
+Build and regression (repository root):
+  cmake --build 3rd/deepgengraph/build --target ThreadTilingTest MyTest -j 2
+  python3 3rd/deepgengraph/test/check_thread_local_reduction.py
+Tests cover attribute/legality gates, protected functions, unsupported ops,
+shared uses, block boundaries, late input definitions, odd chain counts,
+thresholds, identity seeds, idempotence, fragment-to-thread annotation and
+shuffle exclusion, and 400 native CPU numerical checks.
+
+Legacy LLVM API (retained for standalone compatibility)
+------------------------------------------------------
 Public API: include/deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h
 Implementation: lib/Conversion/ConvertToLLVM/LocalReduction.cpp
 This is an LLVM new-PM FunctionPass. It can run on ordinary CPU functions or
@@ -81,8 +125,8 @@ Embedding in another LLVM pipeline:
   pipeline.addPass(mlir::frisk::LocalReductionPass(options));
 or call mlir::frisk::optimizeLocalReductions(module, options).
 
-MyTest runs it after register math and mask bypass, before prefetch/lifetime
-scheduling. TuneAttention.py forwards the same four options, supports sweeps,
+MyTest uses the thread IR pass above, not this legacy LLVM implementation.
+TuneAttention.py forwards the same four options, supports sweeps,
 filters incompatible math/chain/threshold combinations, and records matched
 groups, inputs, chains and mode in result.json's local_reduction_reports.
 For the validated attention experiment (commands from repository root):

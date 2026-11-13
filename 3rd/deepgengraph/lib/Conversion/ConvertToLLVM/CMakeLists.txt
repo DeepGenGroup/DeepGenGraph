@@ -12,6 +12,8 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   FuseMMACAccumulator.cpp
   ThreadMaskAddBypass.cpp
   LocalReduction.cpp
+  ThreadLocalReduction.cpp
+  ThreadDeferLaneSum.cpp
   DeferLaneSum.cpp
   CanonicalizeLDSGEPs.cpp
   OptimizeRegisterLifetimes.cpp

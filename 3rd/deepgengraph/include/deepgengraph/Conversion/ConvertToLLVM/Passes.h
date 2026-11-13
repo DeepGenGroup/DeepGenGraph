@@ -3,6 +3,8 @@
 
 #include "mlir/Pass/Pass.h"
 #include "deepgengraph/Common.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 
 namespace mlir::frisk {
 
@@ -21,6 +23,12 @@ std::unique_ptr<mlir::Pass> createLowerFriskAsyncCopyPass(bool useAsyncCopy = tr
 std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 std::unique_ptr<mlir::Pass> createApproximateThreadMathPass();
 std::unique_ptr<mlir::Pass> createThreadMaskAddBypassPass();
+// Only tagged scalar FP reduction chains; run after thread loop unrolling.
+std::unique_ptr<mlir::Pass> createThreadLocalReductionPass(
+    LocalReductionOptions options = {});
+// Run on structured thread SSA before lowering gpu.shuffle.
+std::unique_ptr<mlir::Pass> createThreadDeferLaneSumPass(
+    DeferLaneSumOptions options = {});
 std::unique_ptr<mlir::Pass> createSimplifyBoundedAffinePass();
 std::unique_ptr<mlir::Pass> createHoistWaveInvariantsPass(bool ldsBases = true, bool laneShuffles = true);
 

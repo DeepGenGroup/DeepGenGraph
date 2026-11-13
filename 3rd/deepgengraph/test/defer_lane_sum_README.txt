@@ -1,3 +1,49 @@
+ThreadDeferLaneSumPass：threadIR 循环跨 lane 求和延迟
+====================================================
+
+主流水线入口（MyTest）
+  include/deepgengraph/Conversion/ConvertToLLVM/Passes.h
+  lib/Conversion/ConvertToLLVM/ThreadDeferLaneSum.cpp
+  C++：createThreadDeferLaneSumPass(DeferLaneSumOptions)
+  独立 MLIR：ThreadTilingTest --frisk-thread-defer-lane-sum='approximate=true wave-size=64'
+
+  MyTest 的 --defer-lane-sum=off|legal|approx 开关保持不变，默认 off。
+  approx 仍要求 math=approx；legal 仅对 i32 执行变换。
+  Pass 在 thread local reduction 之后、early wave lowering 之前运行。
+  dump 阶段：after frisk-thread-defer-lane-sum。
+  主流水线不再调用 LLVM deferLaneSums；DeferLaneSum: 统计格式保持不变，
+  TuneAttention 的 defer_lane_sum_reports 无需修改。
+
+变换与边界
+  数学变换同下方旧入口：循环内保留局部递推，循环出口再求组内和。
+  不依赖函数名或 attention 表达式。匹配 affine.for / scf.for 的零初值
+  iter_args、固定 gpu.shuffle xor 蝶形及加法/乘加递推。
+  支持 f32/i32 标量、固定向量状态的静态元素，以及 vector<1xT> 算术包装。
+  可穿透 extract/broadcast/from_elements/shape_cast；一次算术更新多个向量
+  元素、动态索引、非零初值、子循环候选、未知控制流均保守跳过。
+  全向量循环结果在出口重建，未变换的字段保持原值。
+  缩放一致性支持常量、kernel 参数、固定线程索引计算、纯 arith/math、
+  完整 XOR 组归约及可归纳证明一致的循环状态（例如动态 running max）。
+  状态、局部更新、归约值若存在其它可观察用途则拒绝变换。
+  整数新局部递推清除 overflowFlags；浮点清除更新/缩放的 fastmath 假设。
+
+  thread_num 是现有一维 launch ABI；显式 wave-size=32/64 且完整 wave
+  才启用，目标特性冲突时跳过。默认 wave-size=0 不猜测硬件 wave 大小。
+  MyTest 继续传入 wave64。严格浮点/optnone、未知 call/inline asm、
+  不支持的方言/region 控制拒绝；已知寄存器 MMAC 模板可保留。
+  循环及其外层控制必须 wave-uniform；匹配的更新和 shuffle 必须在
+  候选循环的直接 body 中。循环内部普通结构化分支可以发散后汇合。
+
+构建与 threadIR 回归
+  cmake --build 3rd/deepgengraph/build --target ThreadTilingTest MyTest -j 2
+  python3 3rd/deepgengraph/test/check_thread_defer_lane_sum.py
+  测试覆盖标量/多字段向量、affine/scf、wave32/64、幂等性、拒绝条件、
+  零次/1/2/7/31 次循环、i32 溢出、动态 max 缩放；对实际生成的 LLVM
+  做 verifier/O3 和 CPU lane 模型执行比较。CPU 模型不替代 GPU 性能实测。
+
+旧 LLVM 文件独立入口（保留兼容）
+================================
+
 DeferLaneSumPass：通用循环跨 lane 求和延迟
 =========================================
 
@@ -48,8 +94,7 @@ CLI，默认关闭
     TuneAttention：--set defer-lane-sum=approx
                    --sweep 'defer-lane-sum=off;legal;approx'
   approx 要求 math=approx。legal 目前只变换 i32。
-  MyTest 的现有 lowering 使用 wave64 ABI；Pass 在 LocalReduction 之后、
-  prefetch/register-lifetime 调整之前执行。结果计入 defer_lane_sum_reports。
+  MyTest 使用上方 threadIR 入口；下方 LLVM 入口仅用于独立导出文件。
 
   独立处理已导出的 IR（不运行其他优化）：
     3rd/deepgengraph/build/test/LegacyLLVMExportTest \

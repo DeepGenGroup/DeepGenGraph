@@ -2947,7 +2947,14 @@ struct ReduceTileElement {
           }
         }
         Value value = self.rewriter.create<vector::ExtractOp>(self.loc, self.source, indices);
-        return *combineReduceValues(self.loc, self.kind, accumulator, value, self.rewriter);
+        Value combined = *combineReduceValues(
+            self.loc, self.kind, accumulator, value, self.rewriter);
+        // Only the local recurrence is a multichain candidate. In particular,
+        // do not tag the cross-lane shuffle combines below. Unrolling clones
+        // this attribute onto the scalar SSA chain in thread IR.
+        combined.getDefiningOp()->setAttr("frisk.try_multichain",
+                                         self.rewriter.getUnitAttr());
+        return combined;
       }
     } element{*this, outputIvs};
     // Keep the original left-to-right FP association across all fragments.

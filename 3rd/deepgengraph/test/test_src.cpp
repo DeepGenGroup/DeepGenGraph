@@ -77,6 +77,7 @@
 #include "mlir/InitAllPasses.h"
 
 #include "deepgengraph/Analysis/ThreadAnalysis.h"
+#include "deepgengraph/Analysis/RegisterPressure.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
@@ -495,6 +496,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool simplifyBoundedAffine = true, hoistLDSBases = true, hoistLaneShuffles = true;
   bool elideBackedgeBarrier = true;
   bool dumpLLVMPasses = false;
+  bool analyzeRegisterPressure = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
   StringRef maskAddBypass = "off";
@@ -508,6 +510,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
+    if (option.consume_front("--analyze-register-pressure=")) {
+      if (option != "0" && option != "1") {
+        llvm::errs() << "use --analyze-register-pressure=0|1\n"; return 1;
+      }
+      analyzeRegisterPressure = option == "1";
+      continue;
+    }
     if (option.consume_front("--cpsat-export=")) { cpsat.exportPath = option.str(); continue; }
     if (option.consume_front("--cpsat-import=")) { cpsat.importPath = option.str(); continue; }
     if (option.consume_front("--cpsat-baseline=")) { cpsat.baselinePath = option.str(); continue; }
@@ -1069,6 +1078,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(frisk::createAnalyzeShmLivenessPass());
   llvm::outs() << "\n---- after fragment-level optimization -----\n";
   llvm::outs().flush(); src->dump();
+  if (analyzeRegisterPressure)
+    AddFuncPass(frisk::createAnalyzeRegisterPressurePass("fragment"));
   AddFuncPass(mlir::frisk::createConvertFragmentToThreadIRPass());
   llvm::outs() << "\n---------- after convert-fragment-to-thread ---------\n";
   llvm::outs().flush(); src->dump();
@@ -1156,6 +1167,23 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // Local scalar chains are exposed after unrolling. Only reductions tagged
+  // by lowering (or explicitly by the caller) may be reassociated here.
+  if (localReduce != "off") {
+    AddFuncPass(frisk::createThreadLocalReductionPass(localReductionOptions));
+    llvm::outs() << "\n---- after frisk-thread-local-reduction -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
+  // Preserve structured recurrences and explicit XOR collectives for analysis.
+  if (deferLaneSum != "off") {
+    AddFuncPass(frisk::createThreadDeferLaneSumPass(deferLaneSumOptions));
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-thread-defer-lane-sum -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1169,6 +1197,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
   }
   mlir::ModuleOp mod = *src;
+  if (analyzeRegisterPressure)
+    AddFuncPass(frisk::createAnalyzeRegisterPressurePass("thread"));
   if (!frisk::firstLowering(mod, src->getContext()) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
                             coalesceWaits, mathMode == "approx" || mathMode == "mmac-exp2"))
@@ -1197,13 +1227,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (mathMode != "strict")
     frisk::fuseMMACAccumulators(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");
-  if (localReduce != "off")
-    frisk::optimizeLocalReductions(*llvmModule, localReductionOptions);
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeLocalReductions");
-  if (deferLaneSum != "off") {
-    frisk::deferLaneSums(*llvmModule, deferLaneSumOptions);
-  }
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "deferLaneSums");
+  // Local reductions and deferred lane sums are complete in thread IR.
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "prefetchGlobalPackets");
