@@ -69,6 +69,9 @@ def main():
         for threads,stages,rounds in [(64,2,1),(128,3,1),(256,4,2),(512,5,1),(1024,2,1)]:
             size=threads*16*rounds
             for base in (0,size):check(fixture(threads,stages,base,rounds=rounds))
+        # Earlier joint planning may emit 8B packets before this pass. Audit
+        # their actual full-wave ranges and preserve the same readiness rules.
+        check(fixture().replace('frisk.dma_bytes = 16', 'frisk.dma_bytes = 8'))
         base=fixture()
         check(fixture(capacity=1024),False,'no spare')
         check(fixture(stages=1),False,'2..32')
@@ -79,7 +82,8 @@ def main():
         check(base.replace('gpu.barrier\nvector.store','gpu.barrier\n%late = memref.load %other[%idx] : memref<512xf16, 3>\nvector.store'),False,'surviving')
         check(base.replace('d0 * 8','d0 * 8 + 512'),False,'read outside')
         check(base.replace('to %slot {alignment','to %other {alignment',1),False,'read outside')
-        check(base.replace('frisk.dma_bytes = 16','frisk.dma_bytes = 4'),False,'direct DMA')
+        check(base.replace('frisk.dma_bytes = 16','frisk.dma_bytes = 4'))
+        check(base.replace('frisk.dma_bytes = 16','frisk.dma_bytes = 3'),False,'direct DMA')
         check(base.replace('alignment = 16 : i64','alignment = 4 : i64'),False,'direct DMA')
         check(base.replace('frisk.dma_bytes = 16 : i64','frisk.dma_bytes = 16 : i64, frisk.force_sync'),False,'direct DMA')
         check(base.replace('affine.for %iv = 0 to 4','affine.for %iv = 0 to %tid'),False,'non-uniform')

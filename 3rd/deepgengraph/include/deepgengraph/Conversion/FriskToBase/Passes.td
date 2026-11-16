@@ -76,7 +76,13 @@ def ConvertFriskBaseToThreadLevelIR: Pass<"convert-friskbase-to-thread", "::mlir
 
   let constructor = "mlir::frisk::createConvertFriskBaseToThreadLevelIRPass()";
   let options = [Option<"packSharedOperands", "pack-shared-operands", "bool", "true",
-      "Plan packed LDS layouts for owned GEMM operands">,
+      "Search physical LDS layouts using all accesses to each owned shared allocation">,
+    Option<"sharedMemoryPlanning", "shared-memory-planning", "std::string", "\"auto\"",
+      "analyze (dump the joint plan before tiling), or auto (publish and materialize the plan)">,
+    Option<"sharedCopyConstraints", "shared-copy-constraints", "std::string", "\"\"",
+      "Comma-separated source-argument:bytes[:xor-source:xor-target] constraints, applied before joint planning">,
+    Option<"dmaExportWidths", "dma-export-widths", "std::string", "\"4,16\"",
+      "DMA bytes per lane supported by the selected exporter; buffer asm supports 4,8,16">,
     Option<"matrixLoads", "matrix-loads", "bool", "true",
       "Prefer compatible warp matrix reads for shared GEMM B operands">,
     Option<"asyncDirectOnly", "async-direct-only", "bool", "false",

@@ -3,7 +3,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/NarrowKDMA.h"
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "SplitDAttentionTiles.h"
 #include "deepgengraph/Common.h"
@@ -388,7 +387,7 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators, unsigned pvInterleave = 0,
-                             const mlir::frisk::KDMAOptions &kDMA = {}, unsigned kLDSPrefetch = 0,
+                             unsigned kLDSPrefetch = 0,
                              mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
                              unsigned kTailPrefetch = 0, bool crossBNK0 = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
@@ -415,9 +414,6 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // requested accumulator order. V storage/scheduling is already fixed in Thread IR.
   mlir::frisk::interleavePVAccumulators(module, pvInterleave);
   dumpLLVMPass(module, dumpPasses, "interleavePVAccumulators");
-  if (!mlir::frisk::narrowKDMA(module, kDMA))
-    llvm::report_fatal_error("cannot apply requested K DMA configuration");
-  dumpLLVMPass(module, dumpPasses, "narrowKDMA");
   if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
     llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
   dumpLLVMPass(module, dumpPasses, "prefetchPairedLDS");
@@ -482,7 +478,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   frisk::SoftmaxFragmentMode softmaxFragments = frisk::SoftmaxFragmentMode::Off;
   unsigned pvInterleave = 0;
   bool vDoubleBuffer = false;
-  frisk::KDMAOptions kDMA;
+  // Compatibility spelling only. Translate into generic early constraints;
+  // there is no LLVM-level K DMA transformation.
+  StringRef legacyDMAMode = "128";
+  unsigned legacyDMAArgument = 1;
+  std::string sharedCopyConstraints;
   unsigned kLDSPrefetch = 0;
   unsigned kTailPrefetch = 0;
   bool crossBNK0 = false;
@@ -556,11 +556,22 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       llvm::errs() << "use --softmax-cvt-pack=off|rtz (rtz changes rounding)\n"; return 1;
     }
     if (consumed) continue;
-    if (!frisk::parseKDMAOption(option, kDMA, consumed)) {
-      llvm::errs() << "use --k-dma=128|64|64-swizzle and --k-dma-arg=N\n";
-      return 1;
+    if (option.consume_front("--shared-copy-constraints=")) {
+      if (!sharedCopyConstraints.empty()) sharedCopyConstraints += ",";
+      sharedCopyConstraints += option.str();
+      continue;
     }
-    if (consumed) continue;
+    if (option.consume_front("--k-dma-arg=")) {
+      if (option.getAsInteger(10, legacyDMAArgument)) return 1;
+      continue;
+    }
+    if (option.consume_front("--k-dma=")) {
+      if (option != "128" && option != "64" && option != "64-swizzle") {
+        llvm::errs() << "use --k-dma=128|64|64-swizzle\n"; return 1;
+      }
+      legacyDMAMode = option;
+      continue;
+    }
     if (!frisk::parseVDoubleBufferOption(option, vDoubleBuffer, consumed)) {
       llvm::errs() << "use --v-double-buffer=0|1 (default 0)\n";
       return 1;
@@ -1027,6 +1038,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   tilingOptions += " causal-mask=" + causalMask.str();
   tilingOptions += std::string(" async-direct-only=") + (copyMode == "hybrid" ? "true" : "false");
   tilingOptions += " dma-pack-mode=" + dmaPackMode.str() + swizzleOptions;
+  tilingOptions += dmaExport == "asm128" ? " dma-export-widths=4,8,16" : " dma-export-widths=4,16";
+  if (legacyDMAMode != "128") {
+    if (!sharedCopyConstraints.empty()) sharedCopyConstraints += ",";
+    sharedCopyConstraints += std::to_string(legacyDMAArgument) + ":8";
+    if (legacyDMAMode == "64-swizzle") sharedCopyConstraints += ":9:3";
+  }
+  if (!sharedCopyConstraints.empty())
+    tilingOptions += " shared-copy-constraints=" + sharedCopyConstraints;
   if (failed(tiling->initializeOptions(
           tilingOptions,
           [&](const llvm::Twine &message) {
@@ -1258,7 +1277,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, kDMA, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
       hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {
@@ -1545,7 +1564,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

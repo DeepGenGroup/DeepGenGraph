@@ -64,6 +64,17 @@ enum class BufferAxisCalcuateAttr : int32_t {
 
 class LowerInfoAnalysis ;
 
+// A finite logical access domain, independent of its physical placement.
+// Dimensions are tid, br0, br1, unroll0, unroll1, warpRepeat, registerElement.
+// Bounds are exclusive; coordinates outside shape are masked by tile lowering.
+struct LogicalAccess {
+  AffineMap coordinates;
+  std::array<int64_t, 7> upperBounds{};
+  coordXY_t shape{0, 0};
+  int64_t elementBytes = 0;
+  bool boundsMasked = true;
+};
+
 // Packet legality shared by physical scheduling and final DMA lowering.
 // A sourceMap override describes staging order; without it this checks direct
 // transfer into the op's actual destination layout. Zero means unsupported.
@@ -86,7 +97,14 @@ struct ShmDataIODesc {
   // dst ^= src; -1 means identity. Low four bits stay intact for 128-bit DMA.
   int swizzleSourceBit = -1, swizzleTargetBit = -1;
   bool setXorSwizzle(int sourceBit, int targetBit);
+  // Additional byte-bit XORs, applied in order, inverted in reverse order.
+  // Unlike the legacy setter, this permits 8-byte subpacket permutations.
+  SmallVector<std::pair<int, int>, 2> xorSwizzles;
+  bool appendXorSwizzle(int sourceBit, int targetBit);
+  void clearSwizzles();
+  bool hasSwizzle() const;
   AffineExpr swizzleElementOffset(AffineExpr offset) const;
+  AffineExpr unswizzleElementOffset(AffineExpr offset) const;
   int plannedVectorAccessBytes = 0; // LDS read/write width, NOT DMA width.
   bool isSupportChunkRead = false; // Reserved for target-specific matrix loads.
 
@@ -122,6 +140,9 @@ struct ShmDataIODesc {
   std::optional<unsigned> getBankConflictWays(
       const HWSpecification &hw, ArrayRef<int64_t> laneByteAddresses,
       ShmAccessKind kind = ShmAccessKind::Read) const;
+  std::optional<unsigned> getBankConflictWays(
+      const HWSpecification &hw, ArrayRef<int64_t> laneByteAddresses,
+      unsigned accessBytes, ShmAccessKind kind) const;
 };
 
 /**
@@ -182,6 +203,10 @@ public:
   LinearLayout2DDesc base_layout;  // fragment的Layout。除了基础frag，还包括了 warp内thread的排列要求
   // Filled after shared-layout negotiation, not propagated as an MMA layout.
   std::optional<ShmDataIODesc> shmIO;
+  // Valid only in the current SharedMemoryPlan snapshot. IR changes require
+  // recollection; serialized allocation/copy attributes survive lowering.
+  std::optional<unsigned> sharedGroup;
+  std::optional<LogicalAccess> getLogicalAccess(int64_t blockThreads) const;
   AffineMap getShmAccessMap() {
     return shmIO ? shmIO->mapLogicalToPhysical(getAffineMap()) : AffineMap{};
   }
@@ -203,6 +228,7 @@ public:
     // The stored plan describes a physical allocation in the old coordinates.
     // Re-plan it once the transposed buffer's complete access set is known.
     shmIO.reset();
+    sharedGroup.reset();
 
     swap_xy(block_layout);
     swap_xy(block_layout_order);
@@ -448,6 +474,8 @@ public:
   const SmallVector<Operation*>& getOpsOrder(mlir::Operation* rootNode);
   // 查询 <buffer，op> 对应的LowerInfo
   LowerInfo* getLowerInfo(const mlir::Value& buffer, mlir::Operation* op);
+  LowerInfo *getOperandLowerInfo(OpOperand &use);
+  void setOperandLowerInfo(OpOperand &use, LowerInfo info);
   // 添加 lowerinfo（info中已经含有buffer）
   void addLowerInfo(mlir::Operation* op, LowerInfo info, bool isConflict=false);
   // 当添加 ConvertLayoutOp 进行layout转换时，将op 的arg 的lowerInfo链条断开，将其后的Layout作为 result ssa值的Layout信息
@@ -463,6 +491,7 @@ public:
   void print();
 private:
   DenseMap<Operation *, GemmLayouts> gemmLayouts;
+  DenseMap<std::pair<Operation *, unsigned>, LowerInfo> operandInfo;
   LowerInfoMapTy infoMap;  // 存放解决完冲突后的 LowerInfo 信息
   DenseMap<mlir::Value, SmallVector<LowerInfo, 4>> m_candidates;  // 先存放所有LowerInfo
 

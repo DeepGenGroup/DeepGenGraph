@@ -281,20 +281,19 @@ FRISK_GM_TO_SHM_MODE=async build/test/MyTest test/test_input.mlir 0 /tmp/async.l
 FRISK_GM_TO_SHM_MODE=sync  build/test/MyTest test/test_input.mlir 0 /tmp/sync.ll
 ```
 
-`FRISK_GM_TO_SHM_MODE=hybrid` promotes copies, then selects the existing
-vectorized synchronous path for sub-dword packed operands whose packing axis
-differs from the physical contiguous source axis. Selection runs after layout
-planning and before thread tiling (`async-direct-only=true`). It preserves
-the consumer layout, global packet coalescing and packed LDS stores. Only an
-adjacent matching issue/wait pair is replaced; nonlocal pipeline waits retain
-their original contract. Other unsupported cases keep the existing fallback.
+`FRISK_GM_TO_SHM_MODE=hybrid` enables synchronous alternatives in the joint
+shared-memory planner (`async-direct-only=true`). The planner first considers
+physical layouts with direct DMA and uses a synchronous choice only when no
+legal direct packet exists for that choice. Explicit DMA-width requests cannot
+fall back. An adjacent matching issue/wait pair selected as synchronous becomes
+an ordinary vectorized copy; nonlocal waits retain their readiness contract.
+The old independent source-axis heuristic has been removed.
 
-For the split-D k5 input this keeps Q/K direct DMA and makes V use the original
-vectorized copy, eliminating the 8 KiB staging allocation and its scalar LDS
-repack. This targets the measured regression in `pmc_test.log`: 5.105 ms,
-96-byte scratch, 256 VGPRs and 4.223% bank conflict versus the original k5's
-2.383 ms, zero scratch, 248 VGPRs and zero measured bank conflict. The mixed
-path itself still needs gfx936 timing and register-allocation validation.
+Published direct DMA plans carry source and destination maps through physical
+packing. Later lowering validates and emits that exact plan, without selecting
+another width or allocating staging storage. Unplanned copies retain conservative
+lowering. Buffer-asm export supports both 8B and 16B per lane directly; the old
+LLVM narrowing and swizzle transformation is no longer available.
 
 From the repository root, regenerate the mixed candidate with:
 

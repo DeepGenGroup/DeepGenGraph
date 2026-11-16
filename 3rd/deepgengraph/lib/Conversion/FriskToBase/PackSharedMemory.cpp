@@ -23,6 +23,7 @@
 // no global tensor layout or kernel ABI is changed.
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/SharedMemoryPlan.h"
 #include "SharedBufferAliases.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -117,7 +118,9 @@ static bool collect(const SharedBufferAliases &aliases, SmallVectorImpl<Access> 
       // preexisting vector accesses whose footprint has not been proven.
       return false;
   }
-  return !accesses.empty();
+  return !accesses.empty() || llvm::any_of(aliases.accesses, [](OpOperand *use) {
+    return isa<AsyncCopyGmToShmOp>(use->getOwner());
+  });
 }
 
 // Merge only exact adjacent addresses with no intervening memory operation,
@@ -216,7 +219,8 @@ static void packAllocation(memref::AllocOp alloc,
     for (StringRef name : {"frisk.shared_pack", "frisk.shared_pack_axis",
                            "frisk.shared_pair_stride", "frisk.shared_store_stride",
                            "frisk.shared_store_pair", "frisk.shared_packet_rows",
-                           "frisk.shared_swizzle_src", "frisk.shared_swizzle_dst"})
+                           "frisk.shared_swizzle_src", "frisk.shared_swizzle_dst",
+                           "frisk.shared_swizzles", "frisk.shared_plan"})
       if (storage->getAttr(name) != alloc->getAttr(name))
         return;
   }
@@ -231,7 +235,7 @@ static void packAllocation(memref::AllocOp alloc,
   if (axis != 0 && axis != 1)
     return;
   int64_t pack = attr.getInt();
-  if (pack < 2 || !llvm::isPowerOf2_64(pack) ||
+  if (pack < 1 || (pack == 1 && !alloc->hasAttr("frisk.shared_plan")) || !llvm::isPowerOf2_64(pack) ||
       pack * type.getElementTypeBitWidth() > 128 ||
       type.getDimSize(0) <= 0 || type.getDimSize(1) <= 0 ||
       type.getDimSize(axis) % pack)
@@ -255,17 +259,27 @@ static void packAllocation(memref::AllocOp alloc,
       2 * pack * type.getElementTypeBitWidth() > 128))
     return;
   // io：物理布局描述，提供“逻辑 -> 物理”和“物理 -> 逻辑”的映射。
-  auto io = ShmDataIODesc::getPacked(
-      {type.getDimSize(0), type.getDimSize(1)},
-      type.getElementTypeBitWidth() / 8, axis, pack, pairStride,
-      storeStride, storePair, packetRows);
+  auto io = readSharedLayout(alloc, type);
   if (type.getElementTypeBitWidth() % 8 || !io)
     return;
+  // An identity choice needs no index rewrite. Ordinary synchronous copying
+  // may already have emitted vector accesses, which are unchanged by this
+  // plan. Direct DMA still needs the flat destination/source-map contract.
+  if (alloc->hasAttr("frisk.shared_plan") && io->packAxis == 0 && io->packElements == 1 &&
+      !io->pairStride && !io->storeStride && !io->packetRows && !io->hasSwizzle() &&
+      llvm::any_of(aliases.accesses, [](OpOperand *use) {
+        return isa<vector::LoadOp, vector::StoreOp>(use->getOwner());
+      }) &&
+      llvm::none_of(aliases.accesses, [](OpOperand *use) {
+        return isa<AsyncCopyGmToShmOp>(use->getOwner());
+      })) {
+    for (auto *storage : aliases.allocations)
+      for (StringRef key : {"frisk.shared_plan", "frisk.shared_pack_axis", "frisk.shared_pack"})
+        storage->removeAttr(key);
+    return;
+  }
   auto swizzleSrc = alloc->getAttrOfType<IntegerAttr>("frisk.shared_swizzle_src");
   auto swizzleDst = alloc->getAttrOfType<IntegerAttr>("frisk.shared_swizzle_dst");
-  if (swizzleSrc || swizzleDst)
-    if (!swizzleSrc || !swizzleDst ||
-        !io->setXorSwizzle(swizzleSrc.getInt(), swizzleDst.getInt())) return;
   SmallVector<Access> accesses;
   SmallVector<memref::DeallocOp> deallocs;
   if (!collect(aliases, accesses, deallocs))
@@ -277,7 +291,7 @@ static void packAllocation(memref::AllocOp alloc,
       // Moving just the lane pointer is correct only if every element read
       // implicitly by the instruction stays consecutive in physical storage.
       auto packetIO = *io;
-      packetIO.swizzleSourceBit = packetIO.swizzleTargetBit = -1;
+      packetIO.clearSwizzles();
       auto logical = AffineMap::getMultiDimIdentityMap(2, alloc.getContext());
       auto last = AffineMap::get(2, 0,
           {logical.getResult(0), logical.getResult(1) + pack - 1}, alloc.getContext());
@@ -288,7 +302,7 @@ static void packAllocation(memref::AllocOp alloc,
       auto proven = compose(delta, operands).getResult(0);
       auto constant = dyn_cast<AffineConstantExpr>(proven);
       if (!constant || constant.getValue() != pack - 1) return;
-      if (swizzleSrc) {
+      if (io->hasSwizzle()) {
         // The XOR preserves aligned 16-byte packets, including their implicit
         // matrix-reader elements. Prove alignment before composing the XOR.
         auto residue = AffineMap::get(2, 0,
@@ -296,15 +310,34 @@ static void packAllocation(memref::AllocOp alloc,
         operands.assign(access.indices.begin(), access.indices.end());
         auto aligned = dyn_cast<AffineConstantExpr>(compose(residue, operands).getResult(0));
         if (!aligned || aligned.getValue()) return;
+        // Composed/subpacket XORs need proof of every implicit element, not
+        // just the first pointer or the endpoints of the matrix packet.
+        for (int64_t e = 1; e < pack; ++e) {
+          auto next = AffineMap::get(2, 0,
+              {logical.getResult(0), logical.getResult(1) + e}, alloc.getContext());
+          auto distance = AffineMap::get(2, 0,
+              io->mapLogicalToPhysical(next).getResult(0) -
+              io->mapLogicalToPhysical(logical).getResult(0));
+          operands.assign(access.indices.begin(), access.indices.end());
+          auto difference = dyn_cast<AffineConstantExpr>(compose(distance, operands).getResult(0));
+          if (!difference || difference.getValue() != e) return;
+        }
       }
     }
 
   // Recheck the actual source type after view finalization, before mutation.
-  if (swizzleSrc)
+  if (io->hasSwizzle() || alloc->hasAttr("frisk.shared_plan"))
     for (OpOperand *use : aliases.accesses)
       if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
-        if (selectAsyncDMATransferBytes(copy, 16,
-                io->getPhysicalToLogicalMap(alloc.getContext())) != 16) return;
+        if (!copy->hasAttr("frisk.force_sync")) {
+          auto width = copy->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
+          unsigned requested = width ? width.getInt() : 16;
+          auto plannedSource = copy->getAttrOfType<AffineMapAttr>("frisk.dma_source_map");
+          if (plannedSource && plannedSource.getValue() !=
+                  io->getPhysicalToLogicalMap(alloc.getContext())) return;
+          if (selectAsyncDMATransferBytes(copy, requested,
+                  io->getPhysicalToLogicalMap(alloc.getContext())) != requested) return;
+        }
 
   // 开始改写：physical = 一维 memref，buffers[旧别名] = 新的 memref。
   IRRewriter b(alloc.getContext());
@@ -343,7 +376,9 @@ static void packAllocation(memref::AllocOp alloc,
   auto inverse = io->getPhysicalToLogicalMap(b.getContext());
   for (OpOperand *use : aliases.accesses)
     if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner()))
-      copy->setAttr("frisk.source_map", AffineMapAttr::get(inverse));
+      copy->setAttr("frisk.source_map",
+          copy->hasAttr("frisk.dma_source_map") ? copy->getAttr("frisk.dma_source_map")
+                                               : AffineMapAttr::get(inverse));
   // blocks：需要做访问合并的 (基本块, buffer)。下面的循环重写每个访问的下标。
   llvm::SetVector<std::pair<Block *, Value>> blocks;
   for (auto &access : accesses) {
@@ -382,8 +417,9 @@ LogicalResult packSharedMemory(func::FuncOp kernel) {
   for (auto alloc : allocations) packAllocation(alloc, visited);
   bool unhandled = false;
   kernel.walk([&](memref::AllocOp alloc) {
-    if (alloc->hasAttr("frisk.shared_swizzle_src") || alloc->hasAttr("frisk.shared_swizzle_dst")) {
-      alloc.emitError("cannot safely apply requested shared swizzle to every access / alias while retaining 128-bit DMA");
+    if (alloc->hasAttr("frisk.shared_swizzle_src") || alloc->hasAttr("frisk.shared_swizzle_dst") ||
+        alloc->hasAttr("frisk.shared_swizzles") || alloc->hasAttr("frisk.shared_plan")) {
+      alloc.emitError("cannot safely apply planned shared layout to every access / alias with its DMA contract");
       unhandled = true;
     }
   });

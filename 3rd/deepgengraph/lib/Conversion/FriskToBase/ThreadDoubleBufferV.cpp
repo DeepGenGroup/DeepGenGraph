@@ -197,12 +197,20 @@ static bool direct(AsyncCopyGmToShmOp issue, memref::AllocOp pool,
   auto s = extent(issue.getDst(), pool);
   auto width = issue->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
   auto src = cast<MemRefType>(issue.getSrc().getType());
+  // Other live transfers may already use a narrower packet selected by the
+  // shared-memory planner. Audit their actual complete-wave footprint instead
+  // of relying on the removed late 16B -> 8B LLVM rewrite.
+  int64_t bytes = width ? width.getInt() : 0;
+  if (auto copying = issue->getAttrOfType<IntegerAttr>("frisk.copy_threads")) {
+    if (copying.getInt() <= 0 || copying.getInt() > threads || copying.getInt() % 64) return false;
+    threads = copying.getInt();
+  }
   return s && src.getMemorySpaceAsInt() == 1 &&
-         !issue->hasAttr("frisk.force_sync") && width && width.getInt() == 16 &&
-         s->begin % 16 == 0 && s->size % (threads * 16) == 0 &&
-         s->size / (threads * 16) <= 16 && issue.getAlignment() >= 16 &&
+         !issue->hasAttr("frisk.force_sync") && bytes > 0 && bytes <= 16 &&
+         s->begin % bytes == 0 && s->size % (threads * bytes) == 0 &&
+         s->size / (threads * bytes) <= 16 && issue.getAlignment() % bytes == 0 &&
          uniform(issue.getSrc(), issue->getParentOfType<func::FuncOp>()) &&
-         selectAsyncDMATransferBytes(issue, 16) == 16;
+         selectAsyncDMATransferBytes(issue, bytes) == bytes;
 }
 
 static bool plan(func::FuncOp f, Block &block, memref::AllocOp pool,

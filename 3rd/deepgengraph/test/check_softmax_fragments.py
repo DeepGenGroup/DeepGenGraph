@@ -74,6 +74,18 @@ def main():
             twice = run(out,mode)
             assert insts(twice) == insts(out)
             assert twice.count('call void @llvm.amdgcn.sched.barrier') == 4
+        # Earlier DMA emission leaves wave-base reads in the scheduling
+        # interval. Keep them and both DMA widths fixed while moving math.
+        for words in (2, 4):
+            setup = ('  %leader = call i32 @llvm.amdgcn.readfirstlane.i32(i32 32)\n'
+                     f'  %dma = call i32 asm sideeffect "s_mov_b32 $0, $1\\0A\\09buffer_load_dwordx{words} $2, $3, 0 offen lds", '
+                     '"={m0},s,v,s,~{memory}"(i32 %leader, i32 0, <4 x i32> zeroinitializer)\n')
+            mixed = 'declare i32 @llvm.amdgcn.readfirstlane.i32(i32)\n' + base.replace(
+                '  call void @llvm.amdgcn.s.barrier()', setup + '  call void @llvm.amdgcn.s.barrier()')
+            moved = run(mixed)
+            assert moved.count('call void @llvm.amdgcn.sched.barrier') == 4
+            assert Counter(insts(moved)) == Counter(insts(run(mixed, 'off')))
+            assert moved.index('%leader =') < moved.index('%dma =') < moved.index('call void @llvm.amdgcn.s.barrier()')
         renamed = re.sub(r'%([A-Za-z]\w*)',r'%rename_\1',base)
         assert re.findall(r'%rename_p(\d) =',run(renamed)) == ['0','2','1','3']
         rejected = {

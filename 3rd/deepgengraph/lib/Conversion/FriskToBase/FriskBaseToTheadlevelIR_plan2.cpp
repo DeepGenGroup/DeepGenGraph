@@ -57,9 +57,7 @@
 // 第 6 项不只是 lowering，下面这些优化决策都发生在它的 runOnOperation 里：
 //   promoteGemmMatrixLoads      选择矩阵读（matrixLoads 选项，和第 5 项是同一个函数）。
 //   sinkLoopLayoutConversions   把布局转换移出循环。优化汇总.py 把它记在第 14 项，实际在这里调用。
-//   planSharedOperandPacking    规划 LDS 打包。
-//   DMA 宽度规划                 dmaPackMode，见 runOnOperation 中的 DMAPlan。
-//   planSharedSwizzles          规划 LDS 地址 swizzle。
+//   Shared 物理布局与 DMA         SharedMemoryPlan 联合规划并发布。
 //   sinkWaitBufferReady         推迟 wait。
 // 这里只是在 alloc 和 DMA 上打属性，真正改写地址的是 PackSharedMemory.cpp（第 15 项）。
 // ===========================================================================
@@ -80,6 +78,7 @@
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/SharedMemoryPlan.h"
 #include "deepgengraph/Analysis/MatrixLoad.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
@@ -341,350 +340,112 @@ static bool isGlobalToSharedCopy(frisk::CopyOp op) {
          dst.getMemorySpaceAsInt() == int(friskMs::Shared);
 }
 
-// Plan a physical layout only for owned, non-escaping shared GEMM operands whose
-// complete producer/consumer set is understood. This is independent of kernel
-// names, attention shapes and surrounding graph operators. A logical memref
-// remains row-major until pack-shared-memory rewrites ALL accesses together.
-// 决定每块 LDS 的物理打包方式，结果写成 alloc 属性，由 PackSharedMemory 落实。
-// 只处理所有访问都能理解的自有 LDS，遇到其它使用者就放弃这块 buffer。
-static void planSharedOperandPacking(func::FuncOp kernel, LowerInfoMap &layouts) {
-  auto threads = kernel->getAttrOfType<IntegerAttr>("thread_num");
-  if (!threads || threads.getInt() <= 0)
-    return;
-  llvm::SmallPtrSet<Operation *, 16> visited;
-  kernel.walk([&](frisk::AllocBufferOp alloc) {
-    if (visited.contains(alloc))
-      return;
-    auto type = cast<MemRefType>(alloc.getResult().getType());
-    if (type.getRank() != 2 || !type.hasStaticShape() ||
-        !type.getLayout().isIdentity() ||
-        type.getMemorySpaceAsInt() != int(friskMs::Shared))
-      return;
-    SharedBufferAliases aliases;
-    if (!aliases.collect(alloc.getResult()))
-      return;
-    for (Operation *storage : aliases.allocations)
-      visited.insert(storage);
-    // 一块 buffer 的打包方案。所有使用者必须给出一致的结果，不一致就放弃。
-    //   width              一个包的元素数，来自消费者的 thread_widths。
-    //   axis               沿哪个轴打包。
-    //   pairStride         配对两条 K 指令的 fragment 时的跨度。
-    //   instructionStride  一条 MMA 指令覆盖的跨度。
-    //   matrixPacket       矩阵读的包大小，非 0 表示这块 buffer 走矩阵读。
-    //   matrixPacketRows   矩阵读的行组数。
-    //   writers            写入这块 buffer 的 copy / async_copy。
-    int64_t width = 0, pairStride = 0, axis = -1, instructionStride = 0;
-    int64_t matrixPacket = 0;
-    int64_t matrixPacketRows = 0;
-    SmallVector<Operation *> writers;
-    for (OpOperand *use : aliases.accesses) {
-      Operation *user = use->getOwner();
-      Value buffer = use->get();
-      auto gemm = dyn_cast<frisk::GemmOp>(user);
-      // Elementwise producers (e.g. scaling Q before MMA) read the same
-      // operand fragments. Include them in the all-access packing proof;
-      // previously only direct GEMM users were considered, leaving Q plain.
-      bool elementwise = isa<frisk::AddOp, frisk::SubOp, frisk::MaxOp, frisk::MulOp,
-                             frisk::DivOp, frisk::Exp2Op, frisk::CastOp>(user);
-      if (gemm || elementwise) {
-        auto *info = layouts.getLowerInfo(buffer, user);
-        if (!info || !info->mmaInst || (gemm && gemm.getA() == gemm.getB()))
-          return;
-        // Infer the contiguous register axis from the operand layout. Packing
-        // along columns interleaves A's row packets, avoiding the large row
-        // stride between lanes. The same mechanism applies to ordinary GEMM
-        // and fused producers; it does not identify P or attention by name.
-        int64_t candidateAxis;
-        if (gemm && gemm.getB() == buffer && info->get_thread_widths()[1] == 1)
-          candidateAxis = 0;
-        else if ((!gemm || gemm.getA() == buffer) && info->get_thread_widths()[0] == 1)
-          candidateAxis = 1;
-        else
-          return;
-        int64_t candidate = info->get_thread_widths()[candidateAxis];
-        if (candidate <= 0)
-          return;
-        // Pair the same lane's fragments from two K instructions, rather
-        // than the fragments owned by adjacent lanes. The latter would make
-        // an eight-element packet contain another lane's operands.
-        int64_t stride = info->get_warpInst_widths()[candidateAxis];
-        int64_t pairingStride = stride;
-        if (candidateAxis == 0 && info->logicalTransform) {
-          // A permuted K schedule may read row groups 0,4,... instead of
-          // 0,16,... . Choose the physical packet pairing in logical rows.
-          // This is only a packing heuristic: every access is rewritten by
-          // the bijective packer, and adjacent reads are proven separately.
-          auto map = info->logicalTransform;
-          if (map.getNumDims() == 2 && map.getNumSymbols() == 0 &&
-              !map.getResult(0).isFunctionOfDim(1)) {
-            OpBuilder builder(kernel);
-            SmallVector<Attribute> first, next;
-            if (succeeded(map.constantFold(
-                    {builder.getIndexAttr(0), builder.getIndexAttr(0)}, first)) &&
-                succeeded(map.constantFold(
-                    {builder.getIndexAttr(stride), builder.getIndexAttr(0)}, next)))
-              pairingStride = cast<IntegerAttr>(next[0]).getInt() -
-                              cast<IntegerAttr>(first[0]).getInt();
-          }
-        }
-        int64_t candidateStride =
-            candidateAxis == 0 &&
-            candidate * 2 * type.getElementTypeBitWidth() == 128 &&
-            pairingStride >= candidate && pairingStride % candidate == 0 &&
-            type.getDimSize(0) % (2 * pairingStride) == 0 &&
-            info->get_block_layout()[0] == 1 ? pairingStride : 0;
-        if (width && (width != candidate || pairStride != candidateStride || axis != candidateAxis))
-          return;
-        width = candidate;
-        axis = candidateAxis;
-        pairStride = candidateStride;
-        if (instructionStride && instructionStride != stride)
-          return;
-        instructionStride = stride;
-      } else if (auto read = dyn_cast<frisk::ReadMatrixFromShmOp>(user)) {
-        const auto *inst = getMatrixLoadInstruction(read, *s_hw);
-        auto *info = layouts.getLowerInfo(buffer, user);
-        if (!read.isBlockForm() || !inst || !info || !info->mmaInst) return;
-        // Retain the MMA consumer width for kpack's DMA/consumer ratio. The
-        // physical layout itself must keep each matrix-read row packet intact.
-        int64_t candidate = flat_size(info->get_thread_widths());
-        if (width && width != candidate) return;
-        width = candidate;
-        axis = 1;
-        int64_t rows = selectMatrixPacketRows(*inst, type, *info, *s_hw);
-        if (matrixPacket && matrixPacketRows != rows) return;
-        matrixPacket = inst->inShmLayout.thread_creg[1];
-        matrixPacketRows = rows;
-      } else if (auto copy = dyn_cast<frisk::CopyOp>(user)) {
-        // Offset/sliced and escaping copy aliases conservatively keep their
-        // original layout. Buffer-view origins on the source are supported.
-        auto map = copy.getOffsetMap();
-        auto sourceType = dyn_cast<MemRefType>(copy.getSrc().getType());
-        if (use->getOperandNumber() != 1 || !sourceType ||
-            sourceType.getShape() != type.getShape() ||
-            map.getNumInputs() != 0 || map.getNumResults() != 1 ||
-            !isa<AffineConstantExpr>(map.getResult(0)) ||
-            cast<AffineConstantExpr>(map.getResult(0)).getValue() != type.getRank())
-          return;
-        writers.push_back(copy);
-      } else if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(user)) {
-        auto sourceType = cast<MemRefType>(copy.getSrc().getType());
-        if (use->getOperandNumber() != 1 || sourceType.getShape() != type.getShape())
-          return;
-        writers.push_back(copy);
-      } else {
-        return;
-      }
-    }
-    if (writers.empty() || width < 2 || !llvm::isPowerOf2_64(width) ||
-        width * type.getElementTypeBitWidth() > 128 ||
-        type.getDimSize(axis) % width != 0 ||
-        (axis == 0 && (type.getNumElements() % threads.getInt() != 0 ||
-         (type.getNumElements() / threads.getInt()) % width != 0)))
-      return;
-    // Both row-major and column-major GLOBAL inputs can feed row-axis packing.
-    // The copy chooses ownership using physical strides; GEMM LowerInfo above
-    // still determines the shared packet axis/width and all consumer addresses.
-    if (axis == 0 && llvm::any_of(writers, [](Operation *writer) {
-          if (auto copy = dyn_cast<frisk::CopyOp>(writer))
-            return !isGlobalToSharedCopy(copy) || !getPhysicalMinorCopyAxis(copy.getSrc());
-          return !getPhysicalMinorCopyAxis(cast<frisk::AsyncCopyGmToShmOp>(writer).getSrc());
-        }))
-      return;
-    // 把属性写到别名分量的所有 alloc 上，保证它们一起改写。
-    auto set = [&](StringRef name, int64_t value) {
-      for (Operation *storage : aliases.allocations)
-        storage->setAttr(name, IntegerAttr::get(
-            IntegerType::get(kernel.getContext(), 64), value));
-    };
-    set("frisk.shared_pack_axis", axis);
-    set("frisk.shared_pack", matrixPacket ? matrixPacket : width);
-    if (matrixPacket) {
-      set("frisk.matrix_load_packet", matrixPacket);
-      set("frisk.matrix_load_consumer_width", width);
-      if (matrixPacketRows) set("frisk.shared_packet_rows", matrixPacketRows);
-      for (Operation *storage : aliases.allocations)
-        for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride",
-                               "frisk.shared_store_pair"})
-          storage->removeAttr(name);
-      return;
-    }
-    // A computed producer can own strided columns even though the consumer
-    // reads contiguous register fragments. Put the producer's lane residue
-    // outside the row dimension and pair the consumer's successive K packets.
-    // Both sides then have contiguous subsets, without changing lane ownership.
-    if (axis == 1 && instructionStride > 0 &&
-        type.getDimSize(1) % (2 * instructionStride) == 0) {
-      int64_t storeStride = 0;
-      bool compatible = llvm::all_of(writers, [&](Operation *writer) {
-        auto copy = dyn_cast<frisk::CopyOp>(writer);
-        if (!copy) return false;
-        auto *producer = copy.getSrc().getDefiningOp();
-        auto *info = layouts.getLowerInfo(copy.getSrc(), copy);
-        if (!producer || !producer->hasTrait<frisk::ComputedTile>() || !info ||
-            info->get_thread_widths()[1] != 1 ||
-            info->get_block_layout()[1] != 1 ||
-            info->base_layout.warp_layout_order[0] != 0)
-          return false;
-        int64_t stride = info->get_warp_layout()[1];
-        if (stride < 2 || instructionStride % stride ||
-            !llvm::isPowerOf2_64(stride) || (storeStride && storeStride != stride))
-          return false;
-        storeStride = stride;
-        return true;
-      });
-      if (compatible) {
-        set("frisk.shared_store_stride", storeStride);
-        set("frisk.shared_store_pair", instructionStride);
-      }
-    }
-    if (pairStride && (type.getNumElements() / threads.getInt()) % (2 * width) == 0)
-      set("frisk.shared_pair_stride", pairStride);
-    // Publish the agreed physical plan to every participating LowerInfo.
-    // Allocation attributes carry the same parameters across thread lowering;
-    // PackSharedMemory reconstructs ShmDataIODesc to rewrite ALL accesses and
-    // derive the inverse source map for the GM->LDS copy.
-    auto parameter = [&](StringRef name) -> int64_t {
-      auto attr = alloc->getAttrOfType<IntegerAttr>(name);
-      return attr ? attr.getInt() : 0;
-    };
-    auto io = ShmDataIODesc::getPacked(
-        {type.getDimSize(0), type.getDimSize(1)},
-        type.getElementTypeBitWidth() / 8, axis, width,
-        parameter("frisk.shared_pair_stride"),
-        parameter("frisk.shared_store_stride"),
-        parameter("frisk.shared_store_pair"));
-    if (io && type.getElementTypeBitWidth() % 8 == 0)
-      for (OpOperand *use : aliases.accesses)
-        if (auto *info = layouts.getLowerInfo(use->get(), use->getOwner())) {
-          info->shmIO = *io;
-          info->shmIO->baseLayout = info->base_layout;
-        }
-  });
-}
-
-// Final physical-layout negotiation, after DMA packing has selected its width.
-// Role names are only user-facing bindings to argument indices, never inferred
-// from an MMA position (K and V can both be operand B).
-// 落实 --swizzle-q/k/v：LDS 字节地址 dst 位 ^= src 位，用来减少 bank 冲突。只在 alloc 上打属性。
-// 用户请求了却无法保证时直接报错，不会悄悄跳过。必须在 DMA 宽度确定之后运行，因为要校验 128-bit DMA 合法。
-static LogicalResult planSharedSwizzles(func::FuncOp kernel, LowerInfoMap &layouts,
-    const HWSpecification &hw, ArrayRef<StringRef> options, ArrayRef<int> configuredArguments) {
-  // arguments[i]：Q/K/V 对应的 kernel 参数下标。-1 时从 frisk.shared_role 属性读取。
-  SmallVector<int> arguments(configuredArguments);
+// Compatibility boundary only: translate legacy argument-based switches into
+// allocation constraints. The generic planner never sees roles or ABI indices.
+static LogicalResult bindSharedPlanningConstraints(func::FuncOp kernel,
+    ArrayRef<StringRef> options, ArrayRef<int> arguments, SharedPlanningOptions &plan) {
   const StringRef roles[] = {"q", "k", "v"};
-  for (unsigned i = 0; i < 3; ++i) {
-    if (arguments[i] != -1) continue;
-    for (unsigned arg = 0; arg < kernel.getNumArguments(); ++arg)
-      if (auto role = kernel.getArgAttrOfType<StringAttr>(arg, "frisk.shared_role");
-          role && role.getValue() == roles[i]) {
-        if (arguments[i] != -1) return kernel.emitError("duplicate frisk.shared_role annotation");
-        arguments[i] = arg;
-      }
-  }
-  // bits[i]：Q/K/V 的 (src 位, dst 位)，-1 表示关闭。"on" 等价于 8:6。
-  std::array<std::pair<int, int>, 3> bits;
-  bool enabled = false;
-  for (unsigned i = 0; i < 3; ++i) {
-    bits[i] = {-1, -1};
-    if (options[i] == "off" || options[i] == "0") continue;
-    enabled = true;
+  for (unsigned i = 0; i < options.size(); ++i) {
     StringRef spec = options[i];
+    bool disabled = spec == "off" || spec == "0";
     if (spec == "on" || spec == "1") spec = "8:6";
     auto pair = spec.split(':');
-    if (pair.first.getAsInteger(10, bits[i].first) ||
-        pair.second.getAsInteger(10, bits[i].second) ||
-        bits[i].first < 4 || bits[i].second < 4 ||
-        bits[i].first > 30 || bits[i].second > 30 || bits[i].first == bits[i].second)
-      return kernel.emitError("swizzle must be off, on, or source:target byte bits (distinct, 4..30); sub-16-byte swizzles are forbidden");
-    if (arguments[i] < 0 || unsigned(arguments[i]) >= kernel.getNumArguments())
-      return kernel.emitError("enabled swizzle needs a valid swizzle-{q,k,v}-arg or frisk.shared_role argument annotation");
-  }
-  if (!enabled) return success();
-  for (unsigned i = 0; i < 3; ++i)
-    for (unsigned j = i + 1; j < 3; ++j)
-      if (arguments[i] >= 0 && arguments[i] == arguments[j])
-        return kernel.emitError("Q/K/V swizzle argument bindings must be distinct");
-  // roleOf：穿过视图找到 DMA 源对应的参数，返回 0/1/2（Q/K/V），未知返回 -1。
-  auto roleOf = [&](Value value) -> int {
-    while (true) {
-      if (auto view = value.getDefiningOp<BufferViewOp>()) value = view.getSource();
-      else if (auto transpose = value.getDefiningOp<memref::TransposeOp>()) value = transpose.getIn();
-      else if (auto cast = value.getDefiningOp<memref::CastOp>()) value = cast.getSource();
-      else if (auto view = value.getDefiningOp<memref::SubViewOp>()) value = view.getSource();
-      else break;
-    }
-    for (unsigned i = 0; i < 3; ++i)
-      if (arguments[i] >= 0 && unsigned(arguments[i]) < kernel.getNumArguments() &&
-          value == kernel.getArgument(arguments[i])) return i;
-    return -1;
-  };
-  // matched[i]：Q/K/V 匹配到的 DMA 数。启用了 swizzle 却没有匹配时报错。
-  // visited：已处理的 alloc，避免别名分量重复处理。
-  bool invalid = false;
-  std::array<unsigned, 3> matched{};
-  llvm::SmallPtrSet<Operation *, 16> visited;
-  kernel.walk([&](AsyncCopyGmToShmOp issue) {
-    int role = roleOf(issue.getSrc());
-    if (role < 0 || bits[role].first < 0) return;
-    ++matched[role];
-    SharedBufferAliases aliases;
-    if (!aliases.collect(getViewBuffer(issue.getDst()))) {
-      issue.emitError("requested swizzle requires an owned shared allocation with known aliases");
-      invalid = true; return;
-    }
-    if (visited.contains(aliases.allocations.front())) return;
-    for (auto *storage : aliases.allocations) visited.insert(storage);
-    auto type = cast<MemRefType>(issue.getDst().getType());
-    auto param = [&](StringRef name) -> int64_t {
-      auto attr = dyn_cast_or_null<IntegerAttr>(aliases.commonAttribute(name));
-      return attr ? attr.getInt() : 0;
-    };
-    auto io = type.getRank() == 2 && type.hasStaticShape()
-        ? ShmDataIODesc::getPacked({type.getDimSize(0), type.getDimSize(1)},
-            type.getElementTypeBitWidth() / 8, param("frisk.shared_pack_axis"),
-            param("frisk.shared_pack"), param("frisk.shared_pair_stride"),
-            param("frisk.shared_store_stride"), param("frisk.shared_store_pair"),
-            param("frisk.shared_packet_rows")) : std::nullopt;
-    if (!io || !io->setXorSwizzle(bits[role].first, bits[role].second)) {
-      issue.emitError("requested swizzle is not a bijection of the final packed tile (incomplete period or unsupported layout)");
-      invalid = true; return;
-    }
-    for (OpOperand *use : aliases.accesses) {
-      if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(use->getOwner())) {
-        int other = roleOf(copy.getSrc());
-        auto strides = getGlobalCopyStrides(copy.getSrc());
-        if (use->getOperandNumber() != 1 || other < 0 || bits[other] != bits[role] ||
-            !strides || io->selectDMATransferBytes(hw, kernel.getContext(), *strides,
-                                                  copy.getAlignment()) != 16) {
-          copy.emitError("requested swizzle requires consistent producer layouts and legal 128-bit DMA for every alias");
-          invalid = true; return;
+    int src = -1, dst = -1;
+    if (!disabled && (pair.first.getAsInteger(10, src) || pair.second.getAsInteger(10, dst) ||
+        src < 4 || dst < 4 || src > 30 || dst > 30 || src == dst))
+      return kernel.emitError("legacy swizzle requires distinct byte bits in [4,30]");
+    int argument = arguments[i];
+    if (argument == -1)
+      for (unsigned n = 0; n < kernel.getNumArguments(); ++n)
+        if (auto role = kernel.getArgAttrOfType<StringAttr>(n, "frisk.shared_role");
+            role && role.getValue() == roles[i]) {
+          if (argument != -1) return kernel.emitError("ambiguous shared role");
+          argument = n;
         }
-      } else if (isa<CopyOp>(use->getOwner())) {
-        use->getOwner()->emitError("requested swizzle currently requires asynchronous DMA producers");
-        invalid = true; return;
+    if (disabled && argument < 0) continue;
+    if (argument < 0 || unsigned(argument) >= kernel.getNumArguments())
+      return kernel.emitError("enabled legacy swizzle requires an explicit argument binding");
+    bool matched = false, invalid = false;
+    kernel.walk([&](AsyncCopyGmToShmOp copy) {
+      Value source = copy.getSrc();
+      while (true) {
+        if (auto view = source.getDefiningOp<BufferViewOp>()) source = view.getSource();
+        else if (auto view = source.getDefiningOp<memref::TransposeOp>()) source = view.getIn();
+        else if (auto view = source.getDefiningOp<memref::CastOp>()) source = view.getSource();
+        else if (auto view = source.getDefiningOp<memref::SubViewOp>()) source = view.getSource();
+        else break;
       }
-    }
-    OpBuilder b(kernel.getContext());
-    for (auto *storage : aliases.allocations) {
-      storage->setAttr("frisk.shared_swizzle_src", b.getI64IntegerAttr(bits[role].first));
-      storage->setAttr("frisk.shared_swizzle_dst", b.getI64IntegerAttr(bits[role].second));
-    }
-    for (OpOperand *use : aliases.accesses)
-      if (auto *info = layouts.getLowerInfo(use->get(), use->getOwner())) {
-        info->shmIO = *io;
-        info->shmIO->baseLayout = info->base_layout;
+      if (source != kernel.getArgument(argument)) return;
+      matched = true;
+      SharedBufferAliases aliases;
+      if (!aliases.collect(copy.getDst())) { invalid = true; return; }
+      SmallVector<std::pair<int, int>, 2> bits;
+      if (!disabled) bits.emplace_back(src, dst);
+      for (auto *alloc : aliases.allocations) {
+        auto [it, inserted] = plan.requestedSwizzles.try_emplace(alloc, bits);
+        if (!inserted && it->second != bits) invalid = true;
       }
-    llvm::errs() << "Shared swizzle: argument " << arguments[role] << " byte bit "
-                 << bits[role].second << " ^= " << bits[role].first
-                 << ", DMA=16 bytes, aliases=" << aliases.allocations.size() << "\n";
-  });
-  for (unsigned i = 0; i < 3; ++i)
-    if (bits[i].first >= 0 && !matched[i]) {
-      kernel.emitError("enabled swizzle argument has no traceable asynchronous shared producer");
-      invalid = true;
-    }
-  return failure(invalid);
+    });
+    if ((!matched && !disabled) || invalid)
+      return kernel.emitError("legacy swizzle binding has no complete, consistent shared allocation");
+  }
+  return success();
+}
+
+// Frontend bindings stop here: the planner receives operation/allocation
+// constraints and has no knowledge of argument positions or tensor roles.
+static LogicalResult bindSharedCopyConstraints(func::FuncOp kernel,
+    StringRef specifications, SharedPlanningOptions &plan) {
+  if (specifications.empty()) return success();
+  SmallVector<StringRef> entries;
+  specifications.split(entries, ',');
+  for (StringRef entry : entries) {
+    SmallVector<StringRef> fields;
+    entry.split(fields, ':');
+    unsigned argument, bytes;
+    int src = -1, dst = -1;
+    if ((fields.size() != 2 && fields.size() != 4) ||
+        fields[0].getAsInteger(10, argument) || fields[1].getAsInteger(10, bytes) ||
+        argument >= kernel.getNumArguments() || (bytes != 4 && bytes != 8 && bytes != 16) ||
+        (fields.size() == 4 && (fields[2].getAsInteger(10, src) ||
+          fields[3].getAsInteger(10, dst) || src < 0 || dst < 0 ||
+          src > 30 || dst > 30 || src == dst)))
+      return kernel.emitError("shared-copy-constraints expects argument:bytes[:xor-source:xor-target]");
+    bool matched = false, invalid = false;
+    llvm::SmallPtrSet<Operation *, 8> constrained;
+    kernel.walk([&](AsyncCopyGmToShmOp copy) {
+      Value source = copy.getSrc();
+      while (true) {
+        if (auto view = source.getDefiningOp<BufferViewOp>()) source = view.getSource();
+        else if (auto view = source.getDefiningOp<memref::TransposeOp>()) source = view.getIn();
+        else if (auto view = source.getDefiningOp<memref::CastOp>()) source = view.getSource();
+        else if (auto view = source.getDefiningOp<memref::SubViewOp>()) source = view.getSource();
+        else break;
+      }
+      if (source != kernel.getArgument(argument)) return;
+      matched = true;
+      auto [it, inserted] = plan.requestedDMABytes.try_emplace(copy, bytes);
+      if (!inserted && it->second != bytes) { invalid = true; return; }
+      if (src < 0) return;
+      SharedBufferAliases aliases;
+      if (!aliases.collect(copy.getDst())) { invalid = true; return; }
+      for (auto *alloc : aliases.allocations) {
+        if (!constrained.insert(alloc).second) continue;
+        auto [swizzle, fresh] = plan.requestedSwizzles.try_emplace(alloc);
+        if (fresh) {
+          auto layout = readSharedLayout(alloc, cast<MemRefType>(alloc->getResult(0).getType()));
+          if (!layout) { invalid = true; return; }
+          if (layout->swizzleSourceBit >= 0)
+            swizzle->second.emplace_back(layout->swizzleSourceBit, layout->swizzleTargetBit);
+          llvm::append_range(swizzle->second, layout->xorSwizzles);
+        }
+        swizzle->second.emplace_back(src, dst);
+      }
+    });
+    if (!matched || invalid)
+      return kernel.emitError("shared copy constraint has no complete, consistent producer group");
+  }
+  return success();
 }
 
 // 把 affine map 应用到 operands，并合成已有 affine.apply，返回单个索引值。
@@ -2539,7 +2300,8 @@ public:
         alloc->setAttr("frisk.shared_pair_stride", stride);
       for (StringRef name : {"frisk.shared_store_stride", "frisk.shared_store_pair",
                              "frisk.shared_packet_rows", "frisk.shared_swizzle_src",
-                             "frisk.shared_swizzle_dst"})
+                             "frisk.shared_swizzle_dst", "frisk.shared_swizzles",
+                             "frisk.shared_plan"})
         if (auto attr = op->getAttr(name)) alloc->setAttr(name, attr);
       markTiled(alloc, rewriter);
       rewriter.replaceOp(op, alloc.getResult());
@@ -4390,17 +4152,18 @@ static void foldThreadTilePairs(Operation *root) {
 //   1. 预扫描是否需要 tiling 和布局分析。
 //   2. WMMA 布局方法选择，LowerInfoAnalysis 推断布局。
 //   3. promoteGemmMatrixLoads，插入布局转换，sinkLoopLayoutConversions。
-//   4. planSharedOperandPacking -> DMA 宽度规划 -> planSharedSwizzles（有先后依赖）。
-//   5. asyncDirectOnly 时把部分 DMA 退回同步拷贝。
+//   4. SharedMemoryPlan 收集全部访问，联合选择物理布局与 DMA，发布唯一方案。
 //   6. sinkWaitBufferReady。
 //   7. applyPartialConversion 执行各 Tiling pattern。
 //   8. 折叠桥接并清理。
-// 这个函数约 270 行，其中 DMA 规划和 asyncDirectOnly 是内联写的。
 template <bool Typed>
 class ConvertFriskBaseToThreadLevelIR
     : public impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR<Typed>> {
   using Base = impl::ConvertFriskBaseToThreadLevelIRBase<ConvertFriskBaseToThreadLevelIR<Typed>>;
   using Base::packSharedOperands;
+  using Base::sharedMemoryPlanning;
+  using Base::sharedCopyConstraints;
+  using Base::dmaExportWidths;
   using Base::matrixLoads;
   using Base::asyncDirectOnly;
   using Base::dmaPackMode;
@@ -4418,6 +4181,66 @@ class ConvertFriskBaseToThreadLevelIR
   using Base::getOperation;
   using Base::getContext;
   using Base::signalPassFailure;
+  LogicalResult runSharedPlanning(func::FuncOp kernel, LowerInfoMap &layouts,
+                                  HWSpecification &hw) {
+    if (sharedMemoryPlanning != "analyze" && sharedMemoryPlanning != "auto")
+      return kernel.emitError("shared-memory-planning must be analyze or auto");
+    SharedPlanningOptions options;
+    if (dmaPackMode != "legacy" && dmaPackMode != "useKPack" && dmaPackMode != "noKPack")
+      return kernel.emitError("dma-pack-mode must be legacy, useKPack, or noKPack");
+    SmallVector<StringRef> widths;
+    StringRef(dmaExportWidths).split(widths, ',');
+    options.exportableDMABytes.clear();
+    for (StringRef text : widths) {
+      unsigned width;
+      if (text.getAsInteger(10, width) || !hw.dataCopyInfo.getDMATransfer(width))
+        return kernel.emitError("dma-export-widths must list supported hardware packet widths");
+      options.exportableDMABytes.push_back(width);
+    }
+    options.searchLayouts = packSharedOperands;
+    options.searchSwizzles = packSharedOperands;
+    options.requireMaximumDMA = dmaPackMode != "legacy";
+    options.reduceCopyWaves = dmaPackMode == "noKPack";
+    options.allowSynchronousFallback = asyncDirectOnly;
+    if (failed(bindSharedPlanningConstraints(kernel,
+            {swizzleQ.getValue(), swizzleK.getValue(), swizzleV.getValue()},
+            {swizzleQArg, swizzleKArg, swizzleVArg}, options))) return failure();
+    if (failed(bindSharedCopyConstraints(kernel, sharedCopyConstraints, options))) return failure();
+    auto plan = planSharedMemory(kernel, layouts, hw, options);
+    if (sharedMemoryPlanning == "analyze") { plan.dump(llvm::errs()); return success(); }
+    if (failed(plan.publish(layouts))) { plan.dump(llvm::errs()); return failure(); }
+    // Materialize only synchronous choices made by the joint planner. An
+    // adjacent wait can use vectorized CopyOp lowering; nonlocal readiness
+    // remains explicit and is respected by async-copy lowering.
+    for (const auto &group : plan.groups) {
+      if (!group.selected) continue;
+      for (const auto &copy : group.candidates[*group.selected].copies) {
+        if (copy.bytesPerLane) continue;
+        auto issue = dyn_cast<AsyncCopyGmToShmOp>(group.group.accesses[copy.access].op);
+        if (!issue) continue;
+        auto ready = dyn_cast_or_null<WaitBufferReadyOp>(issue->getNextNode());
+        if (!ready || ready.getToken() != issue.getToken()) continue;
+        OpBuilder b(issue);
+        b.create<CopyOp>(issue.getLoc(), issue.getSrc(), issue.getDst());
+        ready.erase();
+        Value done = b.create<AsyncTaskCompletedOp>(issue.getLoc(), friskAsyncTaskType::get(kernel.getContext()));
+        issue.getToken().replaceAllUsesWith(done);
+        issue.erase();
+      }
+    }
+    for (const auto &group : plan.groups) {
+      if (!group.selected) continue;
+      const auto &chosen = group.candidates[*group.selected];
+      llvm::errs() << "Shared memory plan: group=" << group.group.id
+                   << " axis=" << chosen.layout.packAxis << " pack=" << chosen.layout.packElements
+                   << " rows=" << chosen.layout.packetRows << " xor=";
+      for (auto [src, dst] : chosen.layout.xorSwizzles) llvm::errs() << src << ':' << dst << ',';
+      for (const auto &copy : chosen.copies)
+        llvm::errs() << " copy=" << copy.bytesPerLane << "B/" << copy.copyThreads << "threads/" << copy.rounds << "rounds";
+      llvm::errs() << '\n';
+    }
+    return success();
+  }
 public:
   StringRef getArgument() const override {
     return Typed ? "convert-friskbase-to-fragment" : "convert-friskbase-to-thread";
@@ -4476,6 +4299,13 @@ public:
     });
     // Running the pass again must not re-analyze or re-tile thread operations.
     if (!needsTiling) {
+      // Explicit scalar/affine kernels already describe their computation
+      // accesses. They need no GEMM anchor to use generic storage planning.
+      {
+        LowerInfoMap explicitLayouts;
+        auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, &getContext());
+        if (failed(runSharedPlanning(kernel, explicitLayouts, *hw))) return signalPassFailure();
+      }
       foldThreadTilePairs(kernel);
       // Shared storage planning is deferred until after fragment scheduling.
       return;
@@ -4538,153 +4368,8 @@ public:
       kernel.walk([](frisk::ConvertLayoutOp op) {
         op->removeAttr("frisk.shuffle_plan");
       });
-    if (packSharedOperands)
-      planSharedOperandPacking(kernel, *s_info);
-    // DMA 宽度规划：让 GM -> LDS 的 DMA 达到硬件最大宽度（128-bit）。
-    //   useKPack  调用方把 tile 调粗，每个 lane 搬多个消费者的包。
-    //   noKPack   减少搬运的 wave 数（copying / kpack）。
-    // 先基于原始消费者信息算好所有 DMAPlan，再统一写属性，因为修改属性会影响后面的计算。
-    if (dmaPackMode != "legacy") {
-      if (dmaPackMode != "useKPack" && dmaPackMode != "noKPack") {
-        kernel.emitError("dma-pack-mode must be legacy, useKPack, or noKPack");
-        return signalPassFailure();
-      }
-      const auto *dma = s_hw->dataCopyInfo.getMaxDMATransfer();
-      bool invalid = false;
-      // 一条 DMA 的规划结果。
-      //   issue    DMA op。
-      //   storage  目的 LDS 的所有 alloc。
-      //   axis     物理打包轴。
-      //   width    物理包的元素数。
-      //   kpack    一个 DMA 包里含多少个消费者的包。
-      //   copying  参与搬运的线程数。
-      struct DMAPlan {
-        frisk::AsyncCopyGmToShmOp issue;
-        SmallVector<Operation *> storage;
-        int64_t axis, width, kpack, copying;
-      };
-      SmallVector<DMAPlan> dmaPlans;
-      // storagePlans：alloc -> (轴, 宽度)。同一块 LDS 的多条 DMA 必须一致。
-      DenseMap<Operation *, std::pair<int64_t, int64_t>> storagePlans;
-      kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
-        auto type = cast<MemRefType>(issue.getSrc().getType());
-        auto axis = getPhysicalMinorCopyAxis(issue.getSrc());
-        SharedBufferAliases aliases;
-        bool owned = aliases.collect(getViewBuffer(issue.getDst()));
-        auto consumer = owned ? dyn_cast_or_null<IntegerAttr>(
-            aliases.commonAttribute("frisk.shared_pack")) : IntegerAttr{};
-        auto matrixPacket = owned ? dyn_cast_or_null<IntegerAttr>(
-            aliases.commonAttribute("frisk.matrix_load_packet")) : IntegerAttr{};
-        if (matrixPacket)
-          consumer = dyn_cast_or_null<IntegerAttr>(
-              aliases.commonAttribute("frisk.matrix_load_consumer_width"));
-        int64_t bits = type.getElementTypeBitWidth();
-        if (!dma || !axis || !owned || !consumer || bits % 8 ||
-            type.getRank() != 2 || issue.getAlignment() % dma->alignmentBytes ||
-            dma->bytesPerLane % (consumer.getInt() * bits / 8) ||
-            type.getDimSize(*axis) % (dma->bytesPerLane * 8 / bits)) {
-          issue.emitError("cannot plan maximum-width DMA for this owned tile/alignment");
-          invalid = true;
-          return;
-        }
-        // kpack = DMA 每 lane 字节数 / 消费者包的字节数。
-        int64_t kpack = dma->bytesPerLane / (consumer.getInt() * bits / 8);
-        if (type.getNumElements() % (s_hw->getWarpsize() * dma->bytesPerLane * 8 / bits)) {
-          issue.emitError("packed DMA export requires complete wave packets (no partial-wave tail)");
-          invalid = true;
-          return;
-        }
-        int64_t copying = kernel->getAttrOfType<IntegerAttr>("thread_num").getInt();
-        if (dmaPackMode == "noKPack") {
-          if (!kpack || copying % (kpack * s_hw->getWarpsize())) {
-            issue.emitError("noKPack requires complete copy waves after division by kpack");
-            invalid = true;
-            return;
-          }
-          copying /= kpack;
-        }
-        int64_t physicalAxis = matrixPacket ? 1 : *axis;
-        int64_t physicalWidth = matrixPacket ? matrixPacket.getInt() : dma->bytesPerLane * 8 / bits;
-        for (Operation *storage : aliases.allocations) {
-          auto [it, inserted] = storagePlans.try_emplace(
-              storage, std::make_pair(physicalAxis, physicalWidth));
-          if (!inserted && it->second != std::make_pair(physicalAxis, physicalWidth)) {
-            issue.emitError("conflicting maximum-width DMA layouts for shared aliases");
-            invalid = true;
-            return;
-          }
-        }
-        dmaPlans.push_back({issue,
-            SmallVector<Operation *>(aliases.allocations.begin(), aliases.allocations.end()),
-            physicalAxis, physicalWidth,
-            kpack, copying});
-      });
-      if (invalid) return signalPassFailure();
-      // Plan every launch against the original consumer contract first.
-      // Prologue and steady-state launches may share the same rotated group;
-      // mutating its width during analysis would change subsequent kpack.
-      for (auto &plan : dmaPlans) {
-        auto issue = plan.issue;
-        auto type = cast<MemRefType>(issue.getSrc().getType());
-        OpBuilder b(issue);
-        // Transfer ownership follows the physical contiguous GM axis. The
-        // consumer keeps its original MMAC layout; the common ShmDataIODesc
-        // remaps all loads and provides the inverse DMA source coordinates.
-        for (Operation *storage : plan.storage) {
-          storage->setAttr("frisk.shared_pack_axis", b.getI64IntegerAttr(plan.axis));
-          storage->setAttr("frisk.shared_pack", b.getI64IntegerAttr(plan.width));
-          for (StringRef name : {"frisk.shared_pair_stride", "frisk.shared_store_stride", "frisk.shared_store_pair"})
-            storage->removeAttr(name);
-        }
-        issue->setAttr("frisk.dma_bytes", b.getI64IntegerAttr(dma->bytesPerLane));
-        issue->setAttr("frisk.kpack", b.getI64IntegerAttr(plan.kpack));
-        if (dmaPackMode == "noKPack")
-          issue->setAttr("frisk.copy_threads", b.getI64IntegerAttr(plan.copying));
-        llvm::errs() << "DMA plan: " << dmaPackMode.getValue() << " shape="
-                     << type.getDimSize(0) << "x" << type.getDimSize(1)
-                     << " bytes=" << dma->bytesPerLane << " kpack=" << plan.kpack
-                     << " copy_threads=" << plan.copying << "\n";
-      }
-    }
-    if (failed(planSharedSwizzles(kernel, *s_info, *s_hw,
-            {swizzleQ.getValue(), swizzleK.getValue(), swizzleV.getValue()},
-            {swizzleQArg, swizzleKArg, swizzleVArg})))
-      return signalPassFailure();
-    if (asyncDirectOnly && dmaPackMode == "legacy") {
-      // Select before thread tiling: late scalar fallback loses the ordinary
-      // copy path's coalesced global packets and bank-safe packed LDS stores.
-      // A sub-dword packet along a noncontiguous source axis cannot use direct
-      // DMA. Keep the planned consumer layout and let CopyOpTiling distribute
-      // the transfer, without allocating a second LDS tile for repacking.
-      SmallVector<frisk::AsyncCopyGmToShmOp> synchronous;
-      kernel.walk([&](frisk::AsyncCopyGmToShmOp issue) {
-        auto *storage = getViewBuffer(issue.getDst()).getDefiningOp();
-        auto axis = storage ? storage->getAttrOfType<IntegerAttr>("frisk.shared_pack_axis")
-                            : IntegerAttr{};
-        auto sourceAxis = getPhysicalMinorCopyAxis(issue.getSrc());
-        auto type = cast<MemRefType>(issue.getSrc().getType());
-        auto wait = dyn_cast_or_null<frisk::WaitBufferReadyOp>(issue->getNextNode());
-        // Leave already pipelined/nonlocal waits alone; their readiness must
-        // remain explicit until the original scheduled completion point.
-        if (axis && sourceAxis && axis.getInt() != *sourceAxis &&
-            type.getElementTypeBitWidth() < 32 && wait &&
-            wait.getToken() == issue.getToken())
-          synchronous.push_back(issue);
-      });
-      for (auto issue : synchronous) {
-        OpBuilder b(issue);
-        auto *wait = issue->getNextNode();
-        // The ordinary copy publishes its stores with a block barrier.
-        b.create<frisk::CopyOp>(issue.getLoc(), issue.getSrc(), issue.getDst());
-        wait->erase();
-        Value completed = b.create<frisk::AsyncTaskCompletedOp>(issue.getLoc(),
-            frisk::friskAsyncTaskType::get(kernel.getContext()));
-        issue.getToken().replaceAllUsesWith(completed);
-        issue.erase();
-      }
-      llvm::errs() << "Async direct-only: " << synchronous.size()
-                   << " packed copies selected for vectorized synchronous lowering\n";
-    }
+    if (failed(runSharedPlanning(kernel, *s_info, *s_hw))) return signalPassFailure();
+    if (sharedMemoryPlanning == "analyze") { s_info = nullptr; return; }
     // Select synchronous copies first: hybrid selection needs adjacent pairs.
     // Then delay readiness while logical tile consumers are still explicit.
     sinkWaitBufferReady(kernel);

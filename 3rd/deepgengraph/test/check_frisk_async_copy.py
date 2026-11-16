@@ -63,7 +63,7 @@ void test_set_tid(unsigned v) { if (pending) ++errors; tid = v; }
 unsigned test_tid(void) { return tid; }
 unsigned test_first(unsigned v) { return v; }
 void test_dma(const void *src, void *base, unsigned size, unsigned offset, unsigned aux) {
-  if ((size != 4 && size != 16) || offset || aux || pending == 1024) { ++errors; return; }
+  if ((size != 4 && size != 8 && size != 16) || offset || aux || pending == 1024) { ++errors; return; }
   queue[pending].src = src;
   queue[pending].size = size;
   queue[pending++].dst = (char *)base + (tid % 64) * size;
@@ -144,6 +144,7 @@ def execute_copy(ir, rows, cols, bits, strides=None, offset=0, threads=128,
             'llvm.amdgcn.workitem.id.x': 'test_tid',
             'llvm.amdgcn.readfirstlane.i32': 'test_first',
             'llvm.amdgcn.global.load.async.lds': 'test_dma',
+            '__frisk_async_load_lds': 'test_dma',
             'llvm.amdgcn.asyncmark': 'test_mark',
             'llvm.amdgcn.wait.asyncmark': 'test_wait',
             'llvm.amdgcn.s.barrier': 'test_barrier',
@@ -254,11 +255,12 @@ def main():
     assert 'unrealized_conversion_cast' not in dynamic_final and 'memref.subview' not in dynamic_final
     pipeline = (HERE / 'test_frisk_async_pipeline.mlir').read_text()
     hybrid = lower(pipeline, '--convert-friskbase-to-thread=async-direct-only=true matrix-loads=false')
-    # A's contiguous packed packets stay DMA; B's transposed halfword
-    # packing uses the ordinary vector copy and publishes it with a barrier.
-    assert hybrid.count('frisk.async_copy_gm_to_shm') == 1
-    assert hybrid.count('frisk.wait_buffer_ready') == 1
-    assert 'frisk.sync_threads_in_block' in hybrid
+    # The joint planner can choose a direct layout for both buffers; the
+    # old source-axis heuristic no longer forces the second copy synchronous.
+    assert hybrid.count('frisk.async_copy_gm_to_shm') == 2
+    assert hybrid.count('frisk.wait_buffer_ready') == 2
+    emitted = lower(hybrid, '--finalize-thread-tiling', '--pack-shared-memory', '--frisk-lower-async-copy')
+    assert 'async_lds_staging_' not in emitted
     scheduled = lower(pipeline, '--frisk-pipeline-schedule')
     assert 'pipeline.slots = 2' in scheduled
     assert 'frisk.wait_buffer_ready' in scheduled
@@ -278,10 +280,10 @@ def main():
     premature = pipeline.replace(issue + '\n      ' + wait, wait + '\n      ' + issue)
     premature = premature.replace('0, 0, 1, 1, 1, 1', '0, 0, 0, 1, 1, 1')
     assert 'does not dominate' in lower(premature, '--frisk-pipeline-schedule', ok=False)
-    # Both modes must accept exactly the same scheduled tile/readiness IR.
-    for mode in ('true', 'false'):
-        lower(scheduled, '--convert-friskbase-to-thread', '--finalize-thread-tiling',
-              f'--frisk-lower-async-copy=use-async-copy={mode}')
+    # Select synchronous operation before planning; a published direct DMA
+    # plan cannot be silently replaced at the final emission stage.
+    lower(scheduled, '--convert-friskbase-to-thread', '--finalize-thread-tiling',
+          '--pack-shared-memory', '--frisk-lower-async-copy')
     selected_sync = lower(scheduled, '--frisk-lower-async-to-sync')
     assert 'async_copy_gm_to_shm' not in selected_sync and 'wait_buffer_ready' not in selected_sync
     assert 'frisk.explicit_wait' in selected_sync and 'frisk.sync_threads_in_block' in selected_sync

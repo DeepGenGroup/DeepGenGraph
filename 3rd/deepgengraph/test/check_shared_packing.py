@@ -207,7 +207,9 @@ def main():
             assert 'frisk.packed_width = 4' in text
             assert re.search(r'vector.load .*memref<\d+xf16, 3>, vector<(4|8)xf16>', text)
             store_width = 4 if k >= 32 else 8
-            assert re.search(r'vector.store .*memref<\d+xf16, 3>, vector<'+str(store_width)+r'xf16>', text)
+            # Joint planning may coalesce a wider store than the former fixed packing.
+            stores = [int(w) for w in re.findall(r'vector.store .*memref<\d+xf16, 3>, vector<(\d+)xf16>', text)]
+            assert stores and min(stores) >= store_width and max(stores) <= 8, stores
             global_widths = [int(w) for w in re.findall(
                 r'vector.load[^\n]*memref<[^\n]*, 1>, vector<(\d+)xf16>', text)]
             assert global_widths and all(w <= 8 for w in global_widths), global_widths
@@ -286,14 +288,17 @@ def main():
         source = source.replace('  %b =', f'''  %a = frisk.alloc_buffer {{scope = "shared", alignment = 16}} -> {a}
   frisk.copy %src to %a [affine_map<() -> (2)>] : {a}, {a}
   %b =''', 1)
-        for name, operands in [('same', '%a, %b'), ('conflicting', '%b, %a')]:
+        for name, operands in [('same', '%a, %b'), ('different', '%b, %a')]:
             two = source.replace('  frisk.copy %c to', f'''  %c2 = frisk.gemm({operands}, %c_init) {{transA = false, transB = false}} : {a}, {a}, {c} -> {c}
   %sum = frisk.add %c, %c2 : {c}, {c} -> {c}
   frisk.copy %sum to''')
             path.write_text(two)
             run([TOOL, path, *passes, '-o', out])
-            assert out.read_text().count('frisk.packed_axis = 1') == (1 if name == 'same' else 0)
-        print('PASS A with multiple consumers: compatible layouts share packing; conflicting layouts fall back')
+            # Joint planning can find one legal layout for different A/B
+            # access contracts instead of rejecting their pairwise mismatch.
+            assert out.read_text().count('frisk.packed_shape = array<i64: 32, 32>') == 2
+            assert out.read_text().count('memref.alloc()') == 2
+        print('PASS multiple A/B consumers jointly share proven physical layouts without extra storage')
 
         a, b, c = 'memref<32x16xf16, 3>', 'memref<16x32xf16, 3>', 'memref<32x32xf32>'
         two = gemm(32,32,16,64, f'%c2_init = frisk.zero : {c}\n  %c2 = frisk.gemm(%a, %b, %c2_init) {{transA = false, transB = false}} : {a}, {b}, {c} -> {c}')

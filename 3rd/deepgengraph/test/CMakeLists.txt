@@ -71,3 +71,8 @@ target_link_libraries(MyTest PRIVATE
   TilelangIR
   FriskIR
 )
+
+add_executable(SharedMemoryPlanTest shared_memory_plan_test.cpp)
+llvm_update_compile_flags(SharedMemoryPlanTest)
+target_link_libraries(SharedMemoryPlanTest PRIVATE
+  DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect MLIRParser)

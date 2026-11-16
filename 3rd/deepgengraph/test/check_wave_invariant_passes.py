@@ -192,6 +192,24 @@ class HoistWaveInvariants(unittest.TestCase):
         _, loop, _ = blocks(output)
         self.assertIn('rocdl.readfirstlane', loop)
 
+    def test_planned_bridge_cfg_preserves_uniformity_check(self):
+        for condition, uniform in [(UNIFORM, True),
+                                   ('llvm.icmp "slt" %tid, %sixteen : i32', False)]:
+            source = LOOP.format(condition=condition, leader='rocdl.readfirstlane %base : i32')
+            source = source.replace('llvm.func @use(i32)',
+                'llvm.func @use(i32)\nllvm.func @__frisk_async_load_lds('
+                '!llvm.ptr<1>, !llvm.ptr<3>, i32, i32, i32)')
+            source = source.replace(
+                'rocdl.global.load.async.lds %src, %pointer, 16, 0, 0 : !llvm.ptr<1>, !llvm.ptr<3>',
+                '%bytes = llvm.mlir.constant(8 : i32) : i32\n'
+                '  llvm.call @__frisk_async_load_lds(%src, %pointer, %bytes, %zero, %zero) '
+                ': (!llvm.ptr<1>, !llvm.ptr<3>, i32, i32, i32) -> ()')
+            output, _ = run_pass(source, '--frisk-hoist-wave-invariants')
+            entry, loop, _ = blocks(output)
+            self.assertEqual('rocdl.readfirstlane' in entry, uniform)
+            self.assertEqual('rocdl.readfirstlane' in loop, not uniform)
+            self.assertIn('llvm.call @__frisk_async_load_lds', loop)
+
 
 EARLY_WAVE = '''module {
 func.func @kernel(%src: memref<256xi32, 1>, %dst: memref<256xi32, 3>,
@@ -267,6 +285,42 @@ class StructuredWaveInvariants(unittest.TestCase):
         for op in ('rocdl.global.load.async.lds', 'rocdl.ds_bpermute', 'memref.load', 'memref.store'):
             self.assertIn(op, loop)
         self.assertIn('(structured)', log)
+
+    def test_planned_copy_participation_preserves_hoisting(self):
+        for width in (8, 16):
+            for participants in (64, 128):
+                with self.subTest(width=width, participants=participants):
+                    source = EARLY_WAVE.replace('256xi32', '1024xi32').replace(
+                        'alignment = 4 : i64',
+                        f'alignment = 16 : i64, frisk.dma_bytes = {width} : i64, '
+                        f'frisk.copy_threads = {participants} : i64')
+                    output, _ = self.lower(source)
+                    entry, loop = output.split('affine.for', 1)
+                    # All waves participate: bases can leave the loop. A
+                    # partial copy retains its mask and convergent leader read.
+                    full = participants == 128
+                    self.assertEqual('scf.if' in loop, not full)
+                    self.assertEqual('rocdl.readfirstlane' in loop, not full)
+                    # The 8B bridge declaration may precede the function, but
+                    # it must never carry the actual copy out of the loop.
+                    self.assertIn('rocdl.readfirstlane', entry if full else loop)
+                    instruction = ('llvm.call @__frisk_async_load_lds' if width == 8
+                                   else 'rocdl.global.load.async.lds')
+                    self.assertIn(instruction, loop)
+                    self.assertNotIn(instruction, entry)
+
+    def test_planned_bridge_refuses_varying_base(self):
+        source = self.fixture(address='%address = arith.index_cast %i : index to i32')
+        source = source.replace(
+            'rocdl.global.load.async.lds %src, %pointer, 4, 0, 0 : !llvm.ptr<1>, !llvm.ptr<3>',
+            '%bytes = arith.constant 8 : i32\n'
+            '    llvm.call @__frisk_async_load_lds(%src, %pointer, %bytes, %zero, %zero) '
+            ': (!llvm.ptr<1>, !llvm.ptr<3>, i32, i32, i32) -> ()')
+        source = ('module {\nllvm.func @__frisk_async_load_lds(!llvm.ptr<1>, '
+                  '!llvm.ptr<3>, i32, i32, i32)\n' + source + '\n}')
+        entry, loop = self.lower(source)[0].split('affine.for', 1)
+        self.assertNotIn('rocdl.readfirstlane', entry)
+        self.assertIn('rocdl.readfirstlane', loop)
 
     def test_scf_uniform_dynamic_bound_and_options(self):
         source = self.fixture(loop='scf.for %i = %start to %n step %step')

@@ -1,4 +1,5 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/AsyncDMA.h"
 #include "deepgengraph/Analysis/HardwareSpecification.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -76,6 +77,29 @@ struct GatherToGfx936 : ConvertOpToLLVMPattern<amdgpu::GatherToLDSOp> {
     address = r.create<ROCDL::ReadfirstlaneOp>(loc, i32, address);
     dst = r.create<LLVM::IntToPtrOp>(loc, dst.getType(), address);
     auto bytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
+    if (bytes.getInt() == 8) {
+      auto module = op->getParentOfType<ModuleOp>();
+      auto type = LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(r.getContext()),
+          {src.getType(), dst.getType(), i32, i32, i32});
+      auto *symbol = module.lookupSymbol(frisk::PlannedAsyncDMA);
+      auto function = dyn_cast_or_null<LLVM::LLVMFuncOp>(symbol);
+      if (symbol && (!function || !function.isExternal() || function.getFunctionType() != type))
+        return op.emitOpError("conflicting planned DMA emission declaration");
+      if (!function) {
+        OpBuilder::InsertionGuard guard(r);
+        r.setInsertionPointToStart(module.getBody());
+        function = r.create<LLVM::LLVMFuncOp>(loc, frisk::PlannedAsyncDMA, type);
+        function.setConvergent(true);
+        function.setNoUnwind(true);
+      }
+      Value width = r.create<LLVM::ConstantOp>(loc, i32, bytes.getInt());
+      Value zero = r.create<LLVM::ConstantOp>(loc, i32, 0);
+      auto call = r.create<LLVM::CallOp>(loc, function, ValueRange{src, dst, width, zero, zero});
+      call.setConvergent(true);
+      call.setNoUnwind(true);
+      r.eraseOp(op);
+      return success();
+    }
     r.replaceOpWithNewOp<ROCDL::GlobalLoadAsyncLDSOp>(op, src, dst,
         r.getI32IntegerAttr(bytes.getInt()), r.getI32IntegerAttr(0), r.getI32IntegerAttr(0),
         ArrayAttr{}, ArrayAttr{}, ArrayAttr{});
@@ -137,6 +161,7 @@ struct LowerFriskAsyncCopyPass
       auto dstType = cast<MemRefType>(op.getDst().getType());
       int64_t threads = op->getParentOfType<func::FuncOp>()
                             ->getAttrOfType<IntegerAttr>("thread_num").getInt();
+      const int64_t blockThreads = threads;
       auto requestedBytes = op->getAttrOfType<IntegerAttr>("frisk.dma_bytes");
       bool enabled = useAsyncCopy && !op->hasAttr("frisk.force_sync");
       unsigned dmaBytes = enabled ? frisk::selectAsyncDMATransferBytes(op, requestedBytes ? requestedBytes.getInt() : 0) : 0;
@@ -150,9 +175,26 @@ struct LowerFriskAsyncCopyPass
       }
       auto sourceMapAttr = op->getAttrOfType<AffineMapAttr>("frisk.source_map");
       AffineMap sourceMap = sourceMapAttr ? sourceMapAttr.getValue() : AffineMap{};
+      auto plannedDestination = op->getAttrOfType<AffineMapAttr>("frisk.dma_destination_map");
+      if (plannedDestination) {
+        auto plannedSource = op->getAttrOfType<AffineMapAttr>("frisk.dma_source_map");
+        auto total = op->getAttrOfType<IntegerAttr>("frisk.dma_total_elements");
+        auto tid = b.getAffineDimExpr(0), round = b.getAffineDimExpr(1);
+        auto expected = requestedBytes ? AffineMap::get(2, 0,
+            (round * threads + tid) * (requestedBytes.getInt() * 8 / srcType.getElementTypeBitWidth()))
+            : AffineMap{};
+        if (!dma || !requestedBytes || dmaBytes != requestedBytes.getInt() ||
+            !plannedSource || plannedSource.getValue() != sourceMap ||
+            !total || total.getInt() != dstType.getNumElements() ||
+            total.getInt() != srcType.getNumElements() ||
+            plannedDestination.getValue() != expected) {
+          op.emitError("published shared copy plan invalidated before DMA emission");
+          return signalPassFailure();
+        }
+      }
       Value destination = op.getDst();
       frisk::WaitBufferReadyOp ready;
-      if (!dma && useAsyncCopy && !op->hasAttr("frisk.force_sync") && sourceMap) {
+      if (!plannedDestination && !dma && useAsyncCopy && !op->hasAttr("frisk.force_sync") && sourceMap) {
         for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
           if (auto wait = dyn_cast<frisk::WaitBufferReadyOp>(next);
               wait && wait.getToken() == op.getToken()) { ready = wait; break; }
@@ -226,21 +268,29 @@ struct LowerFriskAsyncCopyPass
       // Disable complete waves, preserving hardware lane IDs within every DMA
       // packet. Completion/publication below remains block collective.
       scf::IfOp participants;
-      if (op->hasAttr("frisk.copy_threads")) {
+      // The published plan also records full-block participation. Do not
+      // introduce a thread-dependent region in that case: it obscures the
+      // uniform control flow needed to hoist DMA wave-base calculations.
+      if (threads < blockThreads) {
         Value active = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
             tid, indexConstant(b, loc, threads));
         participants = b.create<scf::IfOp>(loc, active, false);
         b.setInsertionPointToStart(participants.thenBlock());
       }
       auto emitPacket = [&](Value linear) {
-        Value flat = b.create<arith::MulIOp>(loc, linear,
-                                            indexConstant(b, loc, width));
+        Value flat;
+        if (plannedDestination) {
+          Value round = b.create<arith::DivUIOp>(loc, linear, indexConstant(b, loc, threads));
+          flat = b.create<affine::AffineApplyOp>(loc, plannedDestination.getValue(), ValueRange{tid, round});
+        } else {
+          flat = b.create<arith::MulIOp>(loc, linear, indexConstant(b, loc, width));
+        }
         SmallVector<Value> srcIndices;
         if (sourceMap) srcIndices = mappedCoordinates(b, loc, flat, sourceMap);
         else srcIndices = coordinates(b, loc, flat, srcType.getShape());
         if (dma) {
-          Value wave = b.create<arith::DivUIOp>(loc, linear,
-                                               indexConstant(b, loc, 64));
+          Value wave = b.create<arith::DivUIOp>(loc, flat,
+                                               indexConstant(b, loc, 64 * width));
           Value base = b.create<arith::MulIOp>(loc, wave,
                                                indexConstant(b, loc, 64 * width));
           auto dstIndices = coordinates(b, loc, base, dstType.getShape());

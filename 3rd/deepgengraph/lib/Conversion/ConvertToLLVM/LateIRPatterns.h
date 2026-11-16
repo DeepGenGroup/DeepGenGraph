@@ -2,10 +2,10 @@
 // LLVM 阶段各 Pass 共用的 IR 形状定义和识别函数。
 //
 // 这些 Pass 靠 inline asm 文本和函数名识别 DMA、wait、矩阵读等指令。文本写错或改动时，
-// 它们通常只会放弃优化、不会报错，所以生成方（TranslateToLLVM.cpp、NarrowKDMA.cpp）和
+// 它们通常只会放弃优化、不会报错，所以生成方（TranslateToLLVM.cpp）和
 // 识别方必须使用这里的同一份定义。
 //
-// 使用方：NarrowKDMA、PrefetchNextK、InterleavePV、PrefetchPairedLDS、
+// 使用方：PrefetchNextK、InterleavePV、PrefetchPairedLDS、
 // ScheduleSoftmaxFragments、DeferLaneSum 等。
 // ===========================================================================
 #ifndef DEEPGENGRAPH_LATEIRPATTERNS_H
@@ -164,7 +164,7 @@ inline std::optional<Sync> matchSync(Inst *i) {
 }
 
 // ---- 函数级前置检查 --------------------------------------------------------
-// narrowKDMA、prefetchNextK 都按字节证明 LDS 的读写范围，需要相同的前提：
+// prefetchNextK 都按字节证明 LDS 的读写范围，需要相同的前提：
 // 固定的 1D workgroup、wave64、唯一的静态 LDS 对象、所有分支对 workgroup uniform。
 struct Wave64Kernel {
   unsigned threads = 0;           // workgroup 的线程数，是 64 的倍数。

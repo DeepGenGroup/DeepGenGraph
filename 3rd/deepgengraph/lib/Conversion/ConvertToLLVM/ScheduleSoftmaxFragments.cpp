@@ -131,13 +131,14 @@ bool knownFixed(Inst *i) {
     if (auto *f = c->getCalledFunction()) {
       auto n = f->getName();
       return n == "llvm.amdgcn.s.barrier" || n == "llvm.amdgcn.sched.barrier" ||
+             n == "llvm.amdgcn.readfirstlane.i32" ||
              n == detail::MatrixReadM32x16 ||
              n == "llvm.amdgcn.exp2.f32";
     }
     auto *a = llvm::dyn_cast<llvm::InlineAsm>(c->getCalledOperand());
     if (!a || !a->hasSideEffects() || a->canThrow() || a->isAlignStack()) return false;
     return (detail::isWaitAsm(a) && c->arg_empty()) ||
-           (detail::isDMA128Asm(a) && c->arg_size() == 3);
+           detail::dmaBytesPerLane(i) != 0;
   }
   return !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects();
 }

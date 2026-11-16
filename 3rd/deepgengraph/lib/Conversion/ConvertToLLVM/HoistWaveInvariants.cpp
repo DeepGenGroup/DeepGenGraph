@@ -29,6 +29,7 @@
 // That trades a few registers for fewer ALU instructions per iteration, so it
 // has its own option for A/B measurement.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/AsyncDMA.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -50,6 +51,19 @@
 using namespace mlir;
 
 namespace {
+// Planned 8B copies have the same LDS pointer/convergence contract as the
+// upstream intrinsic. Their emission bridge must participate in the existing
+// invariant-base optimization too; it does not change the chosen copy plan.
+Value getDMALDSPointer(Operation *op) {
+  if (auto copy = dyn_cast<ROCDL::GlobalLoadAsyncLDSOp>(op))
+    return copy.getLdsPtr();
+  if (auto call = dyn_cast<LLVM::CallOp>(op);
+      call && call.getCallee() == frisk::PlannedAsyncDMA &&
+      call.getArgOperands().size() == 5)
+    return call.getArgOperands()[1];
+  return {};
+}
+
 bool isConstant(Value value) {
   return matchPattern(value, m_Constant());
 }
@@ -243,10 +257,12 @@ struct HoistWaveInvariantsPass
       if (ldsBases) {
         // Include copies in inner loops: their base may already have moved
         // into this body during the preceding postorder visit.
-        SmallVector<ROCDL::GlobalLoadAsyncLDSOp> copies;
-        body->walk([&](ROCDL::GlobalLoadAsyncLDSOp copy) { copies.push_back(copy); });
-        for (auto copy : copies) {
-          auto pointer = copy.getLdsPtr().getDefiningOp<LLVM::IntToPtrOp>();
+        SmallVector<Value> destinations;
+        body->walk([&](Operation *op) {
+          if (Value pointer = getDMALDSPointer(op)) destinations.push_back(pointer);
+        });
+        for (Value destination : destinations) {
+          auto pointer = destination.getDefiningOp<LLVM::IntToPtrOp>();
           auto read = pointer ? pointer.getOperand().getDefiningOp<ROCDL::ReadfirstlaneOp>()
                               : ROCDL::ReadfirstlaneOp{};
           if (!read || read->getBlock() != body) continue;
@@ -287,10 +303,12 @@ struct HoistWaveInvariantsPass
   unsigned hoistBases(CFGLoop *loop, Block *entry, Block *body) {
     llvm::SetVector<Operation *> slice;
     unsigned count = 0;
-    SmallVector<ROCDL::GlobalLoadAsyncLDSOp> copies;
-    body->walk([&](ROCDL::GlobalLoadAsyncLDSOp copy) { copies.push_back(copy); });
-    for (auto copy : copies) {
-      auto pointer = copy.getLdsPtr().getDefiningOp<LLVM::IntToPtrOp>();
+    SmallVector<Value> destinations;
+    body->walk([&](Operation *op) {
+      if (Value pointer = getDMALDSPointer(op)) destinations.push_back(pointer);
+    });
+    for (Value destination : destinations) {
+      auto pointer = destination.getDefiningOp<LLVM::IntToPtrOp>();
       auto base = pointer ? pointer.getOperand().getDefiningOp<ROCDL::ReadfirstlaneOp>() : ROCDL::ReadfirstlaneOp{};
       if (!base || base->getBlock() != body) continue;
       llvm::SetVector<Operation *> candidate;

@@ -42,7 +42,7 @@ int main() {
         "bank count is an integer and DMA is supported");
   check(hw->dataCopyInfo.getDMATransfer(16) &&
         hw->dataCopyInfo.getDMATransfer(16)->ldsLaneStrideBytes == 16 &&
-        !hw->dataCopyInfo.getDMATransfer(8), "explicit DMA width set");
+        hw->dataCopyInfo.getDMATransfer(8), "explicit DMA width set");
   for (auto kind : {ShmAccessKind::Read, ShmAccessKind::Write})
     for (unsigned bytes : {4, 8, 16}) {
       auto phases = hw->getBankConflictPhases(bytes, kind);
@@ -92,6 +92,17 @@ int main() {
       checkBijection(configurable, ctx);
     }
 
+  auto composed = *ShmDataIODesc::getPacked({32,64}, 2, 1, 8);
+  check(composed.appendXorSwizzle(8,6) && composed.appendXorSwizzle(9,3), "composed byte-bit permutation");
+  checkBijection(composed, ctx);
+  check(composed.selectDMATransferBytes(*hw, &ctx, {64,1}, 16) == 8,
+        "subpacket permutation requires 8B direct DMA");
+  // Dependent bit operations do not commute: the inverse must reverse order.
+  composed.clearSwizzles();
+  check(composed.appendXorSwizzle(8,6) && composed.appendXorSwizzle(6,3), "dependent XORs");
+  checkBijection(composed, ctx);
+  check(!composed.appendXorSwizzle(4,0), "cannot split a multi-byte element");
+
   auto q = *ShmDataIODesc::getPacked({128,32}, 2, 1, 4);
   auto wide = *ShmDataIODesc::getPacked({128,32}, 2, 1, 8);
   checkBijection(q, ctx);
@@ -114,7 +125,7 @@ int main() {
         !ShmDataIODesc::getPacked({16,32}, 2, 0, 4, 6) &&
         !ShmDataIODesc::getPacked({16,32}, 2, 1, 4, 0, 3, 16),
         "invalid packing rejected");
-  check(q.selectDMATransferBytes(*hw, &ctx, {128,1}, 16) == 4,
+  check(q.selectDMATransferBytes(*hw, &ctx, {128,1}, 16) == 8,
         "Q four-element packets cross GM rows at 16B width");
   check(wide.selectDMATransferBytes(*hw, &ctx, {128,1}, 16) == 16,
         "eight-element Q packets allow 16B DMA");

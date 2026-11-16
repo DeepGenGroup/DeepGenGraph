@@ -4,6 +4,7 @@ add_deepgengraph_library(DeepgengraphAnalysis
   ThreadBounds.cpp
   LowerInfo.cpp
   ShmDataIODesc.cpp
+  SharedMemoryPlan.cpp
   HardwareSpecification.cpp
   LivelinessAnalyze.cpp
   RegisterPressure.cpp

@@ -1,5 +1,6 @@
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/AsyncDMA.h"
 #include "LateIRPatterns.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "llvm/IR/InlineAsm.h"
@@ -193,6 +194,8 @@ void protectAsyncDMASourceAddresses(llvm::Module &module) {
 }
 
 void lowerWideAsyncDMAToHCU(llvm::Module &module) {
+  if (auto *planned = module.getFunction(PlannedAsyncDMA); planned && !planned->use_empty())
+    llvm::report_fatal_error("planned 8B DMA requires buffer-asm export");
   auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
   if (!generic) return;
   SmallVector<llvm::CallInst *> wide;
@@ -228,14 +231,20 @@ void lowerWideAsyncDMAToHCU(llvm::Module &module) {
 
 void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bool reuseLeaderRead) {
   auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
-  if (!generic) return;
+  auto *planned = module.getFunction(PlannedAsyncDMA);
+  if (!generic && !planned) return;
   if (!sourceBytes) llvm::report_fatal_error("buffer DMA requires a nonzero tensor byte range");
   SmallVector<llvm::CallInst *> copies;
-  for (llvm::User *user : generic->users())
-    if (auto *call = llvm::dyn_cast<llvm::CallInst>(user)) copies.push_back(call);
+  for (auto *function : {generic, planned}) {
+    if (!function) continue;
+    for (llvm::User *user : function->users())
+      if (auto *call = llvm::dyn_cast<llvm::CallInst>(user)) copies.push_back(call);
+  }
   SmallVector<llvm::Function *> functions;
   for (auto *call : copies) {
     auto *width = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+    if (call->getCalledFunction() == planned && (!width || !width->equalsInt(8)))
+      llvm::report_fatal_error("invalid width in planned buffer DMA emission bridge");
     // Automatic selection may mix direct dword and dwordx4 packets. Keep
     // narrow calls on the supported intrinsic path; a function containing
     // wide asm uses drain-all VM waits for both kinds of transfer below.
@@ -244,10 +253,10 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bo
     auto *aux = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(4));
     auto *source = call->getArgOperand(0);
     auto *base = llvm::dyn_cast<llvm::Argument>(llvm::getUnderlyingObject(source, 32));
-    if (!width || !width->equalsInt(16) || !offset || !offset->isZero() ||
+    if (!width || (!width->equalsInt(8) && !width->equalsInt(16)) || !offset || !offset->isZero() ||
         !aux || !aux->isZero() || !base ||
         call->getFunction()->getCallingConv() != llvm::CallingConv::AMDGPU_KERNEL)
-      llvm::report_fatal_error("asm128 requires 16B/zero-control DMA from a kernel tensor argument");
+      llvm::report_fatal_error("buffer asm requires 8B or 16B/zero-control DMA from a kernel tensor argument");
     if (!llvm::is_contained(functions, call->getFunction())) functions.push_back(call->getFunction());
     llvm::IRBuilder<> b(call);
     b.SetCurrentDebugLocation(call->getDebugLoc());
@@ -279,7 +288,8 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bo
     // register definition to codegen and avoids the reserved clobber warning.
     auto *type = llvm::FunctionType::get(i32, {i32, i32, v4i32}, false);
     auto *assembly = llvm::InlineAsm::get(type,
-        detail::DMA128Asm, detail::DMAConstraints, true);
+        width->equalsInt(8) ? detail::DMA64Asm : detail::DMA128Asm,
+        detail::DMAConstraints, true);
     auto *issue = b.CreateCall(type, assembly, {lds, byteOffset, rsrc});
     issue->addFnAttr(llvm::Attribute::Convergent);
     issue->setDoesNotThrow();
@@ -310,10 +320,13 @@ void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bo
       call->eraseFromParent();
     }
   }
-  if (generic->use_empty()) generic->eraseFromParent();
+  if (generic && generic->use_empty()) generic->eraseFromParent();
+  if (planned && planned->use_empty()) planned->eraseFromParent();
 }
 
 void splitFullWaveAsyncDMAToDwords(llvm::Module &module) {
+  if (auto *planned = module.getFunction(PlannedAsyncDMA); planned && !planned->use_empty())
+    llvm::report_fatal_error("planned 8B DMA requires buffer-asm export");
   auto *generic = module.getFunction("llvm.amdgcn.global.load.async.lds");
   if (!generic) return;
   SmallVector<llvm::CallInst *> wide;

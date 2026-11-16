@@ -52,6 +52,57 @@ void show_vector(llvm::SmallVector<T, 2> vec, const std::string& name) {
 
 LowerInfo::LowerInfo(int w) : warp_threads(w){ }
 
+std::optional<LogicalAccess> LowerInfo::getLogicalAccess(int64_t threads) const {
+  auto type = buffer ? dyn_cast<ShapedType>(buffer.getType()) : ShapedType{};
+  if (!type || !type.hasStaticShape() || type.getRank() != 2 || threads <= 0 ||
+      warp_threads <= 0 || warpIdDivisor <= 0 ||
+      type.getElementTypeBitWidth() % 8)
+    return std::nullopt;
+  for (auto dims : {base_layout.thread_creg, base_layout.warp_layout,
+                    base_layout.warp_repeat, block_layout, block_repeat, warpInstUnroll})
+    if (dims[0] <= 0 || dims[1] <= 0) return std::nullopt;
+  // getAffineMap has legacy label caches. Build on a copy so analysis cannot
+  // mutate the layout being consumed by thread lowering.
+  LowerInfo snapshot = *this;
+  for (unsigned dim = 0; dim < 2; ++dim)
+    if (type.getDimSize(dim) == 1 || ignoreDim == int(dim)) {
+      snapshot.base_layout.thread_creg[dim] = 1;
+      snapshot.base_layout.warp_repeat[dim] = 1;
+      snapshot.block_repeat[dim] = 1;
+      snapshot.warpInstUnroll[dim] = 1;
+    }
+  LogicalAccess access;
+  access.coordinates = snapshot.getAffineMap();
+  SmallVector<AffineExpr> coordinates(access.coordinates.getResults());
+  for (unsigned dim = 0; dim < 2; ++dim)
+    if (type.getDimSize(dim) == 1 || ignoreDim == int(dim))
+      coordinates[dim] = getAffineConstantExpr(0, buffer.getContext());
+  access.coordinates = AffineMap::get(7, 0, coordinates, buffer.getContext());
+  access.upperBounds = {threads, snapshot.block_repeat[0], snapshot.block_repeat[1],
+      snapshot.warpInstUnroll[0], snapshot.warpInstUnroll[1], flat_size(snapshot.base_layout.warp_repeat),
+      flat_size(snapshot.base_layout.thread_creg)};
+  access.shape = {type.getDimSize(0), type.getDimSize(1)};
+  access.elementBytes = type.getElementTypeBitWidth() / 8;
+  return access;
+}
+
+LowerInfo *LowerInfoMap::getOperandLowerInfo(OpOperand &use) {
+  auto it = operandInfo.find({use.getOwner(), use.getOperandNumber()});
+  if (it != operandInfo.end() && it->second.buffer == use.get())
+    return &it->second;
+  // A value-keyed entry cannot distinguish different instruction operands.
+  if (auto gemm = dyn_cast<GemmOp>(use.getOwner());
+      gemm && gemm.getA() == gemm.getB() && use.getOperandNumber() < 2)
+    return nullptr;
+  return getLowerInfo(use.get(), use.getOwner());
+}
+
+void LowerInfoMap::setOperandLowerInfo(OpOperand &use, LowerInfo info) {
+  info.buffer = use.get();
+  info.op = use.getOwner();
+  operandInfo.insert_or_assign({use.getOwner(), use.getOperandNumber()}, std::move(info));
+}
+
 void LowerInfo::resolveCalculateAttrs() {
   using Attr = BufferAxisCalcuateAttr;
   auto type = buffer ? dyn_cast<ShapedType>(buffer.getType()) : ShapedType{};

@@ -102,37 +102,67 @@ std::optional<ShmDataIODesc> ShmDataIODesc::getPacked(
   return desc;
 }
 
-bool ShmDataIODesc::setXorSwizzle(int sourceBit, int targetBit) {
-  if (sourceBit < 4 || targetBit < 4 || sourceBit == targetBit ||
-      sourceBit > 30 || targetBit > 30 || !llvm::isPowerOf2_64(elementBytes))
+namespace {
+bool legalXor(const ShmDataIODesc &io, int source, int target) {
+  if (source < 0 || target < 0 || source == target || source > 30 || target > 30 ||
+      !llvm::isPowerOf2_64(io.elementBytes) ||
+      (int64_t(1) << std::min(source, target)) < io.elementBytes)
     return false;
-  int64_t period = int64_t(1) << (std::max(sourceBit, targetBit) + 1);
-  // Complete permutation domains: no padding, out-of-bounds or tail aliases.
-  if (shape[0] <= 0 || shape[1] <= 0 ||
-      shape[0] > std::numeric_limits<int64_t>::max() / shape[1] / elementBytes ||
-      (shape[0] * shape[1] * elementBytes) % period)
-    return false;
-  swizzleSourceBit = sourceBit;
-  swizzleTargetBit = targetBit;
-  return true;
+  int64_t period = int64_t(1) << (std::max(source, target) + 1);
+  return io.shape[0] > 0 && io.shape[1] > 0 &&
+      io.shape[0] <= std::numeric_limits<int64_t>::max() / io.shape[1] / io.elementBytes &&
+      (io.shape[0] * io.shape[1] * io.elementBytes) % period == 0;
 }
-
-AffineExpr ShmDataIODesc::swizzleElementOffset(AffineExpr p) const {
-  if (swizzleSourceBit < 0) return p;
-  int64_t packet = 16 / elementBytes;
-  int64_t src = int64_t(1) << (swizzleSourceBit - 4);
-  int64_t dst = int64_t(1) << (swizzleTargetBit - 4);
+AffineExpr applyXor(AffineExpr p, int source, int target, int64_t elementBytes) {
+  // Keep the unchanged low bits outside the nonlinear expression, allowing
+  // scalar-to-vector coalescing to prove adjacent elements.
+  // Keep the legacy 16B granule even when more low bits are unchanged. A
+  // larger divisor obscures cancellation of offsets inside a 16B vector.
+  int low = std::min({4, source, target});
+  int64_t packet = (int64_t(1) << low) / elementBytes;
+  int64_t src = int64_t(1) << (source - low);
+  int64_t dst = int64_t(1) << (target - low);
   unsigned dims = 0, symbols = 0;
-  p.walk([&](AffineExpr expr) {
-    if (auto d = dyn_cast<AffineDimExpr>(expr)) dims = std::max(dims, d.getPosition() + 1);
-    if (auto s = dyn_cast<AffineSymbolExpr>(expr)) symbols = std::max(symbols, s.getPosition() + 1);
+  p.walk([&](AffineExpr e) {
+    if (auto d = dyn_cast<AffineDimExpr>(e)) dims = std::max(dims, d.getPosition() + 1);
+    if (auto s = dyn_cast<AffineSymbolExpr>(e)) symbols = std::max(symbols, s.getPosition() + 1);
   });
   auto simplify = [&](AffineExpr e) { return simplifyAffineExpr(e, dims, symbols); };
   auto high = simplify(p.floorDiv(packet));
   auto a = simplify(high.floorDiv(src) % 2), b = simplify(high.floorDiv(dst) % 2);
-  // Keep the within-packet element explicitly outside the nonlinear map.
-  // Scalar-to-vector coalescing can then prove adjacent element addresses.
   return (high - b * dst + ((a + b) % 2) * dst) * packet + simplify(p % packet);
+}
+} // namespace
+
+bool ShmDataIODesc::setXorSwizzle(int source, int target) {
+  // Preserve the legacy single-swizzle API and its 16-byte packet contract.
+  if (source < 4 || target < 4 || !legalXor(*this, source, target)) return false;
+  clearSwizzles();
+  swizzleSourceBit = source;
+  swizzleTargetBit = target;
+  return true;
+}
+bool ShmDataIODesc::appendXorSwizzle(int source, int target) {
+  if (!legalXor(*this, source, target)) return false;
+  xorSwizzles.emplace_back(source, target);
+  return true;
+}
+void ShmDataIODesc::clearSwizzles() {
+  swizzleSourceBit = swizzleTargetBit = -1;
+  xorSwizzles.clear();
+}
+bool ShmDataIODesc::hasSwizzle() const {
+  return swizzleSourceBit >= 0 || !xorSwizzles.empty();
+}
+AffineExpr ShmDataIODesc::swizzleElementOffset(AffineExpr p) const {
+  if (swizzleSourceBit >= 0) p = applyXor(p, swizzleSourceBit, swizzleTargetBit, elementBytes);
+  for (auto [src, dst] : xorSwizzles) p = applyXor(p, src, dst, elementBytes);
+  return p;
+}
+AffineExpr ShmDataIODesc::unswizzleElementOffset(AffineExpr p) const {
+  for (auto [src, dst] : llvm::reverse(xorSwizzles)) p = applyXor(p, src, dst, elementBytes);
+  if (swizzleSourceBit >= 0) p = applyXor(p, swizzleSourceBit, swizzleTargetBit, elementBytes);
+  return p;
 }
 
 AffineMap ShmDataIODesc::getLogicalToPhysicalMap(MLIRContext *ctx) const {
@@ -183,8 +213,8 @@ AffineMap ShmDataIODesc::mapLogicalToPhysical(AffineMap logical) const {
 }
 
 AffineMap ShmDataIODesc::getPhysicalToLogicalMap(MLIRContext *ctx) const {
-  // XOR is its own inverse, before undoing the underlying packed layout.
-  auto p = swizzleElementOffset(getAffineDimExpr(0, ctx));
+  // Undo the ordered XOR composition before undoing the packed layout.
+  auto p = unswizzleElementOffset(getAffineDimExpr(0, ctx));
   int64_t pack = packElements;
   auto row = p.floorDiv(pack * shape[1]) * pack + p % pack;
   auto col = p.floorDiv(pack) % shape[1];
@@ -295,7 +325,13 @@ unsigned ShmDataIODesc::selectDMATransferBytes(
 std::optional<unsigned> ShmDataIODesc::getBankConflictWays(
     const HWSpecification &hw, ArrayRef<int64_t> addresses,
     ShmAccessKind kind) const {
-  auto phases = hw.getBankConflictPhases(plannedVectorAccessBytes, kind);
+  return getBankConflictWays(hw, addresses, plannedVectorAccessBytes, kind);
+}
+
+std::optional<unsigned> ShmDataIODesc::getBankConflictWays(
+    const HWSpecification &hw, ArrayRef<int64_t> addresses, unsigned accessBytes,
+    ShmAccessKind kind) const {
+  auto phases = hw.getBankConflictPhases(accessBytes, kind);
   int64_t bankBytes = hw.dataCopyInfo.singleBankBytes;
   int64_t banks = hw.dataCopyInfo.bankcount;
   if (!phases || bankBytes <= 0 || banks <= 0 ||
@@ -304,7 +340,7 @@ std::optional<unsigned> ShmDataIODesc::getBankConflictWays(
   for (int64_t address : addresses)
     if (address < -1 || (address >= 0 &&
         (address % bankBytes || address > std::numeric_limits<int64_t>::max() -
-                                              plannedVectorAccessBytes)))
+                                              accessBytes)))
       return std::nullopt;
   unsigned worst = 0;
   for (const auto &phase : *phases) {
@@ -314,7 +350,7 @@ std::optional<unsigned> ShmDataIODesc::getBankConflictWays(
       int64_t address = addresses[lane];
       if (address == -1) continue;
       for (int64_t word = address / bankBytes;
-           word < (address + plannedVectorAccessBytes) / bankBytes; ++word) {
+           word < (address + accessBytes) / bankBytes; ++word) {
         unsigned ways;
         if (kind == ShmAccessKind::Read) {
           auto &words = readWords[word % banks];

@@ -527,18 +527,15 @@ shared scratch 或 block barrier；后续 DCU lowering 将 shuffle 转为
 
 ## 计算结果写入 shared 的生产者/消费者联合布局
 
-`planSharedOperandPacking` 对自有、未逃逸、完整写入的二维 shared buffer 分析所有 producer/consumer。普通 GEMM → cast → GEMM 也走这条路径；不匹配 attention 名称、P 名称或固定 tile 尺寸。
+`SharedMemoryPlan` 在计算布局确定后，收集自有 shared allocation 的全部访问和别名，联合比较物理排列、XOR 序列、DMA 宽度和参与线程数。该路径同时支持 GEMM、逐元素计算和显式标量访问，不匹配算子名或具体 buffer 名。
 
-对于 GEMM A 的列轴，若 `ComputedTile` 生产者每个线程持有间隔为 `S` 的列，且消费者的指令 K 跨度为 `K`，在 `N` 可被 `2K` 整除、`K` 可被 `S` 整除、所有使用者布局兼容时，记录 `frisk.shared_store_stride=S` 和 `frisk.shared_store_pair=K`。这两个属性从 `frisk.alloc_buffer` 传播到低层 `memref.alloc`；`PackSharedMemory` 一次性重写该 buffer 的全部已知访问。
+`shared-memory-planning=auto` 是默认路径；`analyze` 只输出候选，不改写 IR。旧的分步 packing、DMA、swizzle 规划函数和 LLVM `narrowKDMA` 已删除。`pack-shared-operands=false` 关闭自动物理布局搜索，但显式约束仍必须验证。
 
-令 `r = col floordiv S`、`G = K/S`，物理下标为：
+发布时记录唯一布局以及 `frisk.dma_destination_map`、`frisk.dma_source_map`、`frisk.dma_bytes` 和 `frisk.copy_threads`。`PackSharedMemory` 改写全部访问索引并将目标缓冲区展平；异步 copy lowering 消费原规划的目的映射和源逆映射，生成对应宽度的 GatherToLDS 操作。已发布方案失效时直接报错，不重新选宽度或插入 staging。
 
-```text
-paired = (r floordiv (2G)) * (2G) + (r mod G) * 2 + ((r floordiv G) mod 2)
-physical = ((col mod S) * M + row) * (N/S) + paired
-```
+`shared-copy-constraints=参数号:字节数[:XOR源位:XOR目标位]` 支持逗号分隔的多个约束。参数号只在前端转换为操作和 allocation 约束，核心规划器不依赖 ABI。`dma-export-widths` 声明当前导出器能力，buffer asm 支持 4、8、16 字节，其中 8/16 字节直接发出 dwordx2/dwordx4 指令。
 
-该排列是双射，不增加 shared 容量、不改变线程拥有的逻辑元素。生产者寄存器可合成连续 store；消费者相隔一个 K 指令跨度的元素可合并读取。未知访问、逃逸、切片、冲突的消费者布局或不可整除形状均保留保守路径。`pack-shared-operands=false` 关闭自动物理布局规划。
+未知访问或不完整别名阻止修改整个组。总 bank 成本未知时保留 unknown，比较已评估的访问成本和指令数，不把未知成本计作零。布局变换和同步点保持计算语义，性能仍须在目标硬件测量。
 
 展开循环后，`IRDeepOptimize` 在独立步骤中合并 rank-1 shared 标量访问：同一缓冲区的 store 仅在地址差被证明恒定且互不重叠时排序并合并，最宽 128 bit；相邻或反向相邻的 load 先合成两个元素，再尝试合并更宽的向量。常量采样仅用于提出候选地址差，Presburger 空集检查证明它对所有 affine 操作数成立。遇到 barrier、控制流、未知副作用、写入或读取依赖时停止对应的移动，不依赖算子名或 kernel 模板。
 
