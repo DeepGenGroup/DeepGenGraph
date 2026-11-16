@@ -78,7 +78,12 @@ static bool tensorValueOp(Operation *op) {
 //   valid   所有安全条件都满足，任一违反就置 false。
 //   reads / writes  所有 block_load / block_store 的指针根，遍历后做两两不重叠检查。
 static bool canJam(Loop outer, uint64_t maxFactor) {
+  // 获取循环的迭代次数，常量
   auto count = affine::getConstantTripCount(outer);
+  // 外层 trip count 必须能静态确定
+  // 至少迭代两次
+  // 最大因子至少为 2
+  // 外层循环不能有结果
   if (!count || *count < 2 || maxFactor < 2 || outer.getNumResults())
     return false;
   bool nested = false, useful = false, valid = true;
@@ -90,8 +95,10 @@ static bool canJam(Loop outer, uint64_t maxFactor) {
       // 内层循环结果只能是 tensor，否则 carrier 的值语义不成立。
       if (loop != outer) {
         for (Value control : loop.getControlOperands())
+          // 内层循环的控制操作数必须定义在候选外层循环之外
           if (!outer.isDefinedOutsideOfLoop(control)) valid = false;
         for (Type type : loop.getResultTypes())
+          // 内层循环结果必须是 ranked tensor
           if (!isa<RankedTensorType>(type)) valid = false;
       }
       return;

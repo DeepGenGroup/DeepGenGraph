@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""基于 test_input.mlir 生成不同 BM/BN/BK 的 masked attention IR。
+"""基于 test_input.mlir 生成不同 BHSD 尺寸和 BM/BN/BK 的 masked attention IR。
 
 用法：
   python3 generate_attention_ir.py --bm 128 --bn 64
   python3 generate_attention_ir.py --bm 32 64 128 --bn 32 64 --output-dir generated_ir
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 32 --output 3rd/deepgengraph/test/test_input_spidD.mlir
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 64 --output-dir generated_ir
+  python3 generate_attention_ir.py --b 2 --h 8 --s 1024 --d 64 --bm 64 --bn 32 --output-dir generated_ir
 
 标准输出为每行一个生成文件的绝对路径，可直接交给 TuneAttention：
   set -o pipefail
@@ -15,8 +16,10 @@
 在目标 GPU 环境给 TuneAttention 加 --benchmark，可继续生成 HSACO 并校验、测时。
 
 输出名：test_input_{B}x{H}x{S}x{D}-{BM}-{BN}.mlir。
-模板的输入布局为 BSHD；文件名使用 BHSD。只改变 kernel 的分块参数，
-保留模板中的寻址及预缩放方式；默认生成 online softmax。
+模板的输入布局为 BSHD；参数和文件名使用 BHSD。
+--b/--h/--s/--d 必须为正整数，未指定的维度沿用模板（默认 1/32/4096/128）。
+尺寸改变时同步更新高层 Attn 和 kernel 的类型、寻址、grid 及 D 相关缩放；
+默认生成 online softmax。
 BM、BN 必须为 S 的正整数因子，因为模板没有尾块越界保护。
 生成 IR 不代表所有分块都满足后端的硬件指令和共享内存限制。
 指定 BK 时输出名增加 -{BK}；BK 必须整除 D。不指定则保留原 BM/BN 模式。
@@ -28,6 +31,7 @@ V/O 按输出列分块（不沿输出 D 求和），每个输出块重算 QK/分
 
 import argparse
 import itertools
+import math
 from pathlib import Path
 import re
 
@@ -43,11 +47,12 @@ def replace_once(text, pattern, replacement):
     return result
 
 
-def generate_ir(source, bm, bn, bk=None, softmax="online"):
+def generate_ir(source, bm, bn, bk=None, softmax="online", *,
+                b=None, h=None, s=None, d=None):
     """返回 (IR 文本, BHSD)，针对仓库中 BM=64、BN=32 的模板。"""
     if softmax not in ("online", "legacy"):
         raise ValueError("softmax 必须为 online 或 legacy")
-    # 分块替换仅作用于 kernel；online 模式另外稳定化高层 Attn。
+    # 分块替换仅作用于 kernel；尺寸和 online softmax 同时更新高层 Attn。
     kernels = list(re.finditer(r"^  deepgengraph\.kernel @Attn_p2\(", source, re.M))
     if len(kernels) != 1:
         raise ValueError("模板必须包含一个 deepgengraph.kernel @Attn_p2")
@@ -60,21 +65,53 @@ def generate_ir(source, bm, bn, bk=None, softmax="online"):
     shape = re.search(r"%Q: tensor<(\d+)x(\d+)x(\d+)x(\d+)xf16>", kernel)
     if shape is None:
         raise ValueError("模板 Q 必须为静态 BSHD f16 tensor")
-    b, s, h, d = map(int, shape.groups())
+    old_b, old_s, old_h, old_d = map(int, shape.groups())
+    b = old_b if b is None else b
+    h = old_h if h is None else h
+    s = old_s if s is None else s
+    d = old_d if d is None else d
+    for name, value in (("B", b), ("H", h), ("S", s), ("D", d)):
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name}={value} 必须为正整数")
     if bm <= 0 or bn <= 0 or s % bm or s % bn:
         raise ValueError(f"BM={bm}、BN={bn} 必须为正整数且均能整除 S={s}")
     if bk is not None and (bk <= 0 or d % bk):
         raise ValueError(f"BK={bk} 必须为正整数且能整除 D={d}")
     # 以下映射专用于给定模板。若基础模板改变，明确报错，避免误改 H/D。
-    if d != 128 or not re.search(r"sizes = \[64, 32\]", kernel):
+    if old_d != 128 or not re.search(r"sizes = \[64, 32\]", kernel):
         raise ValueError("此脚本要求模板 D=128、BM=64、BN=32")
 
     # 模板中的调试注释含有旧尺寸和已注释代码，生成时去掉 kernel 注释。
     kernel = re.sub(r"[ \t]*//[^\n]*", "", kernel)
     kernel = re.sub(r"^[ \t]+\n", "", kernel, flags=re.M)
 
+    # 按完整形状一次性替换，避免新维度与旧维度相等时发生串联替换。
+    full_shapes = {
+        (old_b, old_s, old_h, old_d): (b, s, h, d),
+        (old_b, old_h, old_s, old_d): (b, h, s, d),
+        (old_b, old_h, old_d, old_s): (b, h, d, s),
+        (old_b, old_h, old_s, old_s): (b, h, s, s),
+        (old_b, old_h, old_s, 1): (b, h, s, 1),
+        (old_s, old_s): (s, s),
+    }
+
+    def full_type(match):
+        dims = tuple(map(int, match[1].split("x")))
+        return "tensor<" + "x".join(map(str, full_shapes.get(dims, dims))) + "x"
+
+    prefix = source[:start]
+    if (b, h, s, d) != (old_b, old_h, old_s, old_d):
+        prefix = re.sub(r"tensor<(\d+(?:x\d+)+)x(?=f\d+>)", full_type, prefix)
+        kernel = re.sub(r"tensor<(\d+x\d+x\d+x\d+)x(?=f\d+>)", full_type, kernel)
+        prefix = replace_once(prefix, r"(deepgengraph.trilu[^\n]*shape = )\[\d+, \d+\]",
+                              lambda m: f"{m[1]}[{s}, {s}]")
+    if d != old_d:
+        prefix = replace_once(prefix, r"(?m)(%cst = arith.constant dense<)[^>]+(>[^\n]*?)(?:[ \t]*//[^\n]*)?$",
+                              lambda m: f"{m[1]}{math.sqrt(d):.9e}{m[2]}")
+        kernel = replace_once(kernel, r"(%cst = arith.constant dense<)[^>]+>",
+                              lambda m: f"{m[1]}{math.log2(math.e) / math.sqrt(d):.9e}>")
+
     # 同时替换二维 tile 类型，避免 BM=32/128、BN=64/128 时串联替换。
-    # 四维完整 tensor、H、D、全局 stride 和 scale 均保持原值。
     tiles = {
         (64, 128): (bm, d),
         (64, 1): (bm, 1),
@@ -82,6 +119,7 @@ def generate_ir(source, bm, bn, bk=None, softmax="online"):
         (32, 128): (bn, d),
         (64, 32): (bm, bn),
     }
+    pointer_shapes = {**tiles, (128, old_s): (d, s), (old_s, 128): (s, d)}
 
     def tile_type(match):
         dims = tuple(map(int, match.group(1, 2)))
@@ -90,12 +128,22 @@ def generate_ir(source, bm, bn, bk=None, softmax="online"):
 
     def tile_shape(match):
         dims = tuple(map(int, match.group(2, 3)))
-        rows, cols = tiles.get(dims, dims)
+        rows, cols = pointer_shapes.get(dims, dims)
         return f"{match[1]} = [{rows}, {cols}]"
 
     kernel = re.sub(r"tensor<(\d+)x(\d+)x(?=f\d+>)", tile_type, kernel)
     kernel = re.sub(r"\b(shape|block_shape|sizes) = \[(\d+), (\d+)\]",
                     tile_shape, kernel)
+    kernel = re.sub(r"stride = \[(\d+), (\d+)\]",
+                    lambda m: f"stride = [1, {h*d}]" if m[1] == "1"
+                    else f"stride = [{h*d}, 1]", kernel)
+    for dim, units in ((0, b), (2, h)):
+        kernel = replace_once(
+            kernel,
+            rf"(arg_dims = \[{dim}, {dim}, {dim}\], res_dims = \[{dim}\], "
+            r"size_per_unit = 1 : i64, unit_num = )\d+ : i64",
+            lambda m: f"{m[1]}{units} : i64",
+        )
     kernel = replace_once(
         kernel,
         r"(arg_dims = \[1, -1, -1\], res_dims = \[1\], )"
@@ -117,6 +165,21 @@ def generate_ir(source, bm, bn, bk=None, softmax="online"):
                           f"%cBM = arith.constant {bm} : index")
     kernel = replace_once(kernel, r"%cBN = arith.constant 32 : index",
                           f"%cBN = arith.constant {bn} : index")
+    kernel = re.sub(rf"%c(?:{old_s}|128)\b",
+                    lambda m: "%cD" if m[0] == "%c128" else "%cS", kernel)
+    kernel = replace_once(kernel, rf"%cS = arith.constant {old_s} : index",
+                          f"%cS = arith.constant {s} : index")
+    kernel = replace_once(kernel, r"%cD = arith.constant 128 : index",
+                          f"%cD = arith.constant {d} : index")
+    if b > 1:
+        # base_offset 使用 permute 后的 BHSD/BHDS 布局，batch 跨 H*S*D。
+        kernel = replace_once(
+            kernel, r"%6 = arith.muli %5, %cS : index",
+            f"%cHSD = arith.constant {h*s*d} : index\n"
+            "      %batchBase = arith.muli %bz, %cHSD : index\n"
+            "      %headOffset = arith.muli %5, %cS : index\n"
+            "      %6 = arith.addi %batchBase, %headOffset : index",
+        )
     kernel = replace_once(kernel, r"(block_advance %tempK, offsets = )\[0, 32\]",
                           lambda m: f"{m[1]}[0, {bn}]")
     kernel = replace_once(kernel, r"(block_advance %tempV, offsets = )\[32, 0\]",
@@ -127,7 +190,6 @@ def generate_ir(source, bm, bn, bk=None, softmax="online"):
         kernel = online_softmax_kernel(kernel, bm, bn, d, bk)
     # causal attention 需覆盖当前 Q tile 的全部有效 key：(bx + 1) * BM。
     # BN > BM 也可用；多加载的未来 key 由原有 causal mask 排除。
-    prefix = source[:start]
     if softmax == "online":
         prefix = stable_reference_function(prefix)
     return prefix + kernel + source[end:], (b, h, s, d)
@@ -310,6 +372,10 @@ def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    for name, description in (("b", "batch 大小"), ("h", "head 数量"),
+                              ("s", "序列长度"), ("d", "每个 head 的维度")):
+        parser.add_argument(f"--{name}", f"--{name.upper()}", type=int,
+                            help=f"{description}，必须为正整数；默认沿用模板")
     parser.add_argument("--bm", "--BM", type=int, nargs="+", required=True,
                         help="Q 行分块大小，可输入多个值")
     parser.add_argument("--bn", "--BN", type=int, nargs="+", required=True,
@@ -328,7 +394,8 @@ def main():
         outputs = []
         for bm, bn, bk in itertools.product(dict.fromkeys(args.bm), dict.fromkeys(args.bn),
                                            dict.fromkeys(args.bk or [None])):
-            ir, bhsd = generate_ir(source, bm, bn, bk, softmax=args.softmax)
+            ir, bhsd = generate_ir(source, bm, bn, bk, softmax=args.softmax,
+                                  b=args.b, h=args.h, s=args.s, d=args.d)
             suffix = f"-{bk}" if bk is not None else ""
             if args.softmax == "online":
                 suffix += "-online"
