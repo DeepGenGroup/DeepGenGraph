@@ -149,9 +149,11 @@ class LiveResults:
                 if better_speedup(entry, self.best.get(key)):
                     self.best[key] = entry
                 shape = "x".join(map(str, entry["launch"]["shape"]))
-                if better_speedup(entry, self.best_by_shape.get(shape)):
-                    self.best_by_shape[shape] = entry
-                    print(f"  当前最佳 BHSD={shape}: speedup={entry['speedup']:.6f}x，"
+                mode = "causal" if entry["launch"]["causal"] else "noncausal"
+                shape_mode = f"{shape}-{mode}"
+                if better_speedup(entry, self.best_by_shape.get(shape_mode)):
+                    self.best_by_shape[shape_mode] = entry
+                    print(f"  当前最佳 BHSD={shape} {mode}: speedup={entry['speedup']:.6f}x，"
                           f"kernel={entry['kernel_median_ms']:.6f} ms，"
                           f"SDPA={entry['sdpa_median_ms']:.6f} ms；{directory}", flush=True)
             self.save("running")
@@ -194,8 +196,11 @@ def launch_config(source, llvm_ir, k_layout="bhsd"):
     block = list(map(int, block.groups()))
     if any(x <= 0 for x in [b, h, s, d, *grid, *block]):
         raise ValueError("启动尺寸必须为正数")
+    kernel_code = code[re.search(r"deepgengraph\.kernel\s+@Attn_p2\b", code).start():]
+    causal = bool(re.search(r"\bdeepgengraph\.mask\b", kernel_code))
     return {"schema_version": 1, "kernel": "Attn_p2", "shape": [b, h, s, d],
-            "grid": grid, "block": block, "shared_mem": 0, "k_layout": k_layout}
+            "grid": grid, "block": block, "shared_mem": 0, "k_layout": k_layout,
+            "causal": causal}
 
 
 def run_stage(command, directory, logpath, timeout):
@@ -254,7 +259,8 @@ online-baseline 只设置编译参数，不会将已有输入转换为 online so
   每个完成的候选立即保存 result.json、manifest.json、best.json、best_by_shape.json。
   只有校验通过者参与排名，按 speedup 最大选优；相同比值优先 kernel median 小者。
   SDPA 为每候选重新测量，speedup=sdpa_median_ms/kernel_median_ms。
-  best.json 按输入分组，best_by_shape.json 按完整 BHSD 分组。
+  best.json 按输入分组，best_by_shape.json 按完整 BHSD 和 causal 模式分组，
+  键为 BxHxSxD-causal 或 BxHxSxD-noncausal，避免两种计算相互覆盖。
   --summary-dir 可将实时 summary.json 与 best_by_shape.json 同步到一键入口的 session。
   JSON 通过临时文件原子替换；中断后保留已完成候选，未完成候选不参与排名。
 

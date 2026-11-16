@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""基于 test_input.mlir 生成不同 BHSD 尺寸和 BM/BN/BK 的 masked attention IR。
+"""基于 test_input.mlir 生成不同 BHSD 尺寸和 BM/BN/BK 的 attention IR。
 
 用法：
   python3 generate_attention_ir.py --bm 128 --bn 64
@@ -20,6 +20,7 @@
 --b/--h/--s/--d 必须为正整数，未指定的维度沿用模板（默认 1/32/4096/128）。
 尺寸改变时同步更新高层 Attn 和 kernel 的类型、寻址、grid 及 D 相关缩放；
 默认生成 online softmax。
+默认 causal；--non-causal 移除高层及 kernel 的 mask，并遍历全部 S 个 key。
 BM、BN 必须为 S 的正整数因子，因为模板没有尾块越界保护。
 生成 IR 不代表所有分块都满足后端的硬件指令和共享内存限制。
 指定 BK 时输出名增加 -{BK}；BK 必须整除 D。不指定则保留原 BM/BN 模式。
@@ -37,7 +38,11 @@ import re
 
 
 ROOT = Path(__file__).resolve().parent
-TEMPLATE = ROOT / "3rd/deepgengraph/test/test_input.mlir"
+# Portable bundles keep the template beside the scripts; source checkouts
+# retain the original test directory. Resolve against the script, not cwd.
+TEMPLATE = ROOT / "test_input.mlir"
+if not TEMPLATE.is_file():
+    TEMPLATE = ROOT / "3rd/deepgengraph/test/test_input.mlir"
 
 
 def replace_once(text, pattern, replacement):
@@ -48,10 +53,12 @@ def replace_once(text, pattern, replacement):
 
 
 def generate_ir(source, bm, bn, bk=None, softmax="online", *,
-                b=None, h=None, s=None, d=None):
+                b=None, h=None, s=None, d=None, causal=True):
     """返回 (IR 文本, BHSD)，针对仓库中 BM=64、BN=32 的模板。"""
     if softmax not in ("online", "legacy"):
         raise ValueError("softmax 必须为 online 或 legacy")
+    if type(causal) is not bool:
+        raise ValueError("causal 必须为布尔值")
     # 分块替换仅作用于 kernel；尺寸和 online softmax 同时更新高层 Attn。
     kernels = list(re.finditer(r"^  deepgengraph\.kernel @Attn_p2\(", source, re.M))
     if len(kernels) != 1:
@@ -192,6 +199,21 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
     # BN > BM 也可用；多加载的未来 key 由原有 causal mask 排除。
     if softmax == "online":
         prefix = stable_reference_function(prefix)
+    if not causal:
+        # Remove both masks after the shape/softmax transformations, whose
+        # template contracts deliberately still describe causal attention.
+        prefix = replace_once(prefix, r"(?m)^    %0 = deepgengraph.trilu[^\n]*\n", "")
+        prefix = replace_once(prefix, r"(?m)^    %6 = deepgengraph.add %5, %0[^\n]*\n", "")
+        prefix = re.sub(r"%6\b", "%5", prefix)
+        mask, masked_score, score = (("%mask", "%masked", "%qk") if bk is not None
+                                     else ("%25", "%26", "%24"))
+        kernel = replace_once(
+            kernel, rf"(?ms)^[ \t]*{mask} = deepgengraph.mask starts = .*?"
+            r"^[ \t]*} : \(index, index\) -> tensor<[^>]+>\n", "")
+        kernel = replace_once(
+            kernel, rf"(?m)^[ \t]*{masked_score} = deepgengraph.add {score}, {mask}[^\n]*\n", "")
+        kernel = re.sub(rf"{masked_score}\b", score, kernel)
+        kernel = replace_once(kernel, r"to %(?:keyEnd|loopUb) step %cBN", "to %cS step %cBN")
     return prefix + kernel + source[end:], (b, h, s, d)
 
 
@@ -384,6 +406,10 @@ def main():
                         help="D 轴分块大小，可输入多个值；必须整除 D")
     parser.add_argument("--softmax", choices=("online", "legacy"), default="online",
                         help="默认 online：MAX 归约及跨 key tile 重缩放；legacy 复现旧非稳定版本")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--causal", "--casual", dest="causal", action="store_true", default=True)
+    mode.add_argument("--non-causal", dest="causal", action="store_false",
+                      help="生成无 mask、遍历全部 key 的 full attention")
     parser.add_argument("--output", type=Path,
                         help="单组参数的指定输出文件（例如 test_input_spidD.mlir）")
     parser.add_argument("--output-dir", type=Path, default=ROOT,
@@ -395,10 +421,12 @@ def main():
         for bm, bn, bk in itertools.product(dict.fromkeys(args.bm), dict.fromkeys(args.bn),
                                            dict.fromkeys(args.bk or [None])):
             ir, bhsd = generate_ir(source, bm, bn, bk, softmax=args.softmax,
-                                  b=args.b, h=args.h, s=args.s, d=args.d)
+                                  b=args.b, h=args.h, s=args.s, d=args.d, causal=args.causal)
             suffix = f"-{bk}" if bk is not None else ""
             if args.softmax == "online":
                 suffix += "-online"
+            if not args.causal:
+                suffix += "-noncausal"
             filename = f"test_input_{'x'.join(map(str, bhsd))}-{bm}-{bn}{suffix}.mlir"
             outputs.append((args.output or args.output_dir / filename, ir))
         if args.output and len(outputs) != 1:

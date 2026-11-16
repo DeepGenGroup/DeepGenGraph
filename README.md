@@ -1,5 +1,8 @@
 # FlashTensor AE
 
+可配置 BHSD / causal 的一键编译与启动脚本：[`RunAttention.py`](RunAttention.py)，
+使用方法见 [`RunAttention.md`](RunAttention.md)。
+
 [![DOI](https://zenodo.org/badge/893756798.svg)](https://zenodo.org/badge/latestdoi/893756798)
 
 ## Abstract
