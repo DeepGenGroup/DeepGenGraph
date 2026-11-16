@@ -55,6 +55,7 @@ struct ShmReusePlan {
   // placements：每块 buffer 的放置结果。
   // originalBytes：不复用时的总字节。pooledBytes：复用后的 pool 大小。alignment：pool 的对齐。
   SmallVector<ShmPlacement> placements;
+  SmallVector<Operation *> barrierPositions; // Insert before these planned anchors.
   /// Totals cover eligible allocations only; skipped buffers are unchanged.
   uint64_t originalBytes = 0;
   uint64_t pooledBytes = 0;
@@ -83,6 +84,13 @@ ShmLivenessResult analyzeShmLiveness(func::FuncOp kernel);
 
 /// Deterministic size-first packing; interfering buffers never overlap in bytes.
 ShmReusePlan planShmReuse(const ShmLivenessResult &liveness);
+
+/// Resolve storage handoffs against the supplied (possibly projected) lifetimes.
+/// These functions do not rediscover a schedule during materialization.
+void planShmHandoffs(const ShmLivenessResult &liveness, ShmReusePlan &plan);
+bool materializeShmReuse(func::FuncOp kernel, const ShmLivenessResult &liveness,
+                        const ShmReusePlan &plan, ShmReuseStats *stats = nullptr,
+                        bool hoistViews = false);
 
 void dumpShmLiveness(const ShmLivenessResult &liveness, llvm::raw_ostream &os);
 

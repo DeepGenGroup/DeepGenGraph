@@ -784,6 +784,7 @@ LogicalResult SharedMemoryPlan::publish(LowerInfoMap &layouts) const {
 }
 
 void SharedMemoryPlan::dump(llvm::raw_ostream &os) const {
+  if (execution) dumpSharedMemoryExecution(*execution, os);
   for (const auto &gp : groups) {
     const auto &g = gp.group;
     os << "Shared group " << g.id << " shape=" << g.shape[0] << 'x' << g.shape[1]

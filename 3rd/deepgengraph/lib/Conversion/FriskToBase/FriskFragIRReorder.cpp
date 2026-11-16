@@ -18,11 +18,12 @@
 //   只打印 LDS 生命周期报告，不改 IR。
 //
 // LowerFriskFragments（lower-frisk-fragments）   第 15 项，thread 阶段
-//   LDS 打包 -> 回边同步 -> 再次调度 DMA -> LDS 物理复用 -> 展开 fragment 循环。
+//   LDS 打包 -> 回边同步 -> 调度 DMA -> 联合规划时序/生命周期/槽位并生成存储。
 //
 // 文件内的证明方法：循环边界都是小常量，所以把每次迭代的坐标直接求值出来比较，是
 // “有界证明”而不是启发式。求值不出来或超预算就放弃优化。
 // ===========================================================================
+#include "deepgengraph/Analysis/SharedMemoryPlan.h"
 #include "deepgengraph/Conversion/AffineLoopEval.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "ScheduleAttrs.h"
@@ -935,8 +936,8 @@ public:
 //   synchronizeSharedMemoryLoopBackedges   补回边 barrier，保护旧读者。
 //   scheduleAsyncCopies                    按物理信息再调度一次。
 //   synchronizeSharedMemoryLoopBackedges   调度改变了访问位置，再检查并补一次。
-//   reuseSharedMemory                      按最终生命周期分配物理地址，所以必须在调度之后。
-//   loopUnrollFull                         最后展开带 frisk.loopUnrollFull 的循环。
+//   planSharedMemoryExecution              用计划中的发起时序计算生命周期，再确定槽位和物理地址。
+//   loopUnrollFull                         双缓冲开启时先展开，暴露完整 stage/read 流。
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
@@ -947,7 +948,12 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
     // The prefetch schedule is now fixed, and all physical reads are visible.
     // Allocate shared storage only against these final operation lifetimes.
     synchronizeSharedMemoryLoopBackedges(getOperation());
-    reuseSharedMemory(getOperation());
+    auto materialize = [&]() {
+      auto plan = planSharedMemoryExecution(getOperation(), doubleBuffer);
+      plan.dump(llvm::errs());
+      return plan.materializeExecution();
+    };
+    if (!doubleBuffer && failed(materialize())) return signalPassFailure();
     SmallVector<Loop> loops;
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) {
       auto full = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
@@ -972,6 +978,9 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
       }
       remaining -= cost;
     }
+    // Expose the bounded stage/read stream before planning its overlap and
+    // storage. No allocation is pooled before the projected lifetimes exist.
+    if (doubleBuffer && failed(materialize())) return signalPassFailure();
   }
 };
 
@@ -1011,6 +1020,13 @@ class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorde
 } // namespace
 std::unique_ptr<Pass> createFriskFragIRReorderPass() {
   return std::make_unique<FriskFragIRReorder>();
+}
+bool parseVDoubleBufferOption(llvm::StringRef argument, bool &enabled, bool &consumed) {
+  consumed = argument.starts_with("--v-double-buffer");
+  if (!consumed) return true;
+  if (!argument.consume_front("--v-double-buffer=") || (argument != "0" && argument != "1")) return false;
+  enabled = argument == "1";
+  return true;
 }
 std::unique_ptr<Pass> createLowerFriskFragmentsPass() {
   return std::make_unique<LowerFriskFragments>();

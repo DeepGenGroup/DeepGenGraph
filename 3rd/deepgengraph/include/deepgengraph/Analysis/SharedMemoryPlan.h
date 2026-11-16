@@ -2,6 +2,7 @@
 #define DEEPGENGRAPH_ANALYSIS_SHARED_MEMORY_PLAN_H
 
 #include "deepgengraph/Analysis/LowerInfo.h"
+#include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include <string>
 
 namespace mlir::frisk {
@@ -102,18 +103,55 @@ struct SharedPlanningOptions {
   uint64_t maxProofElements = 1 << 20;
 };
 
+// The execution phase runs after physical access maps have been materialized,
+// but before allocations become views of a shared pool. It owns all scheduling
+// and placement decisions; lowering must not choose another slot or issue time.
+struct SharedPipelineStage {
+  AsyncCopyGmToShmOp issue;
+  WaitBufferReadyOp ready;
+  SmallVector<ReadMatrixFromShmOp> reads;
+  unsigned bufferIndex = 0;
+  unsigned slot = 0;
+  Operation *issueAfter = nullptr;
+  SmallVector<Operation *> addressDependencies;
+};
+
+struct SharedBufferingPlan {
+  SmallVector<SharedPipelineStage> stages;
+  uint64_t slotBytes = 0;
+  std::array<uint64_t, 2> slotOffsets{};
+};
+
+struct SharedExecutionPlan {
+  func::FuncOp kernel;
+  ShmLivenessResult lifetimes; // Includes the planned earlier DMA issues.
+  ShmReusePlan storage;       // Includes required storage-handoff barriers.
+  SmallVector<SharedBufferingPlan, 0> pipelines;
+  SmallVector<std::string> rejectedPipelines;
+  std::string inputSnapshot;
+  bool materializePool = false;
+};
+
 // Owns a snapshot. Any operand/layout/alias change invalidates it. No analysis
 // routine writes IR. publish() validates every group before writing any attrs.
 struct SharedMemoryPlan {
   SmallVector<SharedGroupPlan, 0> groups;
+  std::optional<SharedExecutionPlan> execution;
   void dump(llvm::raw_ostream &os) const;
   LogicalResult publish(LowerInfoMap &layouts) const;
+  LogicalResult materializeExecution() const;
 };
 
 SmallVector<SharedBufferGroup, 0> collectSharedBufferAccesses(
     func::FuncOp kernel, LowerInfoMap &layouts, HWSpecification &hw);
 SharedMemoryPlan planSharedMemory(func::FuncOp kernel, LowerInfoMap &layouts,
     HWSpecification &hw, const SharedPlanningOptions &options = {});
+
+// Read-only scheduling and allocation against one immutable IR snapshot.
+// Double buffering initially preserves the unbuffered plan's LDS budget.
+SharedMemoryPlan planSharedMemoryExecution(func::FuncOp kernel,
+                                          bool doubleBuffer = false);
+void dumpSharedMemoryExecution(const SharedExecutionPlan &plan, llvm::raw_ostream &os);
 
 // Shared decoding/encoding for the planner and physical packer. Legacy single
 // XOR attrs are supported; the generic ordered form is frisk.shared_swizzles.

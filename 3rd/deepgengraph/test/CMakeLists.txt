@@ -76,3 +76,8 @@ add_executable(SharedMemoryPlanTest shared_memory_plan_test.cpp)
 llvm_update_compile_flags(SharedMemoryPlanTest)
 target_link_libraries(SharedMemoryPlanTest PRIVATE
   DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect MLIRParser)
+
+add_executable(SharedExecutionPlanTest shared_execution_plan_test.cpp)
+llvm_update_compile_flags(SharedExecutionPlanTest)
+target_link_libraries(SharedExecutionPlanTest PRIVATE
+  DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect MLIRParser)

@@ -3,11 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ThreadDoubleBufferV: Pass<"frisk-thread-double-buffer-v", "::mlir::func::FuncOp"> {
-  let summary = "Double buffer matrix-read DMA in existing Thread IR LDS storage";
-  let constructor = "mlir::frisk::createThreadDoubleBufferVPass()";
-}
-
 def OptimizeTensorLoops: Pass<"optimize-tensor-loops", "::mlir::ModuleOp"> {
   let summary = "Share invariant tensor work through checked unroll-and-jam, recurrence CSE and LICM";
   let constructor = "mlir::frisk::createOptimizeTensorLoopsPass()";
@@ -187,6 +182,8 @@ def RetainInvariantFragments: Pass<"frisk-retain-invariant-fragments", "::mlir::
 def LowerFriskFragments: Pass<"lower-frisk-fragments", "::mlir::func::FuncOp"> {
   let summary = "Plan storage and unroll scheduled fragment loops";
   let constructor = "mlir::frisk::createLowerFriskFragmentsPass()";
+  let options = [Option<"doubleBuffer", "double-buffer", "bool", "false",
+    "Jointly plan matrix-copy issue times, alternating slots and LDS storage">];
   let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect", "mlir::memref::MemRefDialect", "mlir::vector::VectorDialect", "mlir::gpu::GPUDialect", "mlir::frisk::FriskDialect"];
 }
 

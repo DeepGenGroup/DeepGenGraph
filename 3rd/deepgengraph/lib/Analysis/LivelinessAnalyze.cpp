@@ -783,6 +783,12 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   if (plan.placements.size() < 2 || plan.pooledBytes >= plan.originalBytes)
     return false;
 
+  planShmHandoffs(liveness, plan);
+  return materializeShmReuse(kernel, liveness, plan, stats);
+}
+
+void planShmHandoffs(const ShmLivenessResult &liveness, ShmReusePlan &plan) {
+  plan.barrierPositions.clear();
   // Operand liveness does not guarantee every warp has finished reading.
   // 每个作用域块的交接需求。
   //   order  块内 op 顺序。
@@ -801,7 +807,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
       const auto &rhs = liveness.buffers[b.bufferIndex];
       if (!overlaps(a.offsetBytes, lhs.sizeBytes, b.offsetBytes, rhs.sizeBytes))
         continue;
-      auto separation = findSeparation(lhs, rhs, &kernel.getBody().front());
+      auto separation = findSeparation(lhs, rhs, liveness.programOrder.front()->getBlock());
       assert(separation && "overlapping placements must have disjoint lifetimes");
       auto [it, inserted] = scopeIndices.try_emplace(separation->block, scopes.size());
       if (inserted)
@@ -817,7 +823,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
       // the next one. A prefix barrier also covers the wrapped handoff; otherwise
       // require a barrier at the loop tail. Even a zero-trip path stays safe.
       // 循环内的两块 buffer 还要考虑跨回边的交接：后者的最后使用 -> 下一轮前者的第一次写。
-      if (separation->block != &kernel.getBody().front() &&
+      if (separation->block != liveness.programOrder.front()->getBlock() &&
           !hasBarrier(0, separation->earlierFirst) &&
           !hasBarrier(separation->laterLast + 1, scope.order.size()))
         scope.gaps.emplace_back(scope.order.size() - 1, separation->laterLast);
@@ -827,18 +833,22 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   // first, and reuse a previously selected barrier whenever it covers the gap.
   // 经典区间选点：按 deadline 排序后贪心，一个 barrier 能满足多个交接。
   // barrierPositions：barrier 要插在这些 op 之前。
-  SmallVector<Operation *> barrierPositions;
+
   for (auto &scope : scopes) {
     llvm::sort(scope.gaps);
     std::optional<unsigned> previous;
     for (auto [deadline, lastUse] : scope.gaps)
       if (!previous || *previous <= lastUse) {
-        barrierPositions.push_back(scope.order[deadline]);
+        plan.barrierPositions.push_back(scope.order[deadline]);
         previous = deadline;
       }
   }
+}
+
+bool materializeShmReuse(func::FuncOp kernel, const ShmLivenessResult &liveness,
+                         const ShmReusePlan &plan, ShmReuseStats *stats, bool hoistViews) {
   OpBuilder builder(kernel.getContext());
-  for (Operation *before : barrierPositions) {
+  for (Operation *before : plan.barrierPositions) {
     builder.setInsertionPoint(before);
     builder.create<gpu::BarrierOp>(before->getLoc());
   }
@@ -853,7 +863,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   pool->setAttr("tiled", builder.getBoolAttr(true));
   for (auto placement : plan.placements) {
     auto alloc = liveness.buffers[placement.bufferIndex].allocation;
-    builder.setInsertionPoint(alloc);
+    if (!hoistViews) builder.setInsertionPoint(alloc);
     Value offset = builder.create<arith::ConstantIndexOp>(
         alloc.getLoc(), placement.offsetBytes);
     auto view = builder.create<memref::ViewOp>(alloc.getLoc(), alloc.getType(),
@@ -864,7 +874,7 @@ bool reuseSharedMemory(func::FuncOp kernel, ShmReuseStats *stats) {
   if (stats) {
     stats->pooledBytes = plan.pooledBytes;
     stats->reusedAllocations = plan.placements.size();
-    stats->insertedBarriers = barrierPositions.size();
+    stats->insertedBarriers = plan.barrierPositions.size();
   }
   return true;
 }

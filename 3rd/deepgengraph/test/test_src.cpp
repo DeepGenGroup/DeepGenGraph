@@ -1104,7 +1104,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createFinalizeThreadTilingPass ---------\n";
   llvm::outs().flush(); src->dump();
 
-  AddFuncPass(frisk::createLowerFriskFragmentsPass());
+  auto sharedExecution = frisk::createLowerFriskFragmentsPass();
+  if (failed(sharedExecution->initializeOptions(
+          vDoubleBuffer ? "double-buffer=true" : "double-buffer=false",
+          [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
+    return 1;
+  AddFuncPass(std::move(sharedExecution));
   // Preserve fragment scheduling opportunities, then hoist invariant storage
   // and address calculations after physical storage planning and unrolling.
   AddFuncPass(mlir::bufferization::createBufferLoopHoistingPass());
@@ -1114,13 +1119,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after lower-frisk-fragments -----\n";
   llvm::outs().flush(); src->dump();
-  if (vDoubleBuffer) {
-    AddFuncPass(frisk::createThreadDoubleBufferVPass());
-    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
-    AddPass(mlir::createCSEPass());
-    llvm::outs() << "\n---- after thread-double-buffer-v -----\n";
-    llvm::outs().flush(); src->dump();
-  }
 
   #if 1
   AddPass(frisk::createThreadLevelIRLegalizePass());
