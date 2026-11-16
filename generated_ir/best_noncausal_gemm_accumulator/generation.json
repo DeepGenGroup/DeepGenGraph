@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-11-12T02:37:02.899999+00:00",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.o3.ll",
+  "reference_sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_sha256": "e5fd4456ecfc34eb3f1af67310b239b0c663e5ea5803e87f0662b45790f52e36",
+  "same_input_command_and_launch_as_reference": true,
+  "mytest_exit_code": 0,
+  "verification": {
+    "llvm_as": true,
+    "o3_verify": true,
+    "base_and_fragment_parse_verify": true,
+    "all_block_gemms_have_three_operands": true
+  },
+  "gpu_tested": false,
+  "o3_byte_identical_to_reference": false,
+  "o3_identical_except_module_id_and_source_filename": false,
+  "files": {
+    "input.mlir": {
+      "sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+      "bytes": 10338
+    },
+    "command.sh": {
+      "sha256": "f40b4b12859b9e422045f733a3e29c5d2e8e66dae343a5fb55a3bd6ac9e564ea",
+      "bytes": 1277
+    },
+    "kernel.ll": {
+      "sha256": "e77537951f49b8e372c2259da90770e9d6ce96d991e4bb86f20d82d93dd6ad7d",
+      "bytes": 271687
+    },
+    "kernel.o3.ll": {
+      "sha256": "4163c1589d71857f7796c9a31e07c6a6b9c9380294bf136c0fad1e6b6c798316",
+      "bytes": 271809
+    },
+    "kernel.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "kernel.o3.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "frisk-base.mlir": {
+      "sha256": "8ca970b488d1d1e7795fa5430cc3fbd0e340228990801d4ce26bf6692fa19ffc",
+      "bytes": 12994
+    },
+    "frisk-fragment.mlir": {
+      "sha256": "54376fecb97701c6ea5339f52a3f687e8f6b46447c6d012bff81ee1ac9ab7d00",
+      "bytes": 156443
+    }
+  }
+}

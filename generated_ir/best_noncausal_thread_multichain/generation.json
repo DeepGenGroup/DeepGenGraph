@@ -1,0 +1,244 @@
+{
+  "generated_at": "2026-11-13T10:14:09.287174+08:00",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.o3.ll",
+  "reference_sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+  "reference_parameters_and_input_identical": true,
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_thread_multichain/input.mlir",
+  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_sha256": "28d4b8f8dcb3ef14be284b2082789c6bcdd785b7470c3744d1c1f10cb67e1bc0",
+  "command": [
+    "bash",
+    "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_thread_multichain/command.sh"
+  ],
+  "command_script_sha256": "f40b4b12859b9e422045f733a3e29c5d2e8e66dae343a5fb55a3bd6ac9e564ea",
+  "mytest_exit_code": 0,
+  "kernel_sha256": "97715d9d3102749dcf439b032a00b10678690d0f4c618c740eede696e499ebec",
+  "o3_sha256": "2b65578abefd55ca1b7ed16a3033dea4f6bc70bae929015f59fdb46188147606",
+  "verification": {
+    "llvm_as_command": [
+      "/data2/xsl/install/bin/llvm-as",
+      "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_thread_multichain/kernel.ll",
+      "-o",
+      "/dev/null"
+    ],
+    "llvm_as_exit_code": 0,
+    "o3_command": [
+      "/data2/xsl/install/bin/opt",
+      "-S",
+      "-passes=default<O3>,verify",
+      "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_thread_multichain/kernel.ll",
+      "-o",
+      "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_thread_multichain/kernel.o3.ll"
+    ],
+    "o3_exit_code": 0,
+    "thread_reduction_stage_order_checked": true
+  },
+  "local_reduction_reports": [
+    "LocalReduction: Attn_p2: 4 groups, 128 inputs, 4 chains (approx)"
+  ],
+  "gpu_tested": false,
+  "stages": [
+    {
+      "line": 96,
+      "stage": "---------- after simplifyPass ---------"
+    },
+    {
+      "line": 191,
+      "stage": "---------- after scfForConversion ---------"
+    },
+    {
+      "line": 314,
+      "stage": "---------- after createConvertKernelOpToFriskPass ---------"
+    },
+    {
+      "line": 903,
+      "stage": "---------- after createConvertMemAndCalcOpPass ---------"
+    },
+    {
+      "line": 1014,
+      "stage": "---------- after createFriskFuseBlockOpsPass ---------"
+    },
+    {
+      "line": 1125,
+      "stage": "---------- after createConvertFriskToBasePass ---------"
+    },
+    {
+      "line": 1247,
+      "stage": "---------- after frisk-op-fuse ---------"
+    },
+    {
+      "line": 1360,
+      "stage": "---------- after reorder-workgroups ---------"
+    },
+    {
+      "line": 1485,
+      "stage": "---------- after createNormalizeAttentionKLayoutPass ---------"
+    },
+    {
+      "line": 1611,
+      "stage": "---------- after promote-gm-to-shm-async ---------"
+    },
+    {
+      "line": 1743,
+      "stage": "---------- after frisk-auto-pipeline ---------"
+    },
+    {
+      "line": 1884,
+      "stage": "---------- after promote-gemm-matrix-loads ---------"
+    },
+    {
+      "line": 2035,
+      "stage": "----- after insertConvertLayoutOps:"
+    },
+    {
+      "line": 2152,
+      "stage": "---------- after convert-friskbase-to-fragment ---------"
+    },
+    {
+      "line": 3094,
+      "stage": "---- after fragment-level fuse-fragment-accumulator -----"
+    },
+    {
+      "line": 3823,
+      "stage": "---- after fragment-level frisk-frag-ir-reorder -----"
+    },
+    {
+      "line": 4367,
+      "stage": "---------- after frisk-simplify-loop-control ---------"
+    },
+    {
+      "line": 5066,
+      "stage": "---- after frisk-retain-invariant-fragments -----"
+    },
+    {
+      "line": 5756,
+      "stage": "---- after fragment-level optimization -----"
+    },
+    {
+      "line": 6433,
+      "stage": "---------- after convert-fragment-to-thread ---------"
+    },
+    {
+      "line": 9658,
+      "stage": "---------- after createFinalizeThreadTilingPass ---------"
+    },
+    {
+      "line": 11374,
+      "stage": "---- after lower-frisk-fragments -----"
+    },
+    {
+      "line": 13267,
+      "stage": "---- after threadIR legalize -----"
+    },
+    {
+      "line": 15340,
+      "stage": "---- after createIRDeepOptimizePass -----"
+    },
+    {
+      "line": 19821,
+      "stage": "---- after affine-scalrep -----"
+    },
+    {
+      "line": 23592,
+      "stage": "---- after frisk-simplify-bounded-affine -----"
+    },
+    {
+      "line": 26867,
+      "stage": "---- after frisk-approximate-thread-math -----"
+    },
+    {
+      "line": 30145,
+      "stage": "---- after frisk-bypass-mask-adds -----"
+    },
+    {
+      "line": 33423,
+      "stage": "---- after frisk-thread-local-reduction -----"
+    },
+    {
+      "line": 36701,
+      "stage": "---- after early wave lowering -----"
+    },
+    {
+      "line": 40373,
+      "stage": "---- after frisk-hoist-wave-invariants -----"
+    },
+    {
+      "line": 43991,
+      "stage": "---- secondLowering done -----"
+    },
+    {
+      "line": 43993,
+      "stage": "---- after llvm translateToLLVM -----"
+    },
+    {
+      "line": 50212,
+      "stage": "---- after llvm optimizeRegisterMath -----"
+    },
+    {
+      "line": 53132,
+      "stage": "---- after llvm deferLaneSums -----"
+    },
+    {
+      "line": 56070,
+      "stage": "---- after llvm prefetchGlobalPackets -----"
+    },
+    {
+      "line": 59010,
+      "stage": "---- after llvm optimizeRegisterLifetimes -----"
+    },
+    {
+      "line": 61975,
+      "stage": "---- after llvm canonicalizeLDSGEPs -----"
+    },
+    {
+      "line": 64672,
+      "stage": "---- after llvm lowerAsyncDMA -----"
+    },
+    {
+      "line": 67619,
+      "stage": "---- after llvm fuseMMACAccumulators -----"
+    },
+    {
+      "line": 70408,
+      "stage": "---- after llvm interleavePVAccumulators -----"
+    },
+    {
+      "line": 73458,
+      "stage": "---- after llvm doubleBufferV -----"
+    },
+    {
+      "line": 76562,
+      "stage": "---- after llvm narrowKDMA -----"
+    },
+    {
+      "line": 79972,
+      "stage": "---- after llvm prefetchPairedLDS -----"
+    },
+    {
+      "line": 82749,
+      "stage": "---- after llvm scheduleSoftmaxFragments -----"
+    },
+    {
+      "line": 85542,
+      "stage": "---- after llvm prefetchPairedLDSTail -----"
+    },
+    {
+      "line": 88345,
+      "stage": "---- after llvm prefetchNextK -----"
+    },
+    {
+      "line": 91322,
+      "stage": "---- after llvm elideBackedgeBarrier -----"
+    },
+    {
+      "line": 94296,
+      "stage": "---- after llvm lazySoftmaxBase -----"
+    },
+    {
+      "line": 97368,
+      "stage": "---- after llvm softmaxCvtPack -----"
+    }
+  ],
+  "note": "Current compiler, including thread-level multichain reduction; all tuning arguments and input copied from the reference. This is not an isolated comparison against the historical compiler."
+}

@@ -1,0 +1,48 @@
+{
+  "cases": [
+    {
+      "file": "kernel.ll",
+      "case": "random",
+      "head": 0,
+      "query": 0,
+      "sha256": "d46d6e470560cf80e60a8ea4641f4089ed9d9e3cd0fe15e3a6e17716d69845a5",
+      "max_abs_error": 0.0001285402867657881,
+      "mmac_count": 8192,
+      "dma64_count": 512
+    },
+    {
+      "file": "kernel.ll",
+      "case": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "sha256": "d46d6e470560cf80e60a8ea4641f4089ed9d9e3cd0fe15e3a6e17716d69845a5",
+      "max_abs_error": 4.617419446795168e-09,
+      "mmac_count": 8192,
+      "dma64_count": 512
+    },
+    {
+      "file": "kernel.o3.ll",
+      "case": "random",
+      "head": 0,
+      "query": 0,
+      "sha256": "456c3618ae800239dc9a97cd59ed97f8908b490df82acad5abf18cd8c44a4982",
+      "max_abs_error": 0.0001285402867657881,
+      "mmac_count": 8192,
+      "dma64_count": 512
+    },
+    {
+      "file": "kernel.o3.ll",
+      "case": "future_key_dominates",
+      "head": 1,
+      "query": 0,
+      "sha256": "456c3618ae800239dc9a97cd59ed97f8908b490df82acad5abf18cd8c44a4982",
+      "max_abs_error": 4.617419446795168e-09,
+      "mmac_count": 8192,
+      "dma64_count": 512
+    }
+  ],
+  "reference_atol": 0.01,
+  "reference_rtol": 0.01,
+  "gpu_tested": false,
+  "note": "CPU delayed-DMA/LLVM model; not target GPU execution or timing"
+}

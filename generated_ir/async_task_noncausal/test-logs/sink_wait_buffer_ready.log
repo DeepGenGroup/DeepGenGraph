@@ -1,0 +1,1 @@
+PASS wait sinking: tile consumers, aliases, source lifetime, DMA/barrier/control-flow boundaries, schedules and idempotence

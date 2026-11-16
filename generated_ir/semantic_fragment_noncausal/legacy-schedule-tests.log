@@ -1,0 +1,15 @@
+PASS schedule ordinary
+PASS schedule fused
+PASS schedule nonzero_step
+PASS schedule symbolic
+PASS schedule one
+PASS schedule empty
+PASS schedule barrier
+PASS schedule write
+PASS schedule nested_control
+PASS schedule opaque_call
+PASS schedule indirect_address
+PASS schedule carried_address
+PASS CPU baseline
+PASS CPU scheduled
+PASS attention: preserved MN/K, scheduled prefetch, late lowering

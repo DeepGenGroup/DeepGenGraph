@@ -1,0 +1,1 @@
+PASS native/strict scalar and multidimensional vector exp2; f16/f64 and protected function fallbacks

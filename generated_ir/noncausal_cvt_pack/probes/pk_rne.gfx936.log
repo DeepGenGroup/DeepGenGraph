@@ -1,0 +1,11 @@
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+'gfx936' is not a recognized processor for this target (ignoring processor)
+warning: codegen with no subarch in the target triple is deprecated and will become an error
+<inline asm>:1:2: error: instruction not supported on this GPU (gfx936): v_cvt_pk_f16_f32
+        v_cvt_pk_f16_f32 v0, v0, v1
+        ^

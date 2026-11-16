@@ -1,0 +1,11 @@
+00-block {'affine.for': 2, 'frisk.gemm_frag': 0, 'frisk.load_frag': 0, 'frisk.fused': 0, 'frisk.pipelined': 0, 'frisk.fragment_accumulate': 0, 'frisk.retained_words': 0, 'retained_payload_words': 0}
+01-fragment {'affine.for': 79, 'frisk.gemm_frag': 5, 'frisk.load_frag': 6, 'frisk.fused': 0, 'frisk.pipelined': 0, 'frisk.fragment_accumulate': 0, 'frisk.retained_words': 0, 'retained_payload_words': 0}
+02-accumulator {'affine.for': 79, 'frisk.gemm_frag': 5, 'frisk.load_frag': 2, 'frisk.fused': 0, 'frisk.pipelined': 0, 'frisk.fragment_accumulate': 1, 'frisk.retained_words': 0, 'retained_payload_words': 0}
+03-reorder {'affine.for': 37, 'frisk.gemm_frag': 6, 'frisk.load_frag': 4, 'frisk.fused': 18, 'frisk.pipelined': 2, 'frisk.fragment_accumulate': 1, 'frisk.retained_words': 0, 'retained_payload_words': 0}
+04-specialized {'affine.for': 45, 'frisk.gemm_frag': 12, 'frisk.load_frag': 16, 'frisk.fused': 24, 'frisk.pipelined': 8, 'frisk.fragment_accumulate': 4, 'frisk.retained_words': 0, 'retained_payload_words': 0}
+05-retained {'affine.for': 45, 'frisk.gemm_frag': 12, 'frisk.load_frag': 16, 'frisk.fused': 24, 'frisk.pipelined': 8, 'frisk.fragment_accumulate': 4, 'frisk.retained_words': 1, 'retained_payload_words': 32}
+06-optimized-fragment {'affine.for': 45, 'frisk.gemm_frag': 12, 'frisk.load_frag': 16, 'frisk.fused': 24, 'frisk.pipelined': 8, 'frisk.fragment_accumulate': 4, 'frisk.retained_words': 1, 'retained_payload_words': 32}
+07-thread-bridges {'affine.for': 45, 'frisk.gemm_frag': 0, 'frisk.load_frag': 0, 'frisk.fused': 24, 'frisk.pipelined': 8, 'frisk.fragment_accumulate': 0, 'frisk.retained_words': 1, 'retained_payload_words': 32}
+08-thread {'affine.for': 48, 'frisk.gemm_frag': 0, 'frisk.load_frag': 0, 'frisk.fused': 24, 'frisk.pipelined': 8, 'frisk.fragment_accumulate': 0, 'frisk.retained_words': 1, 'retained_payload_words': 32}
+09-storage-planned {'affine.for': 40, 'frisk.gemm_frag': 0, 'frisk.load_frag': 0, 'frisk.fused': 24, 'frisk.pipelined': 4, 'frisk.fragment_accumulate': 0, 'frisk.retained_words': 1, 'retained_payload_words': 32}
+PASS: all stages parse; serialized fragment optimization and thread replay match MyTest

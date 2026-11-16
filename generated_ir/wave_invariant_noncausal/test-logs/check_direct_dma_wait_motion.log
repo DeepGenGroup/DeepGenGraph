@@ -1,0 +1,1 @@
+PASS direct DMA wait motion: direct/staged/fallback, aliases, old readers, source writes, control flow, loop backedges, retained zero waits/barriers and idempotence

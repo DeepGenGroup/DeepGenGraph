@@ -1,0 +1,58 @@
+{
+  "variants": {
+    "pass_off": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--softmax-cvt-pack=off",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack/lazy_t8.ll"
+      ],
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "3593b921c3869e52bfbbc5feb1e30f28205cd8baa09c1426a86fd4e5939c87ac",
+      "o3_sha256": "1af98494e40447c3c12f71ba14845e2c54f00b3e9dbbe6ed02bb1ede26253cfe",
+      "packed_pairs": 0,
+      "diagnostics": "",
+      "LLVM_and_O3_verified": true,
+      "O3_equal_to_reference_except_module_id_and_pass_marker": true,
+      "reference": "generated_ir/noncausal_cvt_pack/lazy_t8.o3.ll"
+    },
+    "pass_pk_rtz": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--softmax-cvt-pack=rtz",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack/lazy_t8.ll"
+      ],
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "95b423685499be2b831da140a33e7d6f29625b461ff934940a2e5faa85e993b8",
+      "o3_sha256": "29d751d499acb1eeedbdd46bf8be94544c7b52fe4ae3f314686350042612f8bf",
+      "packed_pairs": 32,
+      "diagnostics": "Softmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2",
+      "LLVM_and_O3_verified": true,
+      "O3_equal_to_reference_except_module_id_and_pass_marker": true,
+      "reference": "generated_ir/noncausal_cvt_pack/lazy_t8_pk_rtz.o3.ll"
+    },
+    "pipeline_t8_pk_rtz": {
+      "command": [
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/LegacyLLVMExportTest",
+        "--lazy-softmax-base=8",
+        "--softmax-cvt-pack=rtz",
+        "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack/control.ll"
+      ],
+      "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "sha256": "07757d92bf7519d51d46028e253af4dc48e80a17565c64dc8385f90d5b0da47a",
+      "o3_sha256": "f46989e6a5aec066b20401eb249a0a13125fcf003e7df6a7177e91f58bf146d6",
+      "packed_pairs": 32,
+      "diagnostics": "Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=8.000000e+00, function=Attn_p2\nSoftmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2",
+      "LLVM_and_O3_verified": true,
+      "O3_equal_to_reference_except_module_id_and_pass_marker": false,
+      "reference": "generated_ir/noncausal_cvt_pack/lazy_t8_pk_rtz.o3.ll"
+    }
+  },
+  "pass_binary_sha256": "a6a44dbe837b6c8ecaf529a2ae6fea408ed3688f9e7e3d02f1f969b692af790d",
+  "measured_winner": "generated_ir/noncausal_cvt_pack/lazy_t8_pk_rtz.o3.ll",
+  "measured_median_ms": 1.5057590007781982,
+  "measured_vgpr": 228,
+  "measured_scratch_bytes": 0,
+  "measurement_source": "pmc_test.log",
+  "pass_artifacts_gpu_tested": false,
+  "idempotence_checked": true
+}

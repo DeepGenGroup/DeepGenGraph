@@ -1,0 +1,59 @@
+LowerInfo inference, both layout contracts, terminal failure diagnostics
+PASS deferred broadcast
+PASS --unresolved
+PASS --no-anchor
+
+Frisk op fusion and loop exit layout guards
+PASS both add orders, vector carriers, late seed and idempotence
+PASS fallback: negative zero
+PASS transpose/attributes, shared zero and vector constant zero
+PASS fallback: strict function
+PASS fallback: nonzero accumulator
+PASS fallback: broadcast row
+PASS fallback: scalar broadcast
+PASS fallback: precision mismatch
+PASS fallback: multiple uses
+PASS fallback: same product twice
+PASS fallback: already tiled
+PASS fallback: authored schedule
+PASS fallback: store to A
+PASS fallback: barrier
+PASS fallback: unknown call
+PASS fallback: intervening region
+PASS fallback: cross-region producer
+PASS CPU execution of before/after block IR with nonzero scaled accumulators
+PASS fused GEMM lowers directly in typed/vector paths and four layouts
+PASS fused loop retains public exit layout, with no in-loop shuffle or LDS scratch
+
+WMMA forward/reverse shuffle and legacy/fused loop sinking
+PASS emitted dataflow: 256 threads, 4 registers, distinct matrix coordinates
+PASS emitted nonuniform accumulator transpose back to native C
+PASS standalone planning, idempotence and unsupported/stale metadata
+PASS shared fallback, multiple tile shapes/waves and repeated tiling
+PASS legacy/fused row-scaled loop layout sinking in both orders; column-scale fallback
+PASS legacy/fused full attention finalization, with no accumulator LDS exchange
+
+Explicit nonzero/loop GEMM seeds, four layouts and two lowering paths
+PASS three-operand round trip, accumulator type, rank, dimensions and transpose verifier
+PASS nonzero and loop-carried seeds: typed/vector lowering, four layouts, no accumulator fusion passes
+
+B-permute and inner-instruction permutation CPU maps
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (16, 64, 16, 64)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (64, 128, 32, 128)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (128, 128, 32, 128)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (32, 192, 64, 64)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (64, 128, 32, 256)
+PASS numerical QK + PV / paired K / direct P or wave-layout fallback: (128, 192, 32, 512)
+PASS P-only selection, terminal/unrelated GEMMs unchanged, 3.1/3.2 and 3.3 fallback
+
+Strict attention loop optimization and CPU numerics
+PASS generic sharing: one recurrence shared, four distinct recurrences retained
+PASS conservative fallback: alias
+PASS conservative fallback: dependent-bound
+PASS conservative fallback: factor-limit
+PASS carrier budget: partial factor two, no jam, and idempotence
+PASS loop-result layout conversion and nonuniform/multi-use fallbacks
+PASS 32/64/32, budget=24576: shared QK/exp2, lowered CPU numerics max_abs=0.00195312
+PASS 64/32/16, budget=24576: shared QK/exp2, lowered CPU numerics max_abs=0.00195312
+PASS 128/128/32, budget=24576: shared QK/exp2, lowered CPU numerics max_abs=0.00195312
+PASS 128/128/32, budget=28672: shared QK/exp2, lowered CPU numerics max_abs=0.00195312

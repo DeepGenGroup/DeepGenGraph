@@ -1,0 +1,5 @@
+PARSED 00-block.mlir
+PARSED 01-fragment.mlir
+PARSED 02-thread-bridges.mlir
+PARSED 03-thread.mlir
+PASS: serialized fragment replay exactly matches the in-process thread stage

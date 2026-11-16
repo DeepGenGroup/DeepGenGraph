@@ -1,0 +1,121 @@
+1: /data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack_pass/pass_pk_rtz.o3.ll  形成Pass后
+2: HSACO (ms): min=1.498080, median=1.505119, p90=1.507375, max=1.508799
+3: PyTorch SDPA (ms): min=1.559999, median=1.565759, p90=1.570095, max=1.575358
+4: time_our_mid=1.5051189661026, time_base_mid=1.565759003162384, speedup=1.0402891986782992x
+5: kernel-name:"Attn_p2"
+6:  kernel dispatch index                     17
+7:  gpu id                                    0
+8:  dispatch queue id                         0
+9:  dispatch queue index                      49
+10:  process id                                894
+11:  thread id                                 894
+12:  grid size                                 262144
+13:  work group size                           256
+14:  shared memory size                        16384
+15:  scratch size                              0
+16:  vgpr count                                228
+17:  sgpr count                                112
+18:  signal handle                             0x0
+19:  kernel time                               0.001502(s)
+20:  processed ALU instructions                80.2922300841(%)
+21:  performance                               7436.674563(Gflops)
+22:  shared memory operation                   9224192
+23:  shared memory bank conflict               0.1441269626(%)
+24:  L1 cache unit is active                   60.1508774160(%)
+25:  L1 cache unit is stalled                  2.7745308990(%)
+26:  L2 cache write unit is stalled            0.0408611903(%)
+27:  L2 cache hit rate                         93.831018(%)
+28: 
+29: 
+187: /data2/xsl/DeepGenGraph/generated_ir/causal_best_mytest/group4.ll  causal 测试
+188: HSACO (ms): min=2.297740, median=2.337099, p90=2.364011, max=2.373419
+189: PyTorch SDPA (ms): min=1.103670, median=1.137190, p90=1.148806, max=1.164150
+190: time_our_mid=2.337099075317383, time_base_mid=1.137190043926239, speedup=0.48658187234608624x
+191: kernel-name:"Attn_p2"
+192:  kernel dispatch index                     15
+193:  gpu id                                    0
+194:  dispatch queue id                         0
+195:  dispatch queue index                      45
+196:  process id                                473
+197:  thread id                                 473
+198:  grid size                                 262144
+199:  work group size                           256
+200:  shared memory size                        16384
+201:  scratch size                              160
+202:  vgpr count                                256
+203:  sgpr count                                112
+204:  signal handle                             0x0
+205:  kernel time                               0.002328(s)
+206:  processed ALU instructions                44.6289460561(%)
+207:  performance                               5209.190500(Gflops)
+208:  shared memory operation                   4974592
+209:  shared memory bank conflict               0.0932730034(%)
+210:  L1 cache unit is active                   40.9735070854(%)
+211:  L1 cache unit is stalled                  2.5664415017(%)
+212:  L2 cache write unit is stalled            0.0008824045(%)
+213:  L2 cache hit rate                         46.378248(%)
+214: 
+215: 
+216: 
+484: [group32.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group32.ll)
+485: HSACO (ms): min=1.263029, median=1.301509, p90=1.351204, max=1.383828
+486: PyTorch SDPA (ms): min=1.105749, median=1.137589, p90=1.149622, max=1.151030
+487: time_our_mid=1.3015090227127075, time_base_mid=1.137589454650879, speedup=0.8740542207535569x
+488: 
+489: [group16.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group16.ll)
+490: HSACO (ms): min=1.219350, median=1.244310, p90=1.264693, max=1.271190
+491: PyTorch SDPA (ms): min=1.100631, median=1.135910, p90=1.148007, max=1.152311
+492: time_our_mid=1.2443099617958069, time_base_mid=1.1359099745750427, speedup=0.9128834530390485x
+493: 
+494: 
+495: [group8.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group8.ll)
+496: HSACO (ms): min=1.230549, median=1.256229, p90=1.271445, max=1.281269
+497: PyTorch SDPA (ms): min=1.101110, median=1.134950, p90=1.149909, max=1.153429
+498: time_our_mid=1.256228506565094, time_base_mid=1.1349499821662903, speedup=0.9034582293229314x
+499: 
+500: [group4.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group4.ll)
+501: HSACO (ms): min=1.160471, median=1.176870, p90=1.185318, max=1.191189
+502: PyTorch SDPA (ms): min=1.101271, median=1.132950, p90=1.146229, max=1.156791
+503: time_our_mid=1.1768704652786255, time_base_mid=1.132949948310852, speedup=0.962680245393553x
+504: 
+1133: 
+1134: 
+1135: //---------------- unsafe softmax
+1136: 
+1137: /data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000001/kernel.ll
+1138: HSACO (ms): min=1.151519, median=1.168559, p90=1.175759, max=1.179519
+1139: PyTorch SDPA (ms): min=1.108479, median=1.119278, p90=1.124271, max=1.141279
+1140: time_our_mid=1.168558955192566, time_base_mid=1.1192784905433655, speedup=0.9578280030885737x
+1141: kernel-name:"Attn_p2"
+1142:  kernel dispatch index                     27
+1143:  gpu id                                    0
+1144:  dispatch queue id                         0
+1145:  dispatch queue index                      45
+1146:  process id                                40497
+1147:  thread id                                 40497
+1148:  grid size                                 262144
+1149:  work group size                           256
+1150:  shared memory size                        16384
+1151:  scratch size                              0
+1152:  vgpr count                                244
+1153:  sgpr count                                112
+1154:  fbarrier count                            0
+1155:  signal handle                             0x0
+1156:  kernel time                               0.001160(s)
+1157:  processed ALU instructions                61.3130913016(%)
+1158:  performance                               6122.934857(Gflops)
+1159:  shared memory operation                   4890624
+1160:  shared memory bank conflict               12.4413465598(%)
+1161:  L1 cache unit is active                   53.8781312955(%)
+1162:  L1 cache unit is stalled                  3.5679626780(%)
+1163:  L2 cache write unit is stalled            0.2755228389(%)
+1164:  L2 cache hit rate                         64.009279(%)
+1165: 
+1166: 
+1167: 
+1168: 
+1169: /data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000002/kernel.ll
+1170: HSACO (ms): min=1.150719, median=1.169279, p90=1.176175, max=1.179518
+1171: PyTorch SDPA (ms): min=1.108479, median=1.117919, p90=1.124255, max=1.134077
+1172: time_our_mid=1.1692790389060974, time_base_mid=1.1179189682006836, speedup=0.9560754370885987x
+1173: 

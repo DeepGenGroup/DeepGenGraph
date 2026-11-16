@@ -1,0 +1,26 @@
+shm bytes 0 -> 0, barriers 0
+shm[0] 8192 bytes, align 16, live [17, 58]
+shm[1] 8192 bytes, align 16, live [42, 82]
+shm[2] 8192 bytes, align 16, live [72, 105]
+shm[3] 8192 bytes, align 16, live [95, 125]
+shm[4] 8192 bytes, align 16, live [135, 135]
+shm[5] 8192 bytes, align 16, live [135, 135]
+shm[6] 8192 bytes, align 16, live [135, 135]
+shm[7] 8192 bytes, align 16, live [135, 135]
+shm[8] 8192 bytes, align 16, live [135, 135]
+shm[9] 8192 bytes, align 16, live [135, 135]
+shm[10] 8192 bytes, align 16, live [135, 135]
+shm[11] 8192 bytes, align 16, live [135, 135]
+placement 0 @ 0
+placement 1 @ 8192
+placement 2 @ 0
+placement 3 @ 8192
+placement 4 @ 0
+placement 5 @ 8192
+placement 6 @ 0
+placement 7 @ 8192
+placement 8 @ 0
+placement 9 @ 0
+placement 10 @ 0
+placement 11 @ 0
+shm bytes 98304 -> 16384, barriers 4

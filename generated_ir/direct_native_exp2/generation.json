@@ -1,0 +1,58 @@
+{
+  "generated_at": "2026-11-12T03:17:47.142760+00:00",
+  "reference": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_gemm_accumulator",
+  "tool_sha256": "5ee796c89176340e02ed0ae7771d353ff41dd0b9ef2ee70b415bd3e162c2eaaa",
+  "same_input_command_and_launch_as_reference": true,
+  "verification": {
+    "llvm_as": true,
+    "o3_verify": true,
+    "native_exp2_regression": true,
+    "register_math_regression": true,
+    "all_five_math_modes": true
+  },
+  "exp2_counts": {
+    "translateToLLVM": {
+      "native_exp2_calls": 66,
+      "ocml_exp2_calls": 0
+    },
+    "kernel.ll": {
+      "native_exp2_calls": 66,
+      "ocml_exp2_calls": 0
+    },
+    "kernel.o3.ll": {
+      "native_exp2_calls": 66,
+      "ocml_exp2_calls": 0
+    }
+  },
+  "gpu_tested": false,
+  "files": {
+    "input.mlir": {
+      "sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+      "bytes": 10338
+    },
+    "command.sh": {
+      "sha256": "f40b4b12859b9e422045f733a3e29c5d2e8e66dae343a5fb55a3bd6ac9e564ea",
+      "bytes": 1277
+    },
+    "kernel.ll": {
+      "sha256": "0c8fadd0f048b8b8a3d4a745926dee0c20f6e711e7344e67914480e75f38a3ab",
+      "bytes": 242406
+    },
+    "kernel.o3.ll": {
+      "sha256": "0702671f9522d61e9ffb0a3ee2af457e43f3839fa5b75c8c6effc614f2d737f3",
+      "bytes": 238042
+    },
+    "kernel.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "kernel.o3.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "run_gpu.sh": {
+      "sha256": "ad02c94f58688b6307821b4ca0d4d6aea894a3c52b6ce56ac082ae339c0a07a0",
+      "bytes": 643
+    }
+  }
+}

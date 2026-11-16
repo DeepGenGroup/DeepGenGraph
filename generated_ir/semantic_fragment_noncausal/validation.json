@@ -1,0 +1,27 @@
+{
+  "build_targets": [
+    "MyTest",
+    "ThreadTilingTest",
+    "FragmentOptTest"
+  ],
+  "tests": {
+    "semantic-tests.log": "passed",
+    "typed-tests.log": "passed",
+    "early-pass-tests.log": "passed",
+    "retention-tests.log": "passed",
+    "plan2-tests.log": "passed",
+    "shuffle-tests.log": "passed",
+    "uniform-mask-tests.log": "passed",
+    "mask-fusion-tests.log": "passed",
+    "legacy-schedule-tests.log": "passed",
+    "legacy-loop-tests.log": "passed",
+    "legacy-fusion-tests.log": "passed"
+  },
+  "llvm_verifier": "passed (raw and O3)",
+  "serialized_stage_replay": "passed",
+  "final_build_regeneration": "byte-identical to numerically validated LLVM",
+  "sha256": "20cb0edc9d77733be0b4f68c5f0dac349e8f27d93f4c07001a2aa50fc4b1b931",
+  "numerical_validation": "numerical_validation.json",
+  "best_noncausal_parameters": "command.json (unchanged from previous output)",
+  "gpu_tested": false
+}

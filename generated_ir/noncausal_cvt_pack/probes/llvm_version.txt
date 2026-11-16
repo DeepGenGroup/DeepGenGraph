@@ -1,0 +1,15 @@
+AOMP-24.0-80 (http://github.com/ROCm/aomp):
+ Source ID:24.0-80-36357b79af717705b61353f554b3526fb0d0f070
+  LLVM version 24.0.0git
+  Optimized build with assertions.
+  Default target: x86_64-unknown-linux-gnu
+  Host CPU: znver4
+
+  Registered Targets:
+    amdgcn  - legacy name for amdgpu
+    amdgpu  - AMDGPU gfx6+
+    nvptx   - NVIDIA PTX 32-bit
+    nvptx64 - NVIDIA PTX 64-bit
+    r600    - AMD GPUs HD2XXX-HD6XXX
+    x86     - 32-bit X86: Pentium-Pro and above
+    x86-64  - 64-bit X86: EM64T and AMD64

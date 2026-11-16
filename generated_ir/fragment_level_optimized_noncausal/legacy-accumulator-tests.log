@@ -1,0 +1,9 @@
+PASS fusion operand order reverse=False
+PASS fusion operand order reverse=True
+PASS reject partial_coverage
+PASS reject overlap
+PASS reject multiple_users
+PASS reject late_accumulator
+PASS derived indices staticized; dynamic outer loop retained
+PASS CPU bitwise result and zero-seeded K reduction reverse=False
+PASS CPU bitwise result and zero-seeded K reduction reverse=True

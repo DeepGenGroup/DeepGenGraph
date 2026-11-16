@@ -1,0 +1,44 @@
+PASS direct rhs
+PASS direct lhs
+PASS direct off
+PASS direct no-uniform
+PASS direct no-fusion
+PASS direct multi-use
+PASS direct barrier
+PASS direct negative-zero
+PASS direct nonzero
+PASS direct signed-predicate
+PASS direct negative-diagonal
+PASS direct 64-threads
+PASS direct 256-threads
+PASS direct strictfp
+PASS direct llvm.strictfp
+PASS direct optnone
+PASS direct llvm.optnone
+PASS direct optimize_none
+PASS direct llvm.optimize_none
+PASS direct passthrough = ["strictfp"]
+PASS direct passthrough = ["optnone"]
+PASS direct passthrough = [["denormal-fp-math", "preserve-sign"]]
+PASS typed rhs
+PASS typed lhs
+PASS typed off
+PASS typed no-uniform
+PASS typed no-fusion
+PASS typed multi-use
+PASS typed barrier
+PASS typed negative-zero
+PASS typed nonzero
+PASS typed signed-predicate
+PASS typed negative-diagonal
+PASS typed 64-threads
+PASS typed 256-threads
+PASS typed strictfp
+PASS typed llvm.strictfp
+PASS typed optnone
+PASS typed llvm.optnone
+PASS typed optimize_none
+PASS typed llvm.optimize_none
+PASS typed passthrough = ["strictfp"]
+PASS typed passthrough = ["optnone"]
+PASS typed passthrough = [["denormal-fp-math", "preserve-sign"]]

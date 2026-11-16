@@ -1,0 +1,3 @@
+PASS {'case': 'random', 'head': 1, 'query': 31, 'variant': 'kernel', 'max_abs_error': 9.917702902600967e-05, 'O3_bitwise_equal': True, 'delayed_DMA_and_ownership_passed': True, 'mmac_count': 8192, 'k0_overlap_mmac': 992}
+PASS {'case': 'random', 'head': 1, 'query': 31, 'variant': 'kernel.o3', 'max_abs_error': 9.917702902600967e-05, 'O3_bitwise_equal': True, 'delayed_DMA_and_ownership_passed': True, 'mmac_count': 8192, 'k0_overlap_mmac': 992}
+PASS {'case': 'future_key_dominates', 'head': 1, 'query': 0, 'variant': 'kernel', 'max_abs_error': 4.617419446795168e-09, 'O3_bitwise_equal': True, 'delayed_DMA_and_ownership_passed': True, 'mmac_count': 8192, 'k0_overlap_mmac': 992}

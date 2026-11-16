@@ -1,0 +1,145 @@
+gemm_accumulator done 8192
+frisk_op_fuse done 8192
+{
+  "outputs_bit_equal": true,
+  "mma_inputs_equal_in_order": true,
+  "first_mma_mismatch": null,
+  "lds_read_records_equal": true,
+  "lds_values_equal": true,
+  "global_trace_equal": false,
+  "k0_issues_equal": true,
+  "global_reads_equal": true,
+  "global_write_lane_vectors_equal_as_set": false,
+  "collective_output_address_set_equal": true,
+  "first_eight_store_columns_lanes_0_16_32_48": [
+    [
+      [
+        0,
+        4,
+        8,
+        12
+      ],
+      [
+        1,
+        5,
+        9,
+        13
+      ],
+      [
+        2,
+        6,
+        10,
+        14
+      ],
+      [
+        3,
+        7,
+        11,
+        15
+      ],
+      [
+        16,
+        20,
+        24,
+        28
+      ],
+      [
+        17,
+        21,
+        25,
+        29
+      ],
+      [
+        18,
+        22,
+        26,
+        30
+      ],
+      [
+        19,
+        23,
+        27,
+        31
+      ]
+    ],
+    [
+      [
+        0,
+        1,
+        2,
+        3
+      ],
+      [
+        4,
+        5,
+        6,
+        7
+      ],
+      [
+        8,
+        9,
+        10,
+        11
+      ],
+      [
+        12,
+        13,
+        14,
+        15
+      ],
+      [
+        16,
+        17,
+        18,
+        19
+      ],
+      [
+        20,
+        21,
+        22,
+        23
+      ],
+      [
+        24,
+        25,
+        26,
+        27
+      ],
+      [
+        28,
+        29,
+        30,
+        31
+      ]
+    ]
+  ],
+  "first_global_event_mismatch": {
+    "index": 776,
+    "before": [
+      "write",
+      8192,
+      "half",
+      "3c0623537d92cfab27e0e043854c80e218419830becb1db2932f07367b9247c7"
+    ],
+    "after": [
+      "write",
+      8192,
+      "half",
+      "feb278bdcd3225769f231ff078c3db2fc56099e374f3d05efc03c159885cf808"
+    ]
+  },
+  "counts": [
+    [
+      260,
+      261,
+      8192,
+      512
+    ],
+    [
+      260,
+      261,
+      8192,
+      512
+    ]
+  ]
+}

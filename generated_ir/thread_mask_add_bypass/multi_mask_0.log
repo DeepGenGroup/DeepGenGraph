@@ -1,0 +1,66 @@
+LowerInfoAnalysis::block_threads = 128
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+mma_inst - v_mmac_f32_16x16x16_f16 $0, $1, $2, $3
+----- after insertConvertLayoutOps:
+func.func @Attn_p2(%arg0: memref<1x32x4096x128xf16, 1>, %arg1: memref<1x32x4096x128xf16, 1>, %arg2: memref<1x32x128x4096xf16, 1>, %arg3: memref<1x32x4096x128xf16, 1>) attributes {block_layout = array<i64: 2, 1>, block_layout_order = array<i64: 0, 1>, thread_num = 128 : i32, warp_layout = array<i64: 16, 4>} {
+  %block_id_y = gpu.block_id y {range = 64 : index}
+  %block_id_x = gpu.block_id x {range = 32 : index}
+  %c64 = arith.constant 64 : index
+  %c1 = arith.constant 1 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %cst_0 = arith.constant 0xFF800000 : f32
+  %cst_1 = arith.constant 0.127531052 : f32
+  %0 = arith.muli %block_id_y, %c64 : index
+  %1 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x128xf16, 3>
+  %2 = frisk.buffer_view %arg0[0, %block_id_x mod 32, (%block_id_y * 64) mod 4096, 0], ranges = [64, 128] : memref<1x32x4096x128xf16, 1> -> memref<64x128xf16, 1>
+  frisk.copy %2 to %1 [affine_map<() -> (2)>] : memref<64x128xf16, 1>, memref<64x128xf16, 3>
+  %3 = arith.truncf %cst_1 : f32 to f16
+  %4 = frisk.mul %1, %3 : memref<64x128xf16, 3>, f16 -> memref<64x128xf16, 3>
+  %5 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<128x32xf16, 3>
+  %6 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<32x128xf16, 3>
+  %cst_2 = arith.constant dense<0.000000e+00> : vector<64x128xf32>
+  %cst_3 = arith.constant dense<0.000000e+00> : vector<64x1xf32>
+  %7 = frisk.zero : memref<64x32xf32>
+  %8 = frisk.zero : memref<64x128xf32>
+  %9:2 = affine.for %arg4 = 0 to affine_map<()[s0] -> (s0 * 64 + 32)>()[%block_id_y] step 32 iter_args(%arg5 = %cst_2, %arg6 = %cst_3) -> (vector<64x128xf32>, vector<64x1xf32>) {
+    %13 = frisk.buffer_view %arg2[0, %block_id_x mod 32, 0, %arg4 mod 4096], ranges = [128, 32] : memref<1x32x128x4096xf16, 1> -> memref<128x32xf16, 1>
+    frisk.copy %13 to %5 [affine_map<() -> (2)>] : memref<128x32xf16, 1>, memref<128x32xf16, 3>
+    %14 = frisk.buffer_view %arg1[0, %block_id_x mod 32, %arg4 mod 4096, 0], ranges = [32, 128] : memref<1x32x4096x128xf16, 1> -> memref<32x128xf16, 1>
+    frisk.copy %14 to %6 [affine_map<() -> (2)>] : memref<32x128xf16, 1>, memref<32x128xf16, 3>
+    %15 = frisk.read_matrix_from_shm %5[] {element_bit_width = 16 : i64, m = 32 : i64, n = 16 : i64} : memref<128x32xf16, 3> -> memref<128x32xf16>
+    %16 = frisk.zero : memref<64x32xf32>
+    %17 = frisk.gemm(%4, %15, %16) {frisk.contiguous_c, inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", transA = false, transB = false} : memref<64x128xf16, 3>, memref<128x32xf16>, memref<64x32xf32> -> memref<64x32xf32>
+    %18 = frisk.convert_layout %17 {frisk.layout_role = "wmmaC", frisk.shuffle_plan = {algorithm = "xor_transpose", registers = 4 : i64, width = 64 : i64, xor_masks = array<i64: 16, 32>}, frisk.source_layout = {block_layout = array<i64: 2, 1>, block_layout_order = array<i64: 0, 1>, block_repeat = array<i64: 2, 2>, ignore_dim = -1 : i64, thread_creg_order = array<i64: 0, 1>, thread_widths = array<i64: 1, 1>, warp_inst_unroll = array<i64: 1, 1>, warp_layout = array<i64: 16, 4>, warp_layout_order = array<i64: 0, 1>, warp_repeat = array<i64: 1, 4>, warp_repeat_order = array<i64: 0, 1>, warp_threads = 64 : i64}, frisk.target_layout = {block_layout = array<i64: 2, 1>, block_layout_order = array<i64: 0, 1>, block_repeat = array<i64: 2, 2>, ignore_dim = -1 : i64, thread_creg_order = array<i64: 0, 1>, thread_widths = array<i64: 1, 4>, warp_inst_unroll = array<i64: 1, 1>, warp_layout = array<i64: 16, 4>, warp_layout_order = array<i64: 0, 1>, warp_repeat = array<i64: 1, 1>, warp_repeat_order = array<i64: 0, 1>, warp_threads = 64 : i64}, frisk.wmma_instruction = {name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", shape = array<i64: 16, 16, 16>}, value = "wmmaC"} : memref<64x32xf32> -> memref<64x32xf32>
+    %19 = frisk.mul %18, %cst_1 : memref<64x32xf32>, f32 -> memref<64x32xf32>
+    %20 = frisk.mask starts = [%0, %arg4], sizes = [64, 32], type = f32 {
+    ^bb0(%arg7: index, %arg8: index):
+      %32 = arith.addi %arg7, %c1 : index
+      %33 = arith.cmpi ule, %32, %arg8 : index
+      %34 = arith.select %33, %cst_0, %cst : f32
+      frisk.mask_yield %34 : f32
+    } : (index, index) -> memref<64x32xf32>
+    %21 = frisk.add %19, %20 : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>
+    %22 = frisk.add %18, %20 : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>
+    %23 = frisk.add %21, %22 : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>
+    %24 = frisk.exp2 %23 : memref<64x32xf32> -> memref<64x32xf32, 3>
+    %25 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x1xf32, 3>
+    frisk.reduce %24, %25 {dim = 1 : i64, kind = "add"} : memref<64x32xf32, 3>, memref<64x1xf32, 3>
+    %26 = frisk.add %25, %arg6 : memref<64x1xf32, 3>, vector<64x1xf32> -> memref<64x1xf32, 3>
+    %27 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x32xf16, 3>
+    frisk.copy %24 to %27 [affine_map<() -> (2)>] : memref<64x32xf32, 3>, memref<64x32xf16, 3>
+    %28 = frisk.read_matrix_from_shm %6[] {element_bit_width = 16 : i64, m = 32 : i64, n = 16 : i64} : memref<32x128xf16, 3> -> memref<32x128xf16>
+    %29 = frisk.zero : memref<64x128xf32>
+    %30 = frisk.gemm(%27, %28, %29) {frisk.contiguous_c, inst_constraints = "=v,v,v,0", inst_name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", transA = false, transB = false} : memref<64x32xf16, 3>, memref<32x128xf16>, memref<64x128xf32> -> memref<64x128xf32>
+    %31 = frisk.add %arg5, %30 : vector<64x128xf32>, memref<64x128xf32> -> memref<64x128xf32>
+    frisk.copy %31 to %arg5 [affine_map<() -> (2)>] : memref<64x128xf32>, vector<64x128xf32>
+    frisk.copy %26 to %arg6 [affine_map<() -> (2)>] : memref<64x1xf32, 3>, vector<64x1xf32>
+    affine.yield %arg5, %arg6 : vector<64x128xf32>, vector<64x1xf32>
+  } {local_yield_transformed = true}
+  %10 = frisk.convert_layout %9#0 {frisk.layout_role = "wmmaC", frisk.shuffle_plan = {algorithm = "xor_transpose", registers = 4 : i64, width = 64 : i64, xor_masks = array<i64: 16, 32>}, frisk.source_layout = {block_layout = array<i64: 2, 1>, block_layout_order = array<i64: 0, 1>, block_repeat = array<i64: 2, 8>, ignore_dim = -1 : i64, thread_creg_order = array<i64: 0, 1>, thread_widths = array<i64: 1, 1>, warp_inst_unroll = array<i64: 1, 1>, warp_layout = array<i64: 16, 4>, warp_layout_order = array<i64: 0, 1>, warp_repeat = array<i64: 1, 4>, warp_repeat_order = array<i64: 0, 1>, warp_threads = 64 : i64}, frisk.target_layout = {block_layout = array<i64: 2, 1>, block_layout_order = array<i64: 0, 1>, block_repeat = array<i64: 2, 8>, ignore_dim = -1 : i64, thread_creg_order = array<i64: 0, 1>, thread_widths = array<i64: 1, 4>, warp_inst_unroll = array<i64: 1, 1>, warp_layout = array<i64: 16, 4>, warp_layout_order = array<i64: 0, 1>, warp_repeat = array<i64: 1, 1>, warp_repeat_order = array<i64: 0, 1>, warp_threads = 64 : i64}, frisk.wmma_instruction = {name = "v_mmac_f32_16x16x16_f16 $0, $1, $2, $3", shape = array<i64: 16, 16, 16>}, value = "loop_result"} : vector<64x128xf32> -> vector<64x128xf32>
+  %11 = frisk.div %10, %9#1 : vector<64x128xf32>, vector<64x1xf32> -> memref<64x128xf32>
+  %12 = frisk.alloc_buffer {scope = "shared", alignment = 16} -> memref<64x128xf16, 3>
+  frisk.copy %11 to %12 [affine_map<() -> (2)>] : memref<64x128xf32>, memref<64x128xf16, 3>
+  frisk.copy %12 to %arg3 at (%block_id_y, %block_id_x) [affine_map<(d0, d1) -> (0, (d1 + (d0 * 8192) floordiv 524288) mod 32, (d0 * 64) mod 4096, 0)>] : memref<64x128xf16, 3>, memref<1x32x4096x128xf16, 1>
+  return
+}
+Fragment -> thread: 2 loads, 3 stores, 30 extracts, 23 inserts, 2 GEMMs, 11 elementwise ops

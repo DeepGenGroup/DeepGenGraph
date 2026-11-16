@@ -1,0 +1,302 @@
+in function Attn_p2:
+  in block %4 / %4:
+    >   %17 = and i64 %13, 31, !dbg !157
+    >   %18 = call i32 @llvm.amdgcn.workgroup.id.z(), !dbg !157
+    >   %19 = sext i32 %18 to i64, !dbg !157
+        %17 = lshr i64 %12, 10, !dbg !58
+        %18 = add nuw nsw i64 %13, %17, !dbg !58
+    >   %22 = and i64 %21, 31, !dbg !159
+        %19 = shl nsw i64 %16, 7, !dbg !58
+        %20 = mul nsw i64 %17, -4096, !dbg !58
+        %21 = add i64 %19, %20, !dbg !58
+    <   %22 = shl i64 %18, 19, !dbg !58
+    <   %23 = and i64 %22, 16252928, !dbg !58
+        %24 = shl nsw i64 %21, 7, !dbg !58
+    >   %.idx = shl nuw nsw i64 %22, 20, !dbg !159
+    <   %25 = add i64 %23, %24, !dbg !58
+        %address.thread = call i32 asm sideeffect "", "=v,0"(i32 %kdma.tid) #9, !dbg !58, !range !79, !frisk.register_lifetimes !52
+        %address.local = zext nneg i32 %address.thread to i64, !dbg !58
+        %address.local404 = shl nuw nsw i64 %address.local, 3, !dbg !58
+        %address.local405 = and i64 %address.local404, 1536, !dbg !58
+        %address.local406 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local405, !dbg !58
+        %address.local407 = ptrtoint ptr addrspace(3) %address.local406 to i64, !dbg !58
+        %address.local408 = trunc i64 %address.local407 to i32, !dbg !58
+        %26 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %address.local408), !dbg !58
+        %address.local409 = shl nuw nsw i64 %address.local, 7, !dbg !58
+        %address.local410 = and i64 %address.local409, 16256, !dbg !58
+        %address.local411 = lshr i64 %address.local, 4, !dbg !58
+        %address.local412 = and i64 %address.local411, 8, !dbg !58
+        %address.local413 = or disjoint i64 %address.local410, %address.local412, !dbg !58
+        %27 = ptrtoint ptr addrspace(1) %0 to i64, !dbg !58
+    >   %.idx1402 = shl i64 %25, 8, !dbg !159
+    >   %29 = add i64 %.idx, %.idx1402, !dbg !159
+    >   %address.local417.idx = shl nuw nsw i64 %address.local416, 1, !dbg !159
+    >   %30 = or disjoint i64 %29, %address.local417.idx, !dbg !159
+    >   %dma.buffer.offset1399 = trunc i64 %30 to i32, !dbg !159
+    <   %.idx1399 = or disjoint i64 %25, %address.local413, !dbg !58
+    <   %.idx1399.tr = trunc i64 %.idx1399 to i32, !dbg !58
+    <   %dma.buffer.offset1396 = shl i32 %.idx1399.tr, 1, !dbg !58
+        %28 = insertelement <2 x i64> poison, i64 %27, i64 0, !dbg !58
+        %29 = bitcast <2 x i64> %28 to <4 x i32>, !dbg !58
+        %dma.buffer.rsrc1397 = shufflevector <4 x i32> %29, <4 x i32> <i32 poison, i32 poison, i32 33554432, i32 131072>, <4 x i32> <i32 0, i32 1, i32 6, i32 7>, !dbg !58
+        %dma.buffer.lds1398 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %26), !dbg !58
+    >   %33 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1401, i32 %dma.buffer.offset1399, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %30 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1398, i32 %dma.buffer.offset1396, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        %address.local415 = or disjoint i64 %address.local, 256, !dbg !58
+        %address.local416 = shl nuw nsw i64 %address.local415, 3, !dbg !58
+        %address.local417 = and i64 %address.local416, 3584, !dbg !58
+        %address.local418 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local417, !dbg !58
+        %address.local419 = ptrtoint ptr addrspace(3) %address.local418 to i64, !dbg !58
+        %address.local420 = trunc i64 %address.local419 to i32, !dbg !58
+        %31 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %address.local420), !dbg !58
+        %address.local423 = lshr i64 %address.local415, 4, !dbg !58
+        %address.local424 = and i64 %address.local423, 24, !dbg !58
+        %address.local425 = or disjoint i64 %address.local410, %address.local424, !dbg !58
+    >   %address.local429.idx = shl nuw nsw i64 %address.local428, 1, !dbg !159
+    >   %35 = or disjoint i64 %29, %address.local429.idx, !dbg !159
+    >   %dma.buffer.offset1396 = trunc i64 %35 to i32, !dbg !159
+    <   %.idx1400 = or disjoint i64 %25, %address.local425, !dbg !58
+    <   %.idx1400.tr = trunc i64 %.idx1400 to i32, !dbg !58
+    <   %dma.buffer.offset1393 = shl i32 %.idx1400.tr, 1, !dbg !58
+        %dma.buffer.lds1395 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %31), !dbg !58
+    >   %36 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1398, i32 %dma.buffer.offset1396, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %32 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1395, i32 %dma.buffer.offset1393, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #10, !dbg !58
+        fence syncscope("workgroup") release, !dbg !58
+        call void @llvm.amdgcn.s.barrier(), !dbg !58
+        fence syncscope("workgroup") acquire, !dbg !58
+    >   %37 = shl nuw nsw i64 %22, 19, !dbg !159
+    >   %38 = add i64 %37, %26, !dbg !159
+        %address.local427 = getelementptr [2 x i8], ptr addrspace(3) getelementptr inbounds nuw (i8, ptr addrspace(3) @shm_0, i64 8192), i64 %address.local405, !dbg !58
+        %address.local428 = ptrtoint ptr addrspace(3) %address.local427 to i64, !dbg !58
+        %address.local429 = trunc i64 %address.local428 to i32, !dbg !58
+        %33 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %address.local429), !dbg !58
+    >   %40 = or disjoint i64 %38, 32, !dbg !159
+    >   %41 = or disjoint i64 %address.local416, %40, !dbg !159
+    >   %.tr = trunc i64 %41 to i32, !dbg !159
+    >   %dma.buffer.offset1393 = shl i32 %.tr, 1, !dbg !159
+    <   %34 = or disjoint i64 %25, 32, !dbg !58
+    <   %35 = or disjoint i64 %address.local413, %34, !dbg !58
+    <   %.tr = trunc i64 %35 to i32, !dbg !58
+    <   %dma.buffer.offset1390 = shl i32 %.tr, 1, !dbg !58
+        %dma.buffer.lds1392 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %33), !dbg !58
+    >   %42 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1395, i32 %dma.buffer.offset1393, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %36 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1392, i32 %dma.buffer.offset1390, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        %address.local431 = getelementptr [2 x i8], ptr addrspace(3) getelementptr inbounds nuw (i8, ptr addrspace(3) @shm_0, i64 8192), i64 %address.local417, !dbg !58
+        %address.local432 = ptrtoint ptr addrspace(3) %address.local431 to i64, !dbg !58
+        %address.local433 = trunc i64 %address.local432 to i32, !dbg !58
+        %37 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %address.local433), !dbg !58
+    >   %44 = or disjoint i64 %address.local428, %40, !dbg !159
+    >   %.tr1406 = trunc i64 %44 to i32, !dbg !159
+    >   %dma.buffer.offset1390 = shl i32 %.tr1406, 1, !dbg !159
+    <   %38 = or disjoint i64 %address.local425, %34, !dbg !58
+    <   %.tr1401 = trunc i64 %38 to i32, !dbg !58
+    <   %dma.buffer.offset1387 = shl i32 %.tr1401, 1, !dbg !58
+        %dma.buffer.lds1389 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %37), !dbg !58
+    >   %45 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1392, i32 %dma.buffer.offset1390, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %39 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1389, i32 %dma.buffer.offset1387, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        %address.local435 = lshr i32 %address.thread, 2, !dbg !59
+        %address.local436 = and i32 %address.local435, 4, !dbg !59
+        %address.local437 = shl nuw nsw i32 %address.thread, 1, !dbg !59
+        %address.local438 = and i32 %address.local437, 384, !dbg !59
+        %address.local439 = or disjoint i32 %address.local436, %address.local438, !dbg !59
+        %address.local440 = shl nuw nsw i32 %address.thread, 3, !dbg !59
+        %address.local441 = and i32 %address.local440, 120, !dbg !59
+        %address.local442 = or disjoint i32 %address.local439, %address.local441, !dbg !59
+        %address.local443 = shl nuw nsw i32 %address.thread, 5, !dbg !59
+        %address.local444 = and i32 %address.local443, 1024, !dbg !59
+        %address.local445 = or disjoint i32 %address.local442, %address.local444, !dbg !59
+        %address.local446 = zext nneg i32 %address.local445 to i64, !dbg !59
+        %address.local447 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %address.local446, !dbg !59
+        %40 = load <4 x half>, ptr addrspace(3) %address.local447, align 8, !dbg !59
+        %lds.const.gep = getelementptr i8, ptr addrspace(3) %address.local447, i64 4096, !dbg !59
+        %41 = load <4 x half>, ptr addrspace(3) %lds.const.gep, align 8, !dbg !59
+        %42 = fmul <4 x half> %40, splat (half 1.275630e-01), !dbg !59
+        %lds.const.gep1197 = getelementptr i8, ptr addrspace(3) %address.local447, i64 1024, !dbg !59
+        %43 = load <4 x half>, ptr addrspace(3) %lds.const.gep1197, align 8, !dbg !59
+        %44 = fmul <4 x half> %41, splat (half 1.275630e-01), !dbg !59
+        %lds.const.gep1198 = getelementptr i8, ptr addrspace(3) %address.local447, i64 5120, !dbg !59
+        %45 = load <4 x half>, ptr addrspace(3) %lds.const.gep1198, align 8, !dbg !59
+        %46 = fmul <4 x half> %43, splat (half 1.275630e-01), !dbg !59
+        %47 = fmul <4 x half> %45, splat (half 1.275630e-01), !dbg !59
+        call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #10, !dbg !58
+        fence syncscope("workgroup") release, !dbg !58
+        call void @llvm.amdgcn.s.barrier(), !dbg !58
+        fence syncscope("workgroup") acquire, !dbg !58
+    >   %54 = or disjoint i64 %38, 64, !dbg !159
+    >   %55 = or disjoint i64 %address.local416, %54, !dbg !159
+    >   %.tr1408 = trunc i64 %55 to i32, !dbg !159
+    >   %dma.buffer.offset1387 = shl i32 %.tr1408, 1, !dbg !159
+    >   %56 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1401, i32 %dma.buffer.offset1387, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    >   %57 = or disjoint i64 %address.local428, %54, !dbg !159
+    >   %.tr1410 = trunc i64 %57 to i32, !dbg !159
+    >   %dma.buffer.offset1384 = shl i32 %.tr1410, 1, !dbg !159
+    >   %58 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1398, i32 %dma.buffer.offset1384, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %48 = or disjoint i64 %25, 64, !dbg !58
+    <   %49 = or disjoint i64 %address.local413, %48, !dbg !58
+    <   %.tr1402 = trunc i64 %49 to i32, !dbg !58
+    <   %dma.buffer.offset1384 = shl i32 %.tr1402, 1, !dbg !58
+    <   %50 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1398, i32 %dma.buffer.offset1384, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+    <   %51 = or disjoint i64 %address.local425, %48, !dbg !58
+    <   %.tr1403 = trunc i64 %51 to i32, !dbg !58
+    <   %dma.buffer.offset1381 = shl i32 %.tr1403, 1, !dbg !58
+    <   %52 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1395, i32 %dma.buffer.offset1381, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        %lds.const.gep1199 = getelementptr i8, ptr addrspace(3) %address.local447, i64 8192, !dbg !59
+        %53 = load <4 x half>, ptr addrspace(3) %lds.const.gep1199, align 8, !dbg !59
+        %lds.const.gep1200 = getelementptr i8, ptr addrspace(3) %address.local447, i64 12288, !dbg !59
+        %54 = load <4 x half>, ptr addrspace(3) %lds.const.gep1200, align 8, !dbg !59
+        %lds.const.gep1201 = getelementptr i8, ptr addrspace(3) %address.local447, i64 9216, !dbg !59
+        %55 = load <4 x half>, ptr addrspace(3) %lds.const.gep1201, align 8, !dbg !59
+        %56 = fmul <4 x half> %53, splat (half 1.275630e-01), !dbg !59
+        %lds.const.gep1202 = getelementptr i8, ptr addrspace(3) %address.local447, i64 13312, !dbg !59
+        %57 = load <4 x half>, ptr addrspace(3) %lds.const.gep1202, align 8, !dbg !59
+        %58 = fmul <4 x half> %54, splat (half 1.275630e-01), !dbg !59
+        %59 = fmul <4 x half> %55, splat (half 1.275630e-01), !dbg !59
+        %60 = fmul <4 x half> %57, splat (half 1.275630e-01), !dbg !59
+        call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #10, !dbg !58
+        fence syncscope("workgroup") release, !dbg !58
+        call void @llvm.amdgcn.s.barrier(), !dbg !58
+        fence syncscope("workgroup") acquire, !dbg !58
+    >   %67 = or disjoint i64 %38, 96, !dbg !159
+    >   %68 = or disjoint i64 %address.local416, %67, !dbg !159
+    >   %.tr1412 = trunc i64 %68 to i32, !dbg !159
+    >   %dma.buffer.offset1381 = shl i32 %.tr1412, 1, !dbg !159
+    >   %69 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1395, i32 %dma.buffer.offset1381, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    >   %70 = or disjoint i64 %address.local428, %67, !dbg !159
+    >   %.tr1414 = trunc i64 %70 to i32, !dbg !159
+    >   %dma.buffer.offset1378 = shl i32 %.tr1414, 1, !dbg !159
+    >   %71 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1392, i32 %dma.buffer.offset1378, <4 x i32> %dma.buffer.rsrc1400) #10, !dbg !159
+    <   %61 = or disjoint i64 %25, 96, !dbg !58
+    <   %62 = or disjoint i64 %address.local413, %61, !dbg !58
+    <   %.tr1404 = trunc i64 %62 to i32, !dbg !58
+    <   %dma.buffer.offset1378 = shl i32 %.tr1404, 1, !dbg !58
+    <   %63 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1392, i32 %dma.buffer.offset1378, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+    <   %64 = or disjoint i64 %address.local425, %61, !dbg !58
+    <   %.tr1405 = trunc i64 %64 to i32, !dbg !58
+    <   %dma.buffer.offset1375 = shl i32 %.tr1405, 1, !dbg !58
+    <   %65 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx4 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %dma.buffer.lds1389, i32 %dma.buffer.offset1375, <4 x i32> %dma.buffer.rsrc1397) #10, !dbg !58
+        %66 = load <4 x half>, ptr addrspace(3) %address.local447, align 8, !dbg !59
+        %67 = load <4 x half>, ptr addrspace(3) %lds.const.gep, align 8, !dbg !59
+        %68 = load <4 x half>, ptr addrspace(3) %lds.const.gep1197, align 8, !dbg !59
+        %69 = fmul <4 x half> %66, splat (half 1.275630e-01), !dbg !59
+        %70 = load <4 x half>, ptr addrspace(3) %lds.const.gep1198, align 8, !dbg !59
+        %71 = fmul <4 x half> %67, splat (half 1.275630e-01), !dbg !59
+        %72 = fmul <4 x half> %68, splat (half 1.275630e-01), !dbg !59
+        %73 = fmul <4 x half> %70, splat (half 1.275630e-01), !dbg !59
+        call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"() #10, !dbg !58
+        fence syncscope("workgroup") release, !dbg !58
+        call void @llvm.amdgcn.s.barrier(), !dbg !58
+        fence syncscope("workgroup") acquire, !dbg !58
+        %74 = load <4 x half>, ptr addrspace(3) %lds.const.gep1199, align 8, !dbg !59
+        %75 = load <4 x half>, ptr addrspace(3) %lds.const.gep1200, align 8, !dbg !59
+        %76 = load <4 x half>, ptr addrspace(3) %lds.const.gep1201, align 8, !dbg !59
+        %77 = fmul <4 x half> %74, splat (half 1.275630e-01), !dbg !59
+        %78 = load <4 x half>, ptr addrspace(3) %lds.const.gep1202, align 8, !dbg !59
+        %79 = fmul <4 x half> %75, splat (half 1.275630e-01), !dbg !59
+        %80 = fmul <4 x half> %76, splat (half 1.275630e-01), !dbg !59
+        %81 = fmul <4 x half> %78, splat (half 1.275630e-01), !dbg !59
+        fence syncscope("workgroup") release, !dbg !57
+        call void @llvm.amdgcn.s.barrier(), !dbg !57
+        fence syncscope("workgroup") acquire, !dbg !57
+    >   %88 = shl nuw nsw i64 %17, 12, !dbg !161
+    >   %89 = shl nsw i64 %19, 17, !dbg !161
+        %82 = shl nuw nsw i32 %kdma.tid, 2, !dbg !62
+        %83 = and i32 %82, 3084, !dbg !62
+        %84 = and i32 %kdma.tid, 1, !dbg !62
+        %85 = or disjoint i32 %83, %84, !dbg !62
+        %narrow = add nuw nsw i32 %85, 1, !dbg !62
+        %86 = lshr i32 %narrow, 1, !dbg !62
+        %87 = zext nneg i32 %86 to i64, !dbg !62
+        %k0.prime.address.thread498 = call i32 asm sideeffect "", "=v,0"(i32 %kdma.tid) #9, !dbg !60, !range !79, !frisk.register_lifetimes !52
+        %k0.prime.address.local499 = zext nneg i32 %k0.prime.address.thread498 to i64, !dbg !58
+        %k0.prime.address.local500 = shl nuw nsw i64 %k0.prime.address.local499, 3, !dbg !58
+        %k0.prime.address.local501 = and i64 %k0.prime.address.local500, 1536, !dbg !58
+        %k0.prime.address.local502 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %k0.prime.address.local501, !dbg !58
+        %k0.prime.address.local503 = ptrtoint ptr addrspace(3) %k0.prime.address.local502 to i64, !dbg !58
+        %k0.prime.address.local504 = trunc i64 %k0.prime.address.local503 to i32, !dbg !58
+        %k0.prime. = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %k0.prime.address.local504), !dbg !60
+        %k0.prime.dma.buffer.lds1374 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %k0.prime.), !dbg !60
+    >   %k0.prime.2007 = shl nuw nsw i64 %17, 19, !dbg !161
+    <   %k0.prime.1963 = shl i64 %13, 19, !dbg !60
+    <   %k0.prime.1964 = and i64 %k0.prime.1963, 16252928, !dbg !60
+        %k0.prime.1965 = shl nuw nsw i64 0, 14, !dbg !60
+    >   %k0.prime.2009 = or disjoint i64 %k0.prime.2007, %k0.prime.2008, !dbg !161
+    <   %k0.prime.1966 = or disjoint i64 %k0.prime.1964, %k0.prime.1965, !dbg !60
+        %k0.prime.kdma.source = zext nneg i32 %kdma.owner to i64, !dbg !60
+        %k0.prime.kdma.source1506 = lshr i64 %k0.prime.kdma.source, 4, !dbg !60
+        %k0.prime.kdma.source1507 = and i64 %k0.prime.kdma.source1506, 8, !dbg !60
+        %k0.prime.kdma.source1508 = and i64 %k0.prime.kdma.source, 91, !dbg !60
+        %k0.prime.kdma.source1509 = lshr i64 %k0.prime.kdma.source, 2, !dbg !60
+        %k0.prime.kdma.source1510 = and i64 %k0.prime.kdma.source1509, 4, !dbg !60
+        %k0.prime.kdma.source1511 = add nuw nsw i64 %k0.prime.kdma.source1510, %k0.prime.kdma.source, !dbg !60
+        %k0.prime.kdma.source1512 = and i64 %k0.prime.kdma.source1511, 4, !dbg !60
+        %k0.prime.kdma.source1513 = or disjoint i64 %k0.prime.kdma.source1508, %k0.prime.kdma.source1512, !dbg !60
+        %k0.prime.kdma.source1514 = shl nuw nsw i64 %k0.prime.kdma.source1513, 7, !dbg !60
+        %k0.prime.kdma.source1515 = or disjoint i64 %k0.prime.kdma.source1507, %k0.prime.kdma.source1514, !dbg !60
+    >   %k0.prime.kdma.source1536 = or disjoint i64 %k0.prime.2009, %k0.prime.kdma.source1535, !dbg !161
+    >   %k0.prime.kdma.source1537 = trunc nuw i64 %k0.prime.kdma.source1536 to i32, !dbg !161
+    >   %k0.prime.kdma.source1538 = shl nuw nsw i32 %k0.prime.kdma.source1537, 1, !dbg !161
+    >   %k0.prime.kdma.offset = or disjoint i32 %k0.prime.kdma.source1538, %kdma.intra, !dbg !161
+    <   %k0.prime.kdma.source1516 = or disjoint i64 %k0.prime.1966, %k0.prime.kdma.source1515, !dbg !60
+    <   %k0.prime.kdma.source1517 = trunc nuw i64 %k0.prime.kdma.source1516 to i32, !dbg !60
+    <   %k0.prime.kdma.source1518 = shl nuw nsw i32 %k0.prime.kdma.source1517, 1, !dbg !60
+    <   %k0.prime.kdma.offset = or disjoint i32 %k0.prime.kdma.source1518, %kdma.intra, !dbg !60
+        %k0.prime.1967 = ptrtoint ptr addrspace(1) %1 to i64, !dbg !60
+        %k0.prime.1968 = insertelement <2 x i64> poison, i64 %k0.prime.1967, i64 0, !dbg !60
+        %k0.prime.1969 = bitcast <2 x i64> %k0.prime.1968 to <4 x i32>, !dbg !60
+        %k0.prime.dma.buffer.rsrc1373 = shufflevector <4 x i32> %k0.prime.1969, <4 x i32> <i32 poison, i32 poison, i32 33554432, i32 131072>, <4 x i32> <i32 0, i32 1, i32 6, i32 7>, !dbg !60
+    >   %k0.prime.2013 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.dma.buffer.lds1377, i32 %k0.prime.kdma.offset, <4 x i32> %k0.prime.dma.buffer.rsrc1376) #10, !dbg !161, !frisk.cross_bn_k0 !52
+    <   %k0.prime.1970 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.dma.buffer.lds1374, i32 %k0.prime.kdma.offset, <4 x i32> %k0.prime.dma.buffer.rsrc1373) #10, !dbg !60, !frisk.cross_bn_k0 !52
+        %k0.prime.kdma.lds1534 = add i32 %k0.prime.dma.buffer.lds1374, 512, !dbg !60
+        %k0.prime.kdma.source1519 = zext nneg i32 %kdma.owner.hi to i64, !dbg !60
+        %k0.prime.kdma.source1520 = lshr i64 %k0.prime.kdma.source1519, 4, !dbg !60
+        %k0.prime.kdma.source1521 = and i64 %k0.prime.kdma.source1520, 8, !dbg !60
+        %k0.prime.kdma.source1522 = and i64 %k0.prime.kdma.source1519, 123, !dbg !60
+        %k0.prime.kdma.source1523 = lshr i64 %k0.prime.kdma.source1519, 2, !dbg !60
+        %k0.prime.kdma.source1524 = and i64 %k0.prime.kdma.source1523, 4, !dbg !60
+        %k0.prime.kdma.source1525 = add nuw nsw i64 %k0.prime.kdma.source1524, %k0.prime.kdma.source1519, !dbg !60
+        %k0.prime.kdma.source1526 = and i64 %k0.prime.kdma.source1525, 4, !dbg !60
+        %k0.prime.kdma.source1527 = or disjoint i64 %k0.prime.kdma.source1522, %k0.prime.kdma.source1526, !dbg !60
+        %k0.prime.kdma.source1528 = shl nuw nsw i64 %k0.prime.kdma.source1527, 7, !dbg !60
+        %k0.prime.kdma.source1529 = or disjoint i64 %k0.prime.kdma.source1521, %k0.prime.kdma.source1528, !dbg !60
+    >   %k0.prime.kdma.source1550 = or disjoint i64 %k0.prime.2009, %k0.prime.kdma.source1549, !dbg !161
+    >   %k0.prime.kdma.source1551 = trunc nuw i64 %k0.prime.kdma.source1550 to i32, !dbg !161
+    >   %k0.prime.kdma.source1552 = shl nuw nsw i32 %k0.prime.kdma.source1551, 1, !dbg !161
+    >   %k0.prime.kdma.offset1553 = or disjoint i32 %k0.prime.kdma.source1552, %kdma.intra.hi, !dbg !161
+    >   %k0.prime.2014 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.kdma.lds1554, i32 %k0.prime.kdma.offset1553, <4 x i32> %k0.prime.dma.buffer.rsrc1376) #10, !dbg !161, !frisk.cross_bn_k0 !52
+    <   %k0.prime.kdma.source1530 = or disjoint i64 %k0.prime.1966, %k0.prime.kdma.source1529, !dbg !60
+    <   %k0.prime.kdma.source1531 = trunc nuw i64 %k0.prime.kdma.source1530 to i32, !dbg !60
+    <   %k0.prime.kdma.source1532 = shl nuw nsw i32 %k0.prime.kdma.source1531, 1, !dbg !60
+    <   %k0.prime.kdma.offset1533 = or disjoint i32 %k0.prime.kdma.source1532, %kdma.intra.hi, !dbg !60
+    <   %k0.prime.1971 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.kdma.lds1534, i32 %k0.prime.kdma.offset1533, <4 x i32> %k0.prime.dma.buffer.rsrc1373) #10, !dbg !60, !frisk.cross_bn_k0 !52
+        %k0.prime.address.local516 = or disjoint i64 %k0.prime.address.local499, 256, !dbg !58
+        %k0.prime.address.local517 = shl nuw nsw i64 %k0.prime.address.local516, 3, !dbg !58
+        %k0.prime.address.local518 = and i64 %k0.prime.address.local517, 3584, !dbg !58
+        %k0.prime.address.local519 = getelementptr [2 x i8], ptr addrspace(3) @shm_0, i64 %k0.prime.address.local518, !dbg !58
+        %k0.prime.address.local520 = ptrtoint ptr addrspace(3) %k0.prime.address.local519 to i64, !dbg !58
+        %k0.prime.address.local521 = trunc i64 %k0.prime.address.local520 to i32, !dbg !58
+        %k0.prime.1972 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %k0.prime.address.local521), !dbg !60
+        %k0.prime.dma.buffer.lds1371 = call i32 @llvm.amdgcn.readfirstlane.i32(i32 %k0.prime.1972), !dbg !60
+        %k0.prime.kdma.source1546 = or disjoint i64 %k0.prime.kdma.source1515, 16, !dbg !60
+    >   %k0.prime.kdma.source1567 = or disjoint i64 %k0.prime.2009, %k0.prime.kdma.source1566, !dbg !161
+    >   %k0.prime.kdma.source1568 = trunc nuw i64 %k0.prime.kdma.source1567 to i32, !dbg !161
+    >   %k0.prime.kdma.source1569 = shl nuw nsw i32 %k0.prime.kdma.source1568, 1, !dbg !161
+    >   %k0.prime.kdma.offset1570 = or disjoint i32 %k0.prime.kdma.source1569, %kdma.intra, !dbg !161
+    >   %k0.prime.2016 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.dma.buffer.lds1374, i32 %k0.prime.kdma.offset1570, <4 x i32> %k0.prime.dma.buffer.rsrc1376) #10, !dbg !161, !frisk.cross_bn_k0 !52
+    <   %k0.prime.kdma.source1547 = or disjoint i64 %k0.prime.1966, %k0.prime.kdma.source1546, !dbg !60
+    <   %k0.prime.kdma.source1548 = trunc nuw i64 %k0.prime.kdma.source1547 to i32, !dbg !60
+    <   %k0.prime.kdma.source1549 = shl nuw nsw i32 %k0.prime.kdma.source1548, 1, !dbg !60
+    <   %k0.prime.kdma.offset1550 = or disjoint i32 %k0.prime.kdma.source1549, %kdma.intra, !dbg !60
+    <   %k0.prime.1973 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.dma.buffer.lds1371, i32 %k0.prime.kdma.offset1550, <4 x i32> %k0.prime.dma.buffer.rsrc1373) #10, !dbg !60, !frisk.cross_bn_k0 !52
+        %k0.prime.kdma.lds1568 = add i32 %k0.prime.dma.buffer.lds1371, 512, !dbg !60
+        %k0.prime.kdma.source1563 = or disjoint i64 %k0.prime.kdma.source1529, 16, !dbg !60
+    >   %k0.prime.kdma.source1584 = or disjoint i64 %k0.prime.2009, %k0.prime.kdma.source1583, !dbg !161
+    >   %k0.prime.kdma.source1585 = trunc nuw i64 %k0.prime.kdma.source1584 to i32, !dbg !161
+    >   %k0.prime.kdma.source1586 = shl nuw nsw i32 %k0.prime.kdma.source1585, 1, !dbg !161
+    >   %k0.prime.kdma.offset1587 = or disjoint i32 %k0.prime.kdma.source1586, %kdma.intra.hi, !dbg !161
+    >   %k0.prime.2017 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.kdma.lds1588, i32 %k0.prime.kdma.offset1587, <4 x i32> %k0.prime.dma.buffer.rsrc1376) #10, !dbg !161, !frisk.cross_bn_k0 !52
+    <   %k0.prime.kdma.source1564 = or disjoint i64 %k0.prime.1966, %k0.prime.kdma.source1563, !dbg !60
+    <   %k0.prime.kdma.source1565 = trunc nuw i64 %k0.prime.kdma.source1564 to i32, !dbg !60
+    <   %k0.prime.kdma.source1566 = shl nuw nsw i32 %k0.prime.kdma.source1565, 1, !dbg !60
+    <   %k0.prime.kdma.offset1567 = or disjoint i32 %k0.prime.kdma.source1566, %kdma.intra.hi, !dbg !60
+    <   %k0.prime.1974 = call i32 asm sideeffect "s_mov_b32 $0, $1\0A\09buffer_load_dwordx2 $2, $3, 0 offen lds", "={m0},s,v,s,~{memory}"(i32 %k0.prime.kdma.lds1568, i32 %k0.prime.kdma.offset1567, <4 x i32> %k0.prime.dma.buffer.rsrc1373) #10, !dbg !60, !frisk.cross_bn_k0 !52

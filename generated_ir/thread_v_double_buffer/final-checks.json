@@ -1,0 +1,14 @@
+{
+  "causal": {
+    "serialized_thread_pass_verified_and_idempotent": true,
+    "final_artifacts_match_numerically_validated_hashes": true,
+    "final_compiler_hash_matches": true,
+    "static_LDS_bytes": 16384
+  },
+  "noncausal": {
+    "serialized_thread_pass_verified_and_idempotent": true,
+    "final_artifacts_match_numerically_validated_hashes": true,
+    "final_compiler_hash_matches": true,
+    "static_LDS_bytes": 16384
+  }
+}

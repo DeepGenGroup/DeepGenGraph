@@ -1,0 +1,15 @@
+{
+  "unit": "passed",
+  "planning": "passed",
+  "dma_execution": "passed",
+  "dma_export": "passed",
+  "packing": "passed",
+  "async": "passed",
+  "double_buffer": "passed",
+  "softmax_fragments": "passed",
+  "swizzle": "passed",
+  "thread_tiling": "passed",
+  "ShmDataIOTest": "passed",
+  "LowerInfoInferenceTest": "passed",
+  "LowerInfoLayoutTest": "passed"
+}

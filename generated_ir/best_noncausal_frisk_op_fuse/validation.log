@@ -1,0 +1,4 @@
+PASS {"file": "kernel.ll", "case": "random", "head": 0, "query": 0, "sha256": "2f07224431845bb34123202b9f50fc8466adc8074d25122dbd675c642fb43b11", "max_abs_error": 0.0001285402867657881, "mmac_count": 8192, "dma64_count": 512}
+PASS {"file": "kernel.ll", "case": "future_key_dominates", "head": 1, "query": 0, "sha256": "2f07224431845bb34123202b9f50fc8466adc8074d25122dbd675c642fb43b11", "max_abs_error": 4.617419446795168e-09, "mmac_count": 8192, "dma64_count": 512}
+PASS {"file": "kernel.o3.ll", "case": "random", "head": 0, "query": 0, "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2", "max_abs_error": 0.0001285402867657881, "mmac_count": 8192, "dma64_count": 512}
+PASS {"file": "kernel.o3.ll", "case": "future_key_dominates", "head": 1, "query": 0, "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2", "max_abs_error": 4.617419446795168e-09, "mmac_count": 8192, "dma64_count": 512}

@@ -1,0 +1,50 @@
+96: ---------- after simplifyPass ---------
+191: ---------- after scfForConversion ---------
+314: ---------- after createConvertKernelOpToFriskPass ---------
+903: ---------- after createConvertMemAndCalcOpPass ---------
+1014: ---------- after createFriskFuseBlockOpsPass ---------
+1125: ---------- after createConvertFriskToBasePass ---------
+1247: ---------- after frisk-op-fuse ---------
+1360: ---------- after reorder-workgroups ---------
+1485: ---------- after createNormalizeAttentionKLayoutPass ---------
+1611: ---------- after promote-gm-to-shm-async ---------
+1743: ---------- after frisk-auto-pipeline ---------
+1884: ---------- after promote-gemm-matrix-loads ---------
+2035: ----- after insertConvertLayoutOps:
+2152: ---------- after convert-friskbase-to-fragment ---------
+3094: ---- after fragment-level fuse-fragment-accumulator -----
+3823: ---- after fragment-level frisk-frag-ir-reorder -----
+4367: ---------- after frisk-simplify-loop-control ---------
+5066: ---- after frisk-retain-invariant-fragments -----
+5756: ---- after fragment-level optimization -----
+6433: ---------- after convert-fragment-to-thread ---------
+9658: ---------- after createFinalizeThreadTilingPass ---------
+11374: ---- after lower-frisk-fragments -----
+13267: ---- after threadIR legalize -----
+15340: ---- after createIRDeepOptimizePass -----
+19821: ---- after affine-scalrep -----
+23592: ---- after frisk-simplify-bounded-affine -----
+26867: ---- after frisk-approximate-thread-math -----
+30145: ---- after frisk-bypass-mask-adds -----
+33423: ---- after frisk-thread-local-reduction -----
+36701: ---- after early wave lowering -----
+40373: ---- after frisk-hoist-wave-invariants -----
+43991: ---- secondLowering done -----
+43993: ---- after llvm translateToLLVM -----
+50212: ---- after llvm optimizeRegisterMath -----
+53132: ---- after llvm deferLaneSums -----
+56070: ---- after llvm prefetchGlobalPackets -----
+59010: ---- after llvm optimizeRegisterLifetimes -----
+61975: ---- after llvm canonicalizeLDSGEPs -----
+64672: ---- after llvm lowerAsyncDMA -----
+67619: ---- after llvm fuseMMACAccumulators -----
+70408: ---- after llvm interleavePVAccumulators -----
+73458: ---- after llvm doubleBufferV -----
+76562: ---- after llvm narrowKDMA -----
+79972: ---- after llvm prefetchPairedLDS -----
+82749: ---- after llvm scheduleSoftmaxFragments -----
+85542: ---- after llvm prefetchPairedLDSTail -----
+88345: ---- after llvm prefetchNextK -----
+91322: ---- after llvm elideBackedgeBarrier -----
+94296: ---- after llvm lazySoftmaxBase -----
+97368: ---- after llvm softmaxCvtPack -----

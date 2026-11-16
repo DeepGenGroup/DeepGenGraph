@@ -1,0 +1,75 @@
+{
+  "scope": "BHSD=1,32,4096,128; BM=BN=128; QK/VO=32; layout=3.4",
+  "model": "32 banks, 4B words, 16 consecutive lanes/b64 phase, broadcast deduplicated",
+  "searched_configs": 219,
+  "source_target_bits": [
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "note": "Address sweep; only baseline and winner compiled. Bits >=13 cannot improve intra-8KiB bank distribution.",
+  "baseline": {
+    "2": 64
+  },
+  "winner": {
+    "1": 64
+  },
+  "winners": [
+    {
+      "swizzle_k": "7:9",
+      "k_dma": "64-swizzle",
+      "max_multiplicity": 1,
+      "site_histogram": {
+        "1": 64
+      }
+    }
+  ],
+  "first_16_baseline": [
+    0,
+    64,
+    128,
+    192,
+    16,
+    80,
+    144,
+    208,
+    32,
+    96,
+    160,
+    224,
+    48,
+    112,
+    176,
+    240
+  ],
+  "first_16_winner": [
+    0,
+    64,
+    648,
+    712,
+    16,
+    80,
+    664,
+    728,
+    32,
+    96,
+    680,
+    744,
+    48,
+    112,
+    696,
+    760
+  ],
+  "emitted_addresses_match_prediction": true,
+  "gpu_tested": false,
+  "sha256": {
+    "baseline.ll": "7838a44f1c107747bca3a06c84ce8ac269b4bb5656d361e3bb5bbad3c9160a09",
+    "kernel.ll": "af3dbec90a26bd2008d7e5015f34f85f2cf005c83ffc2401fbdd8de86bf8ff46"
+  }
+}

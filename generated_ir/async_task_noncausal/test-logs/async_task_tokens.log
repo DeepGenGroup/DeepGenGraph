@@ -1,0 +1,6 @@
+PASS token type verification and text round trip
+PASS two issues to one buffer keep distinct task identities
+PASS affine/scf loop tokens, branch yields, tail waits, sync and LLVM lowering
+PASS automatic 2/3/4-stage pipelines wait on carried tasks
+PASS explicit guarded task yields, iteration carriers and completion-only storage rotation
+PASS task completion extends destination storage lifetime without readers

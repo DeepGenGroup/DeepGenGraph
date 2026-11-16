@@ -1,0 +1,162 @@
+{
+  "tests": [
+    {
+      "test": "check_async_task_tokens.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_async_task_tokens.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_async_task_tokens.log"
+    },
+    {
+      "test": "check_auto_pipeline.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_auto_pipeline.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_auto_pipeline.log"
+    },
+    {
+      "test": "check_frisk_async_copy.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_frisk_async_copy.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_frisk_async_copy.log"
+    },
+    {
+      "test": "check_sink_wait_buffer_ready.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_sink_wait_buffer_ready.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_sink_wait_buffer_ready.log"
+    },
+    {
+      "test": "check_pipeline_cleanup.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_pipeline_cleanup.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_pipeline_cleanup.log"
+    },
+    {
+      "test": "check_invariant_fragment_retention.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_invariant_fragment_retention.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_invariant_fragment_retention.log"
+    },
+    {
+      "test": "check_direct_dma_wait_motion.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_direct_dma_wait_motion.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_direct_dma_wait_motion.log"
+    },
+    {
+      "test": "check_fragment_level_passes.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_fragment_level_passes.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_fragment_level_passes.log"
+    },
+    {
+      "test": "check_full_width_dma.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_full_width_dma.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_full_width_dma.log"
+    },
+    {
+      "test": "check_async_layout_integration.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_async_layout_integration.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_async_layout_integration.log"
+    },
+    {
+      "test": "check_gemm_matrix_loads.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_gemm_matrix_loads.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_gemm_matrix_loads.log"
+    },
+    {
+      "test": "check_typed_fragments.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_typed_fragments.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_typed_fragments.log"
+    },
+    {
+      "test": "check_semantic_fragments.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_semantic_fragments.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_semantic_fragments.log"
+    },
+    {
+      "test": "check_mask_add_fusion.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_mask_add_fusion.py",
+        "3rd/deepgengraph/build/test/ThreadTilingTest"
+      ],
+      "log": "test-logs/check_mask_add_fusion.log"
+    },
+    {
+      "test": "check_wave_invariant_passes.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_wave_invariant_passes.py"
+      ],
+      "log": "test-logs/check_wave_invariant_passes.log"
+    },
+    {
+      "test": "check_cross_bn_k0.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "3rd/deepgengraph/test/check_cross_bn_k0.py"
+      ],
+      "log": "test-logs/check_cross_bn_k0.log"
+    }
+  ]
+}

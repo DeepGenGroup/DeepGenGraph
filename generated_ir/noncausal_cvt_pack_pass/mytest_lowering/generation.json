@@ -1,0 +1,216 @@
+{
+  "input": "/data2/xsl/DeepGenGraph/generated_ir/async_task_noncausal/input.mlir",
+  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_sha256": "ad09d6725086c6166e6d3d8480e493ad944dec3d553822ce9173e9cd33868334",
+  "kernel_sha256": "ab87a0f81783f68654aee9a881d11abf50ad59a01e347abc375c142590611014",
+  "o3_sha256": "271fcba3d0d7d6396a2bcd108262f40afcf76948ea1fc8a2810f7c2d82d9864d",
+  "O3_command": [
+    "/data2/xsl/install/bin/opt",
+    "-S",
+    "-passes=default<O3>,verify",
+    "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack_pass/mytest_lowering/kernel.ll",
+    "-o",
+    "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack_pass/mytest_lowering/kernel.o3.ll"
+  ],
+  "O3_verified": true,
+  "stages": [
+    {
+      "line": 96,
+      "stage": "---------- after simplifyPass ---------"
+    },
+    {
+      "line": 191,
+      "stage": "---------- after scfForConversion ---------"
+    },
+    {
+      "line": 314,
+      "stage": "---------- after createConvertKernelOpToFriskPass ---------"
+    },
+    {
+      "line": 903,
+      "stage": "---------- after createConvertMemAndCalcOpPass ---------"
+    },
+    {
+      "line": 1009,
+      "stage": "---------- after createFriskFuseBlockOpsPass ---------"
+    },
+    {
+      "line": 1115,
+      "stage": "---------- after createConvertFriskToBasePass ---------"
+    },
+    {
+      "line": 1232,
+      "stage": "---------- after reorder-workgroups ---------"
+    },
+    {
+      "line": 1361,
+      "stage": "---------- after createNormalizeAttentionKLayoutPass ---------"
+    },
+    {
+      "line": 1491,
+      "stage": "---------- after promote-gm-to-shm-async ---------"
+    },
+    {
+      "line": 1627,
+      "stage": "---------- after frisk-auto-pipeline ---------"
+    },
+    {
+      "line": 1772,
+      "stage": "---------- after promote-gemm-matrix-loads ---------"
+    },
+    {
+      "line": 2048,
+      "stage": "---------- after convert-friskbase-to-fragment ---------"
+    },
+    {
+      "line": 3054,
+      "stage": "---- after fragment-level fuse-fragment-accumulator -----"
+    },
+    {
+      "line": 3827,
+      "stage": "---- after fragment-level frisk-frag-ir-reorder -----"
+    },
+    {
+      "line": 4361,
+      "stage": "---------- after frisk-simplify-loop-control ---------"
+    },
+    {
+      "line": 5034,
+      "stage": "---- after frisk-retain-invariant-fragments -----"
+    },
+    {
+      "line": 5690,
+      "stage": "---- after fragment-level optimization -----"
+    },
+    {
+      "line": 6333,
+      "stage": "---------- after convert-fragment-to-thread ---------"
+    },
+    {
+      "line": 9431,
+      "stage": "---------- after createFinalizeThreadTilingPass ---------"
+    },
+    {
+      "line": 11079,
+      "stage": "---- after lower-frisk-fragments -----"
+    },
+    {
+      "line": 12897,
+      "stage": "---- after threadIR legalize -----"
+    },
+    {
+      "line": 14900,
+      "stage": "---- after createIRDeepOptimizePass -----"
+    },
+    {
+      "line": 19381,
+      "stage": "---- after affine-scalrep -----"
+    },
+    {
+      "line": 23152,
+      "stage": "---- after frisk-simplify-bounded-affine -----"
+    },
+    {
+      "line": 26427,
+      "stage": "---- secondLowering done -----"
+    },
+    {
+      "line": 26430,
+      "stage": "---- after frisk-hoist-wave-invariants -----"
+    },
+    {
+      "line": 32555,
+      "stage": "---- after llvm translateToLLVM -----"
+    },
+    {
+      "line": 38717,
+      "stage": "---- after llvm optimizeRegisterMath -----"
+    },
+    {
+      "line": 41610,
+      "stage": "---- after llvm bypassMaskAdds -----"
+    },
+    {
+      "line": 44503,
+      "stage": "---- after llvm optimizeLocalReductions -----"
+    },
+    {
+      "line": 47396,
+      "stage": "---- after llvm deferLaneSums -----"
+    },
+    {
+      "line": 50307,
+      "stage": "---- after llvm prefetchGlobalPackets -----"
+    },
+    {
+      "line": 53220,
+      "stage": "---- after llvm optimizeRegisterLifetimes -----"
+    },
+    {
+      "line": 56175,
+      "stage": "---- after llvm canonicalizeLDSGEPs -----"
+    },
+    {
+      "line": 58862,
+      "stage": "---- after llvm lowerAsyncDMA -----"
+    },
+    {
+      "line": 61799,
+      "stage": "---- after llvm fuseMMACAccumulators -----"
+    },
+    {
+      "line": 64579,
+      "stage": "---- after llvm interleavePVAccumulators -----"
+    },
+    {
+      "line": 67620,
+      "stage": "---- after llvm doubleBufferV -----"
+    },
+    {
+      "line": 70715,
+      "stage": "---- after llvm narrowKDMA -----"
+    },
+    {
+      "line": 74025,
+      "stage": "---- after llvm prefetchPairedLDS -----"
+    },
+    {
+      "line": 76786,
+      "stage": "---- after llvm scheduleSoftmaxFragments -----"
+    },
+    {
+      "line": 79563,
+      "stage": "---- after llvm prefetchPairedLDSTail -----"
+    },
+    {
+      "line": 82350,
+      "stage": "---- after llvm prefetchNextK -----"
+    },
+    {
+      "line": 85280,
+      "stage": "---- after llvm elideBackedgeBarrier -----"
+    },
+    {
+      "line": 88207,
+      "stage": "---- after llvm lazySoftmaxBase -----"
+    },
+    {
+      "line": 91232,
+      "stage": "---- after llvm softmaxCvtPack -----"
+    }
+  ],
+  "diagnostics": [
+    {
+      "line": 88205,
+      "message": "Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=8.000000e+00, function=Attn_p2"
+    },
+    {
+      "line": 91230,
+      "message": "Softmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2"
+    }
+  ],
+  "compared_with": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cvt_pack_pass/pass_pk_rtz.o3.ll",
+  "identical_except_module_id": false,
+  "gpu_tested": false
+}

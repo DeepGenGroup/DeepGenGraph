@@ -1,0 +1,25 @@
+PASS CPU producer/consumer packing 7x32, stride=4, pair=16
+PASS CPU producer/consumer packing 11x64, stride=2, pair=8
+PASS CPU producer/consumer packing 16x64, stride=8, pair=16
+PASS CPU 12x7, pack=2, every coordinate and multiple consumers
+PASS CPU 16x11, pack=4, every coordinate and multiple consumers
+PASS CPU column packing: rectangular shapes, all coordinates, reads after writes, invalid axis fallback
+PASS fallback nondivisible
+PASS fallback unmarked
+PASS fallback global
+PASS fallback escaped
+PASS fallback view
+PASS CPU paired K layout, all coordinates and invalid stride fallback
+PASS CPU packet column permutation, every coordinate including group boundaries
+PASS standalone GEMM 32x32x16, 64 threads, wide reads/writes and disable option
+PASS standalone GEMM 64x48x32, 128 threads, wide reads/writes and disable option
+PASS standalone GEMM 32x128x32, 64 threads, wide reads/writes and disable option
+PASS computed GEMM/cast/GEMM 32x32x32x64, 64 threads: automatic planning and fallback
+PASS computed GEMM/cast/GEMM 64x64x32x32, 128 threads: automatic planning and fallback
+PASS computed GEMM/cast/GEMM 32x64x64x32, 128 threads: automatic planning and fallback
+PASS computed GEMM/cast/GEMM 32x32x16x32, 64 threads: automatic planning and fallback
+PASS standalone GEMM A/B 32x32x16: global/shared producers, disable and escape fallback
+PASS standalone GEMM A/B 64x48x32: global/shared producers, disable and escape fallback
+PASS standalone GEMM A/B 32x128x64: global/shared producers, disable and escape fallback
+PASS multiple A/B consumers jointly share proven physical layouts without extra storage
+PASS shared B with two GEMM consumers; unknown consumer disables automatic packing

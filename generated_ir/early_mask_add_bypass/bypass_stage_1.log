@@ -1,0 +1,2 @@
+Mask add bypass lowering: function=Attn_p2, mode=approx, groups=1, elements=16, reason=bypassed
+Fragment -> thread: 2 loads, 3 stores, 22 extracts, 18 inserts, 2 GEMMs, 7 elementwise ops

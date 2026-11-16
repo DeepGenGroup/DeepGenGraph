@@ -1,0 +1,95 @@
+{
+  "tests": [
+    {
+      "test": "check_fragment_async_liveness.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_fragment_async_liveness.py"
+      ],
+      "log": "test-logs/fragment_async_liveness.log"
+    },
+    {
+      "test": "check_shm_liveness.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_shm_liveness.py"
+      ],
+      "log": "test-logs/shm_liveness.log"
+    },
+    {
+      "test": "check_async_task_tokens.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_async_task_tokens.py"
+      ],
+      "log": "test-logs/async_task_tokens.log"
+    },
+    {
+      "test": "check_fragment_level_passes.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_fragment_level_passes.py"
+      ],
+      "log": "test-logs/fragment_level_passes.log"
+    },
+    {
+      "test": "check_async_layout_integration.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_async_layout_integration.py"
+      ],
+      "log": "test-logs/async_layout_integration.log"
+    },
+    {
+      "test": "check_typed_fragments.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_typed_fragments.py"
+      ],
+      "log": "test-logs/typed_fragments.log"
+    },
+    {
+      "test": "check_semantic_fragments.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_semantic_fragments.py"
+      ],
+      "log": "test-logs/semantic_fragments.log"
+    },
+    {
+      "test": "check_sink_wait_buffer_ready.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_sink_wait_buffer_ready.py"
+      ],
+      "log": "test-logs/sink_wait_buffer_ready.log"
+    },
+    {
+      "test": "check_auto_pipeline.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_auto_pipeline.py"
+      ],
+      "log": "test-logs/auto_pipeline.log"
+    },
+    {
+      "test": "check_frisk_async_copy.py",
+      "passed": true,
+      "command": [
+        "python3",
+        "/data2/xsl/DeepGenGraph/3rd/deepgengraph/test/check_frisk_async_copy.py"
+      ],
+      "log": "test-logs/frisk_async_copy.log"
+    }
+  ],
+  "hardware_tested": false
+}

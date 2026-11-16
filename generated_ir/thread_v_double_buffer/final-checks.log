@@ -1,0 +1,8 @@
+V double buffer: 4 slices, slot-bytes=8192, displacement=8192, removed-barriers=3, LDS=16384, function=Attn_p2
+V double buffer: 4 slices, slot-bytes=8192, displacement=8192, removed-barriers=3, LDS=16384, function=Attn_p2
+V double buffer: skipped, function=Attn_p2: already transformed or missing local task completion
+V double buffer: 4 slices, slot-bytes=8192, displacement=8192, removed-barriers=3, LDS=16384, function=Attn_p2
+V double buffer: 4 slices, slot-bytes=8192, displacement=8192, removed-barriers=3, LDS=16384, function=Attn_p2
+V double buffer: skipped, function=Attn_p2: already transformed or missing local task completion
+PASS causal {'serialized_thread_pass_verified_and_idempotent': True, 'final_artifacts_match_numerically_validated_hashes': True, 'final_compiler_hash_matches': True, 'static_LDS_bytes': 16384}
+PASS noncausal {'serialized_thread_pass_verified_and_idempotent': True, 'final_artifacts_match_numerically_validated_hashes': True, 'final_compiler_hash_matches': True, 'static_LDS_bytes': 16384}

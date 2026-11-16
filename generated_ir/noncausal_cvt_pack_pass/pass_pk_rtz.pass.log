@@ -1,0 +1,1 @@
+Softmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2

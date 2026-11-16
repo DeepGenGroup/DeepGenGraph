@@ -1,0 +1,42 @@
+{
+  "strict/translated": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "strict/exported": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "mmac/translated": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "mmac/exported": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "mmac-recip/translated": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "mmac-recip/exported": {
+    "native_exp2_calls": 0,
+    "ocml_exp2_calls": 66
+  },
+  "mmac-exp2/translated": {
+    "native_exp2_calls": 66,
+    "ocml_exp2_calls": 0
+  },
+  "mmac-exp2/exported": {
+    "native_exp2_calls": 66,
+    "ocml_exp2_calls": 0
+  },
+  "approx/translated": {
+    "native_exp2_calls": 66,
+    "ocml_exp2_calls": 0
+  },
+  "approx/exported": {
+    "native_exp2_calls": 66,
+    "ocml_exp2_calls": 0
+  }
+}

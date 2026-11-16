@@ -1,0 +1,15 @@
+PASS exact pmc preset: LLVM/O3 verified, identical to pre-change IR except ModuleID
+{
+  ".ll": {
+    "equals_pre_change_except_module_id": true,
+    "equals_pmc_artifact_except_module_id": false,
+    "pre_change_sha256": "932c7523c34a525ffd34370669d41c6a1ebc2332cb5f8f284c12cf139a209a37",
+    "pmc_artifact_sha256": "646bef897500ba1d6dd82e020b790bfa3bb7d90126aaa27e8af2e5c66bd65cbd"
+  },
+  ".o3.ll": {
+    "equals_pre_change_except_module_id": true,
+    "equals_pmc_artifact_except_module_id": false,
+    "pre_change_sha256": "fe2d8b22a988e1026294319bb69216b2d250dd06d703a79b036d0dd704335a01",
+    "pmc_artifact_sha256": "ebeb0682d71de6264dd0c2f74414038aca892c79718288604c83d830d2693a62"
+  }
+}

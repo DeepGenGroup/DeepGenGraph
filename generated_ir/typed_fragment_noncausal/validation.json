@@ -1,0 +1,81 @@
+{
+  "pipeline": [
+    "convert-friskbase-to-fragment",
+    "convert-fragment-to-thread",
+    "finalize-thread-tiling",
+    "frisk-frag-ir-reorder",
+    "lower-frisk-fragments",
+    "LLVM export"
+  ],
+  "reference": "generated_ir/noncausal_cross_bn_k0_lifetimes/k0_sum_anchor.ll",
+  "reference_median_ms": 1.6633449792861938,
+  "new_kernel_gpu_measured": false,
+  "gfx936_codegen_available": false,
+  "typed_fragment_regression_passed": true,
+  "legacy_plan2_regression_passed": true,
+  "LLVM_verified": true,
+  "LLVM_O3_verified": true,
+  "llvm_diff_to_before_change_equal": true,
+  "llvm_diff_after_O3_equal": true,
+  "serialized_fragment_replay_equal_after_canonicalization": true,
+  "fragment_static_operations": "6 loads, 4 stores, 73 extracts, 66 inserts, 5 GEMMs, 30 elementwise ops",
+  "numerics": {
+    "cases": [
+      {
+        "case": "random",
+        "head": 1,
+        "query": 31,
+        "variant": "kernel",
+        "max_abs_error": 9.917702902600967e-05,
+        "O3_bitwise_equal": true,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "random",
+        "head": 1,
+        "query": 31,
+        "variant": "kernel.o3",
+        "max_abs_error": 9.917702902600967e-05,
+        "O3_bitwise_equal": true,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "future_key_dominates",
+        "head": 1,
+        "query": 0,
+        "variant": "kernel",
+        "max_abs_error": 4.617419446795168e-09,
+        "O3_bitwise_equal": true,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      }
+    ],
+    "gpu_tested": false,
+    "target_codegen_tested": false,
+    "independent_wave_timing_simulated": false,
+    "reference_atol": 0.01,
+    "reference_rtol": 0.01,
+    "sha256": "6216fd6098a154d9d219069609754d66cdf640a8e0694d91da51ddb909096dbb"
+  },
+  "sha256": {
+    "input.mlir": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+    "00-block.mlir": "5167a6ee9edf20d20fa294cf6130470c87b64dead3b969f68ec3fb95ed8ce598",
+    "01-fragment.mlir": "d15f822d576ee923c177b64383677d871c1146b8f54dc6575351b044cb64b64c",
+    "02-thread-bridges.mlir": "ce68c5b7058f7b00fa1fb865e2fec542e39cfd7dda9d938ab1877bf799356ae2",
+    "03-thread.mlir": "c5a2f3cca78acaba97111e481184a27922008e90eac13c64285c04d75b0bd931",
+    "kernel.ll": "6216fd6098a154d9d219069609754d66cdf640a8e0694d91da51ddb909096dbb",
+    "kernel.o3.ll": "a6186002ec15e323976d6793dc1fff3d4bd46cecaf214f15822af169136338e0",
+    "kernel.launch.json": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df"
+  },
+  "known_baseline_failure": {
+    "test": "check_attention_pipeline.py",
+    "configuration": "manual pipeline=1 (unused by delivered kernel)",
+    "reason": "expects 16 ops before materialising P, got 17",
+    "reproduced_with_before_change_binary": true
+  }
+}

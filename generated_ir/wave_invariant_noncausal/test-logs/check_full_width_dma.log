@@ -1,0 +1,5 @@
+PASS 4096 FP16 elements, 16B DMA, 128/256 copy threads; guards intact
+PASS 8192 FP16 elements, 16B DMA, 256/256 copy threads; guards intact
+PASS 264 FP16 elements, 16B DMA, 64/256 copy threads; guards intact
+PASS rejects unaligned/unsupported DMA widths and partial copy waves
+PASS transposed global source / packed LDS inverse mapping

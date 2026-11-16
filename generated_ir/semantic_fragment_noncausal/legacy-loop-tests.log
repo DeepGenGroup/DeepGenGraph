@@ -1,0 +1,16 @@
+PASS fusion pointwise
+PASS fusion dependent_init
+PASS fusion reverse
+PASS fusion whole
+PASS fusion memory
+PASS fusion independent
+PASS fusion memory_reverse
+PASS fusion alias
+PASS fusion barrier
+PASS fusion nonzero_step
+PASS fusion empty
+PASS fusion different_bounds
+PASS CPU execution baseline
+PASS CPU execution fused
+PASS scalar/vector cast tiling
+PASS attention fragment tiling and finalization

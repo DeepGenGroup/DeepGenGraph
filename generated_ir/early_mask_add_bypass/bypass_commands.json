@@ -1,0 +1,18 @@
+[
+  [
+    "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/ThreadTilingTest",
+    "/data2/xsl/DeepGenGraph/generated_ir/early_mask_add_bypass/bypass.input.mlir",
+    "--convert-friskbase-to-fragment=uniform-masks=true fuse-mask-add=true mask-add-bypass=approx",
+    "--verify-each",
+    "-o",
+    "/data2/xsl/DeepGenGraph/generated_ir/early_mask_add_bypass/bypass.fragment.mlir"
+  ],
+  [
+    "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/ThreadTilingTest",
+    "/data2/xsl/DeepGenGraph/generated_ir/early_mask_add_bypass/bypass.fragment.mlir",
+    "--convert-fragment-to-thread",
+    "--verify-each",
+    "-o",
+    "/data2/xsl/DeepGenGraph/generated_ir/early_mask_add_bypass/bypass.thread.mlir"
+  ]
+]

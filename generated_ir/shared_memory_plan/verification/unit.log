@@ -1,0 +1,3 @@
+loc("-":5:10): error: shared-memory planning failed: no exportable candidate satisfies all accesses and constraints
+loc("-":5:10): error: shared-memory plan invalidated by new accesses
+PASS generic shared access collection, joint plans, capabilities and atomic publication

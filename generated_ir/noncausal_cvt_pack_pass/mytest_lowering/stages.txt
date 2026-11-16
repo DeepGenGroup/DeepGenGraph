@@ -1,0 +1,46 @@
+96: ---------- after simplifyPass ---------
+191: ---------- after scfForConversion ---------
+314: ---------- after createConvertKernelOpToFriskPass ---------
+903: ---------- after createConvertMemAndCalcOpPass ---------
+1009: ---------- after createFriskFuseBlockOpsPass ---------
+1115: ---------- after createConvertFriskToBasePass ---------
+1232: ---------- after reorder-workgroups ---------
+1361: ---------- after createNormalizeAttentionKLayoutPass ---------
+1491: ---------- after promote-gm-to-shm-async ---------
+1627: ---------- after frisk-auto-pipeline ---------
+1772: ---------- after promote-gemm-matrix-loads ---------
+2048: ---------- after convert-friskbase-to-fragment ---------
+3054: ---- after fragment-level fuse-fragment-accumulator -----
+3827: ---- after fragment-level frisk-frag-ir-reorder -----
+4361: ---------- after frisk-simplify-loop-control ---------
+5034: ---- after frisk-retain-invariant-fragments -----
+5690: ---- after fragment-level optimization -----
+6333: ---------- after convert-fragment-to-thread ---------
+9431: ---------- after createFinalizeThreadTilingPass ---------
+11079: ---- after lower-frisk-fragments -----
+12897: ---- after threadIR legalize -----
+14900: ---- after createIRDeepOptimizePass -----
+19381: ---- after affine-scalrep -----
+23152: ---- after frisk-simplify-bounded-affine -----
+26427: ---- secondLowering done -----
+26430: ---- after frisk-hoist-wave-invariants -----
+32555: ---- after llvm translateToLLVM -----
+38717: ---- after llvm optimizeRegisterMath -----
+41610: ---- after llvm bypassMaskAdds -----
+44503: ---- after llvm optimizeLocalReductions -----
+47396: ---- after llvm deferLaneSums -----
+50307: ---- after llvm prefetchGlobalPackets -----
+53220: ---- after llvm optimizeRegisterLifetimes -----
+56175: ---- after llvm canonicalizeLDSGEPs -----
+58862: ---- after llvm lowerAsyncDMA -----
+61799: ---- after llvm fuseMMACAccumulators -----
+64579: ---- after llvm interleavePVAccumulators -----
+67620: ---- after llvm doubleBufferV -----
+70715: ---- after llvm narrowKDMA -----
+74025: ---- after llvm prefetchPairedLDS -----
+76786: ---- after llvm scheduleSoftmaxFragments -----
+79563: ---- after llvm prefetchPairedLDSTail -----
+82350: ---- after llvm prefetchNextK -----
+85280: ---- after llvm elideBackedgeBarrier -----
+88207: ---- after llvm lazySoftmaxBase -----
+91232: ---- after llvm softmaxCvtPack -----

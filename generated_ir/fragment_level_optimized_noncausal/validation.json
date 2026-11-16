@@ -1,0 +1,106 @@
+{
+  "configuration_source": "generated_ir/flat_fragment_noncausal/command.json",
+  "measured_reference": "generated_ir/noncausal_cross_bn_k0_lifetimes/k0_sum_anchor.ll",
+  "reference_median_ms": 1.6633449792861938,
+  "configuration_unchanged": true,
+  "build_targets": [
+    "MyTest",
+    "ThreadTilingTest",
+    "FragmentOptTest"
+  ],
+  "build_passed": true,
+  "tests_passed": [
+    "check_fragment_level_passes.py: four GEMM shapes; typed fusion, prefetch, retention; overlap/alias/budget rejection; idempotence; CPU values and zero-seeded K order",
+    "check_typed_fragments.py",
+    "check_invariant_fragment_retention.py: 22 cases",
+    "check_fragment_schedule.py --schedule-only",
+    "check_fragment_loops.py",
+    "check_fragment_optimization.py",
+    "save_stages.py: every stage reparses, standalone typed optimization/thread replay matches MyTest",
+    "opt -S -passes=default<O3>,verify",
+    "validate.py: random and future_key_dominates; baseline/kernel bitwise; raw/O3 bitwise; DMA readiness and K0 ownership"
+  ],
+  "llvm_structurally_identical_to_baseline": false,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "numerics": {
+    "cases": [
+      {
+        "case": "random",
+        "head": 1,
+        "query": 31,
+        "variant": "baseline",
+        "max_abs_error": 9.917702902600967e-05,
+        "baseline_bitwise_equal": true,
+        "O3_bitwise_equal": null,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "random",
+        "head": 1,
+        "query": 31,
+        "variant": "kernel",
+        "max_abs_error": 9.917702902600967e-05,
+        "baseline_bitwise_equal": true,
+        "O3_bitwise_equal": null,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "random",
+        "head": 1,
+        "query": 31,
+        "variant": "kernel.o3",
+        "max_abs_error": 9.917702902600967e-05,
+        "baseline_bitwise_equal": true,
+        "O3_bitwise_equal": true,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "future_key_dominates",
+        "head": 1,
+        "query": 0,
+        "variant": "baseline",
+        "max_abs_error": 4.617419446795168e-09,
+        "baseline_bitwise_equal": true,
+        "O3_bitwise_equal": null,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      },
+      {
+        "case": "future_key_dominates",
+        "head": 1,
+        "query": 0,
+        "variant": "kernel",
+        "max_abs_error": 4.617419446795168e-09,
+        "baseline_bitwise_equal": true,
+        "O3_bitwise_equal": null,
+        "delayed_DMA_and_ownership_passed": true,
+        "mmac_count": 8192,
+        "k0_overlap_mmac": 992
+      }
+    ],
+    "gpu_tested": false,
+    "target_codegen_tested": false,
+    "independent_wave_timing_simulated": false,
+    "reference_atol": 0.01,
+    "reference_rtol": 0.01,
+    "sha256": "c8e767cdba748586ce99ff30061f0ff1cb5b4a17b17bf4403a0419f6e4865720"
+  },
+  "sha256": {
+    "input.mlir": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+    "command.json": "7dd3c1d31f1288fa0aa6a8316cd453c1f92bbea836281f676a98206fa00ca9a9",
+    "01-fragment.mlir": "234e5b48bfab212f045b03e84eb1a47196fc5569b9ecfc70c009dac93163f904",
+    "06-optimized-fragment.mlir": "5ab5c015169e783adbc9012af1450ee1d0e5c89a72e5f6bb8ae2977884e649c5",
+    "kernel.ll": "c8e767cdba748586ce99ff30061f0ff1cb5b4a17b17bf4403a0419f6e4865720",
+    "kernel.o3.ll": "bff7b59e2caaba49e7f59e6758ffe48389e598f9ac4ecbf1adca21169d80fbbd",
+    "baseline.ll": "a29ad4e9bbfe2bb48a3a377deb97e4810835cb1e11e9c0db8de377dd6b546f9a",
+    "kernel.launch.json": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df"
+  }
+}

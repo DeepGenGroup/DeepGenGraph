@@ -1,0 +1,32 @@
+PASS sync: wait-all publication
+PASS sync: adjacent barriers
+PASS sync: pure index expressions
+PASS sync: wait after earlier barrier must be published
+PASS sync: store
+PASS sync: read
+PASS sync: new async group
+PASS sync: unknown effects
+PASS sync: opaque assembly
+PASS sync: task wait
+PASS sync: conditional
+PASS sync: partial wait
+PASS sync: loop boundary
+PASS sync: branch-local merge
+PASS loop CPU: affine 2 13 3
+PASS loop CPU: affine -5 4 2
+PASS loop CPU: affine 4 4 1
+PASS loop CPU: affine 4 2 1
+PASS loop CPU: affine 9 10 2
+PASS preserved: affine unmarked
+PASS preserved: affine trip budget
+PASS preserved: affine growth budget
+PASS loop CPU: scf 2 13 3
+PASS loop CPU: scf -5 4 2
+PASS loop CPU: scf 4 4 1
+PASS loop CPU: scf 4 2 1
+PASS loop CPU: scf 9 10 2
+PASS preserved: scf unmarked
+PASS preserved: scf trip budget
+PASS preserved: scf growth budget
+PASS nested loops preserve all ordered effects
+PASS dynamic bounds, wrapping increments and invalid budget

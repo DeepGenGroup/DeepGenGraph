@@ -1,0 +1,1 @@
+Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=4.000000e+00, function=Attn_p2

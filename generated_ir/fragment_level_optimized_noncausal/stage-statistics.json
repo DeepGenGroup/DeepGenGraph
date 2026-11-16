@@ -1,0 +1,132 @@
+[
+  {
+    "stage": "00-block",
+    "counts": {
+      "affine.for": 2,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "01-fragment",
+    "counts": {
+      "affine.for": 79,
+      "frisk.gemm_frag": 5,
+      "frisk.load_frag": 6,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "02-accumulator",
+    "counts": {
+      "affine.for": 79,
+      "frisk.gemm_frag": 5,
+      "frisk.load_frag": 2,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 1,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "03-reorder",
+    "counts": {
+      "affine.for": 37,
+      "frisk.gemm_frag": 6,
+      "frisk.load_frag": 4,
+      "frisk.fused": 18,
+      "frisk.pipelined": 2,
+      "frisk.fragment_accumulate": 1,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "04-specialized",
+    "counts": {
+      "affine.for": 45,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.fused": 24,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "05-retained",
+    "counts": {
+      "affine.for": 45,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.fused": 24,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "06-optimized-fragment",
+    "counts": {
+      "affine.for": 45,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.fused": 24,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "07-thread-bridges",
+    "counts": {
+      "affine.for": 45,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.fused": 24,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "08-thread",
+    "counts": {
+      "affine.for": 48,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.fused": 24,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "09-storage-planned",
+    "counts": {
+      "affine.for": 40,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.fused": 24,
+      "frisk.pipelined": 4,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  }
+]

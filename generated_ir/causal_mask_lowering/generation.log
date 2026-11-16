@@ -1,0 +1,3 @@
+PASS mask_finite_pk_rtz comparison copies 0 mask vector adds 0
+PASS mask_i32_pk_rtz comparison copies 0 mask vector adds 16
+PASS mask_off_pk_rtz comparison copies 62 mask vector adds 16

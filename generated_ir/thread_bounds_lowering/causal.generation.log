@@ -1,0 +1,14 @@
+Verified: /data2/xsl/DeepGenGraph/generated_ir/thread_bounds_lowering/causal/mask_finite_pk_rtz.o3.ll
+Causal mask lowering: mode=finite, i32-elements=4, direct-selects=4
+LocalReduction: Attn_p2: 4 groups, 128 inputs, 4 chains (approx)
+HoistWaveInvariants: Attn_p2: 16 LDS bases (20 merged), 12 shuffle setup ops (structured)
+Compact thread indices: 248 proven replacements
+Address shared bases: 4 (8 register words)
+OptimizeRegisterLifetimes: Attn_p2: 793 local address expressions, 16 early math packs
+V double buffer: 4 slices, slot-bytes=8192, displacement=8192, removed-barriers=3, LDS=16384, function=Attn_p2
+K DMA: mode=64-swizzle, argument=1, packets=8->16, reads=128, bases=2, function=Attn_p2
+K LDS prefetch: distance=8, regions=3, pairs=23, moved=20, anchors=12, unpaired=4, function=Attn_p2
+SoftmaxFragments: Attn_p2: 16 fragments, mode=pv; original FP32 sum DAG and memory/MMAC order retained
+K tail LDS prefetch: distance=4, regions=1, pairs=8, moved=7, anchors=5, unpaired=0, reduction-regions=65, function=Attn_p2
+Cross BN K0: skipped, function=Attn_p2: requires canonical unsigned loop condition
+Softmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2

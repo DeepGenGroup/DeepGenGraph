@@ -1,0 +1,38 @@
+{
+  "early_wave": {
+    "sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+    "mmac": 256,
+    "dma128": 16,
+    "dma64": 20,
+    "bpermute": 72,
+    "matrix_read": 32,
+    "sched_barrier": 306,
+    "fadd": 68,
+    "fmul": 42,
+    "store": 64
+  },
+  "frisk_op_fuse": {
+    "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2",
+    "mmac": 256,
+    "dma128": 16,
+    "dma64": 20,
+    "bpermute": 8,
+    "matrix_read": 32,
+    "sched_barrier": 306,
+    "fadd": 68,
+    "fmul": 42,
+    "store": 64
+  },
+  "gemm_layout_contract": {
+    "sha256": "456c3618ae800239dc9a97cd59ed97f8908b490df82acad5abf18cd8c44a4982",
+    "mmac": 256,
+    "dma128": 16,
+    "dma64": 20,
+    "bpermute": 72,
+    "matrix_read": 32,
+    "sched_barrier": 306,
+    "fadd": 68,
+    "fmul": 42,
+    "store": 64
+  }
+}

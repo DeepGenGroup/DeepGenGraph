@@ -1,0 +1,56 @@
+[
+  {
+    "source": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.o3.ll",
+    "output": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.no_math_materialize.o3.ll",
+    "source_sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+    "output_sha256": "904cf23acef2f05b78b71d60f70a1281cc010ad6fac9afc375c7df89489f0202",
+    "removed": {
+      "result": 16,
+      "packed": 16
+    },
+    "launch_config": "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.no_math_materialize.o3.launch.json",
+    "checks": [
+      [
+        "/data2/xsl/install/bin/llvm-as",
+        "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.no_math_materialize.o3.ll",
+        "-o",
+        "/dev/null"
+      ],
+      [
+        "/data2/xsl/install/bin/opt",
+        "-passes=verify",
+        "-disable-output",
+        "/data2/xsl/DeepGenGraph/generated_ir/best_noncausal_early_wave/kernel.no_math_materialize.o3.ll"
+      ]
+    ],
+    "rerun_o3": false,
+    "gpu_precision_tested": false
+  },
+  {
+    "source": "/data2/xsl/DeepGenGraph/generated_ir/causal_mask_lowering/mask_finite_pk_rtz.o3.ll",
+    "output": "/data2/xsl/DeepGenGraph/generated_ir/causal_mask_lowering/mask_finite_pk_rtz.no_math_materialize.o3.ll",
+    "source_sha256": "ebeb0682d71de6264dd0c2f74414038aca892c79718288604c83d830d2693a62",
+    "output_sha256": "e7166915bb60b58977ee14e6faeb17a6185b9bce4320c1d9c2e751447a04f937",
+    "removed": {
+      "result": 16,
+      "packed": 16
+    },
+    "launch_config": "/data2/xsl/DeepGenGraph/generated_ir/causal_mask_lowering/mask_finite_pk_rtz.no_math_materialize.o3.launch.json",
+    "checks": [
+      [
+        "/data2/xsl/install/bin/llvm-as",
+        "/data2/xsl/DeepGenGraph/generated_ir/causal_mask_lowering/mask_finite_pk_rtz.no_math_materialize.o3.ll",
+        "-o",
+        "/dev/null"
+      ],
+      [
+        "/data2/xsl/install/bin/opt",
+        "-passes=verify",
+        "-disable-output",
+        "/data2/xsl/DeepGenGraph/generated_ir/causal_mask_lowering/mask_finite_pk_rtz.no_math_materialize.o3.ll"
+      ]
+    ],
+    "rerun_o3": false,
+    "gpu_precision_tested": false
+  }
+]

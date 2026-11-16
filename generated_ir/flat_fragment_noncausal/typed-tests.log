@@ -1,0 +1,1 @@
+PASS: typed fragment round trip, idempotence, legacy equivalence, verifier, CPU load/store and loop-carried arithmetic

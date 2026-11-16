@@ -1,0 +1,125 @@
+{
+  "generated_utc": "2026-11-12T03:09:24.484536+00:00",
+  "baseline_case": "generated_ir/best_noncausal_early_wave/kernel.o3.ll",
+  "baseline_sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+  "same_input_command_and_launch": true,
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_sha256": "65afba7480e9951bff3047f989788da05f485e0da9a4c1776e360cf645c34f26",
+  "files": {
+    "input.mlir": {
+      "sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+      "bytes": 10338
+    },
+    "command.sh": {
+      "sha256": "f40b4b12859b9e422045f733a3e29c5d2e8e66dae343a5fb55a3bd6ac9e564ea",
+      "bytes": 1277
+    },
+    "kernel.ll": {
+      "sha256": "2f07224431845bb34123202b9f50fc8466adc8074d25122dbd675c642fb43b11",
+      "bytes": 242475
+    },
+    "kernel.o3.ll": {
+      "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2",
+      "bytes": 238072
+    },
+    "kernel.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "kernel.o3.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "frisk-base-before-fuse.mlir": {
+      "sha256": "63f7f0b90f3e8275ba06b8b6c05929b29b5b0b0e3a86c7d481b7dee6eae61a31",
+      "bytes": 12289
+    },
+    "frisk-base.mlir": {
+      "sha256": "aea1f2e97f7560e5de191239a5ccd3c41ea97adfae08f52776a85ead8313d45f",
+      "bytes": 11665
+    },
+    "frisk-fragment.mlir": {
+      "sha256": "0c16fab66fffdad20a8f6c99684ab110d443aa2aedd543f9498e64a8c325e1e3",
+      "bytes": 136602
+    },
+    "verify.py": {
+      "sha256": "98477a224531f63dbf1d12c61091326d7f1d8fa6bca07c7ca45c13558901b6a9",
+      "bytes": 1762
+    },
+    "validation.json": {
+      "sha256": "24fee7787cee5837c2daaaec6059f92c4a175a7566e00683ca60fc32051e2eb3",
+      "bytes": 1325
+    },
+    "regression.log": {
+      "sha256": "8dedb9c9b9b80cdee5de17664bc47783cafaedbecab9569b8c2a13f48f65fcd1",
+      "bytes": 2093
+    }
+  },
+  "fusion": {
+    "gemm_before": 5,
+    "gemm_after": 5,
+    "add_before": 7,
+    "add_after": 2,
+    "fused_pairs": 5
+  },
+  "validation": {
+    "llvm_as": true,
+    "o3_verify": true,
+    "mlir_verify": true,
+    "regression_suites": [
+      "fusion",
+      "accumulator",
+      "layout",
+      "strict_attention"
+    ],
+    "cpu_llvm_model": {
+      "cases": [
+        {
+          "file": "kernel.ll",
+          "case": "random",
+          "head": 0,
+          "query": 0,
+          "sha256": "2f07224431845bb34123202b9f50fc8466adc8074d25122dbd675c642fb43b11",
+          "max_abs_error": 0.0001285402867657881,
+          "mmac_count": 8192,
+          "dma64_count": 512
+        },
+        {
+          "file": "kernel.ll",
+          "case": "future_key_dominates",
+          "head": 1,
+          "query": 0,
+          "sha256": "2f07224431845bb34123202b9f50fc8466adc8074d25122dbd675c642fb43b11",
+          "max_abs_error": 4.617419446795168e-09,
+          "mmac_count": 8192,
+          "dma64_count": 512
+        },
+        {
+          "file": "kernel.o3.ll",
+          "case": "random",
+          "head": 0,
+          "query": 0,
+          "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2",
+          "max_abs_error": 0.0001285402867657881,
+          "mmac_count": 8192,
+          "dma64_count": 512
+        },
+        {
+          "file": "kernel.o3.ll",
+          "case": "future_key_dominates",
+          "head": 1,
+          "query": 0,
+          "sha256": "fbc5fca61d6d09e11f41f2756e2a410443904c4d250d202accaeff6df6eb6ae2",
+          "max_abs_error": 4.617419446795168e-09,
+          "mmac_count": 8192,
+          "dma64_count": 512
+        }
+      ],
+      "reference_atol": 0.01,
+      "reference_rtol": 0.01,
+      "gpu_tested": false,
+      "note": "CPU delayed-DMA/LLVM model; not target GPU execution or timing"
+    },
+    "gpu_tested": false
+  }
+}

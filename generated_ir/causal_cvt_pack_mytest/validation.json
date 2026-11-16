@@ -1,0 +1,320 @@
+{
+  "cases": [
+    {
+      "variant": "group4_reverse_off",
+      "case": "random",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 0.0010306326887851158,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "random",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 0.001071694407105861,
+      "max_abs_difference_from_off": 0.0009765625,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 32,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_off.o3",
+      "case": "random",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 0.0010306326887851158,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_pk_rtz.o3",
+      "case": "random",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 0.001071694407105861,
+      "max_abs_difference_from_off": 0.0009765625,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 32,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "random",
+      "head": 1,
+      "query": 8,
+      "physical": [
+        7,
+        20
+      ],
+      "max_abs_error": 0.0002714435505669355,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 86
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "random",
+      "head": 1,
+      "query": 8,
+      "physical": [
+        7,
+        20
+      ],
+      "max_abs_error": 0.0002714435505669355,
+      "max_abs_difference_from_off": 0.0001220703125,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 288,
+      "barriers": 86
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "random",
+      "head": 1,
+      "query": 31,
+      "physical": [
+        4,
+        0
+      ],
+      "max_abs_error": 0.00010725143127841841,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 293
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "random",
+      "head": 1,
+      "query": 31,
+      "physical": [
+        4,
+        0
+      ],
+      "max_abs_error": 8.462071614452615e-05,
+      "max_abs_difference_from_off": 6.103515625e-05,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 1024,
+      "barriers": 293
+    },
+    {
+      "variant": "group4_reverse_off.o3",
+      "case": "random",
+      "head": 1,
+      "query": 31,
+      "physical": [
+        4,
+        0
+      ],
+      "max_abs_error": 0.00010725143127841841,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 293
+    },
+    {
+      "variant": "group4_reverse_pk_rtz.o3",
+      "case": "random",
+      "head": 1,
+      "query": 31,
+      "physical": [
+        4,
+        0
+      ],
+      "max_abs_error": 8.462071614452615e-05,
+      "max_abs_difference_from_off": 6.103515625e-05,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 1024,
+      "barriers": 293
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "max_changes",
+      "head": 1,
+      "query": 2,
+      "physical": [
+        5,
+        28
+      ],
+      "max_abs_error": 6.573245510968495e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 32
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "max_changes",
+      "head": 1,
+      "query": 2,
+      "physical": [
+        5,
+        28
+      ],
+      "max_abs_error": 6.573245510968495e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 96,
+      "barriers": 32
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "diagonal_future_dominates",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 6.802892207713462e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "diagonal_future_dominates",
+      "head": 1,
+      "query": 0,
+      "physical": [
+        7,
+        28
+      ],
+      "max_abs_error": 6.802892207713462e-05,
+      "max_abs_difference_from_off": 0.0001220703125,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 32,
+      "barriers": 14
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "physical": [
+        6,
+        28
+      ],
+      "max_abs_error": 6.101528803503786e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 23
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "positive_overflow",
+      "head": 1,
+      "query": 1,
+      "physical": [
+        6,
+        28
+      ],
+      "max_abs_error": 6.101528803503786e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 64,
+      "barriers": 23
+    },
+    {
+      "variant": "group4_reverse_off",
+      "case": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "physical": [
+        6,
+        28
+      ],
+      "max_abs_error": 6.101528803503786e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 0,
+      "barriers": 23
+    },
+    {
+      "variant": "group4_reverse_pk_rtz",
+      "case": "negative_underflow",
+      "head": 1,
+      "query": 1,
+      "physical": [
+        6,
+        28
+      ],
+      "max_abs_error": 6.101528803503786e-05,
+      "max_abs_difference_from_off": 0.0,
+      "causal_kv_bounds_checked": true,
+      "delayed_dma_and_lds_ownership_checked": true,
+      "memory_and_schedule_equal_to_off": true,
+      "pack_calls": 64,
+      "barriers": 23
+    }
+  ],
+  "conversion_edges": {
+    "finite_values_tested": 253952,
+    "all_positive_half_midpoints_checked": true,
+    "independent_rtz_oracle_passed": true
+  },
+  "reference_atol": 0.01,
+  "reference_rtol": 0.01,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "independent_wave_timing_simulated": false
+}

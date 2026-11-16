@@ -1,0 +1,11 @@
+PASS rhs
+PASS lhs
+PASS no-fast-path
+PASS 64-threads
+PASS 256-threads
+PASS disabled
+PASS multi-use
+PASS barrier
+PASS signed-predicate
+PASS negative-offset
+PASS non-triangular

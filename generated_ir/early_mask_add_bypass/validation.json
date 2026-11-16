@@ -1,0 +1,17 @@
+{
+  "build_passed": true,
+  "early_lowering_cases": 46,
+  "early_native_cpu_comparisons": 327680,
+  "llvm_fallback_native_cpu_comparisons": 600,
+  "existing_regression_suites": [
+    "check_mask_add_fusion",
+    "check_uniform_masks",
+    "check_causal_mask_lowering",
+    "check_semantic_fragments",
+    "check_typed_fragments"
+  ],
+  "tune_attention_tests": 27,
+  "LLVM_and_O3_verified": true,
+  "gpu_tested": false,
+  "target_codegen_tested": false
+}

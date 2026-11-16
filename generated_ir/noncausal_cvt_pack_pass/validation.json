@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "case": "random",
+      "variant": "measured",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 0.0001285402867657881
+    },
+    {
+      "case": "random",
+      "variant": "pass_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 0.0001285402867657881
+    },
+    {
+      "case": "random",
+      "variant": "pipeline_t8_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 0.0001285402867657881
+    },
+    {
+      "case": "one_wave_triggers",
+      "variant": "measured",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.969359923008177e-05
+    },
+    {
+      "case": "one_wave_triggers",
+      "variant": "pass_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.969359923008177e-05
+    },
+    {
+      "case": "one_wave_triggers",
+      "variant": "pipeline_t8_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.969359923008177e-05
+    },
+    {
+      "case": "large_jump",
+      "variant": "measured",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.555152893066406e-05
+    },
+    {
+      "case": "large_jump",
+      "variant": "pass_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.555152893066406e-05
+    },
+    {
+      "case": "large_jump",
+      "variant": "pipeline_t8_pk_rtz",
+      "bitwise_equal_to_measured": true,
+      "memory_and_schedule_audit_passed": true,
+      "max_abs_error": 5.555152893066406e-05
+    }
+  ],
+  "sha256": {
+    "measured": "f987215797d43f0fd3a8222c28c9f56c8c2adcfcc1886f8edd2bd5687a8a549f",
+    "pass_pk_rtz": "29d751d499acb1eeedbdd46bf8be94544c7b52fe4ae3f314686350042612f8bf",
+    "pipeline_t8_pk_rtz": "f46989e6a5aec066b20401eb249a0a13125fcf003e7df6a7177e91f58bf146d6"
+  },
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "reference_atol": 0.01,
+  "reference_rtol": 0.01
+}

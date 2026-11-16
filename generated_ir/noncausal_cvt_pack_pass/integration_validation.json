@@ -1,0 +1,12 @@
+{
+  "command": "OUT=/tmp/cvt_pack_mytest.ll bash generated_ir/wave_invariant_noncausal/command.sh --lazy-softmax-base=8 --softmax-cvt-pack=rtz",
+  "source_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "diagnostics": [
+    "Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=8.000000e+00, function=Attn_p2",
+    "Softmax cvt pack: fragments=16, packed-pairs=32, rounding=rtz, function=Attn_p2"
+  ],
+  "packed_pairs": 32,
+  "O3_verifier_passed": true,
+  "artifact_sha256": "3e4b46eb4f55920c2ea90b602676fbb525f08ea82649f5b1005704051f559243",
+  "gpu_tested": false
+}

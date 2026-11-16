@@ -1,0 +1,131 @@
+early_wave done 8192
+gemm_layout_contract done 8192
+{
+  "outputs_bit_equal": true,
+  "mma_inputs_equal_in_order": true,
+  "first_mma_mismatch": null,
+  "lds_read_records_equal": true,
+  "lds_values_equal": true,
+  "global_trace_equal": true,
+  "k0_issues_equal": true,
+  "global_reads_equal": true,
+  "global_write_lane_vectors_equal_as_set": true,
+  "collective_output_address_set_equal": true,
+  "first_eight_store_columns_lanes_0_16_32_48": [
+    [
+      [
+        0,
+        4,
+        8,
+        12
+      ],
+      [
+        1,
+        5,
+        9,
+        13
+      ],
+      [
+        2,
+        6,
+        10,
+        14
+      ],
+      [
+        3,
+        7,
+        11,
+        15
+      ],
+      [
+        16,
+        20,
+        24,
+        28
+      ],
+      [
+        17,
+        21,
+        25,
+        29
+      ],
+      [
+        18,
+        22,
+        26,
+        30
+      ],
+      [
+        19,
+        23,
+        27,
+        31
+      ]
+    ],
+    [
+      [
+        0,
+        4,
+        8,
+        12
+      ],
+      [
+        1,
+        5,
+        9,
+        13
+      ],
+      [
+        2,
+        6,
+        10,
+        14
+      ],
+      [
+        3,
+        7,
+        11,
+        15
+      ],
+      [
+        16,
+        20,
+        24,
+        28
+      ],
+      [
+        17,
+        21,
+        25,
+        29
+      ],
+      [
+        18,
+        22,
+        26,
+        30
+      ],
+      [
+        19,
+        23,
+        27,
+        31
+      ]
+    ]
+  ],
+  "first_global_event_mismatch": null,
+  "counts": [
+    [
+      260,
+      261,
+      8192,
+      512
+    ],
+    [
+      260,
+      261,
+      8192,
+      512
+    ]
+  ]
+}

@@ -1,0 +1,192 @@
+[
+  {
+    "stage": "00-block",
+    "counts": {
+      "affine.for": 2,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.reduce_frag": 0,
+      "frisk.broadcast_frag": 0,
+      "frisk.convert_layout_frag": 0,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 0,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "01-fragment",
+    "counts": {
+      "affine.for": 73,
+      "frisk.gemm_frag": 5,
+      "frisk.load_frag": 6,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 11,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "02-accumulator",
+    "counts": {
+      "affine.for": 73,
+      "frisk.gemm_frag": 5,
+      "frisk.load_frag": 2,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 11,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 0,
+      "frisk.pipelined": 0,
+      "frisk.fragment_accumulate": 1,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "03-reorder",
+    "counts": {
+      "affine.for": 35,
+      "frisk.gemm_frag": 6,
+      "frisk.load_frag": 4,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 12,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 16,
+      "frisk.pipelined": 2,
+      "frisk.fragment_accumulate": 1,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "04-specialized",
+    "counts": {
+      "affine.for": 43,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 12,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 22,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 0,
+      "retained_payload_words": 0
+    }
+  },
+  {
+    "stage": "05-retained",
+    "counts": {
+      "affine.for": 43,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 12,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 22,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "06-optimized-fragment",
+    "counts": {
+      "affine.for": 43,
+      "frisk.gemm_frag": 12,
+      "frisk.load_frag": 16,
+      "frisk.reduce_frag": 2,
+      "frisk.broadcast_frag": 12,
+      "frisk.convert_layout_frag": 4,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 0,
+      "vector.extract": 32,
+      "frisk.fused": 22,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 4,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "07-thread-bridges",
+    "counts": {
+      "affine.for": 60,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.reduce_frag": 0,
+      "frisk.broadcast_frag": 0,
+      "frisk.convert_layout_frag": 0,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 20,
+      "vector.extract": 727,
+      "frisk.fused": 22,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "08-thread",
+    "counts": {
+      "affine.for": 63,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.reduce_frag": 0,
+      "frisk.broadcast_frag": 0,
+      "frisk.convert_layout_frag": 0,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 20,
+      "vector.extract": 431,
+      "frisk.fused": 22,
+      "frisk.pipelined": 8,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  },
+  {
+    "stage": "09-storage-planned",
+    "counts": {
+      "affine.for": 46,
+      "frisk.gemm_frag": 0,
+      "frisk.load_frag": 0,
+      "frisk.reduce_frag": 0,
+      "frisk.broadcast_frag": 0,
+      "frisk.convert_layout_frag": 0,
+      "frisk.mask_frag": 0,
+      "gpu.shuffle": 20,
+      "vector.extract": 619,
+      "frisk.fused": 22,
+      "frisk.pipelined": 4,
+      "frisk.fragment_accumulate": 0,
+      "frisk.retained_words": 1,
+      "retained_payload_words": 32
+    }
+  }
+]

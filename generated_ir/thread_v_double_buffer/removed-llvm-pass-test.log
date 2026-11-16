@@ -1,0 +1,1 @@
+V double buffering moved to Thread IR; use MyTest --v-double-buffer=1

@@ -1,0 +1,2 @@
+PASS fragment reads/writes, register-only uses, logical motion and deferred pooling
+PASS affine/scf FIFO task completion, branch carriers, exit drains and unsafe paths

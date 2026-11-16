@@ -1,0 +1,31 @@
+{
+  "build_targets": [
+    "ThreadTilingTest",
+    "MyTest",
+    "LegacyLLVMExportTest"
+  ],
+  "build_passed": true,
+  "structural_cases": 59,
+  "frisk_lowering_cases": 44,
+  "native_CPU_comparisons": 58080,
+  "CPU_comparison_policy": "Exact bits except signed zero differences and NaN classification equality",
+  "tuning_unit_tests": 27,
+  "regressions_passed": [
+    "mask_add_fusion",
+    "uniform_masks",
+    "causal_mask_lowering",
+    "semantic_fragments",
+    "typed_fragments",
+    "thread_math"
+  ],
+  "removed_mode_checks_passed": true,
+  "multi_consumer_example": {
+    "groups": 1,
+    "additions": 8
+  },
+  "LLVM_and_O3_verified": true,
+  "compiler_hash_verified": true,
+  "changed_code_diff_check_passed": true,
+  "GPU_tested": false,
+  "target_codegen_tested": false
+}

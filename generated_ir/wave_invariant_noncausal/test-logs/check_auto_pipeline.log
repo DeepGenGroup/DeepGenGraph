@@ -1,0 +1,15 @@
+PASS stages=2: guards, negative/nonzero/extreme bounds, step=3, short loops, ring wraps, two recurrences
+PASS stages=2: guards, negative/nonzero/extreme bounds, step=3, short loops, ring wraps, two recurrences
+PASS stages=3: guards, negative/nonzero/extreme bounds, step=3, short loops, ring wraps, two recurrences
+PASS stages=4: guards, negative/nonzero/extreme bounds, step=3, short loops, ring wraps, two recurrences
+PASS synchronous result aliases, multiple hinted loops, no iter_args, idempotence
+PASS unchanged rejection: global-write
+PASS unchanged rejection: escaping-alias
+PASS unchanged rejection: missing-wait
+PASS unchanged rejection: early-consumer
+PASS unchanged rejection: opaque-call
+PASS unchanged rejection: recurrence-address
+PASS unchanged rejection: divergent-bounds
+PASS unchanged rejection: too-many-stages
+PASS unchanged rejection: explicit-schedule
+PASS unmarked/disabled no-op and invalid attribute diagnostics

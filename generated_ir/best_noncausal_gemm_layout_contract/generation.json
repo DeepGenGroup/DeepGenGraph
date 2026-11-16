@@ -1,0 +1,121 @@
+{
+  "generated_utc": "2026-11-12T04:34:52.486287+00:00",
+  "baseline_case": "generated_ir/best_noncausal_early_wave/kernel.o3.ll",
+  "baseline_sha256": "3b9e80230aba81201a3e514e3faf6e313cfe990c217a804deba30772d1aa5b57",
+  "same_input_command_and_launch": true,
+  "tool": "/data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest",
+  "tool_sha256": "bc10ca206bf16da5f3f56f4c10ccb90726989ffed6827493c02d3b07a62aaf24",
+  "files": {
+    "README.md": {
+      "sha256": "f6355d6a8eb6da2624a3353a6ef805fb2c5818d04614183fbfa9480f0162e874",
+      "bytes": 3039
+    },
+    "command.sh": {
+      "sha256": "f40b4b12859b9e422045f733a3e29c5d2e8e66dae343a5fb55a3bd6ac9e564ea",
+      "bytes": 1277
+    },
+    "compare_trace.py": {
+      "sha256": "a7bf9bc6ec1ff2c96039cb68db9f2a53f4bcddaf612532e6ca4f9acd04aa9bdc",
+      "bytes": 2892
+    },
+    "frisk-base-before-fuse.mlir": {
+      "sha256": "63f7f0b90f3e8275ba06b8b6c05929b29b5b0b0e3a86c7d481b7dee6eae61a31",
+      "bytes": 12289
+    },
+    "frisk-base.mlir": {
+      "sha256": "aea1f2e97f7560e5de191239a5ccd3c41ea97adfae08f52776a85ead8313d45f",
+      "bytes": 11665
+    },
+    "frisk-fragment.mlir": {
+      "sha256": "d9e52e6f4ba2d44d702b856ddc3c2ccbc22f9b4f06698e5322e29bb76bb6e96c",
+      "bytes": 147146
+    },
+    "input.mlir": {
+      "sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+      "bytes": 10338
+    },
+    "kernel.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "kernel.ll": {
+      "sha256": "d46d6e470560cf80e60a8ea4641f4089ed9d9e3cd0fe15e3a6e17716d69845a5",
+      "bytes": 271609
+    },
+    "kernel.o3.launch.json": {
+      "sha256": "dac6b497a7f044163e085d10f1ceba75528884227202b21d79ad7ac87e3e85df",
+      "bytes": 239
+    },
+    "kernel.o3.ll": {
+      "sha256": "456c3618ae800239dc9a97cd59ed97f8908b490df82acad5abf18cd8c44a4982",
+      "bytes": 271770
+    },
+    "lowering.log": {
+      "sha256": "b3c9ef753f6eb1fee64cc3e962bae2b1b382c65cfd65bd166d95026b26f60670",
+      "bytes": 8863526
+    },
+    "metrics.json": {
+      "sha256": "f91e9fb0cd2f47b40c78e9fa3ffdd58363985d8a3533481c1fbd19f672a3d8aa",
+      "bytes": 837
+    },
+    "regression.log": {
+      "sha256": "6f099409fb709a4564384532e14602ff7d2da5841ffda925c0117676f809e34b",
+      "bytes": 3170
+    },
+    "run_gpu.sh": {
+      "sha256": "ad02c94f58688b6307821b4ca0d4d6aea894a3c52b6ce56ac082ae339c0a07a0",
+      "bytes": 643
+    },
+    "trace.log": {
+      "sha256": "594010e77efb083d4ad4b7016fc47562cc3e0c5f2691015e9f3c56721ccd173f",
+      "bytes": 1650
+    },
+    "trace_comparison.json": {
+      "sha256": "8acb59fd3d41c9c8dd2bf71a6eab7947a071159cde326cb179fac250fcd17281",
+      "bytes": 1598
+    },
+    "validation.json": {
+      "sha256": "a88d8cea7bda7df4892aca675943af7fabc0fc7f2e0bf6739e0416586536363b",
+      "bytes": 1325
+    },
+    "validation.log": {
+      "sha256": "b16f148089fd12c818916833276fc47a2fd1f6d76870aa8ba47f6e5c097dc32f",
+      "bytes": 938
+    },
+    "verify.py": {
+      "sha256": "98477a224531f63dbf1d12c61091326d7f1d8fa6bca07c7ca45c13558901b6a9",
+      "bytes": 1762
+    }
+  },
+  "source_files": {
+    "3rd/deepgengraph/include/deepgengraph/Analysis/LowerInfo.h": {
+      "sha256": "ee41ca713ffd1b49d5bcd03d2df12ff44dacff7595d9a26e7d3ab6cfa62be84c",
+      "bytes": 26535
+    },
+    "3rd/deepgengraph/lib/Analysis/LowerInfo.cpp": {
+      "sha256": "967e921caf16c54b0abf48040fd34cca5d9aa32ccf107e5e655e07893cdc55f5",
+      "bytes": 71471
+    },
+    "3rd/deepgengraph/lib/Conversion/FriskToBase/FriskBaseToTheadlevelIR_plan2.cpp": {
+      "sha256": "52e5d5b3fd5c59aa9d2c628f490b5b2245cc33f4872c354ea9b1442538880914",
+      "bytes": 295417
+    },
+    "3rd/deepgengraph/lib/Conversion/FriskToBase/WmmaLayoutConversion.cpp": {
+      "sha256": "5b3798bb94383a061afe4d97e5889d16b3097326bf5837b6da411f3adf199632",
+      "bytes": 11316
+    }
+  },
+  "fusion": {
+    "gemm_before": 5,
+    "gemm_after": 5,
+    "add_before": 7,
+    "add_after": 2
+  },
+  "validation": {
+    "llvm_as_raw_and_o3": true,
+    "llvm_opt_o3_verify": true,
+    "cpu_model_cases": 4,
+    "trace_matches_original": true,
+    "gpu_tested": false
+  }
+}

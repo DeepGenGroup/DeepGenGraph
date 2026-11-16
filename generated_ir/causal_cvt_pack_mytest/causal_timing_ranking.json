@@ -1,0 +1,331 @@
+[
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000001/kernel.ll",
+    "line": 1138,
+    "min_ms": 1.151519,
+    "median_ms": 1.168559,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000002/kernel.ll",
+    "line": 1170,
+    "min_ms": 1.150719,
+    "median_ms": 1.169279,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group4.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group4.ll)",
+    "line": 501,
+    "min_ms": 1.160471,
+    "median_ms": 1.17687,
+    "unsafe_section": false
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_deferred_sum/kernel.ll",
+    "line": 1035,
+    "min_ms": 1.18896,
+    "median_ms": 1.20128,
+    "unsafe_section": false
+  },
+  {
+    "label": "unlabeled; inspect source context",
+    "line": 1067,
+    "min_ms": 1.187359,
+    "median_ms": 1.20392,
+    "unsafe_section": false
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/online_softmax_native_acc/kernel.ll   改进后的safe-oneline-softmax",
+    "line": 1073,
+    "min_ms": 1.232959,
+    "median_ms": 1.242959,
+    "unsafe_section": false
+  },
+  {
+    "label": "[group16.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group16.ll)",
+    "line": 490,
+    "min_ms": 1.21935,
+    "median_ms": 1.24431,
+    "unsafe_section": false
+  },
+  {
+    "label": "[k0_prefetch_pv_tail.ll](/data2/xsl/DeepGenGraph/generated_ir/retained_cross_bn_k0/k0_prefetch_pv_tail.ll)",
+    "line": 1222,
+    "min_ms": 1.244477,
+    "median_ms": 1.252957,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000005/kernel.ll",
+    "line": 1180,
+    "min_ms": 1.241438,
+    "median_ms": 1.255838,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group8.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group8.ll)",
+    "line": 496,
+    "min_ms": 1.230549,
+    "median_ms": 1.256229,
+    "unsafe_section": false
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000006/kernel.ll",
+    "line": 1185,
+    "min_ms": 1.231518,
+    "median_ms": 1.257279,
+    "unsafe_section": true
+  },
+  {
+    "label": "[retained_32words.ll](/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/retained_32words.ll)",
+    "line": 1254,
+    "min_ms": 1.23232,
+    "median_ms": 1.25728,
+    "unsafe_section": true
+  },
+  {
+    "label": "[k0_late_control.ll](/data2/xsl/DeepGenGraph/generated_ir/retained_cross_bn_k0/k0_late_control.ll)：",
+    "line": 1191,
+    "min_ms": 1.231517,
+    "median_ms": 1.257357,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group32.ll](/data2/xsl/DeepGenGraph/generated_ir/causal_v_double_buffer_reverse/group32.ll)",
+    "line": 485,
+    "min_ms": 1.263029,
+    "median_ms": 1.301509,
+    "unsafe_section": false
+  },
+  {
+    "label": "[retained_24words.ll](/data2/xsl/DeepGenGraph/generated_ir/q_bk_retention_sweep/retained_24words.ll)",
+    "line": 1286,
+    "min_ms": 1.36832,
+    "median_ms": 1.3812,
+    "unsafe_section": true
+  },
+  {
+    "label": "[对齐后的稳定版 kernel.ll](/data2/xsl/DeepGenGraph/generated_ir/online_softmax_best_aligned/kernel.ll)  safe softmax 初版",
+    "line": 1105,
+    "min_ms": 1.438398,
+    "median_ms": 1.448637,
+    "unsafe_section": false
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained32_group_prefetch/run-20261023-163255-p16epokv/grid-000003/kernel.ll",
+    "line": 1175,
+    "min_ms": 1.290879,
+    "median_ms": 1.500798,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/q_two_bk_retained/retained_16words.ll",
+    "line": 1318,
+    "min_ms": 1.479838,
+    "median_ms": 1.501919,
+    "unsafe_section": true
+  },
+  {
+    "label": "[fragment_pair.ll](/data2/xsl/DeepGenGraph/generated_ir/retained_local_schedule/fragment_pair.ll)",
+    "line": 1445,
+    "min_ms": 1.606401,
+    "median_ms": 1.622721,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained_local_schedule/combined.ll",
+    "line": 1414,
+    "min_ms": 1.601281,
+    "median_ms": 1.624641,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained_ds_pair_schedule/ds_pair_prefetch.ll",
+    "line": 1382,
+    "min_ms": 1.59712,
+    "median_ms": 1.625999,
+    "unsafe_section": true
+  },
+  {
+    "label": "[wait_tail2.ll](/data2/xsl/DeepGenGraph/generated_ir/retained_local_schedule/wait_tail2.ll)",
+    "line": 1476,
+    "min_ms": 1.628322,
+    "median_ms": 1.642482,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/retained_ds_pair_schedule/ds_pair_prefetch_soft.ll",
+    "line": 1350,
+    "min_ms": 1.628798,
+    "median_ms": 1.645998,
+    "unsafe_section": true
+  },
+  {
+    "label": "[retained_8words.ll](/data2/xsl/DeepGenGraph/generated_ir/invariant_fragment_pass/retained_8words.ll)",
+    "line": 1508,
+    "min_ms": 1.634406,
+    "median_ms": 1.646087,
+    "unsafe_section": true
+  },
+  {
+    "label": "[Q fragment 保留实验 IR](/data2/xsl/DeepGenGraph/generated_ir/q_bk32_retained/q_bk32_retained.ll)。",
+    "line": 1540,
+    "min_ms": 1.637116,
+    "median_ms": 1.745356,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group8_reverse_k128_gep.ll](/data2/xsl/DeepGenGraph/generated_ir/group8_reverse_k_gep/group8_reverse_k128_gep.ll)",
+    "line": 1795,
+    "min_ms": 1.758087,
+    "median_ms": 1.779047,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/group8_reverse_k_swizzle/group8_reverse_k_swizzle128.ll",
+    "line": 1891,
+    "min_ms": 1.800637,
+    "median_ms": 1.820478,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group8_reverse_control.ll](/data2/xsl/DeepGenGraph/generated_ir/group8_reverse_k_swizzle/group8_reverse_control.ll)",
+    "line": 1859,
+    "min_ms": 1.831837,
+    "median_ms": 1.847678,
+    "unsafe_section": true
+  },
+  {
+    "label": "group8-reverse",
+    "line": 1954,
+    "min_ms": 1.829119,
+    "median_ms": 1.848958,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group8_reverse_q32_k128_swizzle.ll](/data2/xsl/DeepGenGraph/generated_ir/group8_reverse_qk_swizzle/group8_reverse_q32_k128_swizzle.ll)",
+    "line": 1827,
+    "min_ms": 1.860477,
+    "median_ms": 1.883117,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/generic_lds_reads/optimized.ll",
+    "line": 1572,
+    "min_ms": 1.778074,
+    "median_ms": 1.908392,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/block_order/query_fast_reverse.ll",
+    "line": 1923,
+    "min_ms": 1.8968,
+    "median_ms": 1.9452,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/block_order/baseline_swap_bx_by.ll",
+    "line": 2145,
+    "min_ms": 1.905596,
+    "median_ms": 1.973675,
+    "unsafe_section": true
+  },
+  {
+    "label": "group16",
+    "line": 2018,
+    "min_ms": 1.93936,
+    "median_ms": 1.9784,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/block_order/group4.ll",
+    "line": 2080,
+    "min_ms": 1.9832,
+    "median_ms": 2.01464,
+    "unsafe_section": true
+  },
+  {
+    "label": "group2：",
+    "line": 2111,
+    "min_ms": 2.043521,
+    "median_ms": 2.064561,
+    "unsafe_section": true
+  },
+  {
+    "label": "group8",
+    "line": 2049,
+    "min_ms": 2.063679,
+    "median_ms": 2.087359,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/two_bm_per_block/group8_reverse_k128_gep_two_bm.ll",
+    "line": 1669,
+    "min_ms": 1.911358,
+    "median_ms": 2.093919,
+    "unsafe_section": true
+  },
+  {
+    "label": "unlabeled; inspect source context",
+    "line": 1986,
+    "min_ms": 2.147039,
+    "median_ms": 2.159039,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/block_order/baseline.ll  acc=0.48",
+    "line": 2177,
+    "min_ms": 2.191675,
+    "median_ms": 2.230714,
+    "unsafe_section": true
+  },
+  {
+    "label": "(generated_ir/bm_bn_sweep/bm64_bn128.ll)",
+    "line": 1732,
+    "min_ms": 2.128636,
+    "median_ms": 2.260475,
+    "unsafe_section": true
+  },
+  {
+    "label": "/data2/xsl/DeepGenGraph/generated_ir/causal_best_mytest/group4.ll  causal 测试",
+    "line": 188,
+    "min_ms": 2.29774,
+    "median_ms": 2.337099,
+    "unsafe_section": false
+  },
+  {
+    "label": "(generated_ir/bm_bn_sweep/bm128_bn64.ll",
+    "line": 1763,
+    "min_ms": 2.278554,
+    "median_ms": 2.388074,
+    "unsafe_section": true
+  },
+  {
+    "label": "[group16 双 BM reverse IR](/data2/xsl/DeepGenGraph/generated_ir/two_bm_per_block/group16_reverse_k128_gep_two_bm.ll)",
+    "line": 1604,
+    "min_ms": 2.290236,
+    "median_ms": 2.483996,
+    "unsafe_section": true
+  },
+  {
+    "label": "[不 reverse 的双 BM 版本](/data2/xsl/DeepGenGraph/generated_ir/two_bm_per_block/group8_forward_k128_gep_two_bm.ll)",
+    "line": 1636,
+    "min_ms": 2.354553,
+    "median_ms": 2.696712,
+    "unsafe_section": true
+  },
+  {
+    "label": "(generated_ir/bm_bn_sweep/bm64_bn64.ll)",
+    "line": 1701,
+    "min_ms": 2.752155,
+    "median_ms": 3.025115,
+    "unsafe_section": true
+  },
+  {
+    "label": "generated_ir/gemm_result_layout_comparison/spill_analysis/kernel.ll  消融实验：基准 3.1策略，shm中转方案",
+    "line": 998,
+    "min_ms": 5.334074,
+    "median_ms": 5.346875,
+    "unsafe_section": false
+  }
+]

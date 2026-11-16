@@ -1,0 +1,4 @@
+warning: codegen with no subarch in the target triple is deprecated and will become an error; use the target triple 'amdgpu9.0a-amd-amdhsa' instead
+<inline asm>:1:2: error: instruction not supported on this GPU (gfx90a): v_cvt_pk_f16_f32
+        v_cvt_pk_f16_f32 v0, v0, v1
+        ^

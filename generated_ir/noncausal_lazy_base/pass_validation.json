@@ -1,0 +1,470 @@
+{
+  "exports": {
+    "pass_t8": {
+      "option": "--lazy-softmax-base=8",
+      "applied": true,
+      "sha256": "074d9f149bae387725a752429457ef01271b75ad819660be90153daaaae76d63",
+      "diagnostics": "Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=8.000000e+00, function=Attn_p2",
+      "structure": {
+        "fast": {
+          "fsub_vec4": 0,
+          "fmul_vec4": 0,
+          "fmul_vec8": 0,
+          "mmac": 256,
+          "exp2": 64,
+          "phi": 29,
+          "maxnum": 69,
+          "ballot": 1,
+          "barrier": 14,
+          "dma": 36,
+          "wait": 12,
+          "ds_read": 32,
+          "fsub_v1": 0,
+          "select": 2
+        },
+        "slow": {
+          "fsub_vec4": 16,
+          "fmul_vec4": 0,
+          "fmul_vec8": 8,
+          "mmac": 0,
+          "exp2": 2,
+          "phi": 0,
+          "maxnum": 2,
+          "ballot": 0,
+          "barrier": 0,
+          "dma": 0,
+          "wait": 0,
+          "ds_read": 0,
+          "fsub_v1": 2,
+          "select": 4
+        }
+      },
+      "LLVM_and_O3_verified": true,
+      "structure_matches_measured": true
+    },
+    "pass_t4": {
+      "option": "--lazy-softmax-base=4",
+      "applied": true,
+      "sha256": "e934b05097f4838379759ee365b81d3ec6856792cf0f8ef08413e8380046c332",
+      "diagnostics": "Lazy softmax base: rows=2, seeded-accumulators=16, scaled-state=5, threshold=4.000000e+00, function=Attn_p2",
+      "structure": {
+        "fast": {
+          "fsub_vec4": 0,
+          "fmul_vec4": 0,
+          "fmul_vec8": 0,
+          "mmac": 256,
+          "exp2": 64,
+          "phi": 29,
+          "maxnum": 69,
+          "ballot": 1,
+          "barrier": 14,
+          "dma": 36,
+          "wait": 12,
+          "ds_read": 32,
+          "fsub_v1": 0,
+          "select": 2
+        },
+        "slow": {
+          "fsub_vec4": 16,
+          "fmul_vec4": 0,
+          "fmul_vec8": 8,
+          "mmac": 0,
+          "exp2": 2,
+          "phi": 0,
+          "maxnum": 2,
+          "ballot": 0,
+          "barrier": 0,
+          "dma": 0,
+          "wait": 0,
+          "ds_read": 0,
+          "fsub_v1": 2,
+          "select": 4
+        }
+      },
+      "LLVM_and_O3_verified": true,
+      "structure_matches_measured": true
+    },
+    "pass_off": {
+      "option": "--lazy-softmax-base=off",
+      "applied": false,
+      "sha256": "42f8741ae3a2bf5a59b5ae0483dae863cfc08fb57c53a414f492bf383f9606f1",
+      "diagnostics": "",
+      "structure": {
+        "fast": {
+          "fsub_vec4": 16,
+          "fmul_vec4": 16,
+          "fmul_vec8": 0,
+          "mmac": 256,
+          "exp2": 66,
+          "phi": 7,
+          "maxnum": 70,
+          "ballot": 0,
+          "barrier": 14,
+          "dma": 36,
+          "wait": 12,
+          "ds_read": 32,
+          "fsub_v1": 2,
+          "select": 2
+        },
+        "slow": {
+          "fsub_vec4": 0,
+          "fmul_vec4": 0,
+          "fmul_vec8": 0,
+          "mmac": 0,
+          "exp2": 0,
+          "phi": 0,
+          "maxnum": 0,
+          "ballot": 0,
+          "barrier": 0,
+          "dma": 0,
+          "wait": 0,
+          "ds_read": 0,
+          "fsub_v1": 0,
+          "select": 0
+        }
+      },
+      "LLVM_and_O3_verified": true
+    }
+  },
+  "numeric": [
+    {
+      "kind": "random",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 0.000145755813135362,
+      "max_W": 1.0
+    },
+    {
+      "kind": "random",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 0.0001895754430157881,
+      "max_W": 14.170456886291504
+    },
+    {
+      "kind": "random",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 0.0001895754430157881,
+      "max_W": 14.170456886291504
+    },
+    {
+      "kind": "random",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 0.0001895754430157881,
+      "max_W": 14.170456886291504
+    },
+    {
+      "kind": "random",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 9.917702902600967e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "random",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 9.84526079852513e-05,
+      "max_W": 15.157699584960938
+    },
+    {
+      "kind": "random",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 9.84526079852513e-05,
+      "max_W": 15.157699584960938
+    },
+    {
+      "kind": "random",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 9.84526079852513e-05,
+      "max_W": 15.157699584960938
+    },
+    {
+      "kind": "max_changes",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 6.108607249871723e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "max_changes",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 7.01414721496485e-05,
+      "max_W": 16.93611717224121
+    },
+    {
+      "kind": "max_changes",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 7.01414721496485e-05,
+      "max_W": 16.93611717224121
+    },
+    {
+      "kind": "max_changes",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "max_abs_error": 6.108607249871723e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "negative_underflow",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 1.1494266800582409e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "negative_underflow",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 1.1494266800582409e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "negative_underflow",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 1.1494266800582409e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "negative_underflow",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 1.1494266800582409e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "gradual_growth",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 6.631746339996747e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "gradual_growth",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        11,
+        11,
+        11,
+        11
+      ],
+      "max_abs_error": 5.575284910003253e-05,
+      "max_W": 59.70643997192383
+    },
+    {
+      "kind": "gradual_growth",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        11,
+        11,
+        11,
+        11
+      ],
+      "max_abs_error": 5.575284910003253e-05,
+      "max_W": 59.70643997192383
+    },
+    {
+      "kind": "gradual_growth",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "max_abs_error": 5.575284910003253e-05,
+      "max_W": 7.726943016052246
+    },
+    {
+      "kind": "large_jump",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 5.555152893066406e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "large_jump",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "max_abs_error": 5.555152893066406e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "large_jump",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "max_abs_error": 5.555152893066406e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "large_jump",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "max_abs_error": 5.555152893066406e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "one_wave_triggers",
+      "variant": "control",
+      "slow_path_per_wave": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_abs_error": 5.969359923008177e-05,
+      "max_W": 1.0
+    },
+    {
+      "kind": "one_wave_triggers",
+      "variant": "lazy_t8",
+      "slow_path_per_wave": [
+        2,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 5.969359923008177e-05,
+      "max_W": 1.1198691129684448
+    },
+    {
+      "kind": "one_wave_triggers",
+      "variant": "pass_t8",
+      "slow_path_per_wave": [
+        2,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 5.969359923008177e-05,
+      "max_W": 1.1198691129684448
+    },
+    {
+      "kind": "one_wave_triggers",
+      "variant": "pass_t4",
+      "slow_path_per_wave": [
+        2,
+        1,
+        1,
+        1
+      ],
+      "max_abs_error": 5.969359923008177e-05,
+      "max_W": 1.1198691129684448
+    }
+  ],
+  "compared_against": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_lazy_base/lazy_t8.ll",
+  "measured_median_ms": 1.571839,
+  "gpu_tested": false
+}

@@ -1,0 +1,7 @@
+Approximate thread math: 16 reciprocal divisions, 2 shared reciprocals
+PASS mode strict {'translated_reciprocals': 0, 'native_exp2': 0, 'ocml_exp2': 66}
+PASS mode mmac {'translated_reciprocals': 0, 'native_exp2': 0, 'ocml_exp2': 66}
+PASS mode mmac-exp2 {'translated_reciprocals': 0, 'native_exp2': 66, 'ocml_exp2': 0}
+PASS mode mmac-recip {'translated_reciprocals': 2, 'native_exp2': 0, 'ocml_exp2': 66}
+PASS mode approx {'translated_reciprocals': 2, 'native_exp2': 66, 'ocml_exp2': 0}
+PASS: thread IR replay, raw/O3 LLVM verifier and five math modes

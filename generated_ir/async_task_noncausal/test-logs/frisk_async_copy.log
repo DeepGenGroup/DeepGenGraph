@@ -1,0 +1,2 @@
+PASS automatic DMA width: 16B packets, padded rows/view origins, alignment and partial-wave fallback
+PASS: Frisk async/sync copies, DMA addresses and guards, LLVM export, views, pipeline readiness

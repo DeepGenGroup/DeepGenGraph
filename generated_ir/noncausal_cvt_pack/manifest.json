@@ -1,0 +1,103 @@
+{
+  "variants": {
+    "control": {
+      "source": "generated_ir/noncausal_lazy_base/control.ll",
+      "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "o3_sha256": "da481db628d1ba3a16a20e5556c85cab462593b34ee03865f91853f4d629e67e",
+      "mode": "baseline",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 96,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "control_pk_rne": {
+      "source": "generated_ir/noncausal_lazy_base/control.ll",
+      "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "sha256": "95e8efed282a6fb3a4496b08d4d8f42fd6e089b4c33c992867c91a8cc173c85f",
+      "o3_sha256": "e4d765a4649c4ba17dd06d4af6b2ed6776629eed559da62d935b63502b675490",
+      "mode": "pk_rne",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 32,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "control_sdwa_rne": {
+      "source": "generated_ir/noncausal_lazy_base/control.ll",
+      "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "sha256": "f18b773cb4f84f64a253980e3413597501fd7a64bb388159da05c4bd82a425bc",
+      "o3_sha256": "0cbb87a428a587806feb486edbf79ed4f162fc1b133f727b799185498ccf9e4c",
+      "mode": "sdwa_rne",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 64,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "control_pk_rtz": {
+      "source": "generated_ir/noncausal_lazy_base/control.ll",
+      "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "sha256": "ab59e3f844e1377a7b6d38133e80473c09afb22e2bd785c125e3d852fa934dca",
+      "o3_sha256": "04c454ce37e38da4da90439f53a1811e234a830b97c7af5680ae7614bcdfbba9",
+      "mode": "pk_rtz",
+      "rounding": "toward-zero",
+      "softmax_convert_pack_instructions": 32,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "lazy_t8": {
+      "source": "generated_ir/noncausal_lazy_base/lazy_t8.ll",
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "o3_sha256": "4f685e20e99ef15397feb1c773e6cda019f5f40863f20385ccf3b0293474b648",
+      "mode": "baseline",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 96,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "lazy_t8_pk_rne": {
+      "source": "generated_ir/noncausal_lazy_base/lazy_t8.ll",
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "787666fc78fdc4bfc92b7367042393b945e0999d5517d93055ff20f348c750cf",
+      "o3_sha256": "873a8873ba83128bf8e92bee91fecdf061e941eeae3d1104a10f4d5c336fad1c",
+      "mode": "pk_rne",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 32,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "lazy_t8_sdwa_rne": {
+      "source": "generated_ir/noncausal_lazy_base/lazy_t8.ll",
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "052eaf07884ca71347f20bf502cad9a19cecc2c8e7c704517878317a27a84358",
+      "o3_sha256": "ecd7c85b7e0e606899d7d4cda59192659e3f06778e3d50ebbf6231509cf9a09a",
+      "mode": "sdwa_rne",
+      "rounding": "nearest-even",
+      "softmax_convert_pack_instructions": 64,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    },
+    "lazy_t8_pk_rtz": {
+      "source": "generated_ir/noncausal_lazy_base/lazy_t8.ll",
+      "source_sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "sha256": "0f250fb7a66ea0121bfd5aaa4499ea5baa09241a92d010a8f075af89b395d4d9",
+      "o3_sha256": "f987215797d43f0fd3a8222c28c9f56c8c2adcfcc1886f8edd2bd5687a8a549f",
+      "mode": "pk_rtz",
+      "rounding": "toward-zero",
+      "softmax_convert_pack_instructions": 32,
+      "LLVM_and_O3_verified": true,
+      "other_IR_byte_identical_to_source": true
+    }
+  },
+  "target": "gfx936",
+  "shape": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "causal": false,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "note": "Instruction counts are intended softmax-only counts, not measured speedups."
+}

@@ -1,0 +1,43 @@
+{
+  "tests": {
+    "unit": "passed",
+    "planning": "passed",
+    "dma_execution": "passed",
+    "dma_export": "passed",
+    "packing": "passed",
+    "async": "passed",
+    "double_buffer": "passed",
+    "softmax_fragments": "passed",
+    "swizzle": "passed",
+    "thread_tiling": "passed",
+    "ShmDataIOTest": "passed",
+    "LowerInfoInferenceTest": "passed",
+    "LowerInfoLayoutTest": "passed"
+  },
+  "artifacts": {
+    "noncausal": {
+      "llvm_sha256": "5869e77b9d4d324fa344d38a3e65bff069f00ca952dff060cb8f1a090e0d2383",
+      "o3_sha256": "c27bc6d0fb8d469811bfcca8af5ff75d493b97ca31e5a6a9a76d14cda4a12a04",
+      "mytest_sha256": "76862a9a97bd10f48938118194ab07d775f9530b9d049feba84f800b9a78d3c8",
+      "LLVM_and_O3_verified": true,
+      "dma8_instructions": 20,
+      "dma16_instructions": 16,
+      "packed_rtz_pairs": 32,
+      "gpu_tested": false,
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/shared_memory_plan/noncausal/kernel.o3.ll",
+      "launch_metadata_matches_reference": true
+    },
+    "causal": {
+      "llvm_sha256": "461c4fa620d38696359a2e11a6b4900aab918653263856498f36acd1797adb9f",
+      "o3_sha256": "ca8a31e7cfc5036bb52c10077e6fa3105eaa6d321bb7ec44abf5370b2d70a20e",
+      "mytest_sha256": "76862a9a97bd10f48938118194ab07d775f9530b9d049feba84f800b9a78d3c8",
+      "LLVM_and_O3_verified": true,
+      "dma8_instructions": 16,
+      "dma16_instructions": 16,
+      "packed_rtz_pairs": 32,
+      "gpu_tested": false,
+      "path": "/data2/xsl/DeepGenGraph/generated_ir/shared_memory_plan/causal/kernel.o3.ll",
+      "launch_metadata_matches_reference": true
+    }
+  }
+}

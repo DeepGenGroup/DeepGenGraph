@@ -1,0 +1,6 @@
+PASS computation boundary, read-only planning, generic names, exporter capabilities
+PASS ordinary GEMM and matrix readers consume published plans through DMA lowering
+PASS CPU numerical semantics for independent and dependent composed XOR layouts
+PASS explicit scalar read/write kernels need no GEMM layout anchor
+PASS unsupported explicit DMA export fails instead of silently narrowing
+PASS planned 8B DMA emits operations and rejects stale plans without fallback

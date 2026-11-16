@@ -1,0 +1,6 @@
+PASS planned 8B DMA 32x64, 64 threads, composed XOR and guard bytes
+PASS planned 8B DMA 24x64, 64 threads, composed XOR and guard bytes
+PASS planned 8B DMA 32x64, 128 threads, composed XOR and guard bytes
+PASS planned 8B DMA 24x64, 128 threads, composed XOR and guard bytes
+PASS planned 8B DMA 32x64, 256 threads, composed XOR and guard bytes
+PASS planned 8B DMA 24x64, 256 threads, composed XOR and guard bytes

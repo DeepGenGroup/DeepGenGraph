@@ -1,0 +1,4 @@
+PASS MyTest rejects legal
+mask-add-bypass must be off or approx; legal mode has been removed
+PASS legacy LLVM bypass entry point removed
+mask-add-bypass moved to ThreadIR; use MyTest --mask-add-bypass=off|approx or ThreadTilingTest --frisk-bypass-mask-adds

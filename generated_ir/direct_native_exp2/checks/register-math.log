@@ -1,0 +1,5 @@
+PASS independent MMAC pass: constant/unconditional CFG cleanup, both add orders, no load motion, idempotence, exp2/div unchanged
+PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal
+PASS late fusion after lifetime/thread-bound simplification
+PASS fused MMAC seed wiring CPU emulation
+PASS reciprocal CPU numerics and native exp2 codegen (gfx90a structural check only)

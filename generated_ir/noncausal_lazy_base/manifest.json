@@ -1,0 +1,94 @@
+{
+  "variants": {
+    "control": {
+      "sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+      "o3_sha256": "fa6e388e3678eab4060eefe853eb17486abd333a8fc109ad940f9a14ab48d3fb",
+      "branch_threshold": null,
+      "note": "byte copy of k0_sum_anchor.ll",
+      "LLVM_and_O3_verified": true,
+      "checks": {}
+    },
+    "lazy_t8": {
+      "sha256": "2ed74244534df53df31a9ca58ed4b6509c6a391a64f994ee516f8863e6896ab8",
+      "o3_sha256": "968da8c68bf9a872a9dc5ac91ea9bc49df55f36b3fa9c9324611bbcef253cc49",
+      "branch_threshold": "8.000000e+00",
+      "note": "primary candidate",
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "loop_MMAC": 256,
+        "fast_fsub_vec4": 0,
+        "fast_fmul_vec4": 0,
+        "fast_exp2": 64,
+        "slow_fsub_vec4": 16,
+        "slow_exp2": 2,
+        "O3": {
+          "loop_MMAC": 256,
+          "fast_fsub_vec4": 0,
+          "fast_fmul_vec4": 0,
+          "fast_exp2": 64,
+          "slow_fsub_vec4": 16,
+          "slow_exp2": 2
+        }
+      }
+    },
+    "lazy_t4": {
+      "sha256": "598aa95c879dad59581581081589c60788695648c1ca8f85a87ef63c8697cb35",
+      "o3_sha256": "f24ea2a40b47a2fad95f436aeaa5cda131f6c711c367465e37a8425f7188ddf3",
+      "branch_threshold": "4.000000e+00",
+      "note": "more frequent rescale, smaller P bound",
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "loop_MMAC": 256,
+        "fast_fsub_vec4": 0,
+        "fast_fmul_vec4": 0,
+        "fast_exp2": 64,
+        "slow_fsub_vec4": 16,
+        "slow_exp2": 2,
+        "O3": {
+          "loop_MMAC": 256,
+          "fast_fsub_vec4": 0,
+          "fast_fmul_vec4": 0,
+          "fast_exp2": 64,
+          "slow_fsub_vec4": 16,
+          "slow_exp2": 2
+        }
+      }
+    },
+    "lazy_always": {
+      "sha256": "67b90527e3d1bd69118caf61c9d3e2af5c3879c7b3ae1414ba25a50208786d57",
+      "o3_sha256": "3b9b2187672c42c6e1c2eb864ddd5f76e26ab457922e45e1e36be2e217de734a",
+      "branch_threshold": "0xFFF0000000000000",
+      "note": "always takes the slow path",
+      "LLVM_and_O3_verified": true,
+      "checks": {
+        "loop_MMAC": 256,
+        "fast_fsub_vec4": 0,
+        "fast_fmul_vec4": 0,
+        "fast_exp2": 64,
+        "slow_fsub_vec4": 16,
+        "slow_exp2": 2,
+        "O3": {
+          "loop_MMAC": 256,
+          "fast_fsub_vec4": 0,
+          "fast_fmul_vec4": 0,
+          "fast_exp2": 64,
+          "slow_fsub_vec4": 16,
+          "slow_exp2": 2
+        }
+      }
+    }
+  },
+  "source": "/data2/xsl/DeepGenGraph/generated_ir/noncausal_cross_bn_k0_lifetimes/k0_sum_anchor.ll",
+  "source_sha256": "b3b554be9a1a0934add236ec0bb978319bd07fa6b609dc5a15537790b278743d",
+  "target": "gfx936",
+  "shape": [
+    1,
+    32,
+    4096,
+    128
+  ],
+  "causal": false,
+  "gpu_tested": false,
+  "target_codegen_tested": false,
+  "note": "IR rewrite only; no compiler pass changed. Non-causal only."
+}

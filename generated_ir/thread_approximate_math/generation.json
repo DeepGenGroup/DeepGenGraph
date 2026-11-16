@@ -1,0 +1,54 @@
+{
+  "thread_divisions_before": 16,
+  "thread_reciprocals_after": 2,
+  "serialized_pass_replay_equal": true,
+  "llvm_verified": true,
+  "o3_verified": true,
+  "modes": {
+    "strict": {
+      "translated_reciprocals": 0,
+      "native_exp2": 0,
+      "ocml_exp2": 66
+    },
+    "mmac": {
+      "translated_reciprocals": 0,
+      "native_exp2": 0,
+      "ocml_exp2": 66
+    },
+    "mmac-exp2": {
+      "translated_reciprocals": 0,
+      "native_exp2": 66,
+      "ocml_exp2": 0
+    },
+    "mmac-recip": {
+      "translated_reciprocals": 2,
+      "native_exp2": 0,
+      "ocml_exp2": 66
+    },
+    "approx": {
+      "translated_reciprocals": 2,
+      "native_exp2": 66,
+      "ocml_exp2": 0
+    }
+  },
+  "gpu_tested": false,
+  "sha256": {
+    "input.mlir": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+    "thread.before.mlir": "59d1983ce0b4d8692cf7bf48934c7f8228f76ac3785d00ec30bd1e5271b7fcc2",
+    "thread.after.mlir": "0989f0d00159f6fa4a67ec61bfa6eba29c81521433501c0471369df797f7e259",
+    "kernel.ll": "feb7a7816ae4f8587fc25d8a0c03fdcf08eeb6735c7d8d4dd5c9415ecbd80eb7",
+    "kernel.o3.ll": "2ec1d44ddfdc10245f0ec5b860f3c0d1e2b496970859ae5daec6acf60fb9be42"
+  },
+  "final_rebuild_kernel_bitwise_identical": true,
+  "thread_math_unit_tests": "passed, including fast-math exclusions and 1005 CPU cases",
+  "native_exp2_regression": "passed",
+  "baseline_comparison": {
+    "ll": {
+      "equal_after_sinking_reciprocals_to_first_use": true
+    },
+    "o3.ll": {
+      "equal_after_sinking_reciprocals_to_first_use": true
+    }
+  },
+  "compiler_sha256": "be9e8aaec89099d11290be5212cc637fe37980d1943a58316a943213389f6ebf"
+}

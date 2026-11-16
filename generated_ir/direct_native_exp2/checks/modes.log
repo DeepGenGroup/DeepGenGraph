@@ -1,0 +1,5 @@
+PASS strict {'native_exp2_calls': 0, 'ocml_exp2_calls': 66}
+PASS mmac {'native_exp2_calls': 0, 'ocml_exp2_calls': 66}
+PASS mmac-recip {'native_exp2_calls': 0, 'ocml_exp2_calls': 66}
+PASS mmac-exp2 {'native_exp2_calls': 66, 'ocml_exp2_calls': 0}
+PASS approx {'native_exp2_calls': 66, 'ocml_exp2_calls': 0}

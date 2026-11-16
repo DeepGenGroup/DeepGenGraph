@@ -1,0 +1,10 @@
+{
+  "script": "generated_ir/wave_invariant_noncausal/command.sh",
+  "input": "generated_ir/async_task_noncausal/input.mlir",
+  "tuning_parameters_source": "generated_ir/async_task_noncausal/command.sh (unchanged)",
+  "new_flags_all_default_on": ["--simplify-bounded-affine", "--hoist-lds-bases", "--hoist-lane-shuffles", "--elide-backedge-barrier"],
+  "measured_reference": "generated_ir/noncausal_cross_bn_k0_lifetimes/k0_sum_anchor.ll",
+  "reference_median_ms": 1.6633449792861938,
+  "hardware_tested": false,
+  "baseline": "baseline.ll (byte-identical to async_task_noncausal/kernel.ll and to this command with all four flags at 0)"
+}

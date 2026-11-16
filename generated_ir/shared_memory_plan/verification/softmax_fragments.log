@@ -1,0 +1,1 @@
+PASS softmax fragment scheduling: both modes, exact DAG, sum-before-pack, PV order, idempotence, renaming, 8 rejection cases, live external use, invalid CLI

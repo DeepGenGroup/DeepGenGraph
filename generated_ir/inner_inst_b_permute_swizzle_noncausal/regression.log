@@ -1,0 +1,11 @@
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 0.804s
+
+OK
+PASS 28 V double-buffer cases (sizes, packet/stage counts, reverse slot, renaming, safety, idempotence, CLI)
+........
+----------------------------------------------------------------------
+Ran 8 tests in 2.474s
+
+OK
