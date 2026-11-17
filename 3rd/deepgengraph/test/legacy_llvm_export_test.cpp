@@ -41,14 +41,8 @@ static void replaceLegacyExp2(llvm::Module &module) {
 }
 
 int main(int argc, char **argv) {
-  mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off;
-  bool softmaxFragmentsSpecified = false;
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
-  unsigned kLDSPrefetch = 0;
-  bool kLDSPrefetchSpecified = false;
-  unsigned kTailPrefetch = 0;
-  bool kTailPrefetchSpecified = false;
   bool crossBNK0 = false, crossBNK0Specified = false, elideBackedgeBarrier = false;
   bool lazySoftmaxBase = false, lazySoftmaxBaseSpecified = false;
   bool softmaxCvtPack = false, softmaxCvtPackSpecified = false;
@@ -61,18 +55,12 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     llvm::StringRef option(argv[i]);
     bool consumed = false;
-    if (!mlir::frisk::parseSoftmaxFragmentOption(option, softmaxFragments, consumed)) {
-      llvm::errs() << "use --softmax-fragments=off|fragment|pv\n"; return 1;
+    if (option.starts_with("--softmax-fragments") ||
+        option.starts_with("--k-lds-prefetch") ||
+        option.starts_with("--k-tail-prefetch")) {
+      llvm::errs() << "paired LDS/softmax scheduling moved to ThreadIR; use MyTest or ThreadTilingTest\n";
+      return 1;
     }
-    if (consumed) { softmaxFragmentsSpecified = true; continue; }
-    if (!mlir::frisk::parsePairedLDSOption(option, kLDSPrefetch, consumed)) {
-      llvm::errs() << "use --k-lds-prefetch=0..8\n"; return 1;
-    }
-    if (consumed) { kLDSPrefetchSpecified = true; continue; }
-    if (!mlir::frisk::parsePairedLDSTailOption(option, kTailPrefetch, consumed)) {
-      llvm::errs() << "use --k-tail-prefetch=0..8\n"; return 1;
-    }
-    if (consumed) { kTailPrefetchSpecified = true; continue; }
     if (!mlir::frisk::parseCrossBNK0Option(option, crossBNK0, consumed)) {
       llvm::errs() << "use --cross-bn-k0=0|1\n"; return 1;
     }
@@ -138,9 +126,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (softmaxFragmentsSpecified || !localReduce.empty() || !deferLaneSum.empty() || kLDSPrefetchSpecified || kTailPrefetchSpecified || crossBNK0Specified || lazySoftmaxBaseSpecified || softmaxCvtPackSpecified) {
+  if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified || lazySoftmaxBaseSpecified || softmaxCvtPackSpecified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--lazy-softmax-base=off|<threshold>] [--softmax-fragments=off|fragment|pv] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] [--lazy-softmax-base=off|<threshold>] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -154,9 +142,6 @@ int main(int argc, char **argv) {
       mlir::frisk::optimizeLocalReductions(*module, localReductionOptions);
     if (!deferLaneSum.empty() && deferLaneSum != "off")
       mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
-    if (!mlir::frisk::prefetchPairedLDS(*module, kLDSPrefetch)) return 1;
-    mlir::frisk::scheduleSoftmaxFragments(*module, softmaxFragments);
-    if (!mlir::frisk::prefetchPairedLDSTail(*module, kTailPrefetch)) return 1;
     mlir::frisk::prefetchNextK(*module, crossBNK0);
     if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(*module);
     // 放在依赖 workgroup-uniform 控制流的 Pass 之后。
@@ -195,7 +180,7 @@ int main(int argc, char **argv) {
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
   if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] <input.ll or ->\n";
+    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--cross-bn-k0=0|1] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;

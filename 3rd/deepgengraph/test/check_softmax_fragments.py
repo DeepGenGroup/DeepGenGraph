@@ -47,87 +47,12 @@ def insts(text):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix='softmax-fragments-') as tmp:
-        p = Path(tmp)/'input.ll'
-        def run(text,mode='pv'):
-            p.write_text(text)
-            out = subprocess.run([TOOL,'--softmax-fragments='+mode,p],text=True,capture_output=True)
-            assert out.returncode == 0, out.stderr
-            return out.stdout
-        base = fixture()
-        off = run(base,'off')
-        for mode in ('fragment','pv'):
-            out = run(base,mode)
-            assert Counter(insts(out)) == Counter(insts(off))
-            assert out.count('call void @llvm.amdgcn.sched.barrier') == 4
-            assert out.index('%p0 =') < out.index('%sub1 =')
-            for f in (1,3):
-                for lane in range(4):
-                    assert out.index(f'%sum{f}_{lane} =') < out.index(f'%r{f} =')
-            expected = [0,1,2,3] if mode == 'fragment' else [0,2,1,3]
-            assert re.findall(r'%p(\d) =',out) == list(map(str,expected))
-            assert re.findall(r'%mma(\d) =',out) == ['0','2','1','3']
-            if mode == 'fragment':
-                assert out.index('%p3 =') < out.index('%mma0 =')
-            else:
-                assert out.index('%mma0 =') < out.index('%p2 =')
-            twice = run(out,mode)
-            assert insts(twice) == insts(out)
-            assert twice.count('call void @llvm.amdgcn.sched.barrier') == 4
-        # Earlier DMA emission leaves wave-base reads in the scheduling
-        # interval. Keep them and both DMA widths fixed while moving math.
-        for words in (2, 4):
-            setup = ('  %leader = call i32 @llvm.amdgcn.readfirstlane.i32(i32 32)\n'
-                     f'  %dma = call i32 asm sideeffect "s_mov_b32 $0, $1\\0A\\09buffer_load_dwordx{words} $2, $3, 0 offen lds", '
-                     '"={m0},s,v,s,~{memory}"(i32 %leader, i32 0, <4 x i32> zeroinitializer)\n')
-            mixed = 'declare i32 @llvm.amdgcn.readfirstlane.i32(i32)\n' + base.replace(
-                '  call void @llvm.amdgcn.s.barrier()', setup + '  call void @llvm.amdgcn.s.barrier()')
-            moved = run(mixed)
-            assert moved.count('call void @llvm.amdgcn.sched.barrier') == 4
-            assert Counter(insts(moved)) == Counter(insts(run(mixed, 'off')))
-            assert moved.index('%leader =') < moved.index('%dma =') < moved.index('call void @llvm.amdgcn.s.barrier()')
-        # ThreadIR canonicalization can leave a wave sum before PV. Its lane
-        # exchange stays fixed, while packet math may sink across it. Preserve
-        # the exact denominator DAG and emit every input before the exchange.
-        wave = ('declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)\n' +
-                base.replace('  call void @llvm.amdgcn.s.barrier()',
-                    '  %sum_bits = bitcast float %sum1_0 to i32\n'
-                    '  %wave_sum = call i32 @llvm.amdgcn.ds.bpermute(i32 16, i32 %sum_bits)\n'
-                    '  call void @llvm.amdgcn.s.barrier()').replace(
-                    '  ret void', '  store i32 %wave_sum, ptr %out\n  ret void'))
-        for mode in ('fragment', 'pv'):
-            moved = run(wave, mode)
-            assert moved.count('call void @llvm.amdgcn.sched.barrier') == 4
-            assert Counter(insts(moved)) == Counter(insts(run(wave, 'off')))
-            assert moved.index('%sum1_0 =') < moved.index('%sum_bits =') < moved.index('%wave_sum =')
-            assert moved.index('%wave_sum =') < moved.index('call void @llvm.amdgcn.s.barrier()') < moved.index('%mma0 =')
-            assert insts(run(moved, mode)) == insts(moved)
-            if mode == 'pv':
-                assert moved.index('%mma0 =') < moved.index('%p2 =')
-        renamed = re.sub(r'%([A-Za-z]\w*)',r'%rename_\1',base)
-        assert re.findall(r'%rename_p(\d) =',run(renamed)) == ['0','2','1','3']
-        rejected = {
-            'unknown_call': base.replace('  call void @llvm.amdgcn.s.barrier()', '  call void @unknown()'),
-            'store_boundary': base.replace('  call void @llvm.amdgcn.s.barrier()', '  store volatile <4 x float> %score, ptr %out'),
-            'strictfp': base.replace('ptr %out) {','ptr %out) strictfp {'),
-            'optnone': base.replace('ptr %out) {','ptr %out) noinline optnone {'),
-            'unowned_identity': base.replace(', !frisk.register_lifetimes !0',''),
-            'nonidentity_asm': base.replace('asm sideeffect "",','asm sideeffect "s_nop 0",'),
-            'nonexp': base.replace('llvm.amdgcn.exp2.f32','other_exp'),
-            'sideeffect_mma': base.replace('asm "v_mmac','asm sideeffect "v_mmac'),
-        }
-        for name,text in rejected.items():
-            out = run(text)
-            assert insts(out) == insts(run(text,'off')), name
-            assert '"frisk.softmax_fragments"' not in out, name
-        # An unrelated live use of a shifted score must remain dominated.
-        extra = base.replace('  %x0_0 =', '  %extra = fadd <4 x float> %sub1, %score\n  %x0_0 =')
-        extra = extra.replace('  ret void', '  store <4 x float> %extra, ptr %out\n  ret void')
-        assert Counter(insts(run(extra))) == Counter(insts(run(extra,'off')))
-        for mode in ('', 'true', '1', 'Fragment', 'pv-more'):
-            p.write_text(base)
-            assert subprocess.run([TOOL,'--softmax-fragments='+mode,p],capture_output=True).returncode != 0
-    print('PASS softmax fragment scheduling: both modes, exact DAG, sum-before-pack, PV order, wave-sum exchange, idempotence, renaming, 8 rejection cases, live external use, invalid CLI')
+    # Keep fixture() for the independent LLVM half-packing tests.
+    for mode in ('off', 'fragment', 'pv'):
+        p = subprocess.run([TOOL, '--softmax-fragments='+mode], text=True, capture_output=True)
+        assert p.returncode != 0 and 'moved to ThreadIR' in p.stderr, p.stderr
+        assert not p.stdout
+    print('PASS LLVM softmax scheduling entry removed; see check_thread_fragment_schedules.py')
 
 
 if __name__ == '__main__': main()

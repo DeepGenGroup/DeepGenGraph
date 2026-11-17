@@ -452,7 +452,11 @@ unsigned scheduleMathConsumers(llvm::Function &function) {
         if (auto *definition = llvm::dyn_cast<llvm::Instruction>(operand))
           if (definition->getParent() == &block && !llvm::isa<llvm::PHINode>(definition) &&
               (!latest || latest->comesBefore(definition))) latest = definition;
-      if (latest && latest->getNextNode() != inst)
+      // ThreadIR has already interleaved softmax producers and FP32 sums with
+      // PV. Preserve that order; still materialize conversion boundaries for
+      // the existing packing and register-pressure contracts.
+      if (!function.hasFnAttribute("frisk.softmax_fragments") &&
+          latest && latest->getNextNode() != inst)
         inst->moveBefore(block, std::next(latest->getIterator()));
       auto *narrow = llvm::dyn_cast<llvm::FPTruncInst>(inst);
       if (!narrow || !canMaterialize(narrow->getOperand(0)->getType(), layout) ||

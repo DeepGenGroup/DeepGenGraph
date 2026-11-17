@@ -15,6 +15,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include <optional>
 #include <regex>
 #include <string>
@@ -53,6 +54,25 @@
 
 namespace mlir::frisk{
 using namespace llvm;
+
+void canonicalizeLLVMExport(llvm::Module &module) {
+  LoopAnalysisManager loops;
+  FunctionAnalysisManager functions;
+  CGSCCAnalysisManager cgscc;
+  llvm::ModuleAnalysisManager modules;
+  PassBuilder builder;
+  builder.registerModuleAnalyses(modules);
+  builder.registerCGSCCAnalyses(cgscc);
+  builder.registerFunctionAnalyses(functions);
+  builder.registerLoopAnalyses(loops);
+  builder.crossRegisterProxies(loops, functions, cgscc, modules);
+  FunctionPassManager pipeline;
+  pipeline.addPass(EarlyCSEPass());
+  pipeline.addPass(InstCombinePass());
+  pipeline.addPass(EarlyCSEPass());
+  for (auto &function : module)
+    if (!function.isDeclaration()) pipeline.run(function, functions);
+}
 
 namespace {
 bool containsSharedPointer(llvm::Type *type) {

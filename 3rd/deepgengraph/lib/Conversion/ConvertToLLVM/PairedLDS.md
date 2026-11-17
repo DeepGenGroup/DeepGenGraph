@@ -1,5 +1,54 @@
 # Paired K/B LDS prefetch
 
+## ThreadIR production pipeline
+
+MyTest now performs all three schedules before async/GPU/LLVM lowering, after
+physical LDS address canonicalization, thread unrolling, local reductions,
+deferred lane sums and PV interleaving:
+
+1. `frisk-thread-prefetch-paired-lds` (`distance=0..8`).
+2. `frisk-thread-schedule-softmax-fragments` (`mode=off|fragment|pv`).
+3. `frisk-thread-prefetch-paired-lds-tail` (`distance=0..8`).
+
+The existing MyTest CLI options retain their meanings and defaults. The LDS
+passes compare explicit `frisk.lds_load` storage/anchor/byte offsets and
+alignment, fold exact vector extract/reassemble identities, and deduplicate
+ordinary reads only within a write-free epoch. Pairing, distance, SSA checks,
+same-block motion and synchronization boundaries follow the LLVM design below.
+Pure vector wrappers may remain in ThreadIR regions; only loads and checked
+integer address dependencies are hoisted. Tail excludes already protected
+loads and requires a local reduction.
+
+Softmax matching uses vector `arith.subf -> math.exp2 -> arith.truncf` and the
+actual MMAC A uses. It no longer depends on the register-lifetime pass's empty
+asm identities. The existing FP32 sum DAG and vector wrappers are scheduled
+when ready, including broadcasts, shape casts and vector FP32 additions in
+the lane-local recurrence. Leaving these wrappers fixed would force the entire
+exp2 row ahead of PV despite moving the casts. Scheduling preserves arithmetic,
+FP flags, the reduction DAG, and memory/MMAC operation order. Unknown effects and nested-region uses reject scheduling.
+The same fragment and PV modes remain available. Compiler scheduling guards
+are emitted directly in ThreadIR and survive ordinary lowering.
+
+Applied schedules are recorded on functions and in LLVM passthrough attributes.
+The LLVM register-lifetime pass preserves an existing softmax schedule while
+still materializing its conversion identities for downstream packing. MyTest
+does not call the three LLVM scheduling functions. Their LLVM implementations
+and public scheduling APIs have been removed.
+`LegacyLLVMExportTest` rejects all three options (including off/zero); the two
+old source files retain CLI parsing only for MyTest. The LLVM descriptions and
+measurements below are historical and cannot be replayed by the current binary.
+The generic EarlyCSE/InstCombine cleanup formerly bundled with LLVM LDS
+prefetch remains as `canonicalizeLLVMExport`: DMA lowering creates duplicate
+resource descriptors which must be folded before cross-iteration K0 analysis.
+It contains no pairing or scheduling logic.
+
+Tests: `python3 3rd/deepgengraph/test/check_thread_fragment_schedules.py`.
+Reproduction with the parameters of `thread_pv_interleave/noncausal/kernel.o3.ll`:
+`python3 generated_ir/thread_fragment_schedules/generate.py`. Output, full
+commands and verification records are in that directory's `noncausal/` folder.
+
+## Historical LLVM implementation (removed)
+
 `--k-lds-prefetch=0..8` controls a final LLVM function pass. Zero is the
 default and leaves the export unchanged. A nonzero value is the maximum
 number of independent MMAC instructions to move a read pair ahead of its

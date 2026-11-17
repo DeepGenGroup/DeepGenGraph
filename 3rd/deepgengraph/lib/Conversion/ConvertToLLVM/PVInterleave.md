@@ -63,8 +63,9 @@ Backend wait insertion, register allocation and physical execution still need
 hardware validation.
 
 The production insertion point follows lane-sum analysis so that new guards
-cannot hide its structured recurrence proof. Late softmax and LDS scheduling
-continue to consume the resulting LLVM order and guards.
+cannot hide its structured recurrence proof. Paired LDS, softmax fragment and
+tail LDS scheduling now follow it in ThreadIR, before async/GPU lowering; see
+`PairedLDS.md` for their order and lowering contracts.
 
 ## Reproduction
 

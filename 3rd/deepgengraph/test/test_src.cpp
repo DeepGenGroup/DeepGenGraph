@@ -387,9 +387,8 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators,
-                             unsigned kLDSPrefetch = 0,
-                             mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
-                             unsigned kTailPrefetch = 0, bool crossBNK0 = false,
+                             bool canonicalizeExport = false,
+                             bool crossBNK0 = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
                              bool lazySoftmaxBase = false, float lazyBaseThreshold = 8.0f,
                              bool dumpPasses = false, bool softmaxCvtPack = false) {
@@ -410,15 +409,12 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
     mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
   dumpLLVMPass(module, dumpPasses, "fuseMMACAccumulators");
 
-  // PV accumulator order and scheduling guards are complete in Thread IR.
-  if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
-    llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
-  dumpLLVMPass(module, dumpPasses, "prefetchPairedLDS");
-  mlir::frisk::scheduleSoftmaxFragments(module, softmaxFragments);
-  dumpLLVMPass(module, dumpPasses, "scheduleSoftmaxFragments");
-  if (!mlir::frisk::prefetchPairedLDSTail(module, kTailPrefetch))
-    llvm::report_fatal_error("cannot apply requested K tail LDS prefetch configuration");
-  dumpLLVMPass(module, dumpPasses, "prefetchPairedLDSTail");
+  // PV, paired LDS and softmax schedules are complete in ThreadIR.
+  // DMA lowering still creates duplicate descriptors. Retain the generic
+  // cleanup formerly bundled with the LLVM LDS scheduler so cross-BN K0 sees
+  // a common resource; this performs no scheduling or pairing.
+  if (canonicalizeExport) mlir::frisk::canonicalizeLLVMExport(module);
+  dumpLLVMPass(module, dumpPasses, "canonicalizeLLVMExport");
   mlir::frisk::prefetchNextK(module, crossBNK0);
   dumpLLVMPass(module, dumpPasses, "prefetchNextK");
   // Only legal after prefetchNextK: see the comment on elideBackedgeBarrier.
@@ -1217,6 +1213,26 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  if (kLDSPrefetch || kTailPrefetch) {
+    // Required even when the optional standalone canonicalizer was disabled.
+    AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+  }
+  if (kLDSPrefetch) {
+    AddPass(frisk::createThreadPrefetchPairedLDSPass(kLDSPrefetch));
+    llvm::outs() << "\n---- after thread prefetchPairedLDS -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+  if (softmaxFragments != frisk::SoftmaxFragmentMode::Off) {
+    AddPass(frisk::createThreadScheduleSoftmaxFragmentsPass(softmaxFragments));
+    llvm::outs() << "\n---- after thread scheduleSoftmaxFragments -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+  if (kTailPrefetch) {
+    AddPass(frisk::createThreadPrefetchPairedLDSTailPass(kTailPrefetch));
+    llvm::outs() << "\n---- after thread prefetchPairedLDSTail -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1287,7 +1303,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0, crossBNK0,
       hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {

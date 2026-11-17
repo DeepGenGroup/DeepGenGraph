@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reduction-aware paired LDS completion: generic matching and safety boundaries."""
+"""Retired LLVM entry point; scheduling coverage is in check_thread_fragment_schedules.py."""
 from collections import Counter, defaultdict
 from pathlib import Path
 import re
@@ -50,141 +50,12 @@ def instructions(text):
 
 
 class PairedLDSTail(unittest.TestCase):
-    def export(self, text, distance='4', ok=True):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / 'input.ll'
-            p.write_text(text)
-            result = subprocess.run([TOOL, '--k-tail-prefetch=' + distance, p], text=True, capture_output=True)
-            if not ok:
-                self.assertNotEqual(result.returncode, 0)
-                return result
-            self.assertEqual(result.returncode, 0, result.stderr)
-            p.write_text(result.stdout)
-            subprocess.run([OPT, '-passes=default<O3>,verify', p, '-disable-output'], check=True, capture_output=True)
-            return result
-
-    def test_generic_pairing_and_exact_fp_order(self):
-        for count, spacing, reduction in ((4, 64, 'maxnum'), (8, 128, 'minnum'),
-                (12, 512, 'maximum'), (8, 2048, 'minimum'), (8, 128, 'sum')):
-            text = fixture(count, spacing, reduction)
-            for distance in ('1', '2', '4', '8'):
-                with self.subTest(count=count, spacing=spacing, reduction=reduction, distance=distance):
-                    before = self.export(text, '0').stdout
-                    result = self.export(text, distance)
-                    self.assertIn(f'pairs={count//2}', result.stderr)
-                    a, b = instructions(before), instructions(result.stdout)
-                    self.assertEqual(Counter(a), Counter(b))
-                    self.assertEqual([l for l in a if ' = load ' not in l],
-                                     [l for l in b if ' = load ' not in l])
-                    self.assertLess(result.stdout.index('%k2 ='), result.stdout.index('%m1 ='))
-                    pairs = defaultdict(list)
-                    lines = result.stdout.splitlines()
-                    for i, l in enumerate(lines):
-                        if m := re.search(r'!frisk.k_tail_pair !(\d+)', l):
-                            pairs[m[1]].append(i)
-                    self.assertEqual(len(pairs), count//2)
-                    for positions in pairs.values():
-                        self.assertEqual(len(positions), 2)
-                        lo, hi = positions
-                        self.assertFalse(any('sched.barrier' in l for l in lines[lo:hi]))
-                        names = [re.match(r'  (%\w+) =', lines[n])[1] for n in positions]
-                        uses = [i for i,l in enumerate(lines) if 'v_mmac_' in l and
-                                any(re.search(re.escape(n)+r'[, )]', l) for n in names)]
-                        self.assertLess(hi, min(uses))
-                        self.assertLessEqual(sum('v_mmac_' in l for l in lines[hi+1:min(uses)]), int(distance))
-
-    def test_renaming_and_preexisting_main_pass(self):
-        text = fixture().replace('ptr %out) {', 'ptr %out) "frisk.k_lds_prefetch"="8" {')
-        text = re.sub(r'%([A-Za-z]\w*)', r'%renamed_\1', text).replace('@not_attention', '@another_gemm')
-        result = self.export(text)
-        self.assertIn('pairs=4', result.stderr)
-        self.assertIn('"frisk.k_lds_prefetch"="8"', result.stdout)
-        self.assertIn('"frisk.k_tail_prefetch"="4"', result.stdout)
-
-    def test_causal_mask_select_and_predicate(self):
-        for boundary in ('', 'call void @llvm.amdgcn.s.barrier()'):
-            text = fixture(boundary=boundary).replace(
-                'ptr %out)', 'ptr %out, i32 %row, i32 %col)')
-            for i in range(8):
-                extract = f'  %x{i} = extractelement <4 x float> %m{i}, i32 0'
-                text = text.replace(extract, extract +
-                    f'\n  %limit{i} = add i32 %row, {i + 1}' +
-                    f'\n  %future{i} = icmp uge i32 %col, %limit{i}' +
-                    f'\n  %masked{i} = select i1 %future{i}, float 0xFFF0000000000000, float %x{i}')
-                text = text.replace(f'@llvm.maxnum.f32(float %x{i},',
-                                    f'@llvm.maxnum.f32(float %masked{i},')
-            before = self.export(text, '0').stdout
-            result = self.export(text)
-            a, b = instructions(before), instructions(result.stdout)
-            self.assertEqual(Counter(a), Counter(b))
-            self.assertEqual([l for l in a if ' = load ' not in l],
-                             [l for l in b if ' = load ' not in l])
-            if boundary:
-                self.assertIn('moved=0, anchors=0', result.stderr)
-                self.assertEqual(a, b)
-            else:
-                self.assertIn('pairs=4', result.stderr)
-                self.assertLess(result.stdout.index('%k2 ='), result.stdout.index('%m1 ='))
-
-    def test_boundaries(self):
-        boundaries = ['call void @opaque()', 'call void @pure_unknown()',
-            'call void @llvm.amdgcn.s.barrier()', 'call void @llvm.amdgcn.sched.barrier(i32 0)',
-            'fence syncscope("workgroup") acquire', 'store i32 1, ptr addrspace(3) %base',
-            'call void asm sideeffect "s_waitcnt vmcnt(0)", "~{memory}"()',
-            '%wave$i = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 0)',
-            '%other$i = load volatile i32, ptr addrspace(3) %base']
-        for boundary in boundaries:
-            with self.subTest(boundary=boundary):
-                text = fixture(boundary=boundary)
-                result = self.export(text)
-                self.assertIn('moved=0, anchors=0', result.stderr)
-                self.assertEqual(instructions(result.stdout), instructions(self.export(text, '0').stdout))
-
-    def test_rejections(self):
-        base = fixture()
-        texts = [base.replace('load <4 x half>', 'load volatile <4 x half>'),
-                 base.replace('align 8', 'align 4'),
-                 base.replace('ptr %out) {', 'ptr %out) strictfp {'),
-                 base.replace('ptr %out) {', 'ptr %out) noinline optnone {'),
-                 base.replace('asm "v_mmac', 'asm sideeffect "v_mmac'),
-                 re.sub(r'<4 x half> zeroinitializer, <4 x half> (%k\d)',
-                        r'<4 x half> \1, <4 x half> zeroinitializer', base),
-                 re.sub(r'(load <4 x half>[^\n]+)', r'\1, !frisk.k_lds_pair !0', base),
-                 base.replace('llvm.maxnum.f32', 'not_an_intrinsic')]
-        for text in texts:
-            out = self.export(text).stdout
-            self.assertNotIn('!frisk.k_tail_pair', out)
-            self.assertEqual(instructions(out), instructions(self.export(text, '0').stdout))
-
-    def test_off_idempotence_conflict_and_invalid(self):
-        text = fixture()
-        self.assertNotIn('frisk.k_tail_prefetch', self.export(text, '0').stdout)
-        first = self.export(text).stdout
-        second = self.export(first).stdout
-        self.assertEqual(instructions(first), instructions(second))
-        self.assertEqual(first.count('call void @llvm.amdgcn.sched.barrier'),
-                         second.count('call void @llvm.amdgcn.sched.barrier'))
-        self.export(first, '2', ok=False)
-        for distance in ('-1', '9', 'true', '', '4x'):
-            self.export(text, distance, ok=False)
-
-    def test_unknown_addresses_and_block_boundaries(self):
-        text = fixture()
-        text = text.replace('ptr %out)', 'ptr %out, ' + ', '.join(f'i64 %offset{i}' for i in range(8)) + ')')
-        text = re.sub(r'(%p(\d+) = getelementptr[^\n]*), i64 \d+',
-                      lambda m: m[1] + ', i64 %offset' + m[2], text)
-        self.assertNotIn('!frisk.k_tail_pair', self.export(text).stdout)
-        text = fixture(boundary='br label %next$i\nnext$i:')
-        result = self.export(text)
-        self.assertNotIn('!frisk.k_tail_pair', result.stdout)
-        self.assertEqual(instructions(result.stdout), instructions(self.export(text, '0').stdout))
-
-    def test_constrained_fp_boundary(self):
-        text = fixture(boundary='%strict$i = call float @llvm.experimental.constrained.fadd.f32(float 1.0, float 2.0, metadata !"round.dynamic", metadata !"fpexcept.strict")')
-        text = 'declare float @llvm.experimental.constrained.fadd.f32(float, float, metadata, metadata)\n' + text
-        result = self.export(text)
-        self.assertNotIn('!frisk.k_tail_pair', result.stdout)
-        self.assertEqual(instructions(result.stdout), instructions(self.export(text, '0').stdout))
+    def test_llvm_entry_removed(self):
+        for option in ['--k-tail-prefetch=0', '--k-tail-prefetch=4']:
+            result = subprocess.run([TOOL, option], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('moved to ThreadIR', result.stderr)
+            self.assertEqual(result.stdout, '')
 
 
 if __name__ == '__main__':

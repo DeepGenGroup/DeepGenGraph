@@ -22,6 +22,10 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text);
 /// immediately after MLIR translation, before LLVM optimizations or printing.
 void prepareRegisterMMAForLLVM(llvm::Module &module);
 
+/// Fold duplicate export-created DMA descriptors and address expressions.
+/// EarlyCSE/InstCombine cleanup only; no fragment or LDS scheduling.
+void canonicalizeLLVMExport(llvm::Module &module);
+
 /// Pin each complete global-to-LDS DMA source address before final export.
 /// Prevent backend source-offset folding from also shifting the LDS address.
 /// Retains DMA and synchronization; safe to call repeatedly.
