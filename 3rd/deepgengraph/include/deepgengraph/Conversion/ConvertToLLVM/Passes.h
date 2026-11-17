@@ -23,6 +23,8 @@ std::unique_ptr<mlir::Pass> createLowerFriskAsyncCopyPass(bool useAsyncCopy = tr
 std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 std::unique_ptr<mlir::Pass> createApproximateThreadMathPass();
 std::unique_ptr<mlir::Pass> createThreadMaskAddBypassPass();
+// After thread loop unrolling and reduction rewrites; before async/GPU lowering.
+std::unique_ptr<mlir::Pass> createThreadInterleavePVPass(unsigned width = 0);
 // Only tagged scalar FP reduction chains; run after thread loop unrolling.
 std::unique_ptr<mlir::Pass> createThreadLocalReductionPass(
     LocalReductionOptions options = {});

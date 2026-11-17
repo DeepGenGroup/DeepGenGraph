@@ -23,7 +23,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   PrefetchGlobalPackets.cpp
   PrefetchMMACFragments.cpp
   ScheduleSoftmaxFragments.cpp
-  InterleavePV.cpp
+  ThreadInterleavePV.cpp
   PrefetchPairedLDS.cpp
   PrefetchNextK.cpp
   LazySoftmaxBase.cpp

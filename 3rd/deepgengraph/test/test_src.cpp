@@ -9,7 +9,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/InterleavePV.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/PVInterleaveOptions.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
@@ -386,7 +386,7 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 
 void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
-                             bool fuseAccumulators, unsigned pvInterleave = 0,
+                             bool fuseAccumulators,
                              unsigned kLDSPrefetch = 0,
                              mlir::frisk::SoftmaxFragmentMode softmaxFragments = mlir::frisk::SoftmaxFragmentMode::Off,
                              unsigned kTailPrefetch = 0, bool crossBNK0 = false,
@@ -410,10 +410,7 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
     mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
   dumpLLVMPass(module, dumpPasses, "fuseMMACAccumulators");
 
-  // Final scheduling: subsequent fusion/lifetime passes must not undo the
-  // requested accumulator order. V storage/scheduling is already fixed in Thread IR.
-  mlir::frisk::interleavePVAccumulators(module, pvInterleave);
-  dumpLLVMPass(module, dumpPasses, "interleavePVAccumulators");
+  // PV accumulator order and scheduling guards are complete in Thread IR.
   if (!mlir::frisk::prefetchPairedLDS(module, kLDSPrefetch))
     llvm::report_fatal_error("cannot apply requested K LDS prefetch configuration");
   dumpLLVMPass(module, dumpPasses, "prefetchPairedLDS");
@@ -1214,6 +1211,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  if (pvInterleave) {
+    AddPass(frisk::createThreadInterleavePVPass(pvInterleave));
+    llvm::outs() << "\n---- after frisk-thread-interleave-pv -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1284,7 +1287,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", pvInterleave, kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch, softmaxFragments, kTailPrefetch, crossBNK0,
       hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {

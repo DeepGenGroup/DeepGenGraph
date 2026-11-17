@@ -5,7 +5,7 @@
 // 它们通常只会放弃优化、不会报错，所以生成方（TranslateToLLVM.cpp）和
 // 识别方必须使用这里的同一份定义。
 //
-// 使用方：PrefetchNextK、InterleavePV、PrefetchPairedLDS、
+// 使用方：PrefetchNextK、PrefetchPairedLDS、
 // ScheduleSoftmaxFragments、DeferLaneSum 等。
 // ===========================================================================
 #ifndef DEEPGENGRAPH_LATEIRPATTERNS_H
