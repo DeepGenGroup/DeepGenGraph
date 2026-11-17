@@ -21,7 +21,7 @@ static std::string text(Operation *op) {
   return result;
 }
 int main(int argc, char **argv) {
-  check(argc == 2, "provide the logical three-stage execution fixture");
+  check(argc == 2 || argc == 3, "provide an execution fixture, optionally cross-iteration");
   DialectRegistry registry;
   registry.insert<FriskDialect, func::FuncDialect, arith::ArithDialect,
                   affine::AffineDialect, memref::MemRefDialect, gpu::GPUDialect,
@@ -31,6 +31,40 @@ int main(int argc, char **argv) {
   check(bool(module), "parse execution fixture");
   auto function = *module->getOps<func::FuncOp>().begin();
   std::string original = text(function);
+  if (argc == 3) {
+    auto baseline = planSharedMemoryExecution(function, true);
+    auto planned = planSharedMemoryExecution(function, true, true);
+    check(text(function) == original, "cross-iteration planning is read-only");
+    check(planned.execution->crossIterations.size() == 1, "one cross-iteration plan");
+    auto &execution = *planned.execution;
+    auto cross = execution.crossIterations.front();
+    auto &pipeline = execution.pipelines.front();
+    unsigned last = pipeline.stages.back().bufferIndex;
+    check(!baseline.execution->lifetimes.interferes(cross.bufferIndex, last) &&
+          execution.lifetimes.interferes(cross.bufferIndex, last),
+          "circular suffix interferes with final readers");
+    check(!execution.lifetimes.interferes(cross.bufferIndex, pipeline.stages[0].bufferIndex),
+          "circular middle remains reusable");
+    check(execution.storage.pooledBytes == baseline.execution->storage.pooledBytes,
+          "cross-iteration reuse preserves the LDS budget");
+    OpBuilder b(cross.issueAfter);
+    auto extra = b.create<gpu::BarrierOp>(cross.issueAfter.getLoc());
+    std::string mutated = text(function);
+    {
+      ScopedDiagnosticHandler expected(&context, [](Diagnostic &) { return success(); });
+      check(failed(planned.materializeExecution()), "stale cross-iteration plan is rejected");
+    }
+    check(text(function) == mutated, "stale plan leaves IR untouched");
+    extra.erase();
+    check(succeeded(planned.materializeExecution()) && succeeded(verify(*module)) &&
+          succeeded(validateAsyncTaskTokens(function)), "cross-iteration SSA and task validation");
+    auto materialized = text(function);
+    auto repeated = planSharedMemoryExecution(function, true, true);
+    check(repeated.execution->crossIterations.empty() && succeeded(repeated.materializeExecution()) &&
+          text(function) == materialized, "cross-iteration materialization is idempotent");
+    llvm::outs() << "PASS circular interference, budget, read-only planning, stale-plan rejection, task SSA and idempotence\n";
+    return 0;
+  }
   auto baseline = planSharedMemoryExecution(function, false);
   auto planned = planSharedMemoryExecution(function, true);
   check(text(function) == original, "planning is read-only");

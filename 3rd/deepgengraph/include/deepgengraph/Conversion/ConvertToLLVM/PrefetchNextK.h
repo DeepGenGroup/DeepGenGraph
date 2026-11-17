@@ -11,11 +11,15 @@ class PrefetchNextKPass : public llvm::OptionalPassInfoMixin<PrefetchNextKPass> 
 public:
   llvm::PreservedAnalyses run(llvm::Function &, llvm::FunctionAnalysisManager &);
 };
-/// Final export scheduling, after V buffering, K layout and softmax scheduling.
+/// Legacy standalone export scheduling. MyTest schedules the DMA through
+/// SharedMemoryPlan and calls only anchorNextKSums at LLVM export.
 void prefetchNextK(llvm::Module &, bool enabled = false);
+/// Preserve denominator lifetimes for SharedMemoryPlan's early cross-iteration
+/// schedule. Does not move DMA, select LDS storage or reconstruct the schedule.
+void anchorNextKSums(llvm::Module &);
 // Erase the barrier ending each iteration once it orders nothing the next
-// iteration's opening barrier does not. Only acts on functions prefetchNextK
-// transformed, and must run after it, because that pass anchors on this barrier.
+// iteration's opening barrier does not. Requires completed cross-iteration
+// scheduling (SharedMemoryPlan or the legacy prefetchNextK transformation).
 void elideBackedgeBarrier(llvm::Module &);
 }
 #endif

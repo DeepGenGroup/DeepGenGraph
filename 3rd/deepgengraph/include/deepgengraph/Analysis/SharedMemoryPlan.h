@@ -122,12 +122,26 @@ struct SharedBufferingPlan {
   std::array<uint64_t, 2> slotOffsets{};
 };
 
+// One-iteration lookahead. Task SSA connects the prologue/guarded issue to
+// the original readiness in the next iteration. Allocation uses a circular
+// lifetime, not an iteration-local lifetime or a whole-loop approximation.
+struct SharedCrossIterationPlan {
+  Operation *loop = nullptr;
+  AsyncCopyGmToShmOp issue;
+  WaitBufferReadyOp ready;
+  WaitBufferReadyOp issueAfter;
+  unsigned bufferIndex = 0;
+  SmallVector<Operation *> addressDependencies;
+};
+
 struct SharedExecutionPlan {
   func::FuncOp kernel;
   ShmLivenessResult lifetimes; // Includes the planned earlier DMA issues.
   ShmReusePlan storage;       // Includes required storage-handoff barriers.
   SmallVector<SharedBufferingPlan, 0> pipelines;
+  SmallVector<SharedCrossIterationPlan, 0> crossIterations;
   SmallVector<std::string> rejectedPipelines;
+  SmallVector<std::string> rejectedCrossIterations;
   std::string inputSnapshot;
   bool materializePool = false;
 };
@@ -150,7 +164,8 @@ SharedMemoryPlan planSharedMemory(func::FuncOp kernel, LowerInfoMap &layouts,
 // Read-only scheduling and allocation against one immutable IR snapshot.
 // Double buffering initially preserves the unbuffered plan's LDS budget.
 SharedMemoryPlan planSharedMemoryExecution(func::FuncOp kernel,
-                                          bool doubleBuffer = false);
+                                          bool doubleBuffer = false,
+                                          bool crossIteration = false);
 void dumpSharedMemoryExecution(const SharedExecutionPlan &plan, llvm::raw_ostream &os);
 
 // Shared decoding/encoding for the planner and physical packer. Legacy single

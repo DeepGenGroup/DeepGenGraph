@@ -119,6 +119,18 @@ class CrossBNK0(unittest.TestCase):
         for value in ('', '-1', '2', 'true', '1x'):
             self.export(fixture(), value, ok=False)
 
+    def test_shared_plan_only_anchors_sums(self):
+        source = fixture().replace('!reqd_work_group_size !0 {', '#1 !reqd_work_group_size !0 {')
+        source += '\nattributes #1 = { "frisk.cross_bn_k0"="shared-plan-v1" }\n'
+        first = self.export(source)
+        self.assertIn('Cross BN K0 sum anchors: 1', first.stderr)
+        self.assertNotIn('k0.prime', first.stdout)
+        self.assertNotIn('k0.issue:', first.stdout)
+        self.assertEqual(first.stdout.count('buffer_load_dwordx'), source.count('buffer_load_dwordx'))
+        self.assertEqual(first.stdout.count('call float asm sideeffect "", "=v,0"'), 1)
+        second = self.export(first.stdout)
+        self.assertEqual(instructions(first.stdout), instructions(second.stdout))
+
     def test_loop_bounds_and_control(self):
         s = fixture()
         for bad in [s.replace('%iv, 5\n', '%iv, 0\n'),

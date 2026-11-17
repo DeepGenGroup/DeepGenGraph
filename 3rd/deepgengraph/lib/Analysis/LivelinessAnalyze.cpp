@@ -505,6 +505,7 @@ struct Separation {
   Block *block;
   SmallVector<Operation *> order;
   unsigned earlierFirst, earlierLast, laterFirst, laterLast;
+  std::optional<unsigned> cyclicNextFirst;
 };
 
 // Descend only when BOTH buffers are confined to one collective loop and their
@@ -534,6 +535,23 @@ std::optional<Separation> findSeparation(const ShmLiveInterval &a,
   };
   auto [af, al] = range(a);
   auto [bf, bl] = range(b);
+  bool ac = a.cyclicLoop == block->getParentOp();
+  bool bc = b.cyclicLoop == block->getParentOp();
+  if (ac || bc) {
+    if (ac && bc) return std::nullopt;
+    const auto &cyclic = ac ? a : b;
+    unsigned prefixLast = ac ? al : bl;
+    unsigned middleFirst = ac ? bf : af, middleLast = ac ? bl : al;
+    unsigned nextFirst = positions.lookup(cyclic.cyclicIssueAfter) + 1;
+    if (prefixLast >= middleFirst || middleLast >= nextFirst)
+      return std::nullopt;
+    result.earlierFirst = 0;
+    result.earlierLast = prefixLast;
+    result.laterFirst = middleFirst;
+    result.laterLast = middleLast;
+    result.cyclicNextFirst = nextFirst;
+    return result;
+  }
   if (bl < af) {
     std::swap(af, bf);
     std::swap(al, bl);
@@ -547,8 +565,8 @@ std::optional<Separation> findSeparation(const ShmLiveInterval &a,
   }
   if (af == al && af == bf && bf == bl) {
     Operation *loop = result.order[af];
-    if (llvm::is_contained(a.iterationLocalLoops, loop) &&
-        llvm::is_contained(b.iterationLocalLoops, loop))
+    if ((a.cyclicLoop == loop || llvm::is_contained(a.iterationLocalLoops, loop)) &&
+        (b.cyclicLoop == loop || llvm::is_contained(b.iterationLocalLoops, loop)))
       return findSeparation(a, b, getLoopBody(loop));
   }
   return std::nullopt;
@@ -823,7 +841,13 @@ void planShmHandoffs(const ShmLivenessResult &liveness, ShmReusePlan &plan) {
       // the next one. A prefix barrier also covers the wrapped handoff; otherwise
       // require a barrier at the loop tail. Even a zero-trip path stays safe.
       // 循环内的两块 buffer 还要考虑跨回边的交接：后者的最后使用 -> 下一轮前者的第一次写。
-      if (separation->block != liveness.programOrder.front()->getBlock() &&
+      if (separation->cyclicNextFirst) {
+        // Two handoffs in this iteration: prefix -> middle -> next prefix.
+        // A tail barrier is too late to protect the early next-iteration DMA.
+        unsigned deadline = *separation->cyclicNextFirst;
+        if (!hasBarrier(separation->laterLast + 1, deadline))
+          scope.gaps.emplace_back(deadline, separation->laterLast);
+      } else if (separation->block != liveness.programOrder.front()->getBlock() &&
           !hasBarrier(0, separation->earlierFirst) &&
           !hasBarrier(separation->laterLast + 1, scope.order.size()))
         scope.gaps.emplace_back(scope.order.size() - 1, separation->laterLast);

@@ -20,7 +20,8 @@
 //   lane-shuffles: the mbcnt lane ID and the bpermute index computed from it.
 //
 // readfirstlane depends on the execution mask. Structured loops must be in
-// provably block-uniform control flow; slices never cross a conditional region.
+// provably block-uniform control flow; conditional regions additionally need
+// a uniform predicate proof before a convergent leader read may leave them.
 // The legacy CFG path only accepts a two-block counted loop after entry.
 // Mbcnt with a fixed all-ones mask computes a physical lane ID; arbitrary mbcnt
 // operands must still pass the ordinary loop-invariance dependency checks.
@@ -140,8 +141,46 @@ void moveInOrder(Block *body, const llvm::SetVector<Operation *> &slice, Operati
     if (slice.contains(&op)) op.moveBefore(before);
 }
 
-// Reject induction/iter arguments, nested regions, memory reads, and partial
-// slices. Values defined outside the loop already dominate the insertion point.
+// Prove only block-uniform predicates: constants, scalar kernel arguments,
+// block queries and arithmetic on collective-loop induction variables. In
+// particular, neither a pipeline marker nor a thread-dependent participation
+// mask is sufficient to move readfirstlane across an if.
+bool uniformPredicate(Value value, unsigned depth = 0) {
+  if (depth > 64) return false;
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    Operation *owner = arg.getOwner()->getParentOp();
+    if (isa<func::FuncOp>(owner))
+      return value.getType().isIntOrIndex() || isa<FloatType>(value.getType());
+    return arg.getArgNumber() == 0 &&
+           isa<affine::AffineForOp, scf::ForOp>(owner) &&
+           frisk::isInBlockUniformControlFlow(arg.getOwner()->getTerminator());
+  }
+  Operation *op = value.getDefiningOp();
+  if (!op) return false;
+  if (op->hasTrait<OpTrait::ConstantLike>() ||
+      isa<gpu::BlockIdOp, gpu::BlockDimOp, gpu::GridDimOp>(op)) return true;
+  if (op->getNumRegions() || !isMemoryEffectFree(op) ||
+      (op->getName().getDialectNamespace() != "arith" &&
+       !isa<affine::AffineApplyOp, affine::AffineMinOp, affine::AffineMaxOp>(op)))
+    return false;
+  return llvm::all_of(op->getOperands(), [&](Value v) {
+    return uniformPredicate(v, depth + 1);
+  });
+}
+
+bool sameExecutionMask(Block *from, Block *body) {
+  while (from != body) {
+    auto branch = dyn_cast<scf::IfOp>(from->getParentOp());
+    if (!branch || !uniformPredicate(branch.getCondition())) return false;
+    from = branch->getBlock();
+  }
+  return true;
+}
+
+// Reject induction/iter arguments, memory reads, and partial slices. Values
+// defined outside the loop already dominate the insertion point. A nested
+// uniform if may guard a next-iteration DMA, but its invariant LDS base has
+// the same active lanes as the loop preheader whenever the DMA executes.
 bool collectStructuredSlice(Value root, Operation *loop, Block *body,
                             llvm::SetVector<Operation *> &slice) {
   Operation *op = root.getDefiningOp();
@@ -151,7 +190,7 @@ bool collectStructuredSlice(Value root, Operation *loop, Block *body,
     return owner != loop && !loop->isAncestor(owner);
   }
   if (!loop->isAncestor(op) || slice.contains(op)) return true;
-  if (op->getBlock() != body || !isHoistablePure(op)) return false;
+  if (!sameExecutionMask(op->getBlock(), body) || !isHoistablePure(op)) return false;
   for (Value operand : op->getOperands())
     if (!collectStructuredSlice(operand, loop, body, slice)) return false;
   slice.insert(op);
@@ -206,7 +245,11 @@ unsigned mergeEntryReads(Operation *function, Block *entry) {
     // Do not infer execution-mask equivalence across structured control flow
     // or opaque calls. Reconverging normal loop/if regions are deliberately
     // treated conservatively here.
-    if (op.getNumRegions() || isa<func::CallOp, LLVM::CallOp, LLVM::InlineAsmOp>(op))
+    // The planned DMA bridge preserves exec, just like the ROCDL intrinsic.
+    // Clearing here would duplicate the primed K base at the loop preheader.
+    bool plannedCopy = bool(getDMALDSPointer(&op));
+    if (op.getNumRegions() ||
+        (isa<func::CallOp, LLVM::CallOp, LLVM::InlineAsmOp>(op) && !plannedCopy))
       leaders.clear();
     auto read = dyn_cast<ROCDL::ReadfirstlaneOp>(op);
     if (!read) continue;
@@ -265,7 +308,7 @@ struct HoistWaveInvariantsPass
           auto pointer = destination.getDefiningOp<LLVM::IntToPtrOp>();
           auto read = pointer ? pointer.getOperand().getDefiningOp<ROCDL::ReadfirstlaneOp>()
                               : ROCDL::ReadfirstlaneOp{};
-          if (!read || read->getBlock() != body) continue;
+          if (!read || !loop->isAncestor(read)) continue;
           llvm::SetVector<Operation *> candidate;
           if (!collectStructuredSlice(pointer.getResult(), loop, body, candidate)) continue;
           slice.insert(candidate.begin(), candidate.end());
@@ -287,7 +330,9 @@ struct HoistWaveInvariantsPass
           ++setup;
         }
       }
-      moveInOrder(body, slice, loop);
+      // collectStructuredSlice inserts definitions before users, including
+      // definitions in guarded regions which a flat body scan would miss.
+      for (Operation *op : slice) op->moveBefore(loop);
     });
     if (!bases && !setup) return;
     Block *entry = &function.getBody().front();

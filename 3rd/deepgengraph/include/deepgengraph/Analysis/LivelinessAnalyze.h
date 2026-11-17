@@ -31,6 +31,12 @@ struct ShmLiveInterval {
   unsigned firstUse = 0;
   unsigned lastUse = 0; // Inclusive; equal endpoints interfere.
   bool asyncAcrossIterations = false;
+  // Read-only execution-plan projection: this buffer is live from just after
+  // cyclicIssueAfter through the backedge and through its original last use.
+  // The original accesses describe the prefix; the middle remains reusable.
+  // Only the execution planner may set these after proving task/reader order.
+  Operation *cyclicLoop = nullptr;
+  Operation *cyclicIssueAfter = nullptr;
   bool reusable = false;
   std::string skipReason;
 };

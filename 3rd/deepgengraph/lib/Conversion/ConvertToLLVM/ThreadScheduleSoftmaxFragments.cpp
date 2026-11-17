@@ -43,6 +43,7 @@ bool reductionNode(Operation *op) {
 }
 bool knownFixed(Operation *op) {
   if (op->hasTrait<OpTrait::IsTerminator>()) return true;
+  if (crossIterationIssue(op)) return true;
   if (op->getNumRegions()) return false;
   if (pure(op) || mma(op)) return true;
   if (isa<LDSLoadOp, ReadMatrixFromShmOp, gpu::BarrierOp,

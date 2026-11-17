@@ -339,6 +339,27 @@ class StructuredWaveInvariants(unittest.TestCase):
         self.assertIn('rocdl.readfirstlane', loop)
         self.assertIn('rocdl.mbcnt.lo', entry)
 
+    def test_guarded_dma_base_requires_uniform_predicate_and_invariance(self):
+        for uniform, invariant in [(True, True), (False, True), (True, False)]:
+            with self.subTest(uniform=uniform, invariant=invariant):
+                address = ('%address = arith.constant 0 : i32' if invariant else
+                           '%address = arith.index_cast %i : index to i32')
+                predicate = ('%condition = arith.cmpi ult, %i, %end : index' if uniform else
+                             '%tid = gpu.thread_id x\n'
+                             '    %condition = arith.cmpi ult, %tid, %end : index')
+                source = self.fixture(address=address).replace(address,
+                    predicate + '\n    scf.if %condition {\n    ' + address)
+                source = source.replace('"test.use"(%y, %valid) : (i32, i1) -> ()',
+                    '"test.use"(%y, %valid) : (i32, i1) -> ()\n    }')
+                output, _ = self.lower(source)
+                entry, body = output.split('affine.for', 1)
+                self.assertEqual('rocdl.readfirstlane' in entry, uniform and invariant)
+                self.assertEqual('rocdl.readfirstlane' in body, not (uniform and invariant))
+                self.assertIn('rocdl.global.load.async.lds', body.split('scf.if', 1)[1])
+                repeated, _ = run_pass(output, '--allow-unregistered-dialect',
+                                       '--frisk-hoist-wave-invariants')
+                self.assertEqual(output, repeated)
+
     def test_refuses_loop_carried_base_and_memory_read(self):
         carried = self.fixture(
             loop='%r = scf.for %i = %start to %end step %step '
@@ -457,6 +478,32 @@ class ElideBackedgeBarrier(unittest.TestCase):
         self.assertNotIn('Elide backedge barrier', off.stderr)
         self.assertEqual(off.stdout.count('call void @llvm.amdgcn.s.barrier'),
                          text.count('call void @llvm.amdgcn.s.barrier'))
+
+    def test_shared_plan_exit_reduction_precedes_drain(self):
+        text = self.export(cross_bn.fixture()).stdout.replace(
+            '"frisk.cross_bn_k0"="sum-anchor-v1"',
+            '"frisk.cross_bn_k0"="shared-plan-v1"')
+        text = text.replace('define amdgpu_kernel',
+            'declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)\n\ndefine amdgpu_kernel', 1)
+        for prefix, allowed in [
+            ('  %bits = bitcast float %sum to i32\n'
+             '  %peer = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 %bits)\n'
+             '  %pf = bitcast i32 %peer to float\n'
+             '  %reduced = fadd float %sum, %pf\n', True),
+            ('  %read = load i32, ptr addrspace(3) %kp\n', False),
+            ('  store float %sum, ptr addrspace(1) %out\n', False),
+            ('  call void @unknown()\n', False),
+        ]:
+            with self.subTest(prefix=prefix):
+                # The exporter prints predecessors on the exit label line.
+                source = re.sub(r'^(exit:.*\n)',
+                    lambda m: m[0] + prefix + cross_bn.WAIT + cross_bn.SYNC,
+                    text, flags=re.M)
+                self.assertNotEqual(source, text)
+                result = self.export(source, '--elide-backedge-barrier=1')
+                self.assertEqual('Elide backedge barrier: removed' in result.stderr, allowed)
+                self.assertEqual(result.stdout.count('call void @llvm.amdgcn.s.barrier'),
+                                 source.count('call void @llvm.amdgcn.s.barrier') - int(allowed))
 
 
 if __name__ == '__main__':

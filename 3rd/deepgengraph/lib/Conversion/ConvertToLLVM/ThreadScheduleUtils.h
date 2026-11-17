@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
@@ -48,6 +49,16 @@ inline bool protectedFunction(func::FuncOp f) {
 inline bool pure(Operation *op) {
   return !op->getNumRegions() && !op->hasTrait<OpTrait::IsTerminator>() &&
          isMemoryEffectFree(op) && isSpeculatable(op);
+}
+// A planned next-iteration launch stays fixed while register-only softmax
+// computations are scheduled around it. Check the region, not just its marker.
+inline bool crossIterationIssue(Operation *op) {
+  if (!isa<scf::IfOp>(op) || !op->hasAttr("frisk.cross_bn_k0")) return false;
+  return !op->walk([&](Operation *nested) {
+    if (nested == op || isa<scf::YieldOp, AsyncCopyGmToShmOp>(nested) || pure(nested))
+      return WalkResult::advance();
+    return WalkResult::interrupt();
+  }).wasInterrupted();
 }
 inline bool wrapper(Operation *op) {
   return isa<vector::ExtractOp, vector::FromElementsOp, vector::InsertOp,

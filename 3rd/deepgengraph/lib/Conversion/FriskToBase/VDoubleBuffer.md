@@ -85,3 +85,40 @@ Target code generation and GPU performance have not been measured here.
 On the target machine, run `bash generated_ir/shared_memory_plan_pipeline/run_gpu.sh`
 with the usual toolchain environment; set `ATTENTION_KIND=causal` for causal
 attention. This compares the before/after kernels in both run orders.
+
+## Cross-iteration first-copy prefetch
+
+`MyTest --cross-bn-k0=1` now enables
+`lower-frisk-fragments="cross-iteration=true"`. The execution planner selects
+the first local DMA and its readiness in an outer affine/scf loop, and issues
+the next iteration's copy after the final matrix stage's readiness. This is
+planned together with V buffering and physical allocation. A rejected candidate
+retains the ordinary schedule; MyTest does not retry the transformation in LLVM.
+
+The projected lifetime has two parts: the loop prefix through the current
+buffer's last reader, and the suffix from the proposed issue point through the
+backedge. The allocator may reuse the middle but must keep the final readers
+disjoint from the prefetched buffer. Handoff planning protects both transitions
+inside the iteration. The initial policy preserves the existing LDS budget and
+any already selected alternating stage offsets.
+
+Materialization guards the prologue against zero trips, carries the exact task
+token through the loop, and guards the next issue with the original upper bound
+and step. The inactive path yields `async_task_completed`. An explicit exit
+drain retains a locally checkable completion path, including zero trips. The
+prologue has a reader handoff before issuing the first copy. Unknown memory
+effects, global writes in the loop, nonuniform bounds, unavailable source
+addresses, unsupported DMA and overlapping final readers reject the candidate.
+
+Only scheduling protection remains in LLVM on the main export path:
+`anchorNextKSums` anchors the scalar FP32 recurrence additions before register
+lifetime optimization. The standalone legacy LLVM exporter retains the old
+transformation for compatibility and regression comparisons. The optional
+backedge-barrier removal checks the exit drain for a shared execution plan.
+
+Additional validation:
+
+```sh
+python3 3rd/deepgengraph/test/check_shared_cross_iteration.py
+python3 3rd/deepgengraph/test/check_cross_bn_k0.py
+```

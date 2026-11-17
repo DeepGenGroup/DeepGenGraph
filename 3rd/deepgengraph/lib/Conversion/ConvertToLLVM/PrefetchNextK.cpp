@@ -347,11 +347,12 @@ bool plan(Function &f, Loop &loop, DominatorTree &dt, GlobalVariable *storage,
   return true;
 }
 
-void apply(Plan &p) {
-  auto &ctx = p.body->getContext();
+void anchorSums(ArrayRef<Inst *> sums) {
+  if (sums.empty()) return;
+  auto &ctx = sums.front()->getContext();
   auto *tag = MDNode::get(ctx,{});
   // 分母锚定：add 后面加空 asm，其余使用者改用 asm 的结果。
-  for (auto *add : p.sums) {
+  for (auto *add : sums) {
     auto *ft = FunctionType::get(add->getType(),{add->getType()},false);
     auto *a = InlineAsm::get(ft,"","=v,0",true);
     IRBuilder<> builder(add->getNextNode());
@@ -361,6 +362,11 @@ void apply(Plan &p) {
     anchor->setMetadata(SumMarker,tag); anchor->setDebugLoc(add->getDebugLoc());
     add->replaceUsesWithIf(anchor,[&](Use &u) { return u.getUser() != anchor; });
   }
+}
+void apply(Plan &p) {
+  auto &ctx = p.body->getContext();
+  auto *tag = MDNode::get(ctx,{});
+  anchorSums(p.sums);
   // 把 K0 DMA 及 deps 克隆到 before 之前，iv 替换成 index。
   auto clone = [&](ArrayRef<Inst *> deps, Value *index, Inst *before, StringRef prefix) {
     DenseMap<Value *,Value *> map; map[p.iv] = index;
@@ -430,9 +436,39 @@ llvm::PreservedAnalyses PrefetchNextKPass::run(llvm::Function &f, llvm::Function
 }
 void prefetchNextK(llvm::Module &module, bool enabled) {
   if (!enabled) return;
+  anchorNextKSums(module);
   llvm::FunctionAnalysisManager analyses;
   PrefetchNextKPass pass;
   for (auto &f : module) pass.run(f,analyses);
+}
+
+void anchorNextKSums(llvm::Module &module) {
+  using namespace llvm;
+  for (auto &f : module) {
+    if (f.isDeclaration() || !f.hasFnAttribute(Marker) || f.hasFnAttribute(SumMarker) ||
+        f.getFnAttribute(Marker).getValueAsString() != "shared-plan-v1") continue;
+    DominatorTree dt(f);
+    LoopInfo loops(dt);
+    SmallPtrSet<Inst *, 32> seen, additions;
+    for (Loop *loop : loops) {
+      std::function<void(Value *)> collect = [&](Value *value) {
+        auto *i = dyn_cast<Inst>(value);
+        if (!i || !loop->contains(i) || !seen.insert(i).second) return;
+        if (identity(i)) { collect(cast<Call>(i)->getArgOperand(0)); return; }
+        if (isa<CallBase, PHINode>(i) || !isPureInst(i)) return;
+        if (i->getOpcode() == Inst::FAdd && i->getType()->isFloatTy()) additions.insert(i);
+        for (Value *operand : i->operands()) collect(operand);
+      };
+      for (auto &phi : loop->getHeader()->phis())
+        for (unsigned n = 0; n < phi.getNumIncomingValues(); ++n)
+          if (loop->contains(phi.getIncomingBlock(n))) collect(phi.getIncomingValue(n));
+    }
+    SmallVector<Inst *> ordered;
+    for (auto &block : f) for (auto &i : block) if (additions.contains(&i)) ordered.push_back(&i);
+    anchorSums(ordered);
+    f.addFnAttr(SumMarker, "v1");
+    errs() << "Cross BN K0 sum anchors: " << ordered.size() << ", function=" << f.getName() << '\n';
+  }
 }
 
 // After next-K0 prefetch, the barrier ending an iteration releases V3 readers,
@@ -440,13 +476,14 @@ void prefetchNextK(llvm::Module &module, bool enabled) {
 // That second barrier therefore orders the same accesses. On the last iteration
 // the loop exits without any later LDS user, so no ordering is needed at all.
 //
-// Keep this after LLVM next-K0 prefetch. Even with Thread IR V double buffering,
-// K0 has not moved yet and may write a slot used by the preceding iteration,
-// and this barrier is required. prefetchNextK also anchors on it, so it must stay
-// until that pass has run.
+// Keep this after cross-iteration scheduling. V double buffering alone does
+// not move K0 and cannot release a slot used by the preceding iteration.
+// Legacy prefetchNextK also anchors on this barrier, so it must stay until
+// that pass has run on the standalone LLVM path.
 //
-// prefetchNextK's marker already proves uniform control flow, one two-way loop,
-// and no LDS user outside it. Only the adjacency is checked here.
+// The legacy marker proves no LDS user outside the loop. SharedMemoryPlan
+// permits later users, so that path additionally needs its exit drain barrier.
+// Lane-sum deferral can insert register-only reductions before this drain.
 void elideBackedgeBarrier(llvm::Module &module) {
   using namespace llvm;
   for (auto &f : module) {
@@ -485,6 +522,19 @@ void elideBackedgeBarrier(llvm::Module &module) {
     for (auto &i : *body) if (auto s = matchSync(&i)) { head = s; break; }
     if (!head || !head->wait) { skip("next iteration does not open with wait+barrier"); continue; }
     if (!onlyAddressMath(&body->front(),head->wait)) { skip("LDS or DMA before next barrier"); continue; }
+
+    if (f.getFnAttribute(Marker).getValueAsString() == "shared-plan-v1") {
+      BasicBlock *exit = loop.getUniqueExitBlock();
+      std::optional<Sync> drain;
+      if (exit) for (auto &i : *exit) if (auto s = matchSync(&i)) { drain = s; break; }
+      bool registerOnly = drain && drain->wait;
+      if (registerOnly)
+        for (auto *i = &exit->front(); i != drain->wait; i = i->getNextNode())
+          if (!isPureInst(i) && !knownCall(i)) { registerOnly = false; break; }
+      if (!registerOnly) {
+        skip("shared execution plan requires an exit drain before memory effects"); continue;
+      }
+    }
 
     tail->acquire->eraseFromParent();
     tail->barrier->eraseFromParent();

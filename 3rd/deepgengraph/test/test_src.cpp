@@ -388,7 +388,6 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators,
                              bool canonicalizeExport = false,
-                             bool crossBNK0 = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
                              bool lazySoftmaxBase = false, float lazyBaseThreshold = 8.0f,
                              bool dumpPasses = false, bool softmaxCvtPack = false) {
@@ -415,9 +414,10 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // a common resource; this performs no scheduling or pairing.
   if (canonicalizeExport) mlir::frisk::canonicalizeLLVMExport(module);
   dumpLLVMPass(module, dumpPasses, "canonicalizeLLVMExport");
-  mlir::frisk::prefetchNextK(module, crossBNK0);
-  dumpLLVMPass(module, dumpPasses, "prefetchNextK");
-  // Only legal after prefetchNextK: see the comment on elideBackedgeBarrier.
+  mlir::frisk::anchorNextKSums(module);
+  dumpLLVMPass(module, dumpPasses, "anchorNextKSums");
+  // Only legal after cross-iteration scheduling; the helper checks the backedge
+  // and the shared execution plan's exit drain before removing a barrier.
   if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(module);
   dumpLLVMPass(module, dumpPasses, "elideBackedgeBarrier");
   // 放在依赖 analyzeWave64Kernel 的 Pass 之后；后续纯寄存器转换不需要该分析。
@@ -1099,7 +1099,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   auto sharedExecution = frisk::createLowerFriskFragmentsPass();
   if (failed(sharedExecution->initializeOptions(
-          vDoubleBuffer ? "double-buffer=true" : "double-buffer=false",
+          std::string("double-buffer=") + (vDoubleBuffer ? "true" : "false") +
+              " cross-iteration=" + (crossBNK0 ? "true" : "false"),
           [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
     return 1;
   AddFuncPass(std::move(sharedExecution));
@@ -1280,6 +1281,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "prefetchGlobalPackets");
+  // Cross-iteration control flow already exists. Protect denominator inputs
+  // before LLVM lifetime optimization can sink their additions across it.
+  frisk::anchorNextKSums(*llvmModule);
   if (optimizeLifetimes)
     frisk::optimizeRegisterLifetimes(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterLifetimes");
@@ -1303,7 +1307,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0, crossBNK0,
+      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0,
       hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
   os.close();
   if (os.has_error()) {

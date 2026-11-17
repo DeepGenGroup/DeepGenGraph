@@ -937,7 +937,7 @@ public:
 //   scheduleAsyncCopies                    按物理信息再调度一次。
 //   synchronizeSharedMemoryLoopBackedges   调度改变了访问位置，再检查并补一次。
 //   planSharedMemoryExecution              用计划中的发起时序计算生命周期，再确定槽位和物理地址。
-//   loopUnrollFull                         双缓冲开启时先展开，暴露完整 stage/read 流。
+//   loopUnrollFull                         双缓冲或跨迭代预取开启时先展开，暴露完整 stage/read 流。
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
@@ -949,11 +949,11 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
     // Allocate shared storage only against these final operation lifetimes.
     synchronizeSharedMemoryLoopBackedges(getOperation());
     auto materialize = [&]() {
-      auto plan = planSharedMemoryExecution(getOperation(), doubleBuffer);
+      auto plan = planSharedMemoryExecution(getOperation(), doubleBuffer, crossIteration);
       plan.dump(llvm::errs());
       return plan.materializeExecution();
     };
-    if (!doubleBuffer && failed(materialize())) return signalPassFailure();
+    if (!doubleBuffer && !crossIteration && failed(materialize())) return signalPassFailure();
     SmallVector<Loop> loops;
     getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) {
       auto full = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
@@ -980,7 +980,7 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
     }
     // Expose the bounded stage/read stream before planning its overlap and
     // storage. No allocation is pooled before the projected lifetimes exist.
-    if (doubleBuffer && failed(materialize())) return signalPassFailure();
+    if ((doubleBuffer || crossIteration) && failed(materialize())) return signalPassFailure();
   }
 };
 

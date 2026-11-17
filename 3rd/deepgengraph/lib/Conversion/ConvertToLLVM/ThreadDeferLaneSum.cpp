@@ -306,6 +306,10 @@ bool safeFunction(func::FuncOp function) {
           name != "gpu.block_dim" && name != "gpu.grid_dim" &&
           name != "gpu.lane_id" && name != "gpu.shuffle" && name != "gpu.barrier" &&
           name != "frisk.async_copy_gm_to_shm" && name != "frisk.wait_buffer_ready" &&
+          // A completed task is the inactive value of a guarded pipeline
+          // issue. It neither changes the execution mask nor contributes data
+          // to the recurrence; its presence must not disable lane-sum deferral.
+          name != "frisk.async_task_completed" &&
           // Canonicalized LDS reads have the same control-flow behavior as
           // memref loads. Their values are still rejected as uniform factors
           // by Proof::uniform; accepting the operation does not prove its data.

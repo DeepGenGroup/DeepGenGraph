@@ -155,6 +155,27 @@ assert 'gpu.shuffle' not in deferred.split('affine.yield')[0]
 assert deferred.count('gpu.shuffle') == 2
 assert deferred.split('affine.yield')[0].count('frisk.lds_load') == 1
 assert transform(deferred) == deferred
+# Cross-iteration shared execution adds an inactive task and a loop-carried
+# task beside the numeric state. Neither may disable numeric recurrence proof.
+for loop in ('affine', 'scf'):
+    source = fixture(loop=loop).replace('%result:1 =',
+        '%done = frisk.async_task_completed : !frisk.async_task\n%result:2 =')
+    source = source.replace('iter_args(%state = %init) -> (f32)',
+        'iter_args(%state = %init, %task = %done) -> (f32, !frisk.async_task)')
+    source = source.replace('%iter = arith.index_cast',
+        'frisk.wait_buffer_ready %task : !frisk.async_task\n%iter = arith.index_cast')
+    source = source.replace(f'{loop}.yield %update0 : f32',
+        '%next = arith.addi %iv, %c1 : index\n'
+        '%more = arith.cmpi slt, %next, %end : index\n'
+        '%pending = scf.if %more -> !frisk.async_task {\n'
+        '  scf.yield %done : !frisk.async_task\n'
+        '} else {\n  scf.yield %done : !frisk.async_task\n}\n'
+        f'{loop}.yield %update0, %pending : f32, !frisk.async_task')
+    output = transform(source)
+    assert 'gpu.shuffle' not in output.split(f'{loop}.yield')[0]
+    assert output.count('gpu.shuffle') == 2
+    assert 'frisk.wait_buffer_ready' in output and 'frisk.async_task_completed' in output
+    assert transform(output) == output
 varying_factor = shared.replace('arith.mulf %state, %factor', 'arith.mulf %state, %x')
 unchanged(run([TOOL, '--verify-each', '--frisk-canonicalize-lds-addresses'], varying_factor))
 # The same recurrence under a partial-wave branch cannot be moved to its exit.
