@@ -1013,7 +1013,7 @@ private:
       return;
     // Do not infer completion or synchronization semantics from memory effects
     // alone: async copies, atomics, fences, calls and opaque asm stay unknown.
-    if (!isa<memref::LoadOp, memref::StoreOp, memref::CopyOp,
+    if (!isa<LDSLoadOp, memref::LoadOp, memref::StoreOp, memref::CopyOp,
              affine::AffineLoadOp, affine::AffineStoreOp,
              affine::AffineVectorLoadOp, affine::AffineVectorStoreOp,
              vector::LoadOp, vector::StoreOp, vector::TransferReadOp,

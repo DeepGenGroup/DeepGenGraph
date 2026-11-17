@@ -1,5 +1,6 @@
 // ===========================================================================
-// Pass: canonicalizeLDSGEPs（CanonicalizeLDSGEPsPass）   优化汇总.py 第 24 项，LLVM 阶段，开启 swizzle 后自动打开
+// Legacy .ll compatibility only. MyTest now uses the ThreadIR pass in
+// CanonicalizeThreadLDSAddresses.cpp before LLVM lowering.
 //
 // 作用：
 //   把地址差恒定的 LDS load 改写成“公共基址 + 常量 GEP”，并提升 load 的 align。后端看到这个形式

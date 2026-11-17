@@ -4,7 +4,23 @@ These optimizations are opt-in. Existing callers retain the previous layout and
 launch order. The implementation does not depend on `Attn_p2`, fixed SSA names,
 32 heads, a 128-dimensional head, or a fixed number of waves.
 
-The LLVM `CanonicalizeLDSGEPsPass` can also run independently of swizzling via
+Production LDS address canonicalization runs in ThreadIR through
+`frisk-canonicalize-lds-addresses`, after physical storage planning, unrolling
+and bounded-affine simplification. It uses symbolic affine differences and
+exact evaluation of the full launch range returned by `getThreadIdRange`;
+the pass has no independent hard-coded thread limit. Missing launch bounds
+disable enumeration, while symbolic proofs remain available.
+
+The resulting `frisk.lds_load` retains a memref anchor, anchor indices, a signed
+constant byte offset, proven alignment and the nontemporal flag. It is an
+ordinary memory read, with effects bound to its source, and is not speculatable.
+LLVM lowering mechanically emits the anchor GEP, a byte GEP without additional
+nowrap promises, and the load. These canonicalization proofs no longer run after
+LLVM translation in the production pipeline.
+Pool/view byte shifts participate in alignment proofs. Unsupported dynamic
+strides/offsets, unknown memory contracts and non-dominating anchors are skipped.
+
+The legacy LLVM `CanonicalizeLDSGEPsPass` can still run independently via
 `LegacyLLVMExportTest --canonicalize-lds-geps-only input.ll`. This entry point
 does not run the MMAC/shared-memory export preparation. The pass considers
 ordinary nonvolatile, nonatomic loads from any address-space-3 buffer, including
@@ -29,9 +45,11 @@ this pass, plus verifier results and optional matching launch configurations.
    that `ShmDataIODesc`, rewrites every supported alias/consumer, and uses the
    inverse layout for the DMA source map. Failure of an explicit swizzle
    request is a compilation error, not a partial layout change.
-5. LLVM `CanonicalizeLDSGEPsPass`, after register lifetime/fragment scheduling,
-   exposes proven constant address differences as byte GEPs. `MyTest` enables
-   this automatically when a Q/K/V swizzle is enabled.
+5. `frisk-canonicalize-lds-addresses`, after physical shared storage planning and
+   thread unrolling, exposes proven constant address differences and alignment.
+   `MyTest` enables it automatically when a Q/K/V swizzle is enabled. The
+   `frisk.lds_load` lowering preserves those facts as LLVM byte GEPs and load
+   alignment; the production LLVM canonicalizer invocation has been removed.
 
 The ownership/MMAC layout in `LowerInfo::base_layout` is unchanged. Physical LDS
 swizzling belongs to `ShmDataIODesc`, not to the instruction's register layout.
@@ -123,7 +141,7 @@ This remains bijective for a short last group, `group_size > Q`, unequal extents
 and either axis order. A repeated identical pass is a no-op; conflicting second
 configurations are rejected. Helpers with no relevant block IDs are skipped.
 
-### LLVM constant GEP pass
+### Legacy LLVM constant GEP pass
 
 The pass first uses ScalarEvolution to prove constant pointer differences.
 For nonlinear XOR layouts it also evaluates the **entire proven legal
@@ -149,6 +167,7 @@ cmake --build 3rd/deepgengraph/build \
 python 3rd/deepgengraph/test/check_swizzle_passes.py
 python 3rd/deepgengraph/test/check_shared_packing.py
 python 3rd/deepgengraph/test/check_shared_buffer_aliases.py
+python 3rd/deepgengraph/test/check_thread_lds_addresses.py
 bash generated_ir/swizzle_pass/generate.sh k128
 OPENBLAS_NUM_THREADS=1 python generated_ir/swizzle_pass/validate.py
 OPENBLAS_NUM_THREADS=1 python generated_ir/swizzle_pass/probe.py

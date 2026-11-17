@@ -30,6 +30,8 @@ std::unique_ptr<mlir::Pass> createThreadLocalReductionPass(
 std::unique_ptr<mlir::Pass> createThreadDeferLaneSumPass(
     DeferLaneSumOptions options = {});
 std::unique_ptr<mlir::Pass> createSimplifyBoundedAffinePass();
+// After physical shared storage and thread unrolling, before LLVM lowering.
+std::unique_ptr<mlir::Pass> createCanonicalizeThreadLDSAddressesPass();
 std::unique_ptr<mlir::Pass> createHoistWaveInvariantsPass(bool ldsBases = true, bool laneShuffles = true);
 
 // -------- Lower Pipeline ----------

@@ -141,6 +141,22 @@ loaded = fixture().replace('%scaled0 =',
     '%mem = memref.alloca() : memref<1xf32>\n'
     '%unknown = memref.load %mem[%c0] : memref<1xf32>\n%scaled0 =')
 unchanged(loaded.replace('arith.mulf %state, %factor', 'arith.mulf %state, %unknown'))
+# Exercise the production pass ordering: an ordinary shared read becomes an
+# LDSLoadOp before lane-sum deferral. Keep the read in the loop and defer only
+# the sum exchanges. Unknown loaded factors must still fail uniformity proof.
+shared = fixture().replace('%result:1 =',
+    '%shared = memref.alloc() alignment = 16 : memref<128xf32, 3>\n%result:1 =').replace(
+    '%x = arith.uitofp %seed : i32 to f32',
+    '%x = memref.load %shared[%tid] : memref<128xf32, 3>')
+canonical = run([TOOL, '--verify-each', '--frisk-canonicalize-lds-addresses'], shared)
+assert canonical.count('frisk.lds_load') == 1
+deferred = transform(canonical)
+assert 'gpu.shuffle' not in deferred.split('affine.yield')[0]
+assert deferred.count('gpu.shuffle') == 2
+assert deferred.split('affine.yield')[0].count('frisk.lds_load') == 1
+assert transform(deferred) == deferred
+varying_factor = shared.replace('arith.mulf %state, %factor', 'arith.mulf %state, %x')
+unchanged(run([TOOL, '--verify-each', '--frisk-canonicalize-lds-addresses'], varying_factor))
 # The same recurrence under a partial-wave branch cannot be moved to its exit.
 divergent = fixture().replace('%result:1 =',
     '%cond = arith.cmpi eq, %lane, %b1 : i32\n'

@@ -1166,6 +1166,16 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---- after frisk-simplify-bounded-affine -----\n"; llvm::outs().flush(); src->dump();
   }
 
+  // Physical storage, slots and unrolling are final. Keep proven address anchors
+  // and alignment in ThreadIR until their mechanical LLVM conversion.
+  if (canonicalizeLDS) {
+    AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+    AddPass(mlir::createCSEPass());
+    llvm::outs() << "\n---- after frisk-canonicalize-lds-addresses -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Register vectors and repeated denominators are exposed after unrolling.
   // Perform approximate division here, before any LLVM dialect conversion.
   if (mathMode == "approx" || mathMode == "mmac-recip") {
@@ -1259,8 +1269,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (fragPrefetch)
     frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
 
-  if (canonicalizeLDS) frisk::canonicalizeLDSGEPs(*llvmModule);
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "canonicalizeLDSGEPs");
+  // LDS address canonicalization is complete in ThreadIR.
 
   // 4. 将 llvm::Module 打印为文本
   std::string llvmIrStr;

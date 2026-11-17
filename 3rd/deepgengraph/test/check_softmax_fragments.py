@@ -86,6 +86,24 @@ def main():
             assert moved.count('call void @llvm.amdgcn.sched.barrier') == 4
             assert Counter(insts(moved)) == Counter(insts(run(mixed, 'off')))
             assert moved.index('%leader =') < moved.index('%dma =') < moved.index('call void @llvm.amdgcn.s.barrier()')
+        # ThreadIR canonicalization can leave a wave sum before PV. Its lane
+        # exchange stays fixed, while packet math may sink across it. Preserve
+        # the exact denominator DAG and emit every input before the exchange.
+        wave = ('declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)\n' +
+                base.replace('  call void @llvm.amdgcn.s.barrier()',
+                    '  %sum_bits = bitcast float %sum1_0 to i32\n'
+                    '  %wave_sum = call i32 @llvm.amdgcn.ds.bpermute(i32 16, i32 %sum_bits)\n'
+                    '  call void @llvm.amdgcn.s.barrier()').replace(
+                    '  ret void', '  store i32 %wave_sum, ptr %out\n  ret void'))
+        for mode in ('fragment', 'pv'):
+            moved = run(wave, mode)
+            assert moved.count('call void @llvm.amdgcn.sched.barrier') == 4
+            assert Counter(insts(moved)) == Counter(insts(run(wave, 'off')))
+            assert moved.index('%sum1_0 =') < moved.index('%sum_bits =') < moved.index('%wave_sum =')
+            assert moved.index('%wave_sum =') < moved.index('call void @llvm.amdgcn.s.barrier()') < moved.index('%mma0 =')
+            assert insts(run(moved, mode)) == insts(moved)
+            if mode == 'pv':
+                assert moved.index('%mma0 =') < moved.index('%p2 =')
         renamed = re.sub(r'%([A-Za-z]\w*)',r'%rename_\1',base)
         assert re.findall(r'%rename_p(\d) =',run(renamed)) == ['0','2','1','3']
         rejected = {
@@ -109,7 +127,7 @@ def main():
         for mode in ('', 'true', '1', 'Fragment', 'pv-more'):
             p.write_text(base)
             assert subprocess.run([TOOL,'--softmax-fragments='+mode,p],capture_output=True).returncode != 0
-    print('PASS softmax fragment scheduling: both modes, exact DAG, sum-before-pack, PV order, idempotence, renaming, 8 rejection cases, live external use, invalid CLI')
+    print('PASS softmax fragment scheduling: both modes, exact DAG, sum-before-pack, PV order, wave-sum exchange, idempotence, renaming, 8 rejection cases, live external use, invalid CLI')
 
 
 if __name__ == '__main__': main()

@@ -43,6 +43,33 @@ namespace frisk {
 namespace mlir {
 namespace frisk {
 
+LogicalResult LDSLoadOp::verify() {
+  auto type = cast<MemRefType>(getSource().getType());
+  auto space = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
+  if (!space || space.getInt() != 3)
+    return emitOpError("requires address-space-3 storage");
+  if (getIndices().size() != unsigned(type.getRank()))
+    return emitOpError("requires one anchor index per memref dimension");
+  Type element = getResult().getType();
+  if (auto vector = dyn_cast<VectorType>(element)) {
+    if (vector.getRank() != 1 || vector.isScalable())
+      return emitOpError("requires a fixed one-dimensional vector or scalar");
+    SmallVector<int64_t> strides;
+    int64_t offset;
+    if (failed(type.getStridesAndOffset(strides, offset)) ||
+        (!strides.empty() && strides.back() != 1))
+      return emitOpError("requires contiguous vector elements");
+    element = vector.getElementType();
+  }
+  if (element != type.getElementType() || !element.isIntOrFloat() ||
+      element.getIntOrFloatBitWidth() < 8 ||
+      !llvm::isPowerOf2_64(element.getIntOrFloatBitWidth()))
+    return emitOpError("requires matching power-of-two byte-sized integer or float elements");
+  if (!llvm::isPowerOf2_64(getAlignment()))
+    return emitOpError("requires power-of-two alignment");
+  return success();
+}
+
 llvm::StringRef ReadMatrixFromShmOp::getIntrinsicName() {
   struct Instruction {
     int64_t m, n, bits;

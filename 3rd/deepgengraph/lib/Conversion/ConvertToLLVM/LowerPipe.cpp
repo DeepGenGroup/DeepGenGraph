@@ -15,6 +15,31 @@ namespace mlir::frisk {
 
 static constexpr unsigned kLLVMIndexBitwidth = 64;
 
+// All proofs and anchor selection were completed in ThreadIR. This conversion
+// only preserves that contract; it performs no address search or enumeration.
+struct LDSLoadToLLVM : ConvertOpToLLVMPattern<LDSLoadOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(LDSLoadOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &r) const override {
+    Value anchor = getStridedElementPtr(r, op.getLoc(),
+        cast<MemRefType>(op.getSource().getType()), adaptor.getSource(),
+        adaptor.getIndices());
+    Value pointer = anchor;
+    if (op.getByteOffset()) {
+      Value offset = r.create<LLVM::ConstantOp>(op.getLoc(), r.getI64Type(),
+                                               op.getByteOffset());
+      pointer = r.create<LLVM::GEPOp>(op.getLoc(), anchor.getType(), r.getI8Type(),
+                                     anchor, ValueRange{offset});
+    }
+    bool nontemporal = op.getNontemporal();
+    auto load = r.replaceOpWithNewOp<LLVM::LoadOp>(op,
+        getTypeConverter()->convertType(op.getResult().getType()), pointer,
+        op.getAlignment());
+    load.setNontemporal(nontemporal);
+    return success();
+  }
+};
+
 // LLVM represents an n-D vector as nested arrays of 1-D vectors.  Array
 // indices on llvm.extractvalue/insertvalue have to be constants, so the
 // standard Vector-to-LLVM patterns cannot lower a scalar access with a
@@ -223,9 +248,11 @@ struct VectorToLLVMPass : public PassWrapper<VectorToLLVMPass, OperationPass<Mod
     target.addLegalDialect<memref::MemRefDialect>();
     target.addLegalOp<UnrealizedConversionCastOp>();
     target.addIllegalDialect<vector::VectorDialect>();
+    target.addIllegalOp<LDSLoadOp>();
 
     LLVMTypeConverter converter(&getContext(), options);
     RewritePatternSet patterns(&getContext());
+    patterns.add<LDSLoadToLLVM>(converter);
     mlir::vector::populateVectorTransferLoweringPatterns(patterns);
     patterns.add<VectorTypeCastOpIndexBitwidthConversion>(
         converter, PatternBenefit(2));

@@ -306,7 +306,10 @@ bool safeFunction(func::FuncOp function) {
           name != "gpu.block_dim" && name != "gpu.grid_dim" &&
           name != "gpu.lane_id" && name != "gpu.shuffle" && name != "gpu.barrier" &&
           name != "frisk.async_copy_gm_to_shm" && name != "frisk.wait_buffer_ready" &&
-          name != "frisk.read_matrix_from_shm") safe = false;
+          // Canonicalized LDS reads have the same control-flow behavior as
+          // memref loads. Their values are still rejected as uniform factors
+          // by Proof::uniform; accepting the operation does not prove its data.
+          name != "frisk.lds_load" && name != "frisk.read_matrix_from_shm") safe = false;
     }
     if (op->getNumRegions() && op != function &&
         !isa<affine::AffineForOp, scf::ForOp, affine::AffineIfOp, scf::IfOp>(op))

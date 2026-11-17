@@ -132,6 +132,10 @@ bool knownFixed(Inst *i) {
       auto n = f->getName();
       return n == "llvm.amdgcn.s.barrier" || n == "llvm.amdgcn.sched.barrier" ||
              n == "llvm.amdgcn.readfirstlane.i32" ||
+             // A wave sum can already be interleaved with the packets. Keep
+             // its lane exchange fixed; the SSA scheduler emits its inputs
+             // before it, without changing the reduction or participating lanes.
+             n == "llvm.amdgcn.ds.bpermute" ||
              n == detail::MatrixReadM32x16 ||
              n == "llvm.amdgcn.exp2.f32";
     }

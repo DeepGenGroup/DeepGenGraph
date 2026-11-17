@@ -16,6 +16,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   ThreadDeferLaneSum.cpp
   DeferLaneSum.cpp
   CanonicalizeLDSGEPs.cpp
+  CanonicalizeThreadLDSAddresses.cpp
   OptimizeRegisterLifetimes.cpp
   OptimizeRegisterMath.cpp
   ApproximateThreadMath.cpp

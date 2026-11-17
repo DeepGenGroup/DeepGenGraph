@@ -196,7 +196,7 @@ bool isSynchronousAccess(Operation *op) {
     return !read.isBlockForm();
   // Fragment loads finish the SHM read here; uses of the register result do
   // not keep its source storage alive. Fragment stores write their destination.
-  return isa<LoadFragOp, StoreFragOp,
+  return isa<LDSLoadOp, LoadFragOp, StoreFragOp,
              memref::LoadOp, memref::StoreOp, memref::CopyOp,
              memref::DimOp, memref::AssumeAlignmentOp,
              affine::AffineLoadOp, affine::AffineStoreOp,

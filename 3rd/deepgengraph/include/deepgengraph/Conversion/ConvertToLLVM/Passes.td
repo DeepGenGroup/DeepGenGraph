@@ -59,4 +59,9 @@ def ApproximateThreadMath: Pass<"frisk-approximate-thread-math", "func::FuncOp">
   let dependentDialects = ["mlir::arith::ArithDialect"];
 }
 
+def CanonicalizeThreadLDSAddresses : Pass<"frisk-canonicalize-lds-addresses", "func::FuncOp"> {
+  let summary = "Prove shared load alignment and constant address differences in ThreadIR";
+  let constructor = "mlir::frisk::createCanonicalizeThreadLDSAddressesPass()";
+}
+
 #endif // THREADIR_TO_LLVM_CONVERSION_PASSES

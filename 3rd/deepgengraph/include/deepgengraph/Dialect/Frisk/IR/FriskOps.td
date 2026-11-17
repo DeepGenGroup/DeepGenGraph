@@ -1244,6 +1244,19 @@ def Frisk_FromThreadTileOp: Frisk_Op<"from_threadTile", [Pure]> {
 }
 
 
+// Late ThreadIR load: the indices name a shared address anchor, and the signed
+// byte offset is relative to that address. Lowering must keep the two separate.
+// This is an ordinary, non-speculatable memory read, not a paired instruction.
+def Frisk_LDSLoadOp : Frisk_Op<"lds_load", []> {
+  let arguments = (ins Arg<AnyMemRef, "shared storage", [MemRead]>:$source,
+      Variadic<Index>:$indices, I64Attr:$byte_offset,
+      ConfinedAttr<I64Attr, [IntPositive]>:$alignment,
+      DefaultValuedOptionalAttr<BoolAttr, "false">:$nontemporal);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$source `[` $indices `]` attr-dict `:` type($source) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 // Explicit block -> fragment -> thread IR. Coordinates count fragments, not
 // elements. Memory operations carry the same layout recipe as tile bridges.
 def Frisk_LoadFragOp : Frisk_Op<"load_frag", []> {
