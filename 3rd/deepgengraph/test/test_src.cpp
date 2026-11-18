@@ -4,7 +4,6 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchPairedLDS.h"
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
-#include "SplitDAttentionTiles.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
@@ -667,18 +666,18 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   argc = positional.size();
   argv = positional.data();
-  if (argc < 2 || argc > 20) {
-    llvm::errs() << "expected an input and at most 18 positional tuning arguments\n";
+  if (argc < 2 || argc > 19) {
+    llvm::errs() << "expected an input and at most 17 positional tuning arguments\n";
     return 1;
   }
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
   // CP-SAT needs explicit block-level DMA tasks, before fragment lowering.
   // An explicitly selected legacy/sync mode still retains its own semantics.
   StringRef copyMode = copyModeEnv ? copyModeEnv : (cpsat.enabled() ? "async" : "legacy");
-  StringRef dmaPackMode = argc > 16 ? argv[16] : "legacy";
+  StringRef dmaPackMode = argc > 15 ? argv[15] : "legacy";
   // gfx936's DTK rejects the wide HCU global-load intrinsic. Packed DMA
   // uses the hardware-validated buffer inline asm unless explicitly overridden.
-  StringRef dmaExport = argc > 17 ? argv[17]
+  StringRef dmaExport = argc > 16 ? argv[16]
                                 : (copyMode == "async" || copyMode == "hybrid" ? "asm128" : "split32");
   if (dmaExport != "split32" && dmaExport != "hcu128" && dmaExport != "asm128") {
     llvm::errs() << "DMA export must be split32, hcu128, or asm128\n";
@@ -698,12 +697,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   int64_t qkTile = 0, voTile = 0;
-  if ((argc > 18 && (StringRef(argv[18]).getAsInteger(10, qkTile) || qkTile < 0)) ||
-      (argc > 19 && (StringRef(argv[19]).getAsInteger(10, voTile) || voTile < 0))) {
+  if ((argc > 17 && (StringRef(argv[17]).getAsInteger(10, qkTile) || qkTile < 0)) ||
+      (argc > 18 && (StringRef(argv[18]).getAsInteger(10, voTile) || voTile < 0))) {
     llvm::errs() << "QK/VO tile must be nonnegative; 0 selects the independent automatic default\n";
     return 1;
   }
-  bool explicitTiles = qkTile || voTile;
   bool isPipelineSched = argc > 2 && StringRef(argv[2]) == "1";
   if ((cpsat.enabled() && isPipelineSched) || (cpsatStopAfter && !cpsat.enabled())) {
     llvm::errs() << "CP-SAT requires pipeline positional switch 0; stop-after needs export/import/baseline\n";
@@ -717,12 +715,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool reorderEnabled = argc < 5 || StringRef(argv[4]) == "1";
   bool packSharedEnabled = argc < 6 || StringRef(argv[5]) == "1";
   StringRef wmmaLayout = argc > 6 ? argv[6] : "shuffle";
-  uint64_t carrierWords = 24576;
-  if (argc > 7 && StringRef(argv[7]).getAsInteger(10, carrierWords)) {
-    llvm::errs() << "carrier budget must be a nonnegative number of 32-bit words/block\n";
-    return 1;
-  }
-  StringRef mathMode = argc > 8 ? argv[8] : "strict";
+  StringRef mathMode = argc > 7 ? argv[7] : "strict";
   if (!localReductionOptions.valid()) {
     llvm::errs() << "local-reduce requires chains=2..16, min-inputs>=2*chains and <=2048\n";
     return 1;
@@ -748,40 +741,40 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::errs() << "mask-add-bypass=approx requires math=approx; use off for strict math\n";
     return 1;
   }
-  bool optimizeLifetimes = argc < 12 || StringRef(argv[11]) == "1";
-  bool uniformMasks = argc > 12 && StringRef(argv[12]) == "1";
-  bool prefetchPackets = argc > 13 && StringRef(argv[13]) == "1";
-  bool fuseMaskAdd = argc < 15 || StringRef(argv[14]) == "1";
+  bool optimizeLifetimes = argc < 11 || StringRef(argv[10]) == "1";
+  bool uniformMasks = argc > 11 && StringRef(argv[11]) == "1";
+  bool prefetchPackets = argc > 12 && StringRef(argv[12]) == "1";
+  bool fuseMaskAdd = argc < 14 || StringRef(argv[13]) == "1";
   unsigned ldsReuseWords = 0;
-  if (argc > 15 && StringRef(argv[15]).getAsInteger(10, ldsReuseWords)) {
+  if (argc > 14 && StringRef(argv[14]).getAsInteger(10, ldsReuseWords)) {
     llvm::errs() << "lds-reuse-words must be a nonnegative number of 32-bit words/thread\n";
     return 1;
   }
-  if (argc > 14 && StringRef(argv[14]) != "0" && StringRef(argv[14]) != "1") {
+  if (argc > 13 && StringRef(argv[13]) != "0" && StringRef(argv[13]) != "1") {
     llvm::errs() << "fuse-mask-add must be 0 or 1\n";
     return 1;
   }
-  if (argc > 13 && StringRef(argv[13]) != "0" && StringRef(argv[13]) != "1") {
+  if (argc > 12 && StringRef(argv[12]) != "0" && StringRef(argv[12]) != "1") {
     llvm::errs() << "prefetch-packets must be 0 or 1\n";
     return 1;
   }
-  if (argc > 12 && StringRef(argv[12]) != "0" && StringRef(argv[12]) != "1") {
+  if (argc > 11 && StringRef(argv[11]) != "0" && StringRef(argv[11]) != "1") {
     llvm::errs() << "uniform-masks must be 0 or 1\n";
     return 1;
   }
-  if (argc > 11 && StringRef(argv[11]) != "0" && StringRef(argv[11]) != "1") {
+  if (argc > 10 && StringRef(argv[10]) != "0" && StringRef(argv[10]) != "1") {
     llvm::errs() << "register-lifetimes must be 0 or 1\n";
     return 1;
   }
   unsigned threads = 128;
-  if (argc > 9 && (StringRef(argv[9]).getAsInteger(10, threads) ||
+  if (argc > 8 && (StringRef(argv[8]).getAsInteger(10, threads) ||
                   threads == 0 || threads > 1024 || threads % 64)) {
     llvm::errs() << "threads must be a multiple of 64 in [64,1024]\n";
     return 1;
   }
   SmallVector<int64_t> blockWarps;
-  if (argc > 10) {
-    auto axes = StringRef(argv[10]).split(',');
+  if (argc > 9) {
+    auto axes = StringRef(argv[9]).split(',');
     unsigned m = 0, n = 0;
     if (axes.first.getAsInteger(10, m) || axes.second.getAsInteger(10, n) ||
         !m || !n || m > 16 || n > 16 || m * n != threads / 64) {
@@ -871,9 +864,20 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       asmSourceBytes = bytes;
     }
   }
-  if ((dmaPackMode == "useKPack" || explicitTiles) &&
-      failed(configureSplitDAttention(*src, dmaPackMode == "useKPack", qkTile, voTile)))
+  // BK is a lowering hint; tensor attention always retains full-D values and
+  // a single QK/softmax recurrence. Capture hints before kernel conversion.
+  DenseI64ArrayAttr attentionTiles;
+  Attribute qkPipelineHint;
+  Attribute qkSimplifyLoop;
+  if (auto attention = src->lookupSymbol<deepgengraph::KernelOp>("Attn_p2")) {
+    attentionTiles = attention->getAttrOfType<DenseI64ArrayAttr>("frisk.attention_tiles");
+    qkPipelineHint = attention->getAttr("frisk.qk_pipeline_hint");
+    qkSimplifyLoop = attention->getAttr("frisk.qk_simplify_loop");
+  }
+  if (attentionTiles && attentionTiles.size() != 2) {
+    llvm::errs() << "attention tiles require two QK/VO hints\n";
     return 1;
+  }
   // 简单的输出，在 debug 的时候常用
   analyze::PointerTracer::getPointerInfo(*src);
   src->dump();
@@ -911,13 +915,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
-  auto tensorLoops = frisk::createOptimizeTensorLoopsPass();
-  if (failed(tensorLoops->initializeOptions(
-          "max-carrier-words=" + std::to_string(carrierWords),
-          [](const llvm::Twine &message) { llvm::errs() << message << "\n"; return failure(); })))
-    return 1;
-  pm.addPass(std::move(tensorLoops));
-  if (failed(pm.run(src->getOperation())) || failed(checkSplitDSharing(*src, explicitTiles)))
+  if (failed(pm.run(src->getOperation())))
     return 1;
   pm.clear();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createMemspaceAnalyzePass());
@@ -938,7 +936,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   src->walk([&](func::FuncOp function) {
     if (!function->hasAttr("thread_num")) return;
     OpBuilder builder(function);
-    if (argc > 9) {
+    if (argc > 8) {
       function->setAttr("thread_num", builder.getI32IntegerAttr(threads));
       function.walk([&](gpu::ThreadIdOp id) {
         if (id.getDimension() == gpu::Dimension::x)
@@ -947,11 +945,56 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     }
     if (!blockWarps.empty())
       function->setAttr("frisk.block_warps", builder.getDenseI64ArrayAttr(blockWarps));
+    if (attentionTiles)
+      function->setAttr("frisk.attention_tiles", attentionTiles);
+    if (qkPipelineHint)
+      function->setAttr("frisk.qk_pipeline_hint", qkPipelineHint);
+    if (qkSimplifyLoop)
+      function->setAttr("frisk.qk_simplify_loop", qkSimplifyLoop);
   });
-  if (isPipelineSched && failed(annotateAttentionSeqLenPipeline(*src)))
-    return 1;
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
+
+  // Tile before layout/DMA planning so allocation sizes and all their producer
+  // accesses describe the selected physical staging granularity. CLI axes
+  // override hints independently. useKPack coarsens only unspecified axes.
+  if (dmaPackMode == "useKPack") {
+    auto *hw = GetHWSpecification(HW_KIND_DCU, HW_VERSION_DCU_BW1000, ctx.get());
+    auto *dma = hw->dataCopyInfo.getMaxDMATransfer();
+    int64_t fragmentBytes = 0;
+    for (const auto &mma : hw->gemmInfo.validInsts)
+      if (mma.asm_str.find("16x16x16_f16") != std::string::npos)
+        fragmentBytes = mma.desc_a.thread_creg[0] * mma.desc_a.thread_creg[1] * 2;
+    if (!dma || !fragmentBytes || dma->bytesPerLane % fragmentBytes) {
+      llvm::errs() << "no full-width FP16 DMA/MMAC kpack ratio\n";
+      return 1;
+    }
+    int64_t factor = dma->bytesPerLane / fragmentBytes;
+    auto attention = src->lookupSymbol<func::FuncOp>("Attn_p2");
+    if (!attention || attention.getNumArguments() != 4) return 1;
+    auto outputType = dyn_cast<MemRefType>(attention.getArgument(3).getType());
+    if (!outputType || !outputType.hasStaticShape() || outputType.getRank() != 4) return 1;
+    int64_t d = outputType.getDimSize(3);
+    auto coarsen = [&](int64_t hint) {
+      // Invalid hints reach the pass validator unchanged; saturating them at
+      // D would silently turn an invalid request into a different tile.
+      if (hint <= 0 || hint % 16 || d % hint) return hint;
+      return hint <= d / factor ? hint * factor : d;
+    };
+    if (!qkTile) qkTile = coarsen(attentionTiles ? attentionTiles[0] : 16);
+    if (!voTile) voTile = coarsen(attentionTiles ? attentionTiles[1] : 16);
+  }
+  auto attentionTiling = frisk::createTileAttentionPass();
+  if (failed(attentionTiling->initializeOptions(
+          "qk-tile=" + std::to_string(qkTile) + " vo-tile=" + std::to_string(voTile) +
+          " allow-reassociation=" + (mathMode != "strict" ? "true" : "false"),
+          [](const llvm::Twine &m) { llvm::errs() << m << '\n'; return failure(); })))
+    return 1;
+  AddFuncPass(std::move(attentionTiling));
+  if (isPipelineSched && failed(annotateAttentionSeqLenPipeline(*src)))
+    return 1;
+  llvm::outs() << "\n---------- after frisk-tile-attention ---------\n";
+  llvm::outs().flush(); src->dump();
 
   // All executable kernel computations are now Frisk block IR. Preserve
   // strict sums; the modes that already permit MMAC reassociation fuse here.
@@ -1594,7 +1637,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);

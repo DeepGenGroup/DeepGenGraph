@@ -12,14 +12,28 @@
     "measured_in_this_run": false
   },
   "input_source": "generated_ir/causal_cvt_pack_mytest/causal.input.mlir",
-  "input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a",
+  "historical_input_sha256": "ebc04f67887a20a6e45cdf84304d41b3f0480b2dcd514b171daa22a4a299231a",
+  "input_sha256": "f7d0522b1bc2c49ce1344b215af55052190b229dd0184fb3ec9f1464a3fcdbb0",
+  "input_generation": {
+    "generator": "generate_attention_ir.py",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "bm": 128,
+    "bn": 128,
+    "bk_hint": 32,
+    "softmax": "online",
+    "causal": true
+  },
   "config_source": "generated_ir/causal_cvt_pack_mytest/historical_safe_best.config.json",
   "parameters": {
     "pipeline": "0",
     "reorder": "1",
     "pack": "1",
     "layout": "3.3",
-    "carrier": "34816",
     "math": "approx",
     "threads": "256",
     "waves": "4,1",
@@ -65,12 +79,11 @@
     "FRISK_GM_TO_SHM_MODE": "async",
     "FRISK_GM_TO_SHM_ALIGNMENT": "16"
   },
-  "mytest_sha256": "c08eb6cb69392d9225c6082e83f7dea3dcea8921be96eb3b7d9735417925143f",
+  "mytest_sha256": "fae12b5d77d6d6a1a88e8d7db8ed7122c7151b9645637a4d7390af1a27ea6fc5",
   "mytest_arguments_after_output": [
     "1",
     "1",
     "3.3",
-    "34816",
     "approx",
     "256",
     "4,1",
@@ -107,8 +120,8 @@
     "--pv-interleave=4",
     "--v-double-buffer=1"
   ],
-  "fingerprint": "dd545cb4576b7c3f81439d9f1220e34520957daf13d664bb54bd42be4e944594",
-  "base_sha256": "b26e187a0bb8fa95c2464a42d3416b91b65a6e416f494cd6ba27d23cda9b0314",
+  "fingerprint": "0de87ae507c8bdb0a3c42b6d4c87965b07ad60347c67b0311d5a01d665af6bde",
+  "base_sha256": "cb606f3d45df7d12fab299f53989805dd18e6c4871f287a57acb60f3e9965e3b",
   "identity_replay_exact": true,
   "final_llvm_identity_replay_exact": true,
   "note": "schedule.json records the current compiler's original Base order with this config. Historical winners include later fragment/LLVM transformations and are not reproduced solely by this Base schedule. No new GPU timing is claimed.",
@@ -160,13 +173,5 @@
     "static_mmac": 256,
     "static_waits": 12,
     "static_barriers": 14
-  },
-  "analysis_update": {
-    "mytest_sha256": "421a5f64766d4f84b0b61d3698a9b5f5f60f32abc3cf9fb5377e3fbebd93f4b1",
-    "base_ir_unchanged": true,
-    "fields_added": [
-      "buffers.liveness",
-      "dma_summary"
-    ]
   }
 }

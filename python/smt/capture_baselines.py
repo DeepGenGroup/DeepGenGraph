@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
 import tempfile
 
 try:
@@ -20,7 +22,11 @@ except ImportError:
     from schedule_schema import read_problem, validate_schedule, write_json
 
 ROOT = Path(__file__).resolve().parents[2]
-POSITIONAL = ("reorder", "pack", "layout", "carrier", "math", "threads", "waves",
+sys.path.insert(0, str(ROOT))
+from generate_attention_ir import TEMPLATE, generate_ir
+from TuneAttention import masked, prepare_input
+
+POSITIONAL = ("reorder", "pack", "layout", "math", "threads", "waves",
               "lifetimes", "masks", "prefetch", "fuse", "reuse", "dma-pack", "dma-export",
               "qk-tile", "vo-tile")
 INPUT_ONLY = {"pipeline", "copy", "alignment", "pipeline-stages", "loop-mark", "lds-bytes"}
@@ -66,10 +72,18 @@ def run(command, env, work, log):
 def capture(name, case, output, mytest, verify_lowering):
     dest = output / name
     dest.mkdir(parents=True, exist_ok=True)
-    cfg = case["parameters"]
+    cfg = {key: value for key, value in case["parameters"].items() if key != "carrier"}
     source = ROOT / case["input"]
     artifact = ROOT / case["artifact"]
-    (dest / "input.mlir").write_bytes(source.read_bytes())
+    historical = masked(source.read_text()).split("deepgengraph.kernel", 1)[1]
+    b, s, h, d = map(int, re.search(r"%Q:\s*tensor<(\d+)x(\d+)x(\d+)x(\d+)xf16>", historical).groups())
+    bm, bn, bk = (int(re.search(rf"%c{axis}\s*=\s*arith.constant\s+(\d+)", historical)[1])
+                  for axis in ("BM", "BN", "BK"))
+    softmax = "online" if re.search(r"\bop\s*=\s*MAX\b", historical) else "legacy"
+    causal = "deepgengraph.mask" in historical
+    generated, _ = generate_ir(TEMPLATE.read_text(), bm, bn, bk, softmax,
+                               b=b, h=h, s=s, d=d, causal=causal)
+    (dest / "input.mlir").write_text(prepare_input(generated, cfg, "qk"))
     options = [str(cfg[k]) for k in POSITIONAL]
     options += [f"--{key}={value}" for key, value in cfg.items()
                 if key not in POSITIONAL and key not in INPUT_ONLY]
@@ -109,7 +123,10 @@ def capture(name, case, output, mytest, verify_lowering):
         phase=problem["phase"], loop_id=problem["loop"]["id"],
         historical_measurement=dict(artifact=case["artifact"], sha256=sha256(artifact),
             median_ms=case["median_ms"], source="pmc_test.log", measured_in_this_run=False),
-        input_source=case["input"], input_sha256=sha256(source),
+        input_source=case["input"], historical_input_sha256=sha256(source),
+        input_sha256=sha256(dest / "input.mlir"),
+        input_generation=dict(generator="generate_attention_ir.py", shape=[b, h, s, d],
+                              bm=bm, bn=bn, bk_hint=bk, softmax=softmax, causal=causal),
         config_source=case["config_source"], parameters=cfg, environment=environment,
         mytest_sha256=sha256(mytest), mytest_arguments_after_output=options,
         fingerprint=problem["fingerprint"], base_sha256=sha256(dest / "base.mlir"),

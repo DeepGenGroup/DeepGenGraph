@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the exported split-D attention LLVM body with NumPy lane values.
+"""Execute the exported attention LLVM body with NumPy lane values.
 
 Unlike address/provenance checks, this executes loops, PHIs, mask, reductions,
 MMAC operands/accumulators, memory traffic and normalization numerically. The
@@ -144,19 +144,31 @@ class LLVMWorkgroupModel:
         if re.search(r'\basm(?: sideeffect)? "', body):
             operands = re.search('"\\((.*)\\)', body)[1]
             args = [self.typed(x) for x in split_args(operands)] if operands else []
-            if 'buffer_load_dwordx4' in body:
+            if 'v_cvt_pkrtz_f16_f32' in body:
+                assert len(args) == 2 and '"=v,v,v"' in body
+                halves = []
+                for value in args:
+                    rounded = value.astype(np.float16)
+                    away = np.abs(rounded.astype(np.float32)) > np.abs(value)
+                    rounded = np.where(away,np.nextafter(rounded,np.zeros_like(rounded)),rounded)
+                    halves.append(rounded.view(np.uint16).astype(np.uint32))
+                return (halves[0] | (halves[1] << 16)).astype(np.int64)
+            dma = re.search(r'buffer_load_dwordx([24])\b', body)
+            if dma:
+                width = int(dma[1]) * 4
                 assert '"={m0},s,v,s,~{memory}"' in body
                 lds, offset, resource = args
                 assert np.all(resource[:, 3] == 0x20000), 'unexpected buffer format'
                 assert np.all(offset[self.active] >= 0)
-                assert np.all(offset[self.active] + 16 <= resource[self.active, 2]), 'buffer OOB'
+                assert np.all(offset[self.active] + width <= resource[self.active, 2]), 'buffer OOB'
                 for wave in range(self.t // 64):
                     lanes = slice(wave * 64, (wave + 1) * 64)
                     assert np.all(resource[lanes] == resource[wave * 64])
                     assert np.all(lds[lanes] == lds[wave * 64])
                 source = resource[:, 0] + (resource[:, 1] << 32) + offset
-                self.memory(lds + np.arange(self.t) % 64 * 16, '<8 x half>',
-                            self.memory(source, '<8 x half>'))
+                packet = f'<{width // 2} x half>'
+                self.memory(lds + np.arange(self.t) % 64 * width, packet,
+                            self.memory(source, packet))
                 return lds
             if 's_waitcnt vmcnt(0)' in body:
                 assert not args and '"~{memory}"' in body
@@ -184,6 +196,14 @@ class LLVMWorkgroupModel:
         args = [self.typed(x) for x in split_args(args)] if args else []
         if name.startswith('llvm.maxnum.'):
             return np.fmax(args[0], args[1])
+        if name == 'llvm.amdgcn.ballot.i64':
+            result = np.zeros(self.t,dtype=np.uint64)
+            for wave in range(self.t//64):
+                begin,end = wave*64,(wave+1)*64
+                mask = sum(1 << lane for lane in range(64)
+                           if self.active[begin+lane] and args[0][begin+lane])
+                result[begin:end] = mask
+            return result.view(np.int64)
         if name.endswith('workgroup.id.x'):
             return np.full(self.t, self.head, dtype=np.int64)
         if name.endswith('workgroup.id.y'):
@@ -300,6 +320,15 @@ class LLVMWorkgroupModel:
         if op == 'select':
             c, a, b = map(self.typed, split_args(body))
             return np.where(c, a, b)
+        if op == 'fcmp':
+            pred, body = body.split(' ', 1)
+            a, b = split_args(body)
+            ty, _ = self.parse_type(a)
+            a, b = self.typed(a), self.value(b, ty)
+            assert pred in ('oeq','one','olt','ole','ogt','oge'), pred
+            compare = {'oeq':np.equal,'one':np.not_equal,'olt':np.less,
+                       'ole':np.less_equal,'ogt':np.greater,'oge':np.greater_equal}[pred]
+            return ~np.isnan(a) & ~np.isnan(b) & compare(a,b)
         if op == 'icmp':
             pred, body = body.split(' ', 1)
             a, b = split_args(body)

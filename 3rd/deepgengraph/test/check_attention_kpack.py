@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check split-D BK inference, LLVM export and lowered-IR CPU numerics.
+"""Check block tiling hint inference, LLVM export and lowered-IR CPU numerics.
 
 Usage: OPENBLAS_NUM_THREADS=1 python3 check_attention_kpack.py build/test/MyTest
 Requires NumPy; this does not execute GPU machine code.
@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 from check_attention_split_d import check_numerics
+from generate_attention_ir import TEMPLATE, generate_ir
 
 
 def main():
@@ -32,21 +33,21 @@ def main():
             path.write_text(source)
             proc = subprocess.run(
                 [str(tool), str(path), "0", str(output), "1", "1", args.wmma_layout,
-                 "34816", "approx", "256", "4,1", "1", "1", "1", "0", "0",
+                 "approx", "256", "4,1", "1", "1", "1", "0", "0",
                  "useKPack", "asm128"], cwd=work, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=180)
             return proc, output
 
-        for bk, fixture in ((16, "test_input_sd16.mlir"),
-                            (32, "test_input_spidD.mlir")):
-            proc, output = compile_ir(f"bk{bk}", (fixtures / fixture).read_text())
+        for bk in (16, 32):
+            proc, output = compile_ir(f"bk{bk}", generate_ir(TEMPLATE.read_text(),128,128,bk,softmax="legacy")[0])
             assert proc.returncode == 0, proc.stdout[-5000:]
             assert not re.search(r"error:|Assertion .*failed|LLVM ERROR", proc.stdout), proc.stdout[-5000:]
-            match = re.search(r"kpack=(\d+), BK=(\d+) -> (\d+)", proc.stdout)
-            assert match, "Missing BK inference diagnostic"
-            factor, old, new = map(int, match.groups())
-            assert old == bk and new == bk * factor and 128 % new == 0
+            match = re.search(r"frisk.attention_tiled = array<i64: (\d+), (\d+)>", proc.stdout)
+            assert match, "Missing effective block tiling attribute"
+            qk, vo = map(int, match.groups())
+            assert qk == vo == bk*2
+            old, new = bk, qk
             llvm = output.read_text()
             assert "define amdgpu_kernel void @Attn_p2" in llvm
             assert "buffer_load_dwordx4" in llvm
@@ -54,19 +55,15 @@ def main():
                                    blocks=[(0, 0, 0), (0, 13, 15), (0, 31, 31)])
             print(f"PASS BK={old} -> {new}: LLVM export, lowered-IR CPU numerics; max_abs={error:.6g}", flush=True)
 
-        source = (fixtures / "test_input_sd16.mlir").read_text()
-        mismatched = source.replace("%cBK = arith.constant 16", "%cBK = arith.constant 32")
-        wrong_tiles = mismatched.replace("to 128 step 16", "to 128 step 32")
-        oversized = source.replace("to 128 step 16", "to 128 step 256")
-        for name, text, diagnostic in (
-            ("mismatched-steps", mismatched, "operand tile extents must match their own loop steps"),
-            ("wrong-tiles", wrong_tiles, "operand tile extents must match their own loop steps"),
-            ("oversized-bk", oversized, "input QK/VO steps must divide their respective D extents"),
-        ):
+        source = generate_ir(TEMPLATE.read_text(),128,128,16,softmax="legacy")[0]
+        for name, hints in (("invalid-qk", "24, 16"), ("invalid-vo", "16, 256"),
+                            ("negative-hint", "-1, 16")):
+            text = source.replace("frisk.attention_tiles = array<i64: 16, 16>",
+                                  f"frisk.attention_tiles = array<i64: {hints}>")
             proc, output = compile_ir(name, text)
-            assert proc.returncode == 1 and diagnostic in proc.stdout, proc.stdout[-5000:]
-            assert not output.exists(), "Invalid input reached LLVM export"
-            print(f"PASS rejected {name}: {diagnostic}", flush=True)
+            assert proc.returncode == 1 and "tiles" in proc.stdout, proc.stdout[-5000:]
+            assert not output.exists(), "Invalid hint reached LLVM export"
+            print(f"PASS rejected {name}", flush=True)
 
 
 if __name__ == "__main__":

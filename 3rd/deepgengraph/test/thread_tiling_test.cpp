@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
                   mlir::deepgengraph::DeepgengraphDialect>();
   mlir::registerPass([] { return mlir::frisk::createFriskOpFusePass(); });
   mlir::registerPass([] { return mlir::frisk::createReorderWorkgroupsPass(); });
-  mlir::registerPass([] { return mlir::frisk::createOptimizeTensorLoopsPass(); });
+  mlir::registerPass([] { return mlir::frisk::createTileAttentionPass(); });
   mlir::PassRegistration<TestShmReusePass>();
   mlir::PassRegistration<TestAsyncToLLVMPass>();
   mlir::PassRegistration<TestExp2ToROCDLPass>();

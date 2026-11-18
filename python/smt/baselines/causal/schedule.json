@@ -207,9 +207,21 @@
     {
       "id": 51,
       "slots": 1
+    },
+    {
+      "id": 52,
+      "slots": 1
+    },
+    {
+      "id": 53,
+      "slots": 1
+    },
+    {
+      "id": 54,
+      "slots": 1
     }
   ],
-  "fingerprint": "dd545cb4576b7c3f81439d9f1220e34520957daf13d664bb54bd42be4e944594",
+  "fingerprint": "0de87ae507c8bdb0a3c42b6d4c87965b07ad60347c67b0311d5a01d665af6bde",
   "loop_id": "Attn_p2:0",
   "mode": "intra",
   "operations": [
@@ -496,6 +508,41 @@
     {
       "id": 56,
       "order": 56,
+      "stage": 0
+    },
+    {
+      "id": 57,
+      "order": 57,
+      "stage": 0
+    },
+    {
+      "id": 58,
+      "order": 58,
+      "stage": 0
+    },
+    {
+      "id": 59,
+      "order": 59,
+      "stage": 0
+    },
+    {
+      "id": 60,
+      "order": 60,
+      "stage": 0
+    },
+    {
+      "id": 61,
+      "order": 61,
+      "stage": 0
+    },
+    {
+      "id": 62,
+      "order": 62,
+      "stage": 0
+    },
+    {
+      "id": 63,
+      "order": 63,
       "stage": 0
     }
   ],

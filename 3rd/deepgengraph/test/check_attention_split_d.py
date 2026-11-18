@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile split-D attention and execute its normalized Frisk IR on the CPU.
+"""Compile shared attention and execute independently tiled Frisk IR on CPU.
 
 Usage: OPENBLAS_NUM_THREADS=1 python3 check_attention_split_d.py path/to/MyTest
 Requires NumPy. This checks the actual lowered addresses, loop-carried sums,
@@ -241,45 +241,51 @@ def main():
     args = parser.parse_args()
     tool = args.mytest.resolve()
     source = TEMPLATE.read_text()
-    fixture = TEMPLATE.with_name("test_input_spidD.mlir")
-    fixture_text = fixture.read_text()
-    fixture_bm, fixture_bn, fixture_bk = (
-        int(re.search(rf'%c{name} = arith.constant (\d+)', fixture_text)[1])
-        for name in ('BM', 'BN', 'BK'))
-    # This fixture deliberately records the historical non-stable kernel.
-    assert fixture_text == generate_ir(source, fixture_bm, fixture_bn, fixture_bk, softmax="legacy")[0]
-    for bk in (0, -1, 3, 129):
+    for bk in (0, -1, 3, 8, 24, 129):
         try:
             generate_ir(source, 64, 32, bk)
         except ValueError:
             pass
         else:
             raise AssertionError(f"Invalid BK accepted: {bk}")
-    small = source.replace("4096", "256").replace("1x256x32x", "2x256x3x").replace("1x32x", "2x3x")
     configs = [(64, 32, bk) for bk in (16, 32, 64, 128)] + [(32, 64, 32), (128, 32, 64)]
-    with tempfile.TemporaryDirectory(prefix="attention-split-d-") as directory:
+    with tempfile.TemporaryDirectory(prefix="attention-shared-") as directory:
         for bm, bn, bk in configs:
             path = Path(directory) / f"attention-{bm}-{bn}-{bk}.mlir"
-            ir, _ = generate_ir(small, bm, bn, bk, softmax="legacy")
-            assert ir.split("  deepgengraph.kernel", 1)[0] == small.split("  deepgengraph.kernel", 1)[0]
+            ir, shape = generate_ir(source, bm, bn, bk, softmax="legacy", b=2, h=3, s=256)
+            assert shape == (2, 3, 256, 128), shape
+            kernel = ir.split("  deepgengraph.kernel", 1)[1]
+            assert f"frisk.attention_tiles = array<i64: {bk}, {bk}>" in kernel
+            assert kernel.count("deepgengraph.precise_dot_op") == 2, kernel
+            assert len(re.findall(r"(?:scf|affine)\.for", kernel)) == 1, kernel
+            assert not re.search(r"%(?:od|dk|cBK)\b", kernel), kernel
             path.write_text(ir)
             output = path.with_suffix(".ll")
-            proc = subprocess.run([str(tool), str(path), "0", str(output)],
+            math = "strict" if bk == 128 else "mmac"
+            proc = subprocess.run([str(tool), str(path), "0", str(output),
+                                   "1", "1", "3.3", math],
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                   text=True, timeout=180)
             log = proc.stdout
             assert proc.returncode == 0, log[-5000:]
             assert not re.search(r"error:|Assertion .*failed|LLVM ERROR", log), log[-5000:]
             assert "define amdgpu_kernel void @Attn_p2" in output.read_text()
+            normalized = log.split("after createNormalizeAttentionKLayoutPass ---------", 1)[1].split("----- after", 1)[0]
+            assert normalized.count("frisk.exp2") == 1, normalized
+            assert normalized.count("frisk.gemm(") == 1 + 128 // bk, normalized
             error = check_numerics(log, bm)
             print(f"PASS BM={bm} BN={bn} BK={bk}: LLVM export, lowered-IR CPU execution; max_abs={error:.6g}", flush=True)
-        output = Path(directory) / "full.ll"
-        proc = subprocess.run([str(tool), str(fixture), "0", str(output)],
+        full_bm = 128
+        full = Path(directory) / "full.mlir"
+        full.write_text(generate_ir(source, full_bm, 32, 32, softmax="legacy")[0])
+        output = full.with_suffix(".ll")
+        proc = subprocess.run([str(tool), str(full), "0", str(output),
+                               "1", "1", "3.3", "mmac"],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=180)
         assert proc.returncode == 0 and not re.search(r"error:|Assertion .*failed|LLVM ERROR", proc.stdout), proc.stdout[-5000:]
-        last_tile = 4096 // fixture_bm - 1
-        error = check_numerics(proc.stdout, fixture_bm, seed=1,
+        last_tile = 4096 // full_bm - 1
+        error = check_numerics(proc.stdout, full_bm, seed=1,
             blocks=[(0, 0, 0), (0, 13, last_tile // 2), (0, 31, last_tile)])
         print(f"PASS original 1x32x4096x128 shape: first/middle/last tiles; max_abs={error:.6g}")
 

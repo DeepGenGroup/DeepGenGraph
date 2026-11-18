@@ -14,12 +14,12 @@ tool=${MYTEST:-"$repo_dir/3rd/deepgengraph/build/test/MyTest"}
 mkdir -p -- "$output_dir"
 output_dir=$(cd -- "$output_dir" && pwd)
 for mode in useKPack noKPack; do
-    # argv 4..17: reorder, shared packing, layout, carrier, math, threads,
+    # argv 4..16: reorder, shared packing, layout, math, threads,
     # block-warps, lifetimes, masks, prefetch, fuse, reuse, DMA pack strategy,
     # instruction export mode (split32 preserves the logical 16B layout).
     FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
-        "$tool" "$repo_dir/3rd/deepgengraph/test/test_input_spidD.mlir" \
-        0 "$output_dir/$mode.ll" 1 1 "$wmma_layout" 34816 approx 256 4,1 1 1 1 0 0 "$mode" "$dma_export" \
+        "$tool" "$repo_dir/3rd/deepgengraph/test/test_input_shared_d.mlir" \
+        0 "$output_dir/$mode.ll" 1 1 "$wmma_layout" approx 256 4,1 1 1 1 0 0 "$mode" "$dma_export" \
         > "$output_dir/$mode.log" 2>&1
     if [[ ! -s "$output_dir/$mode.ll" ]] || rg -q 'error:|LLVM ERROR|Assertion .*failed' "$output_dir/$mode.log"; then
         tail -80 -- "$output_dir/$mode.log" >&2

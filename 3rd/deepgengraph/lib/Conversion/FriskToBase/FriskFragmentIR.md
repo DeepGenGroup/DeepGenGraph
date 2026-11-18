@@ -254,8 +254,8 @@ matrix read 仍使用已经单独通过设备验证的 HCU DS intrinsic。可在
 ```bash
 FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
   3rd/deepgengraph/build/test/MyTest \
-  3rd/deepgengraph/test/test_input_spidD.mlir 0 /tmp/matrix-attention-asm.ll \
-  1 1 3.2 34816 approx 256 4,1 1 1 1 0 0 useKPack asm128 \
+  3rd/deepgengraph/test/test_input_shared_d.mlir 0 /tmp/matrix-attention-asm.ll \
+  1 1 3.2 approx 256 4,1 1 1 1 0 0 useKPack asm128 \
   > /tmp/matrix-attention-asm.log 2>&1
 ```
 

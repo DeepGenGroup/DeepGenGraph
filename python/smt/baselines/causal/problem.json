@@ -8,11 +8,14 @@
         "reason": "no proof of full write, ownership and no escape"
       },
       "memory_space": 0,
-      "readers": [],
+      "readers": [
+        1
+      ],
       "rotatable": false,
       "type": "memref<128x128xf32>",
       "users": [
-        0
+        0,
+        1
       ],
       "writers": [
         0
@@ -75,8 +78,28 @@
       ]
     },
     {
-      "bytes": 33554432,
+      "bytes": 8192,
       "id": 4,
+      "liveness": {
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
+      },
+      "memory_space": 3,
+      "readers": [
+        2
+      ],
+      "rotatable": false,
+      "type": "memref<128x32xf16, 3>",
+      "users": [
+        2
+      ],
+      "writers": [
+        2
+      ]
+    },
+    {
+      "bytes": 33554432,
+      "id": 5,
       "liveness": {
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
@@ -94,26 +117,6 @@
     },
     {
       "bytes": 8192,
-      "id": 5,
-      "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
-      },
-      "memory_space": 3,
-      "readers": [
-        2
-      ],
-      "rotatable": false,
-      "type": "memref<32x128xf16, 3>",
-      "users": [
-        2
-      ],
-      "writers": [
-        2
-      ]
-    },
-    {
-      "bytes": 8192,
       "id": 6,
       "liveness": {
         "iteration_local": false,
@@ -124,7 +127,7 @@
         2
       ],
       "rotatable": false,
-      "type": "memref<128x32xf16, 3>",
+      "type": "memref<32x128xf16, 3>",
       "users": [
         2
       ],
@@ -144,7 +147,7 @@
         2
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32>",
+      "type": "vector<128x128xf32>",
       "users": [
         2
       ],
@@ -164,7 +167,7 @@
         2
       ],
       "rotatable": false,
-      "type": "vector<128x128xf32>",
+      "type": "memref<128x128xf32>",
       "users": [
         2
       ],
@@ -201,17 +204,14 @@
       },
       "memory_space": 0,
       "readers": [
-        4
+        3
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32>",
+      "type": "vector<128x128xf32>",
       "users": [
-        3,
-        4
-      ],
-      "writers": [
         3
-      ]
+      ],
+      "writers": []
     },
     {
       "bytes": 65536,
@@ -222,33 +222,34 @@
       },
       "memory_space": 0,
       "readers": [
-        4
+        5
       ],
       "rotatable": false,
-      "type": "vector<128x128xf32>",
+      "type": "memref<128x128xf32>",
       "users": [
-        4
+        3,
+        5
       ],
-      "writers": []
+      "writers": [
+        3
+      ]
     },
     {
       "bytes": 65536,
       "id": 12,
       "liveness": {
-        "iteration_local": true,
-        "reason": "owned computed tile with only local direct uses"
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 3,
+      "memory_space": 0,
       "readers": [
-        6,
-        9
+        5
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32, 3>",
+      "type": "memref<128x128xf32>",
       "users": [
         4,
-        6,
-        9
+        5
       ],
       "writers": [
         4
@@ -263,31 +264,33 @@
       },
       "memory_space": 3,
       "readers": [
-        7
+        7,
+        10
       ],
       "rotatable": false,
       "type": "memref<128x128xf32, 3>",
       "users": [
-        6,
-        7
+        5,
+        7,
+        10
       ],
       "writers": [
-        6
+        5
       ]
     },
     {
-      "bytes": 512,
+      "bytes": 65536,
       "id": 14,
       "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
+        "iteration_local": true,
+        "reason": "owned computed tile with only local direct uses"
       },
       "memory_space": 3,
       "readers": [
         8
       ],
       "rotatable": false,
-      "type": "memref<128x1xf32, 3>",
+      "type": "memref<128x128xf32, 3>",
       "users": [
         7,
         8
@@ -303,70 +306,70 @@
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 0,
-      "readers": [
-        8,
-        10
-      ],
-      "rotatable": false,
-      "type": "vector<128x1xf32>",
-      "users": [
-        8,
-        10,
-        53
-      ],
-      "writers": [
-        53
-      ]
-    },
-    {
-      "bytes": 512,
-      "id": 16,
-      "liveness": {
-        "iteration_local": true,
-        "reason": "owned computed tile with only local direct uses"
-      },
       "memory_space": 3,
       "readers": [
-        9,
-        10,
-        53
+        9
       ],
       "rotatable": false,
       "type": "memref<128x1xf32, 3>",
       "users": [
         8,
-        9,
-        10,
-        53
+        9
       ],
       "writers": [
         8
       ]
     },
     {
-      "bytes": 65536,
-      "id": 17,
+      "bytes": 512,
+      "id": 16,
       "liveness": {
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
       },
       "memory_space": 0,
       "readers": [
-        13
+        9,
+        11
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32>",
+      "type": "vector<128x1xf32>",
       "users": [
         9,
-        13
+        11,
+        63
+      ],
+      "writers": [
+        63
+      ]
+    },
+    {
+      "bytes": 512,
+      "id": 17,
+      "liveness": {
+        "iteration_local": true,
+        "reason": "owned computed tile with only local direct uses"
+      },
+      "memory_space": 3,
+      "readers": [
+        10,
+        11,
+        63
+      ],
+      "rotatable": false,
+      "type": "memref<128x1xf32, 3>",
+      "users": [
+        9,
+        10,
+        11,
+        63
       ],
       "writers": [
         9
       ]
     },
     {
-      "bytes": 512,
+      "bytes": 65536,
       "id": 18,
       "liveness": {
         "iteration_local": false,
@@ -374,13 +377,13 @@
       },
       "memory_space": 0,
       "readers": [
-        11
+        14
       ],
       "rotatable": false,
-      "type": "memref<128x1xf32>",
+      "type": "memref<128x128xf32>",
       "users": [
         10,
-        11
+        14
       ],
       "writers": [
         10
@@ -395,21 +398,13 @@
       },
       "memory_space": 0,
       "readers": [
-        12,
-        25,
-        33,
-        41,
-        49
+        12
       ],
       "rotatable": false,
       "type": "memref<128x1xf32>",
       "users": [
         11,
-        12,
-        25,
-        33,
-        41,
-        49
+        12
       ],
       "writers": [
         11
@@ -424,16 +419,24 @@
       },
       "memory_space": 0,
       "readers": [
-        12
+        13,
+        49,
+        50,
+        51,
+        52
       ],
       "rotatable": false,
-      "type": "vector<128x1xf32>",
+      "type": "memref<128x1xf32>",
       "users": [
         12,
+        13,
+        49,
+        50,
+        51,
         52
       ],
       "writers": [
-        52
+        12
       ]
     },
     {
@@ -445,20 +448,20 @@
       },
       "memory_space": 0,
       "readers": [
-        17
+        13
       ],
       "rotatable": false,
-      "type": "memref<128x1xf32>",
+      "type": "vector<128x1xf32>",
       "users": [
-        12,
-        17
+        13,
+        62
       ],
       "writers": [
-        12
+        62
       ]
     },
     {
-      "bytes": 65536,
+      "bytes": 512,
       "id": 22,
       "liveness": {
         "iteration_local": false,
@@ -466,14 +469,12 @@
       },
       "memory_space": 0,
       "readers": [
-        15,
         18
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32>",
+      "type": "memref<128x1xf32>",
       "users": [
         13,
-        15,
         18
       ],
       "writers": [
@@ -484,36 +485,38 @@
       "bytes": 65536,
       "id": 23,
       "liveness": {
-        "iteration_local": true,
-        "reason": "owned computed tile with only local direct uses"
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 3,
+      "memory_space": 0,
       "readers": [
-        16
+        16,
+        19
       ],
       "rotatable": false,
-      "type": "memref<128x128xf32, 3>",
+      "type": "memref<128x128xf32>",
       "users": [
-        15,
-        16
+        14,
+        16,
+        19
       ],
       "writers": [
-        15
+        14
       ]
     },
     {
-      "bytes": 512,
+      "bytes": 65536,
       "id": 24,
       "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
+        "iteration_local": true,
+        "reason": "owned computed tile with only local direct uses"
       },
       "memory_space": 3,
       "readers": [
         17
       ],
       "rotatable": false,
-      "type": "memref<128x1xf32, 3>",
+      "type": "memref<128x128xf32, 3>",
       "users": [
         16,
         17
@@ -526,25 +529,25 @@
       "bytes": 512,
       "id": 25,
       "liveness": {
-        "iteration_local": true,
-        "reason": "owned computed tile with only local direct uses"
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
       },
       "memory_space": 3,
       "readers": [
-        52
+        18
       ],
       "rotatable": false,
       "type": "memref<128x1xf32, 3>",
       "users": [
         17,
-        52
+        18
       ],
       "writers": [
         17
       ]
     },
     {
-      "bytes": 32768,
+      "bytes": 512,
       "id": 26,
       "liveness": {
         "iteration_local": true,
@@ -552,72 +555,68 @@
       },
       "memory_space": 3,
       "readers": [
-        24,
-        32,
-        40,
-        48
+        62
       ],
       "rotatable": false,
-      "type": "memref<128x128xf16, 3>",
+      "type": "memref<128x1xf32, 3>",
       "users": [
         18,
-        24,
-        32,
-        40,
-        48
+        62
       ],
       "writers": [
         18
       ]
     },
     {
-      "bytes": 33554432,
+      "bytes": 32768,
       "id": 27,
+      "liveness": {
+        "iteration_local": true,
+        "reason": "owned computed tile with only local direct uses"
+      },
+      "memory_space": 3,
+      "readers": [
+        29,
+        36,
+        43,
+        57
+      ],
+      "rotatable": false,
+      "type": "memref<128x128xf16, 3>",
+      "users": [
+        19,
+        29,
+        36,
+        43,
+        57
+      ],
+      "writers": [
+        19
+      ]
+    },
+    {
+      "bytes": 16384,
+      "id": 28,
       "liveness": {
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 1,
+      "memory_space": 0,
       "readers": [
-        21,
-        29,
-        37,
-        45
+        29
       ],
       "rotatable": false,
-      "type": "memref<1x32x4096x128xf16, 1>",
+      "type": "memref<128x32xf32>",
       "users": [
-        21,
-        29,
-        37,
-        45
-      ],
-      "writers": []
-    },
-    {
-      "bytes": 8192,
-      "id": 28,
-      "liveness": {
-        "iteration_local": true,
-        "reason": "owned full-tile DMA with local completion"
-      },
-      "memory_space": 3,
-      "readers": [
-        23
-      ],
-      "rotatable": true,
-      "type": "memref<128x32xf16, 3>",
-      "users": [
-        21,
-        23,
-        22
+        20,
+        29
       ],
       "writers": [
-        21
+        20
       ]
     },
     {
-      "bytes": 8192,
+      "bytes": 16384,
       "id": 29,
       "liveness": {
         "iteration_local": false,
@@ -625,16 +624,16 @@
       },
       "memory_space": 0,
       "readers": [
-        24
+        36
       ],
       "rotatable": false,
-      "type": "memref<128x32xf16>",
+      "type": "memref<128x32xf32>",
       "users": [
-        23,
-        24
+        21,
+        36
       ],
       "writers": [
-        23
+        21
       ]
     },
     {
@@ -646,76 +645,59 @@
       },
       "memory_space": 0,
       "readers": [
-        26
+        43
       ],
       "rotatable": false,
       "type": "memref<128x32xf32>",
       "users": [
-        24,
-        26
+        22,
+        43
       ],
       "writers": [
-        24
+        22
       ]
     },
     {
-      "bytes": 16384,
+      "bytes": 33554432,
       "id": 31,
       "liveness": {
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 0,
+      "memory_space": 1,
       "readers": [
-        25
+        26,
+        33,
+        40,
+        47
       ],
       "rotatable": false,
-      "type": "vector<128x32xf32>",
-      "users": [
-        25,
-        51
-      ],
-      "writers": [
-        51
-      ]
-    },
-    {
-      "bytes": 16384,
-      "id": 32,
-      "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
-      },
-      "memory_space": 0,
-      "readers": [
-        26
-      ],
-      "rotatable": false,
-      "type": "memref<128x32xf32>",
-      "users": [
-        25,
-        26
-      ],
-      "writers": [
-        25
-      ]
-    },
-    {
-      "bytes": 16384,
-      "id": 33,
-      "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
-      },
-      "memory_space": 0,
-      "readers": [
-        51
-      ],
-      "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "memref<1x32x4096x128xf16, 1>",
       "users": [
         26,
-        51
+        33,
+        40,
+        47
+      ],
+      "writers": []
+    },
+    {
+      "bytes": 8192,
+      "id": 32,
+      "liveness": {
+        "iteration_local": true,
+        "reason": "owned full-tile DMA with local completion"
+      },
+      "memory_space": 3,
+      "readers": [
+        28
+      ],
+      "rotatable": true,
+      "type": "memref<128x32xf16, 3>",
+      "users": [
+        26,
+        28,
+        27
       ],
       "writers": [
         26
@@ -723,21 +705,41 @@
     },
     {
       "bytes": 8192,
+      "id": 33,
+      "liveness": {
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
+      },
+      "memory_space": 0,
+      "readers": [
+        29
+      ],
+      "rotatable": false,
+      "type": "memref<128x32xf16>",
+      "users": [
+        28,
+        29
+      ],
+      "writers": [
+        28
+      ]
+    },
+    {
+      "bytes": 16384,
       "id": 34,
       "liveness": {
-        "iteration_local": true,
-        "reason": "owned full-tile DMA with local completion"
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 3,
+      "memory_space": 0,
       "readers": [
-        31
+        53
       ],
-      "rotatable": true,
-      "type": "memref<128x32xf16, 3>",
+      "rotatable": false,
+      "type": "memref<128x32xf32>",
       "users": [
         29,
-        31,
-        30
+        53
       ],
       "writers": [
         29
@@ -747,25 +749,26 @@
       "bytes": 8192,
       "id": 35,
       "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
+        "iteration_local": true,
+        "reason": "owned full-tile DMA with local completion"
       },
-      "memory_space": 0,
+      "memory_space": 3,
       "readers": [
-        32
+        35
       ],
-      "rotatable": false,
-      "type": "memref<128x32xf16>",
+      "rotatable": true,
+      "type": "memref<128x32xf16, 3>",
       "users": [
-        31,
-        32
+        33,
+        35,
+        34
       ],
       "writers": [
-        31
+        33
       ]
     },
     {
-      "bytes": 16384,
+      "bytes": 8192,
       "id": 36,
       "liveness": {
         "iteration_local": false,
@@ -773,16 +776,16 @@
       },
       "memory_space": 0,
       "readers": [
-        34
+        36
       ],
       "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "memref<128x32xf16>",
       "users": [
-        32,
-        34
+        35,
+        36
       ],
       "writers": [
-        32
+        35
       ]
     },
     {
@@ -794,41 +797,42 @@
       },
       "memory_space": 0,
       "readers": [
-        33
-      ],
-      "rotatable": false,
-      "type": "vector<128x32xf32>",
-      "users": [
-        33,
         54
-      ],
-      "writers": [
-        54
-      ]
-    },
-    {
-      "bytes": 16384,
-      "id": 38,
-      "liveness": {
-        "iteration_local": false,
-        "reason": "no proof of full write, ownership and no escape"
-      },
-      "memory_space": 0,
-      "readers": [
-        34
       ],
       "rotatable": false,
       "type": "memref<128x32xf32>",
       "users": [
-        33,
-        34
+        36,
+        54
       ],
       "writers": [
-        33
+        36
       ]
     },
     {
-      "bytes": 16384,
+      "bytes": 8192,
+      "id": 38,
+      "liveness": {
+        "iteration_local": true,
+        "reason": "owned full-tile DMA with local completion"
+      },
+      "memory_space": 3,
+      "readers": [
+        42
+      ],
+      "rotatable": true,
+      "type": "memref<128x32xf16, 3>",
+      "users": [
+        40,
+        42,
+        41
+      ],
+      "writers": [
+        40
+      ]
+    },
+    {
+      "bytes": 8192,
       "id": 39,
       "liveness": {
         "iteration_local": false,
@@ -836,59 +840,59 @@
       },
       "memory_space": 0,
       "readers": [
-        54
+        43
       ],
       "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "memref<128x32xf16>",
       "users": [
-        34,
-        54
+        42,
+        43
       ],
       "writers": [
-        34
+        42
       ]
     },
     {
-      "bytes": 8192,
+      "bytes": 16384,
       "id": 40,
-      "liveness": {
-        "iteration_local": true,
-        "reason": "owned full-tile DMA with local completion"
-      },
-      "memory_space": 3,
-      "readers": [
-        39
-      ],
-      "rotatable": true,
-      "type": "memref<128x32xf16, 3>",
-      "users": [
-        37,
-        39,
-        38
-      ],
-      "writers": [
-        37
-      ]
-    },
-    {
-      "bytes": 8192,
-      "id": 41,
       "liveness": {
         "iteration_local": false,
         "reason": "no proof of full write, ownership and no escape"
       },
       "memory_space": 0,
       "readers": [
-        40
+        55
       ],
       "rotatable": false,
-      "type": "memref<128x32xf16>",
+      "type": "memref<128x32xf32>",
       "users": [
-        39,
-        40
+        43,
+        55
       ],
       "writers": [
-        39
+        43
+      ]
+    },
+    {
+      "bytes": 8192,
+      "id": 41,
+      "liveness": {
+        "iteration_local": true,
+        "reason": "owned full-tile DMA with local completion"
+      },
+      "memory_space": 3,
+      "readers": [
+        56
+      ],
+      "rotatable": true,
+      "type": "memref<128x32xf16, 3>",
+      "users": [
+        47,
+        56,
+        48
+      ],
+      "writers": [
+        47
       ]
     },
     {
@@ -900,16 +904,16 @@
       },
       "memory_space": 0,
       "readers": [
-        42
+        49
       ],
       "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "vector<128x32xf32>",
       "users": [
-        40,
-        42
+        49,
+        58
       ],
       "writers": [
-        40
+        58
       ]
     },
     {
@@ -921,16 +925,16 @@
       },
       "memory_space": 0,
       "readers": [
-        41
+        53
       ],
       "rotatable": false,
-      "type": "vector<128x32xf32>",
+      "type": "memref<128x32xf32>",
       "users": [
-        41,
-        55
+        49,
+        53
       ],
       "writers": [
-        55
+        49
       ]
     },
     {
@@ -942,16 +946,16 @@
       },
       "memory_space": 0,
       "readers": [
-        42
+        50
       ],
       "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "vector<128x32xf32>",
       "users": [
-        41,
-        42
+        50,
+        59
       ],
       "writers": [
-        41
+        59
       ]
     },
     {
@@ -963,42 +967,41 @@
       },
       "memory_space": 0,
       "readers": [
-        55
+        54
       ],
       "rotatable": false,
       "type": "memref<128x32xf32>",
       "users": [
-        42,
-        55
+        50,
+        54
       ],
       "writers": [
-        42
+        50
       ]
     },
     {
-      "bytes": 8192,
+      "bytes": 16384,
       "id": 46,
       "liveness": {
-        "iteration_local": true,
-        "reason": "owned full-tile DMA with local completion"
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
       },
-      "memory_space": 3,
+      "memory_space": 0,
       "readers": [
-        47
+        51
       ],
-      "rotatable": true,
-      "type": "memref<128x32xf16, 3>",
+      "rotatable": false,
+      "type": "vector<128x32xf32>",
       "users": [
-        45,
-        47,
-        46
+        51,
+        60
       ],
       "writers": [
-        45
+        60
       ]
     },
     {
-      "bytes": 8192,
+      "bytes": 16384,
       "id": 47,
       "liveness": {
         "iteration_local": false,
@@ -1006,16 +1009,16 @@
       },
       "memory_space": 0,
       "readers": [
-        48
+        55
       ],
       "rotatable": false,
-      "type": "memref<128x32xf16>",
+      "type": "memref<128x32xf32>",
       "users": [
-        47,
-        48
+        51,
+        55
       ],
       "writers": [
-        47
+        51
       ]
     },
     {
@@ -1027,16 +1030,16 @@
       },
       "memory_space": 0,
       "readers": [
-        50
+        52
       ],
       "rotatable": false,
-      "type": "memref<128x32xf32>",
+      "type": "vector<128x32xf32>",
       "users": [
-        48,
-        50
+        52,
+        61
       ],
       "writers": [
-        48
+        61
       ]
     },
     {
@@ -1048,16 +1051,16 @@
       },
       "memory_space": 0,
       "readers": [
-        49
+        57
       ],
       "rotatable": false,
-      "type": "vector<128x32xf32>",
+      "type": "memref<128x32xf32>",
       "users": [
-        49,
-        56
+        52,
+        57
       ],
       "writers": [
-        56
+        52
       ]
     },
     {
@@ -1069,16 +1072,16 @@
       },
       "memory_space": 0,
       "readers": [
-        50
+        58
       ],
       "rotatable": false,
       "type": "memref<128x32xf32>",
       "users": [
-        49,
-        50
+        53,
+        58
       ],
       "writers": [
-        49
+        53
       ]
     },
     {
@@ -1090,16 +1093,79 @@
       },
       "memory_space": 0,
       "readers": [
-        56
+        59
       ],
       "rotatable": false,
       "type": "memref<128x32xf32>",
       "users": [
-        50,
-        56
+        54,
+        59
       ],
       "writers": [
-        50
+        54
+      ]
+    },
+    {
+      "bytes": 16384,
+      "id": 52,
+      "liveness": {
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
+      },
+      "memory_space": 0,
+      "readers": [
+        60
+      ],
+      "rotatable": false,
+      "type": "memref<128x32xf32>",
+      "users": [
+        55,
+        60
+      ],
+      "writers": [
+        55
+      ]
+    },
+    {
+      "bytes": 8192,
+      "id": 53,
+      "liveness": {
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
+      },
+      "memory_space": 0,
+      "readers": [
+        57
+      ],
+      "rotatable": false,
+      "type": "memref<128x32xf16>",
+      "users": [
+        56,
+        57
+      ],
+      "writers": [
+        56
+      ]
+    },
+    {
+      "bytes": 16384,
+      "id": 54,
+      "liveness": {
+        "iteration_local": false,
+        "reason": "no proof of full write, ownership and no escape"
+      },
+      "memory_space": 0,
+      "readers": [
+        61
+      ],
+      "rotatable": false,
+      "type": "memref<128x32xf32>",
+      "users": [
+        57,
+        61
+      ],
+      "writers": [
+        57
       ]
     }
   ],
@@ -1107,7 +1173,7 @@
     {
       "id": "Attn_p2:0",
       "marked": false,
-      "top_level_ops": 57
+      "top_level_ops": 64
     },
     {
       "id": "Attn_p2:1",
@@ -1117,28 +1183,34 @@
   ],
   "dependencies": [
     {
-      "dst": 21,
+      "dst": 26,
       "kind": "allocation_writer",
       "same_stage": true,
-      "src": 19
+      "src": 25
     },
     {
-      "dst": 29,
+      "dst": 33,
       "kind": "allocation_writer",
       "same_stage": true,
-      "src": 27
+      "src": 32
     },
     {
-      "dst": 37,
+      "dst": 40,
       "kind": "allocation_writer",
       "same_stage": true,
-      "src": 35
+      "src": 39
     },
     {
-      "dst": 45,
+      "dst": 47,
       "kind": "allocation_writer",
       "same_stage": true,
-      "src": 43
+      "src": 46
+    },
+    {
+      "dst": 1,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 0
     },
     {
       "dst": 2,
@@ -1147,19 +1219,19 @@
       "src": 1
     },
     {
-      "dst": 4,
+      "dst": 3,
       "kind": "ssa",
       "same_stage": true,
       "src": 2
     },
     {
-      "dst": 4,
+      "dst": 5,
       "kind": "ssa",
       "same_stage": true,
       "src": 3
     },
     {
-      "dst": 6,
+      "dst": 5,
       "kind": "ssa",
       "same_stage": true,
       "src": 4
@@ -1168,43 +1240,43 @@
       "dst": 7,
       "kind": "ssa",
       "same_stage": true,
-      "src": 6
-    },
-    {
-      "dst": 7,
-      "kind": "ssa",
-      "same_stage": false,
       "src": 5
     },
     {
       "dst": 8,
       "kind": "ssa",
+      "same_stage": true,
+      "src": 7
+    },
+    {
+      "dst": 8,
+      "kind": "ssa",
       "same_stage": false,
-      "src": 5
+      "src": 6
     },
     {
       "dst": 9,
       "kind": "ssa",
-      "same_stage": true,
-      "src": 4
-    },
-    {
-      "dst": 9,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 8
+      "same_stage": false,
+      "src": 6
     },
     {
       "dst": 10,
       "kind": "ssa",
       "same_stage": true,
-      "src": 8
+      "src": 5
+    },
+    {
+      "dst": 10,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 9
     },
     {
       "dst": 11,
       "kind": "ssa",
       "same_stage": true,
-      "src": 10
+      "src": 9
     },
     {
       "dst": 12,
@@ -1216,37 +1288,37 @@
       "dst": 13,
       "kind": "ssa",
       "same_stage": true,
-      "src": 9
+      "src": 12
     },
     {
-      "dst": 15,
+      "dst": 14,
       "kind": "ssa",
       "same_stage": true,
-      "src": 13
+      "src": 10
     },
     {
       "dst": 16,
       "kind": "ssa",
       "same_stage": true,
+      "src": 14
+    },
+    {
+      "dst": 17,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 16
+    },
+    {
+      "dst": 17,
+      "kind": "ssa",
+      "same_stage": false,
       "src": 15
     },
     {
-      "dst": 16,
+      "dst": 18,
       "kind": "ssa",
       "same_stage": false,
-      "src": 14
-    },
-    {
-      "dst": 17,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 14
-    },
-    {
-      "dst": 17,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 12
+      "src": 15
     },
     {
       "dst": 18,
@@ -1255,184 +1327,10 @@
       "src": 13
     },
     {
-      "dst": 21,
+      "dst": 19,
       "kind": "ssa",
       "same_stage": true,
-      "src": 20
-    },
-    {
-      "dst": 21,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 19
-    },
-    {
-      "dst": 22,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 21
-    },
-    {
-      "dst": 22,
-      "kind": "completion",
-      "same_stage": false,
-      "src": 21
-    },
-    {
-      "dst": 23,
-      "kind": "ready",
-      "same_stage": true,
-      "src": 22
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 0
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 1
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 2
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 3
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 4
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 6
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 7
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 8
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 9
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 10
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 11
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 12
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 13
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 15
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 16
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 17
-    },
-    {
-      "dst": 22,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 18
-    },
-    {
-      "dst": 29,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 37,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 45,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 23,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 19
-    },
-    {
-      "dst": 24,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 18
+      "src": 14
     },
     {
       "dst": 24,
@@ -1441,22 +1339,208 @@
       "src": 23
     },
     {
-      "dst": 25,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 11
-    },
-    {
-      "dst": 26,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 25
-    },
-    {
       "dst": 26,
       "kind": "ssa",
       "same_stage": true,
       "src": 24
+    },
+    {
+      "dst": 26,
+      "kind": "ssa",
+      "same_stage": false,
+      "src": 25
+    },
+    {
+      "dst": 27,
+      "kind": "ssa",
+      "same_stage": false,
+      "src": 26
+    },
+    {
+      "dst": 27,
+      "kind": "completion",
+      "same_stage": false,
+      "src": 26
+    },
+    {
+      "dst": 28,
+      "kind": "ready",
+      "same_stage": true,
+      "src": 27
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 0
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 1
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 2
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 3
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 4
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 5
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 7
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 8
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 9
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 10
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 11
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 12
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 13
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 14
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 16
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 17
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 18
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 19
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 20
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 21
+    },
+    {
+      "dst": 27,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 22
+    },
+    {
+      "dst": 33,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 34,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 40,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 47,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 28,
+      "kind": "ssa",
+      "same_stage": false,
+      "src": 25
+    },
+    {
+      "dst": 29,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 19
     },
     {
       "dst": 29,
@@ -1467,203 +1551,17 @@
     {
       "dst": 29,
       "kind": "ssa",
-      "same_stage": false,
-      "src": 27
-    },
-    {
-      "dst": 30,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 29
-    },
-    {
-      "dst": 30,
-      "kind": "completion",
-      "same_stage": false,
-      "src": 29
-    },
-    {
-      "dst": 31,
-      "kind": "ready",
       "same_stage": true,
-      "src": 30
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 0
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 1
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 2
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 3
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 4
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 6
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 7
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 8
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 9
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 10
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 11
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 12
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 13
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 15
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 16
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 17
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 18
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 21
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 22
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 23
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 24
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 25
-    },
-    {
-      "dst": 30,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 26
-    },
-    {
-      "dst": 37,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
-    },
-    {
-      "dst": 45,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
+      "src": 20
     },
     {
       "dst": 31,
       "kind": "ssa",
-      "same_stage": false,
-      "src": 27
-    },
-    {
-      "dst": 32,
-      "kind": "ssa",
       "same_stage": true,
-      "src": 18
+      "src": 30
     },
     {
-      "dst": 32,
+      "dst": 33,
       "kind": "ssa",
       "same_stage": true,
       "src": 31
@@ -1671,272 +1569,470 @@
     {
       "dst": 33,
       "kind": "ssa",
-      "same_stage": true,
-      "src": 11
+      "same_stage": false,
+      "src": 32
     },
     {
       "dst": 34,
       "kind": "ssa",
-      "same_stage": true,
+      "same_stage": false,
       "src": 33
     },
     {
       "dst": 34,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 32
-    },
-    {
-      "dst": 37,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 36
-    },
-    {
-      "dst": 37,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 35
-    },
-    {
-      "dst": 38,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 37
-    },
-    {
-      "dst": 38,
       "kind": "completion",
       "same_stage": false,
-      "src": 37
+      "src": 33
     },
     {
-      "dst": 39,
+      "dst": 35,
       "kind": "ready",
       "same_stage": true,
-      "src": 38
+      "src": 34
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 0
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 1
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 2
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 3
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 4
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 6
+      "src": 5
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 7
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 8
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 9
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 10
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 11
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 12
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 13
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 15
+      "src": 14
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 16
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 17
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 18
     },
     {
-      "dst": 38,
+      "dst": 34,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 19
+    },
+    {
+      "dst": 34,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 20
+    },
+    {
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 21
     },
     {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 22
     },
     {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 23
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 24
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 25
-    },
-    {
-      "dst": 38,
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 26
     },
     {
-      "dst": 38,
+      "dst": 34,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 34,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 28
+    },
+    {
+      "dst": 34,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 29
     },
     {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 31
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 32
-    },
-    {
-      "dst": 38,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 33
-    },
-    {
-      "dst": 38,
+      "dst": 40,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 34
     },
     {
-      "dst": 45,
+      "dst": 41,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 38
+      "src": 34
     },
     {
-      "dst": 46,
+      "dst": 47,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 38
+      "src": 34
     },
     {
-      "dst": 39,
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 34
+    },
+    {
+      "dst": 35,
       "kind": "ssa",
       "same_stage": false,
+      "src": 32
+    },
+    {
+      "dst": 36,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 19
+    },
+    {
+      "dst": 36,
+      "kind": "ssa",
+      "same_stage": true,
       "src": 35
     },
     {
-      "dst": 40,
+      "dst": 36,
       "kind": "ssa",
       "same_stage": true,
-      "src": 18
+      "src": 21
+    },
+    {
+      "dst": 38,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 37
     },
     {
       "dst": 40,
       "kind": "ssa",
       "same_stage": true,
+      "src": 38
+    },
+    {
+      "dst": 40,
+      "kind": "ssa",
+      "same_stage": false,
       "src": 39
     },
     {
       "dst": 41,
       "kind": "ssa",
-      "same_stage": true,
-      "src": 11
+      "same_stage": false,
+      "src": 40
+    },
+    {
+      "dst": 41,
+      "kind": "completion",
+      "same_stage": false,
+      "src": 40
     },
     {
       "dst": 42,
-      "kind": "ssa",
+      "kind": "ready",
       "same_stage": true,
+      "src": 41
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 0
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 1
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 2
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 3
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 4
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 5
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 7
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 8
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 9
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 10
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 11
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 12
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 13
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 14
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 16
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 17
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 18
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 19
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 20
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 21
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 22
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 26
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 28
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 29
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 33
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 34
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 35
+    },
+    {
+      "dst": 41,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 36
+    },
+    {
+      "dst": 47,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 41
+    },
+    {
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
       "src": 41
     },
     {
       "dst": 42,
       "kind": "ssa",
+      "same_stage": false,
+      "src": 39
+    },
+    {
+      "dst": 43,
+      "kind": "ssa",
       "same_stage": true,
-      "src": 40
+      "src": 19
+    },
+    {
+      "dst": 43,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 42
+    },
+    {
+      "dst": 43,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 22
     },
     {
       "dst": 45,
@@ -1945,319 +2041,367 @@
       "src": 44
     },
     {
-      "dst": 45,
+      "dst": 47,
       "kind": "ssa",
-      "same_stage": false,
-      "src": 43
-    },
-    {
-      "dst": 46,
-      "kind": "ssa",
-      "same_stage": false,
-      "src": 45
-    },
-    {
-      "dst": 46,
-      "kind": "completion",
-      "same_stage": false,
+      "same_stage": true,
       "src": 45
     },
     {
       "dst": 47,
-      "kind": "ready",
-      "same_stage": true,
+      "kind": "ssa",
+      "same_stage": false,
       "src": 46
     },
     {
-      "dst": 46,
+      "dst": 48,
+      "kind": "ssa",
+      "same_stage": false,
+      "src": 47
+    },
+    {
+      "dst": 48,
+      "kind": "completion",
+      "same_stage": false,
+      "src": 47
+    },
+    {
+      "dst": 56,
+      "kind": "ready",
+      "same_stage": true,
+      "src": 48
+    },
+    {
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 0
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 1
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 2
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 3
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 4
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 6
+      "src": 5
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 7
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 8
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 9
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 10
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 11
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 12
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 13
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 15
+      "src": 14
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 16
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 17
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 18
     },
     {
-      "dst": 46,
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 19
+    },
+    {
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 20
+    },
+    {
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 21
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 22
     },
     {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 23
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 24
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 25
-    },
-    {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 26
     },
     {
-      "dst": 46,
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 27
+    },
+    {
+      "dst": 48,
+      "kind": "intra_sync",
+      "same_stage": false,
+      "src": 28
+    },
+    {
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 29
     },
     {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 30
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 31
-    },
-    {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 32
-    },
-    {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 33
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 34
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 37
+      "src": 35
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
-      "src": 38
+      "src": 36
     },
     {
-      "dst": 46,
-      "kind": "intra_sync",
-      "same_stage": false,
-      "src": 39
-    },
-    {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 40
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 41
     },
     {
-      "dst": 46,
+      "dst": 48,
       "kind": "intra_sync",
       "same_stage": false,
       "src": 42
     },
     {
-      "dst": 47,
-      "kind": "ssa",
+      "dst": 48,
+      "kind": "intra_sync",
       "same_stage": false,
       "src": 43
-    },
-    {
-      "dst": 48,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 18
-    },
-    {
-      "dst": 48,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 47
     },
     {
       "dst": 49,
       "kind": "ssa",
       "same_stage": true,
-      "src": 11
+      "src": 12
     },
     {
       "dst": 50,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 12
+    },
+    {
+      "dst": 51,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 12
+    },
+    {
+      "dst": 52,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 12
+    },
+    {
+      "dst": 53,
       "kind": "ssa",
       "same_stage": true,
       "src": 49
     },
     {
-      "dst": 50,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 48
-    },
-    {
-      "dst": 51,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 26
-    },
-    {
-      "dst": 52,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 17
-    },
-    {
       "dst": 53,
       "kind": "ssa",
       "same_stage": true,
-      "src": 8
+      "src": 29
     },
     {
       "dst": 54,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 34
-    },
-    {
-      "dst": 55,
-      "kind": "ssa",
-      "same_stage": true,
-      "src": 42
-    },
-    {
-      "dst": 56,
       "kind": "ssa",
       "same_stage": true,
       "src": 50
     },
     {
+      "dst": 54,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 36
+    },
+    {
+      "dst": 55,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 51
+    },
+    {
+      "dst": 55,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 43
+    },
+    {
+      "dst": 56,
+      "kind": "ssa",
+      "same_stage": false,
+      "src": 46
+    },
+    {
+      "dst": 57,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 19
+    },
+    {
+      "dst": 57,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 56
+    },
+    {
+      "dst": 57,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 52
+    },
+    {
+      "dst": 58,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 53
+    },
+    {
+      "dst": 59,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 54
+    },
+    {
+      "dst": 60,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 55
+    },
+    {
+      "dst": 61,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 57
+    },
+    {
+      "dst": 62,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 18
+    },
+    {
+      "dst": 63,
+      "kind": "ssa",
+      "same_stage": true,
+      "src": 9
+    },
+    {
+      "dst": 1,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 0
+    },
+    {
       "dst": 2,
       "kind": "fence",
       "same_stage": true,
       "src": 0
     },
     {
-      "dst": 3,
+      "dst": 4,
       "kind": "fence",
       "same_stage": true,
       "src": 0
@@ -2269,7 +2413,7 @@
       "src": 1
     },
     {
-      "dst": 3,
+      "dst": 4,
       "kind": "fence",
       "same_stage": true,
       "src": 1
@@ -2599,6 +2743,48 @@
       "src": 2
     },
     {
+      "dst": 57,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 58,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 59,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 60,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 61,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 62,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
+      "dst": 63,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 2
+    },
+    {
       "dst": 4,
       "kind": "fence",
       "same_stage": true,
@@ -2606,325 +2792,361 @@
     },
     {
       "dst": 5,
-      "kind": "fence",
+      "kind": "raw",
       "same_stage": true,
       "src": 3
+    },
+    {
+      "dst": 5,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
     },
     {
       "dst": 6,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 7,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 8,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 9,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 10,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 11,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 12,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 13,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 14,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 15,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 16,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 17,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 18,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 19,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 20,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 21,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 22,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 23,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 24,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 25,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 26,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 27,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 28,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 29,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 30,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 31,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 32,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 33,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 34,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 35,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 36,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 37,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 38,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 39,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 40,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 41,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 42,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 43,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 44,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 45,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 46,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 47,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 48,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 49,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 50,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 51,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 52,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 53,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 54,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 55,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
       "dst": 56,
       "kind": "fence",
       "same_stage": true,
-      "src": 3
+      "src": 4
     },
     {
-      "dst": 6,
-      "kind": "raw",
+      "dst": 57,
+      "kind": "fence",
       "same_stage": true,
       "src": 4
     },
     {
-      "dst": 9,
-      "kind": "raw",
+      "dst": 58,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
+    },
+    {
+      "dst": 59,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
+    },
+    {
+      "dst": 60,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
+    },
+    {
+      "dst": 61,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
+    },
+    {
+      "dst": 62,
+      "kind": "fence",
+      "same_stage": true,
+      "src": 4
+    },
+    {
+      "dst": 63,
+      "kind": "fence",
       "same_stage": true,
       "src": 4
     },
@@ -2932,7 +3154,13 @@
       "dst": 7,
       "kind": "raw",
       "same_stage": true,
-      "src": 6
+      "src": 5
+    },
+    {
+      "dst": 10,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 5
     },
     {
       "dst": 8,
@@ -2950,35 +3178,29 @@
       "dst": 10,
       "kind": "raw",
       "same_stage": true,
-      "src": 8
-    },
-    {
-      "dst": 53,
-      "kind": "war",
-      "same_stage": true,
-      "src": 8
-    },
-    {
-      "dst": 53,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 8
-    },
-    {
-      "dst": 13,
-      "kind": "raw",
-      "same_stage": true,
       "src": 9
     },
     {
       "dst": 11,
       "kind": "raw",
       "same_stage": true,
-      "src": 10
+      "src": 9
     },
     {
-      "dst": 53,
+      "dst": 63,
       "kind": "war",
+      "same_stage": true,
+      "src": 9
+    },
+    {
+      "dst": 63,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 9
+    },
+    {
+      "dst": 14,
+      "kind": "raw",
       "same_stage": true,
       "src": 10
     },
@@ -2989,46 +3211,40 @@
       "src": 11
     },
     {
-      "dst": 25,
-      "kind": "raw",
+      "dst": 63,
+      "kind": "war",
       "same_stage": true,
       "src": 11
     },
     {
-      "dst": 33,
+      "dst": 13,
       "kind": "raw",
       "same_stage": true,
-      "src": 11
-    },
-    {
-      "dst": 41,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 11
+      "src": 12
     },
     {
       "dst": 49,
       "kind": "raw",
       "same_stage": true,
-      "src": 11
+      "src": 12
     },
     {
-      "dst": 17,
+      "dst": 50,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 12
+    },
+    {
+      "dst": 51,
       "kind": "raw",
       "same_stage": true,
       "src": 12
     },
     {
       "dst": 52,
-      "kind": "war",
-      "same_stage": true,
-      "src": 12
-    },
-    {
-      "dst": 15,
       "kind": "raw",
       "same_stage": true,
-      "src": 13
+      "src": 12
     },
     {
       "dst": 18,
@@ -3037,10 +3253,22 @@
       "src": 13
     },
     {
+      "dst": 62,
+      "kind": "war",
+      "same_stage": true,
+      "src": 13
+    },
+    {
       "dst": 16,
       "kind": "raw",
       "same_stage": true,
-      "src": 15
+      "src": 14
+    },
+    {
+      "dst": 19,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 14
     },
     {
       "dst": 17,
@@ -3049,178 +3277,196 @@
       "src": 16
     },
     {
-      "dst": 52,
+      "dst": 18,
       "kind": "raw",
       "same_stage": true,
       "src": 17
     },
     {
-      "dst": 24,
+      "dst": 62,
       "kind": "raw",
       "same_stage": true,
       "src": 18
     },
     {
-      "dst": 32,
+      "dst": 29,
       "kind": "raw",
       "same_stage": true,
-      "src": 18
+      "src": 19
     },
     {
-      "dst": 40,
+      "dst": 36,
       "kind": "raw",
       "same_stage": true,
-      "src": 18
+      "src": 19
     },
     {
-      "dst": 48,
+      "dst": 43,
       "kind": "raw",
       "same_stage": true,
-      "src": 18
+      "src": 19
     },
     {
-      "dst": 23,
+      "dst": 57,
       "kind": "raw",
-      "same_stage": false,
+      "same_stage": true,
+      "src": 19
+    },
+    {
+      "dst": 29,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 20
+    },
+    {
+      "dst": 36,
+      "kind": "raw",
+      "same_stage": true,
       "src": 21
     },
     {
-      "dst": 24,
+      "dst": 43,
       "kind": "raw",
       "same_stage": true,
-      "src": 23
+      "src": 22
     },
     {
-      "dst": 26,
+      "dst": 28,
       "kind": "raw",
-      "same_stage": true,
-      "src": 24
-    },
-    {
-      "dst": 26,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 25
-    },
-    {
-      "dst": 51,
-      "kind": "war",
-      "same_stage": true,
-      "src": 25
-    },
-    {
-      "dst": 51,
-      "kind": "raw",
-      "same_stage": true,
+      "same_stage": false,
       "src": 26
     },
     {
-      "dst": 31,
+      "dst": 29,
       "kind": "raw",
-      "same_stage": false,
+      "same_stage": true,
+      "src": 28
+    },
+    {
+      "dst": 53,
+      "kind": "raw",
+      "same_stage": true,
       "src": 29
     },
     {
-      "dst": 32,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 31
-    },
-    {
-      "dst": 34,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 32
-    },
-    {
-      "dst": 34,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 33
-    },
-    {
-      "dst": 54,
-      "kind": "war",
-      "same_stage": true,
-      "src": 33
-    },
-    {
-      "dst": 54,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 34
-    },
-    {
-      "dst": 39,
+      "dst": 35,
       "kind": "raw",
       "same_stage": false,
-      "src": 37
+      "src": 33
     },
     {
-      "dst": 40,
+      "dst": 36,
       "kind": "raw",
       "same_stage": true,
-      "src": 39
+      "src": 35
+    },
+    {
+      "dst": 54,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 36
     },
     {
       "dst": 42,
       "kind": "raw",
-      "same_stage": true,
+      "same_stage": false,
       "src": 40
     },
     {
-      "dst": 42,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 41
-    },
-    {
-      "dst": 55,
-      "kind": "war",
-      "same_stage": true,
-      "src": 41
-    },
-    {
-      "dst": 55,
+      "dst": 43,
       "kind": "raw",
       "same_stage": true,
       "src": 42
     },
     {
-      "dst": 47,
-      "kind": "raw",
-      "same_stage": false,
-      "src": 45
-    },
-    {
-      "dst": 48,
+      "dst": 55,
       "kind": "raw",
       "same_stage": true,
+      "src": 43
+    },
+    {
+      "dst": 56,
+      "kind": "raw",
+      "same_stage": false,
       "src": 47
     },
     {
-      "dst": 50,
-      "kind": "raw",
-      "same_stage": true,
-      "src": 48
-    },
-    {
-      "dst": 50,
+      "dst": 53,
       "kind": "raw",
       "same_stage": true,
       "src": 49
     },
     {
-      "dst": 56,
+      "dst": 58,
       "kind": "war",
       "same_stage": true,
       "src": 49
     },
     {
-      "dst": 56,
+      "dst": 54,
       "kind": "raw",
       "same_stage": true,
       "src": 50
+    },
+    {
+      "dst": 59,
+      "kind": "war",
+      "same_stage": true,
+      "src": 50
+    },
+    {
+      "dst": 55,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 51
+    },
+    {
+      "dst": 60,
+      "kind": "war",
+      "same_stage": true,
+      "src": 51
+    },
+    {
+      "dst": 57,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 52
+    },
+    {
+      "dst": 61,
+      "kind": "war",
+      "same_stage": true,
+      "src": 52
+    },
+    {
+      "dst": 58,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 53
+    },
+    {
+      "dst": 59,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 54
+    },
+    {
+      "dst": 60,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 55
+    },
+    {
+      "dst": 57,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 56
+    },
+    {
+      "dst": 61,
+      "kind": "raw",
+      "same_stage": true,
+      "src": 57
     }
   ],
   "dma_summary": {
@@ -3230,7 +3476,7 @@
     "nested_waits": 2,
     "synchronous_gm_shm": 0
   },
-  "fingerprint": "dd545cb4576b7c3f81439d9f1220e34520957daf13d664bb54bd42be4e944594",
+  "fingerprint": "0de87ae507c8bdb0a3c42b6d4c87965b07ad60347c67b0311d5a01d665af6bde",
   "limits": {
     "max_slots": 2,
     "max_stages": 2
@@ -3260,11 +3506,13 @@
       "compute_ops": 16384,
       "id": 1,
       "kind": "alu",
-      "name": "arith.constant",
+      "name": "frisk.cast",
       "opaque": false,
       "pipeline_anchor": true,
-      "read_bytes": 0,
-      "reads": [],
+      "read_bytes": 65536,
+      "reads": [
+        0
+      ],
       "write_bytes": 65536,
       "writes": [
         1
@@ -3280,27 +3528,43 @@
       "read_bytes": 237568,
       "reads": [
         2,
-        4,
         3,
-        6,
         5,
-        8,
         7,
+        4,
+        6,
+        8,
         9
       ],
       "write_bytes": 221184,
       "writes": [
         3,
-        5,
+        4,
         6,
-        7,
+        8,
         9,
-        8
+        7
       ]
     },
     {
       "compute_ops": 16384,
       "id": 3,
+      "kind": "alu",
+      "name": "frisk.cast",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 65536,
+      "reads": [
+        10
+      ],
+      "write_bytes": 65536,
+      "writes": [
+        11
+      ]
+    },
+    {
+      "compute_ops": 16384,
+      "id": 4,
       "kind": "alu",
       "name": "frisk.mask",
       "opaque": true,
@@ -3309,12 +3573,12 @@
       "reads": [],
       "write_bytes": 65536,
       "writes": [
-        10
+        12
       ]
     },
     {
       "compute_ops": 16384,
-      "id": 4,
+      "id": 5,
       "kind": "alu",
       "name": "frisk.add",
       "opaque": false,
@@ -3322,16 +3586,16 @@
       "read_bytes": 131072,
       "reads": [
         11,
-        10
+        12
       ],
       "write_bytes": 65536,
       "writes": [
-        12
+        13
       ]
     },
     {
       "compute_ops": 0,
-      "id": 5,
+      "id": 6,
       "kind": "alloc",
       "name": "frisk.alloc_buffer",
       "opaque": false,
@@ -3343,75 +3607,41 @@
     },
     {
       "compute_ops": 16384,
-      "id": 6,
+      "id": 7,
       "kind": "alu",
       "name": "frisk.cast",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        12
+        13
       ],
       "write_bytes": 65536,
       "writes": [
-        13
+        14
       ]
     },
     {
       "compute_ops": 16384,
-      "id": 7,
+      "id": 8,
       "kind": "reduce",
       "name": "frisk.reduce",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        13
+        14
       ],
       "write_bytes": 512,
       "writes": [
-        14
+        15
       ]
     },
     {
       "compute_ops": 128,
-      "id": 8,
-      "kind": "alu",
-      "name": "frisk.max",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 1024,
-      "reads": [
-        14,
-        15
-      ],
-      "write_bytes": 512,
-      "writes": [
-        16
-      ]
-    },
-    {
-      "compute_ops": 16384,
       "id": 9,
       "kind": "alu",
-      "name": "frisk.sub",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 66048,
-      "reads": [
-        12,
-        16
-      ],
-      "write_bytes": 65536,
-      "writes": [
-        17
-      ]
-    },
-    {
-      "compute_ops": 128,
-      "id": 10,
-      "kind": "alu",
-      "name": "frisk.sub",
+      "name": "frisk.max",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 1024,
@@ -3421,6 +3651,23 @@
       ],
       "write_bytes": 512,
       "writes": [
+        17
+      ]
+    },
+    {
+      "compute_ops": 16384,
+      "id": 10,
+      "kind": "alu",
+      "name": "frisk.sub",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 66048,
+      "reads": [
+        13,
+        17
+      ],
+      "write_bytes": 65536,
+      "writes": [
         18
       ]
     },
@@ -3428,12 +3675,13 @@
       "compute_ops": 128,
       "id": 11,
       "kind": "alu",
-      "name": "frisk.exp2",
+      "name": "frisk.sub",
       "opaque": false,
       "pipeline_anchor": true,
-      "read_bytes": 512,
+      "read_bytes": 1024,
       "reads": [
-        18
+        16,
+        17
       ],
       "write_bytes": 512,
       "writes": [
@@ -3444,38 +3692,54 @@
       "compute_ops": 128,
       "id": 12,
       "kind": "alu",
+      "name": "frisk.exp2",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 512,
+      "reads": [
+        19
+      ],
+      "write_bytes": 512,
+      "writes": [
+        20
+      ]
+    },
+    {
+      "compute_ops": 128,
+      "id": 13,
+      "kind": "alu",
       "name": "frisk.mul",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 1024,
       "reads": [
-        20,
-        19
+        21,
+        20
       ],
       "write_bytes": 512,
       "writes": [
-        21
+        22
       ]
     },
     {
       "compute_ops": 16384,
-      "id": 13,
+      "id": 14,
       "kind": "alu",
       "name": "frisk.exp2",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        17
+        18
       ],
       "write_bytes": 65536,
       "writes": [
-        22
+        23
       ]
     },
     {
       "compute_ops": 0,
-      "id": 14,
+      "id": 15,
       "kind": "alloc",
       "name": "frisk.alloc_buffer",
       "opaque": false,
@@ -3487,47 +3751,30 @@
     },
     {
       "compute_ops": 16384,
-      "id": 15,
+      "id": 16,
       "kind": "alu",
       "name": "frisk.cast",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        22
+        23
       ],
       "write_bytes": 65536,
       "writes": [
-        23
+        24
       ]
     },
     {
       "compute_ops": 16384,
-      "id": 16,
+      "id": 17,
       "kind": "reduce",
       "name": "frisk.reduce",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        23
-      ],
-      "write_bytes": 512,
-      "writes": [
         24
-      ]
-    },
-    {
-      "compute_ops": 128,
-      "id": 17,
-      "kind": "alu",
-      "name": "frisk.add",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 1024,
-      "reads": [
-        24,
-        21
       ],
       "write_bytes": 512,
       "writes": [
@@ -3535,26 +3782,85 @@
       ]
     },
     {
-      "compute_ops": 16384,
+      "compute_ops": 128,
       "id": 18,
+      "kind": "alu",
+      "name": "frisk.add",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 1024,
+      "reads": [
+        25,
+        22
+      ],
+      "write_bytes": 512,
+      "writes": [
+        26
+      ]
+    },
+    {
+      "compute_ops": 16384,
+      "id": 19,
       "kind": "alu",
       "name": "frisk.cast",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 65536,
       "reads": [
-        22
+        23
       ],
       "write_bytes": 32768,
       "writes": [
-        26
+        27
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 20,
+      "kind": "alu",
+      "name": "frisk.zero",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 16384,
+      "writes": [
+        28
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 21,
+      "kind": "alu",
+      "name": "frisk.zero",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 16384,
+      "writes": [
+        29
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 22,
+      "kind": "alu",
+      "name": "frisk.zero",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 16384,
+      "writes": [
+        30
       ]
     },
     {
       "compute_ops": 0,
-      "id": 19,
-      "kind": "alloc",
-      "name": "frisk.alloc_buffer",
+      "id": 23,
+      "kind": "address",
+      "name": "arith.constant",
       "opaque": false,
       "pipeline_anchor": false,
       "read_bytes": 0,
@@ -3564,7 +3870,7 @@
     },
     {
       "compute_ops": 0,
-      "id": 20,
+      "id": 24,
       "kind": "address",
       "name": "frisk.buffer_view",
       "opaque": false,
@@ -3576,27 +3882,11 @@
     },
     {
       "compute_ops": 0,
-      "id": 21,
-      "kind": "dma",
-      "name": "frisk.async_copy_gm_to_shm",
+      "id": 25,
+      "kind": "alloc",
+      "name": "frisk.alloc_buffer",
       "opaque": false,
       "pipeline_anchor": false,
-      "read_bytes": 8192,
-      "reads": [
-        27
-      ],
-      "write_bytes": 8192,
-      "writes": [
-        28
-      ]
-    },
-    {
-      "compute_ops": 0,
-      "id": 22,
-      "kind": "wait",
-      "name": "frisk.wait_buffer_ready",
-      "opaque": false,
-      "pipeline_anchor": true,
       "read_bytes": 0,
       "reads": [],
       "write_bytes": 0,
@@ -3604,78 +3894,27 @@
     },
     {
       "compute_ops": 0,
-      "id": 23,
-      "kind": "shm_reg",
-      "name": "frisk.read_matrix_from_shm",
+      "id": 26,
+      "kind": "dma",
+      "name": "frisk.async_copy_gm_to_shm",
       "opaque": false,
-      "pipeline_anchor": true,
+      "pipeline_anchor": false,
       "read_bytes": 8192,
       "reads": [
-        28
+        31
       ],
       "write_bytes": 8192,
-      "writes": [
-        29
-      ]
-    },
-    {
-      "compute_ops": 1048576,
-      "id": 24,
-      "kind": "wmma",
-      "name": "frisk.gemm",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 40960,
-      "reads": [
-        26,
-        29
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        30
-      ]
-    },
-    {
-      "compute_ops": 4096,
-      "id": 25,
-      "kind": "alu",
-      "name": "frisk.mul",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 16896,
-      "reads": [
-        31,
-        19
-      ],
-      "write_bytes": 16384,
       "writes": [
         32
       ]
     },
     {
-      "compute_ops": 4096,
-      "id": 26,
-      "kind": "alu",
-      "name": "frisk.add",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 32768,
-      "reads": [
-        32,
-        30
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        33
-      ]
-    },
-    {
       "compute_ops": 0,
       "id": 27,
-      "kind": "alloc",
-      "name": "frisk.alloc_buffer",
+      "kind": "wait",
+      "name": "frisk.wait_buffer_ready",
       "opaque": false,
-      "pipeline_anchor": false,
+      "pipeline_anchor": true,
       "read_bytes": 0,
       "reads": [],
       "write_bytes": 0,
@@ -3684,27 +3923,33 @@
     {
       "compute_ops": 0,
       "id": 28,
-      "kind": "address",
-      "name": "frisk.buffer_view",
+      "kind": "shm_reg",
+      "name": "frisk.read_matrix_from_shm",
       "opaque": false,
-      "pipeline_anchor": false,
-      "read_bytes": 0,
-      "reads": [],
-      "write_bytes": 0,
-      "writes": []
-    },
-    {
-      "compute_ops": 0,
-      "id": 29,
-      "kind": "dma",
-      "name": "frisk.async_copy_gm_to_shm",
-      "opaque": false,
-      "pipeline_anchor": false,
+      "pipeline_anchor": true,
       "read_bytes": 8192,
       "reads": [
-        27
+        32
       ],
       "write_bytes": 8192,
+      "writes": [
+        33
+      ]
+    },
+    {
+      "compute_ops": 1048576,
+      "id": 29,
+      "kind": "wmma",
+      "name": "frisk.gemm",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 57344,
+      "reads": [
+        27,
+        33,
+        28
+      ],
+      "write_bytes": 16384,
       "writes": [
         34
       ]
@@ -3712,10 +3957,10 @@
     {
       "compute_ops": 0,
       "id": 30,
-      "kind": "wait",
-      "name": "frisk.wait_buffer_ready",
+      "kind": "address",
+      "name": "arith.constant",
       "opaque": false,
-      "pipeline_anchor": true,
+      "pipeline_anchor": false,
       "read_bytes": 0,
       "reads": [],
       "write_bytes": 0,
@@ -3724,85 +3969,6 @@
     {
       "compute_ops": 0,
       "id": 31,
-      "kind": "shm_reg",
-      "name": "frisk.read_matrix_from_shm",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 8192,
-      "reads": [
-        34
-      ],
-      "write_bytes": 8192,
-      "writes": [
-        35
-      ]
-    },
-    {
-      "compute_ops": 1048576,
-      "id": 32,
-      "kind": "wmma",
-      "name": "frisk.gemm",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 40960,
-      "reads": [
-        26,
-        35
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        36
-      ]
-    },
-    {
-      "compute_ops": 4096,
-      "id": 33,
-      "kind": "alu",
-      "name": "frisk.mul",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 16896,
-      "reads": [
-        37,
-        19
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        38
-      ]
-    },
-    {
-      "compute_ops": 4096,
-      "id": 34,
-      "kind": "alu",
-      "name": "frisk.add",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 32768,
-      "reads": [
-        38,
-        36
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        39
-      ]
-    },
-    {
-      "compute_ops": 0,
-      "id": 35,
-      "kind": "alloc",
-      "name": "frisk.alloc_buffer",
-      "opaque": false,
-      "pipeline_anchor": false,
-      "read_bytes": 0,
-      "reads": [],
-      "write_bytes": 0,
-      "writes": []
-    },
-    {
-      "compute_ops": 0,
-      "id": 36,
       "kind": "address",
       "name": "frisk.buffer_view",
       "opaque": false,
@@ -3814,23 +3980,35 @@
     },
     {
       "compute_ops": 0,
-      "id": 37,
+      "id": 32,
+      "kind": "alloc",
+      "name": "frisk.alloc_buffer",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 33,
       "kind": "dma",
       "name": "frisk.async_copy_gm_to_shm",
       "opaque": false,
       "pipeline_anchor": false,
       "read_bytes": 8192,
       "reads": [
-        27
+        31
       ],
       "write_bytes": 8192,
       "writes": [
-        40
+        35
       ]
     },
     {
       "compute_ops": 0,
-      "id": 38,
+      "id": 34,
       "kind": "wait",
       "name": "frisk.wait_buffer_ready",
       "opaque": false,
@@ -3842,74 +4020,65 @@
     },
     {
       "compute_ops": 0,
-      "id": 39,
+      "id": 35,
       "kind": "shm_reg",
       "name": "frisk.read_matrix_from_shm",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 8192,
       "reads": [
-        40
+        35
       ],
       "write_bytes": 8192,
       "writes": [
-        41
+        36
       ]
     },
     {
       "compute_ops": 1048576,
-      "id": 40,
+      "id": 36,
       "kind": "wmma",
       "name": "frisk.gemm",
       "opaque": false,
       "pipeline_anchor": true,
-      "read_bytes": 40960,
+      "read_bytes": 57344,
       "reads": [
-        26,
-        41
+        27,
+        36,
+        29
       ],
       "write_bytes": 16384,
       "writes": [
-        42
-      ]
-    },
-    {
-      "compute_ops": 4096,
-      "id": 41,
-      "kind": "alu",
-      "name": "frisk.mul",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 16896,
-      "reads": [
-        43,
-        19
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        44
-      ]
-    },
-    {
-      "compute_ops": 4096,
-      "id": 42,
-      "kind": "alu",
-      "name": "frisk.add",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 32768,
-      "reads": [
-        44,
-        42
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        45
+        37
       ]
     },
     {
       "compute_ops": 0,
-      "id": 43,
+      "id": 37,
+      "kind": "address",
+      "name": "arith.constant",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 38,
+      "kind": "address",
+      "name": "frisk.buffer_view",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 39,
       "kind": "alloc",
       "name": "frisk.alloc_buffer",
       "opaque": false,
@@ -3921,9 +4090,71 @@
     },
     {
       "compute_ops": 0,
+      "id": 40,
+      "kind": "dma",
+      "name": "frisk.async_copy_gm_to_shm",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 8192,
+      "reads": [
+        31
+      ],
+      "write_bytes": 8192,
+      "writes": [
+        38
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 41,
+      "kind": "wait",
+      "name": "frisk.wait_buffer_ready",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 42,
+      "kind": "shm_reg",
+      "name": "frisk.read_matrix_from_shm",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 8192,
+      "reads": [
+        38
+      ],
+      "write_bytes": 8192,
+      "writes": [
+        39
+      ]
+    },
+    {
+      "compute_ops": 1048576,
+      "id": 43,
+      "kind": "wmma",
+      "name": "frisk.gemm",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 57344,
+      "reads": [
+        27,
+        39,
+        30
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        40
+      ]
+    },
+    {
+      "compute_ops": 0,
       "id": 44,
       "kind": "address",
-      "name": "frisk.buffer_view",
+      "name": "arith.constant",
       "opaque": false,
       "pipeline_anchor": false,
       "read_bytes": 0,
@@ -3934,22 +4165,46 @@
     {
       "compute_ops": 0,
       "id": 45,
+      "kind": "address",
+      "name": "frisk.buffer_view",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 46,
+      "kind": "alloc",
+      "name": "frisk.alloc_buffer",
+      "opaque": false,
+      "pipeline_anchor": false,
+      "read_bytes": 0,
+      "reads": [],
+      "write_bytes": 0,
+      "writes": []
+    },
+    {
+      "compute_ops": 0,
+      "id": 47,
       "kind": "dma",
       "name": "frisk.async_copy_gm_to_shm",
       "opaque": false,
       "pipeline_anchor": false,
       "read_bytes": 8192,
       "reads": [
-        27
+        31
       ],
       "write_bytes": 8192,
       "writes": [
-        46
+        41
       ]
     },
     {
       "compute_ops": 0,
-      "id": 46,
+      "id": 48,
       "kind": "wait",
       "name": "frisk.wait_buffer_ready",
       "opaque": false,
@@ -3960,39 +4215,6 @@
       "writes": []
     },
     {
-      "compute_ops": 0,
-      "id": 47,
-      "kind": "shm_reg",
-      "name": "frisk.read_matrix_from_shm",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 8192,
-      "reads": [
-        46
-      ],
-      "write_bytes": 8192,
-      "writes": [
-        47
-      ]
-    },
-    {
-      "compute_ops": 1048576,
-      "id": 48,
-      "kind": "wmma",
-      "name": "frisk.gemm",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 40960,
-      "reads": [
-        26,
-        47
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        48
-      ]
-    },
-    {
       "compute_ops": 4096,
       "id": 49,
       "kind": "alu",
@@ -4001,8 +4223,76 @@
       "pipeline_anchor": true,
       "read_bytes": 16896,
       "reads": [
-        49,
-        19
+        42,
+        20
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        43
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 50,
+      "kind": "alu",
+      "name": "frisk.mul",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16896,
+      "reads": [
+        44,
+        20
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        45
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 51,
+      "kind": "alu",
+      "name": "frisk.mul",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16896,
+      "reads": [
+        46,
+        20
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        47
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 52,
+      "kind": "alu",
+      "name": "frisk.mul",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16896,
+      "reads": [
+        48,
+        20
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        49
+      ]
+    },
+    {
+      "compute_ops": 4096,
+      "id": 53,
+      "kind": "alu",
+      "name": "frisk.add",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 32768,
+      "reads": [
+        43,
+        34
       ],
       "write_bytes": 16384,
       "writes": [
@@ -4011,15 +4301,15 @@
     },
     {
       "compute_ops": 4096,
-      "id": 50,
+      "id": 54,
       "kind": "alu",
       "name": "frisk.add",
       "opaque": false,
       "pipeline_anchor": true,
       "read_bytes": 32768,
       "reads": [
-        50,
-        48
+        45,
+        37
       ],
       "write_bytes": 16384,
       "writes": [
@@ -4027,88 +4317,75 @@
       ]
     },
     {
-      "compute_ops": 0,
-      "id": 51,
-      "kind": "copy",
-      "name": "frisk.copy",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 16384,
-      "reads": [
-        33
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        31
-      ]
-    },
-    {
-      "compute_ops": 0,
-      "id": 52,
-      "kind": "shm_reg",
-      "name": "frisk.copy",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 512,
-      "reads": [
-        25
-      ],
-      "write_bytes": 512,
-      "writes": [
-        20
-      ]
-    },
-    {
-      "compute_ops": 0,
-      "id": 53,
-      "kind": "shm_reg",
-      "name": "frisk.copy",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 512,
-      "reads": [
-        16
-      ],
-      "write_bytes": 512,
-      "writes": [
-        15
-      ]
-    },
-    {
-      "compute_ops": 0,
-      "id": 54,
-      "kind": "copy",
-      "name": "frisk.copy",
-      "opaque": false,
-      "pipeline_anchor": true,
-      "read_bytes": 16384,
-      "reads": [
-        39
-      ],
-      "write_bytes": 16384,
-      "writes": [
-        37
-      ]
-    },
-    {
-      "compute_ops": 0,
+      "compute_ops": 4096,
       "id": 55,
-      "kind": "copy",
-      "name": "frisk.copy",
+      "kind": "alu",
+      "name": "frisk.add",
       "opaque": false,
       "pipeline_anchor": true,
-      "read_bytes": 16384,
+      "read_bytes": 32768,
       "reads": [
-        45
+        47,
+        40
       ],
       "write_bytes": 16384,
       "writes": [
-        43
+        52
       ]
     },
     {
       "compute_ops": 0,
       "id": 56,
+      "kind": "shm_reg",
+      "name": "frisk.read_matrix_from_shm",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 8192,
+      "reads": [
+        41
+      ],
+      "write_bytes": 8192,
+      "writes": [
+        53
+      ]
+    },
+    {
+      "compute_ops": 1048576,
+      "id": 57,
+      "kind": "wmma",
+      "name": "frisk.gemm",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 57344,
+      "reads": [
+        27,
+        53,
+        49
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        54
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 58,
+      "kind": "copy",
+      "name": "frisk.copy",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16384,
+      "reads": [
+        50
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        42
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 59,
       "kind": "copy",
       "name": "frisk.copy",
       "opaque": false,
@@ -4119,7 +4396,71 @@
       ],
       "write_bytes": 16384,
       "writes": [
-        49
+        44
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 60,
+      "kind": "copy",
+      "name": "frisk.copy",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16384,
+      "reads": [
+        52
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        46
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 61,
+      "kind": "copy",
+      "name": "frisk.copy",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 16384,
+      "reads": [
+        54
+      ],
+      "write_bytes": 16384,
+      "writes": [
+        48
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 62,
+      "kind": "shm_reg",
+      "name": "frisk.copy",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 512,
+      "reads": [
+        26
+      ],
+      "write_bytes": 512,
+      "writes": [
+        21
+      ]
+    },
+    {
+      "compute_ops": 0,
+      "id": 63,
+      "kind": "shm_reg",
+      "name": "frisk.copy",
+      "opaque": false,
+      "pipeline_anchor": true,
+      "read_bytes": 512,
+      "reads": [
+        17
+      ],
+      "write_bytes": 512,
+      "writes": [
+        16
       ]
     }
   ],

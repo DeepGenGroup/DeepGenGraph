@@ -123,7 +123,7 @@ online-baseline 对齐最新 native PV accumulator 导出配置：
   simplify-loop-control=1、coalesce-waits=0、fuse=0。
 baseline 和 retained32-baseline 保留原参数；后者仍为 group=8、frag-prefetch=1。
 预设只控制编译参数，不会把任意已有输入自动转换为 online softmax。
-直接运行 TuneAttention.py 的默认 test_input_spidD.mlir 仍是历史输入；
+直接运行 TuneAttention.py 的默认 test_input_shared_d.mlir 使用 legacy softmax；
 复现 safe-softmax 时应使用本入口或先运行生成器，不能只切换 --case。
 
 针对新增行最大值和 O 重缩放带来的寄存器/调度变化，先运行小范围扫描：
@@ -135,12 +135,12 @@ baseline 和 retained32-baseline 保留原参数；后者仍为 group=8、frag-p
 扫描 group=4/8/16、frag-prefetch=0/1、retain-fragment-words=0/32，共 24 项。
 新内核的最佳性能参数需重新测量；旧内核的耗时不能直接沿用。
 Q 保留预算是每线程 word 数，不是 softmax 行状态的预算；无需因新增 m/l
-就机械地把 32 加大。必要时再扫描 carrier、qk-tile/vo-tile 和线程布局。
+就机械地把 32 加大。必要时再扫描 qk-tile/vo-tile 和线程布局。
 
 tuning.combinations*.json 也以 online-baseline 为扫描起点。
 pipeline 固定为 0：MyTest 的旧手工 seqLen 调度按两个累加器和固定操作序列
 设计，不能将 pipeline=1 当作已适配 online 的流水开关。
-pipeline-stages 仍扫描 dk 的自动流水提示，两者不同。
+pipeline-stages 控制 lowering 生成的 QK 循环自动流水提示，两者不同。
 simple 配置固定 BK=32，避免 BK=16 在 QK/VO=32 重分块下重复扫描；
 保留 warmup=100/repeat=500，frag-prefetch 改为 0/1 对照。
 
@@ -155,7 +155,7 @@ simple 配置固定 BK=32，避免 BK=16 在 QK/VO=32 重分块下重复扫描�
 
 只比较 group/reverse 的对照和 K-only：
 
-  python3 TuneAttention.py --input 3rd/deepgengraph/test/test_input_spidD.mlir \
+  python3 TuneAttention.py --input 3rd/deepgengraph/test/test_input_shared_d.mlir \
     --case group8-reverse --case group8-reverse-k128-swizzle --benchmark
 
 --set / --sweep 新增参数：
@@ -188,11 +188,12 @@ config.json / result.json / best_by_shape.json 保存优化参数，实际候选
   ./run_tuning.sh --config /path/to/custom.json
 
 字段说明：
-  bm / bn / bk：生成器分块参数的笛卡尔积。
-    bm、bn 必须为正整数；bk 可以为 0，表示生成时不传 --bk，
-    保留 test_input.mlir 模板的非 split-D 结构，不新增 BK 循环。
-    例如 "bk": [0, 32, 64] 同时生成非 split-D、BK=32、BK=64 三种输入；
-    路径统一汇入 inputs.txt。非 split-D 文件名没有 -BK 后缀。
+  bm / bn / bk：生成器参数的笛卡尔积。
+    bm、bn 必须为正整数且整除 S；正的 bk 必须为 16 的倍数且整除 D。
+    bk 仅提供 QK/VO lowering 分块提示；所有输入都共享完整 D 的 tensor 计算。
+    bk=0 表示生成时不传 --bk，不附加分块提示，文件名没有 -BK 后缀。
+    例如 "bk": [0, 32, 64] 生成无提示、提示 32、提示 64 三份共享输入；
+    路径统一汇入 inputs.txt。
   cases：TuneAttention 的预设名，可用 glob。
   softmax：online（默认）或 legacy；显式传给生成器，保存到 settings.json。
     online 文件名增加 -online；legacy 仅用于复现历史非稳定 exp2。
@@ -204,14 +205,13 @@ config.json / result.json / best_by_shape.json 保存优化参数，实际候选
   opt_level / device / warmup / repeat / seed / timeout：编译和启动控制。
   output_dir：相对于包根目录的结果目录，也可写绝对路径。
 
-注意：生成器 BK 是原始 IR 的分块值。baseline 的 qk-tile=32、
-vo-tile=32 会显式重新分块。若扫描 BK，希望保持 QK/VO 的输入分块，
+注意：生成器 BK 是 lowering 提示。baseline 的 qk-tile=32、
+vo-tile=32 会分别覆盖提示。若扫描 BK，希望按提示选择 QK/VO 分块，
 可以在 set 中指定 dma-pack=noKPack、qk-tile=0、vo-tile=0；
-若仍用 useKPack，0 表示让编译器按 kpack 因子重新分块，并不等于原 BK。
+若仍用 useKPack，0 表示按 kpack 因子扩大未显式指定的分块，并不等于原 BK。
 也可直接扫描 qk-tile/vo-tile；查看每候选 config.json 和 lowering.log。
-bk=0 仅控制输入生成，不会自动修改 cases/set/sweep；非 split-D 输入
-建议使用 cases=["legacy-baseline"]。默认 baseline 的 useKPack 和显式
-qk-tile/vo-tile 要求 split-D 结构，不宜直接用于 bk=0。
+bk=0 仅控制输入生成，不会自动修改 cases/set/sweep；默认 baseline 的
+useKPack 和独立 qk-tile/vo-tile 覆盖同样适用于无 BK 提示的共享输入。
 混合 BK 扫描会对每份输入应用同一套候选参数，编译失败仍会记录到汇总。
 这里的 bk=0 与 set 中 qk-tile=0/vo-tile=0 的含义不同。
 
@@ -394,8 +394,8 @@ config.json 在编译前写入，其中初始 hardware_tested=false 不代表最
   launchKernel.py                 GPU 校验和基准测试
   3rd/deepgengraph/test/test_input.mlir
                                  生成器原始模板，保留了它要求的相对路径
-  3rd/deepgengraph/test/test_input_spidD.mlir
-                                 默认 split-D 输入
+  3rd/deepgengraph/test/test_input_shared_d.mlir
+                                 默认完整 D 的共享 tensor attention 输入
   run_tuning.sh / run_tuning.py   一键入口
   tuning.json / env.sh.example    默认扫描和环境配置
   tuning.online.json             最新 online 配置的 24 项定向扫描
