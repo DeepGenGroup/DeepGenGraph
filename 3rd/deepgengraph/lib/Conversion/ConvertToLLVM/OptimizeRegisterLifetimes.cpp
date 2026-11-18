@@ -5,7 +5,7 @@
 //   线程号范围由 GPU→ROCDL lowering 从 thread_num 传递，不在这里重新推导。
 //   simplifyThreadExpressions   枚举所有线程号，把长的地址表达式换成等价的“掩码 + 移位”。
 //   scheduleMathConsumers       把数学结果的消费者紧贴生产者，尽早 fptrunc 打包成 half。
-//   AddressRematerializer       把依赖线程号的地址表达式在每个基本块内就地重建，不跨块存活。
+//   AddressRematerializer       就地重建线程相关地址，纯计算分支汇合时复用支配块的缓存。
 //   compactIntegerComparisons   把一组 64-bit 比较拆成共享的高位比较 + 独立的低位比较。
 //
 // 执行顺序（文件末尾的 optimizeRegisterLifetimes）：
@@ -18,6 +18,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "LateIRPatterns.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -26,6 +27,7 @@
 #include <map>
 #include <tuple>
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -475,7 +477,7 @@ unsigned scheduleMathConsumers(llvm::Function &function) {
 
 // 把依赖线程号的地址表达式在每个基本块内重建，这样长的地址 DAG 不会跨循环占用寄存器。
 //   divergent  值 -> 是否依赖线程号的缓存。
-//   local      本基本块内已重建的值，每块清空。
+//   local      本区域内已重建的值；允许跨过纯计算的可选分支。
 //   retained   不重建、继续共享的昂贵基址（含除法）。
 //   clones     克隆的指令数，只用于日志。
 class AddressRematerializer {
@@ -575,11 +577,10 @@ public:
   }
   // 先记下要处理的访问，再逐个重建地址操作数。包括 GM/LDS 的 load/store、DMA 源地址、readfirstlane
   // 的输入和矩阵读指针。只重建地址，不移动访问本身。
-  void run(llvm::BasicBlock &block) {
-    local.clear();
-    // Snapshot accesses before inserting instructions. Per-block caching
-    // shares nearby addresses, but never carries their expanded DAGs through
-    // another block/loop. Uniform base pointers and loop PHIs remain shared.
+  void runBlock(llvm::BasicBlock &block) {
+    // Snapshot accesses before inserting instructions. Share nearby addresses
+    // within a block or across a proven pure diamond, never across a loop
+    // backedge. Uniform base pointers and loop PHIs remain shared.
     // accesses：(指令, 地址操作数下标)。
     llvm::SmallVector<std::pair<llvm::Instruction *, unsigned>> accesses;
     for (llvm::Instruction &inst : block) {
@@ -613,6 +614,71 @@ public:
       inst->setOperand(operand, rebuild(inst->getOperand(operand), inst));
     }
   }
+
+  void run(llvm::Function &function) {
+    // ThreadIR can introduce a pure optional rescale before address lowering.
+    // A per-BB cache would recompute the same DMA/LDS address DAG at its join,
+    // including on the hot path that skips the rescale. Keep only values from
+    // the dominating header, never values defined on the optional path.
+    llvm::DenseMap<llvm::BasicBlock *, llvm::BasicBlock *> joins;
+    llvm::SmallPtrSet<llvm::BasicBlock *, 8> heads;
+    auto pureExit = [](llvm::BasicBlock *block) -> llvm::UncondBrInst * {
+      auto *exit = llvm::dyn_cast<llvm::UncondBrInst>(block->getTerminator());
+      if (!exit) return nullptr;
+      for (auto &inst : *block) {
+        if (&inst == exit) continue;
+        auto *call = llvm::dyn_cast<llvm::CallBase>(&inst);
+        if (inst.mayReadOrWriteMemory() || inst.mayHaveSideEffects() ||
+            (call && call->isConvergent())) return nullptr;
+      }
+      return exit;
+    };
+    auto remember = [&](llvm::BasicBlock *head, llvm::BasicBlock *join) {
+      // SCF lowering can retain a pure yield block between the PHIs and the
+      // continuation. Follow only single-predecessor, effect-free forwarding.
+      llvm::SmallPtrSet<llvm::BasicBlock *, 8> seen;
+      while (join != head && seen.insert(join).second) {
+        joins[join] = head;
+        auto *exit = pureExit(join);
+        if (!exit || exit->getSuccessor()->getSinglePredecessor() != join) break;
+        join = exit->getSuccessor();
+      }
+      heads.insert(head);
+    };
+    for (auto &head : function) {
+      auto *branch = llvm::dyn_cast<llvm::CondBrInst>(head.getTerminator());
+      if (!branch) continue;
+      for (unsigned side = 0; side != 2; ++side) {
+        auto *body = branch->getSuccessor(side);
+        auto *join = branch->getSuccessor(1 - side);
+        if (body == join || join == &head || body == &head ||
+            body->getSinglePredecessor() != &head)
+          continue;
+        auto *exit = pureExit(body);
+        if (!exit) continue;
+        if (exit->getSuccessor() == join && llvm::pred_size(join) == 2) {
+          remember(&head, join);
+        } else if (join->getSinglePredecessor() == &head) {
+          auto *otherExit = pureExit(join);
+          auto *merge = exit->getSuccessor();
+          if (otherExit && otherExit->getSuccessor() == merge &&
+              merge != &head && llvm::pred_size(merge) == 2)
+            remember(&head, merge);
+        }
+      }
+    }
+    using Cache = llvm::DenseMap<llvm::Value *, llvm::Value *>;
+    llvm::DenseMap<llvm::BasicBlock *, Cache> saved;
+    // RPO guarantees each dominating header is processed before its join,
+    // regardless of the textual order of blocks in the input LLVM IR.
+    for (auto *block : llvm::ReversePostOrderTraversal<llvm::Function *>(&function)) {
+      local.clear();
+      if (auto it = joins.find(block); it != joins.end())
+        local = saved.lookup(it->second);
+      runBlock(*block);
+      if (heads.contains(block)) saved[block] = local;
+    }
+  }
 };
 } // namespace
 
@@ -624,7 +690,7 @@ llvm::PreservedAnalyses OptimizeRegisterLifetimesPass::run(
   unsigned packed = scheduleMathConsumers(function), clones = 0;
   AddressRematerializer addresses(clones);
   addresses.chooseSharedBases(function, analyses.getResult<llvm::LoopAnalysis>(function));
-  for (llvm::BasicBlock &block : function) addresses.run(block);
+  addresses.run(function);
   function.addFnAttr(marker, "1");
   llvm::errs() << "OptimizeRegisterLifetimes: " << function.getName() << ": "
                << clones << " local address expressions, " << packed << " early math packs\n";

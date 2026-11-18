@@ -1,4 +1,3 @@
-#include "deepgengraph/Conversion/ConvertToLLVM/LazySoftmaxBase.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
@@ -44,9 +43,7 @@ int main(int argc, char **argv) {
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
   bool crossBNK0 = false, crossBNK0Specified = false, elideBackedgeBarrier = false;
-  bool lazySoftmaxBase = false, lazySoftmaxBaseSpecified = false;
   bool softmaxCvtPack = false, softmaxCvtPackSpecified = false;
-  float lazyBaseThreshold = 8.0f;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
   llvm::StringRef deferLaneSum;
@@ -66,11 +63,10 @@ int main(int argc, char **argv) {
     }
     if (consumed) { crossBNK0Specified = true; continue; }
     if (option == "--elide-backedge-barrier=1") { elideBackedgeBarrier = true; continue; }
-    if (!mlir::frisk::parseLazySoftmaxBaseOption(option, lazySoftmaxBase, lazyBaseThreshold,
-                                                 consumed)) {
-      llvm::errs() << "use --lazy-softmax-base=off|<threshold in (0,15]>\n"; return 1;
+    if (option.starts_with("--lazy-softmax-base")) {
+      llvm::errs() << "lazy softmax base moved to ThreadIR; use MyTest or ThreadTilingTest\n";
+      return 1;
     }
-    if (consumed) { lazySoftmaxBaseSpecified = true; continue; }
     if (!mlir::frisk::parseSoftmaxCvtPackOption(option, softmaxCvtPack, consumed)) {
       llvm::errs() << "use --softmax-cvt-pack=off|rtz (rtz changes rounding)\n"; return 1;
     }
@@ -126,9 +122,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified || lazySoftmaxBaseSpecified || softmaxCvtPackSpecified) {
+  if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified || softmaxCvtPackSpecified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] [--lazy-softmax-base=off|<threshold>] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -144,8 +140,6 @@ int main(int argc, char **argv) {
       mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
     mlir::frisk::prefetchNextK(*module, crossBNK0);
     if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(*module);
-    // 放在依赖 workgroup-uniform 控制流的 Pass 之后。
-    mlir::frisk::lazySoftmaxBase(*module, lazySoftmaxBase, lazyBaseThreshold);
     mlir::frisk::softmaxCvtPack(*module, softmaxCvtPack);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);

@@ -1,6 +1,6 @@
 // Include LLVM codegen headers before LowerInfo.h's legacy TID macro.
 #include "llvm/Passes/PassBuilder.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/LazySoftmaxBase.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadLazySoftmaxBase.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
@@ -394,7 +394,6 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool fuseAccumulators,
                              bool canonicalizeExport = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
-                             bool lazySoftmaxBase = false, float lazyBaseThreshold = 8.0f,
                              bool dumpPasses = false, bool softmaxCvtPack = false,
                              bool optimizeLLVM = true) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
@@ -426,9 +425,6 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // and the shared execution plan's exit drain before removing a barrier.
   if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(module);
   dumpLLVMPass(module, dumpPasses, "elideBackedgeBarrier");
-  // 放在依赖 analyzeWave64Kernel 的 Pass 之后；后续纯寄存器转换不需要该分析。
-  mlir::frisk::lazySoftmaxBase(module, lazySoftmaxBase, lazyBaseThreshold);
-  dumpLLVMPass(module, dumpPasses, "lazySoftmaxBase");
   mlir::frisk::softmaxCvtPack(module, softmaxCvtPack);
   dumpLLVMPass(module, dumpPasses, "softmaxCvtPack");
 
@@ -1320,6 +1316,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     AddPass(mlir::createCSEPass());
     llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
   }
+  // All register/LDS schedules and wave setup are fixed before introducing
+  // the wave-uniform, register-only rescale region.
+  if (lazySoftmaxBase) {
+    AddFuncPass(frisk::createThreadLazySoftmaxBasePass(lazyBaseThreshold));
+    llvm::outs() << "\n---- after thread lazySoftmaxBase -----\n";
+    llvm::outs().flush(); src->dump();
+  }
   mlir::ModuleOp mod = *src;
   if (analyzeRegisterPressure)
     AddFuncPass(frisk::createAnalyzeRegisterPressurePass("thread"));
@@ -1382,7 +1385,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   bool exported = printLLVM22CompatibleIR(*llvmModule, os,
       dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0,
-      hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack, optimizeLLVM);
+      hoistLDSBases, elideBackedgeBarrier, dumpLLVMPasses, softmaxCvtPack, optimizeLLVM);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
