@@ -1,3 +1,5 @@
+// Include LLVM codegen headers before LowerInfo.h's legacy TID macro.
+#include "llvm/Passes/PassBuilder.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LazySoftmaxBase.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
@@ -90,9 +92,12 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdlib>
@@ -384,13 +389,14 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
   llvm::outs().flush();
 }
 
-void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
+bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators,
                              bool canonicalizeExport = false,
                              bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
                              bool lazySoftmaxBase = false, float lazyBaseThreshold = 8.0f,
-                             bool dumpPasses = false, bool softmaxCvtPack = false) {
+                             bool dumpPasses = false, bool softmaxCvtPack = false,
+                             bool optimizeLLVM = true) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes, reuseLeaderRead);
@@ -426,14 +432,73 @@ void printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   mlir::frisk::softmaxCvtPack(module, softmaxCvtPack);
   dumpLLVMPass(module, dumpPasses, "softmaxCvtPack");
 
+  // Match the standalone pre-link opt -passes='default<O3>' stage. Keep
+  // TargetMachine unset: target-specific optimization and device-library
+  // linking still belong to GenHsaco.sh. Run after every custom LLVM rewrite.
+  if (llvm::verifyModule(module, &llvm::errs())) {
+    llvm::errs() << "Invalid LLVM IR before export optimization\n";
+    return false;
+  }
+  llvm::LLVMContext optimizationContext;
+  std::unique_ptr<llvm::Module> optimizedModule;
+  llvm::Module *exportModule = &module;
+  if (optimizeLLVM) {
+    // Reproduce opt's reader boundary too: it upgrades intrinsic attributes
+    // and resets value-name uniquing/use ordering left by earlier rewrites.
+    std::string input;
+    llvm::raw_string_ostream inputStream(input);
+    module.print(inputStream, nullptr);
+    inputStream.flush();
+    mlir::frisk::legalizeLLVMTextForLLVM22(input);
+    llvm::SMDiagnostic diagnostic;
+    optimizedModule = llvm::parseIR(
+        llvm::MemoryBufferRef(input, module.getModuleIdentifier()), diagnostic,
+        optimizationContext);
+    if (!optimizedModule) {
+      diagnostic.print("MyTest LLVM export", llvm::errs());
+      return false;
+    }
+    exportModule = optimizedModule.get();
+    if (llvm::verifyModule(*exportModule, &llvm::errs())) {
+      llvm::errs() << "Invalid LLVM IR after export roundtrip\n";
+      return false;
+    }
+    llvm::LoopAnalysisManager loops;
+    llvm::FunctionAnalysisManager functions;
+    llvm::CGSCCAnalysisManager cgscc;
+    llvm::ModuleAnalysisManager modules;
+    // opt's default<O3> alias enables both vectorizers; the library's
+    // PipelineTuningOptions defaults leave SLP disabled.
+    llvm::PipelineTuningOptions tuning;
+    tuning.LoopVectorization = true;
+    tuning.SLPVectorization = true;
+    llvm::PassBuilder builder(nullptr, tuning);
+    builder.registerModuleAnalyses(modules);
+    builder.registerCGSCCAnalyses(cgscc);
+    builder.registerFunctionAnalyses(functions);
+    builder.registerLoopAnalyses(loops);
+    builder.crossRegisterProxies(loops, functions, cgscc, modules);
+    auto pipeline = builder.buildPerModuleDefaultPipeline(
+        llvm::OptimizationLevel::O3);
+    pipeline.run(*exportModule, modules);
+    if (llvm::verifyModule(*exportModule, &llvm::errs())) {
+      llvm::errs() << "Invalid LLVM IR after export optimization\n";
+      return false;
+    }
+    dumpLLVMPass(*exportModule, dumpPasses, "default<O3>");
+  }
+  llvm::errs() << "LLVM export optimization: "
+               << (optimizeLLVM ? "default<O3>" : "disabled") << '\n';
+
   std::string text;
   llvm::raw_string_ostream buffer(text);
-  module.print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
+  exportModule->print(buffer, /*AssemblyAnnotationWriter=*/nullptr);
   buffer.flush();
 
   mlir::frisk::legalizeLLVMTextForLLVM22(text);
 
   os << text;
+  return true;
 }
 
 } // namespace
@@ -485,6 +550,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool simplifyBoundedAffine = true, hoistLDSBases = true, hoistLaneShuffles = true;
   bool elideBackedgeBarrier = true;
   bool dumpLLVMPasses = false;
+  bool optimizeLLVM = true;
   bool analyzeRegisterPressure = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
@@ -499,6 +565,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
+    if (option.consume_front("--llvm-opt=")) {
+      if (option != "0" && option != "3") {
+        llvm::errs() << "use --llvm-opt=0|3 (default: 3; 0 disables export optimization)\n";
+        return 1;
+      }
+      optimizeLLVM = option == "3";
+      continue;
+    }
     if (option.consume_front("--analyze-register-pressure=")) {
       if (option != "0" && option != "1") {
         llvm::errs() << "use --analyze-register-pressure=0|1\n"; return 1;
@@ -1306,15 +1380,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
-  printLLVM22CompatibleIR(*llvmModule, os,
+  bool exported = printLLVM22CompatibleIR(*llvmModule, os,
       dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0,
-      hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack);
+      hoistLDSBases, elideBackedgeBarrier, lazySoftmaxBase, lazyBaseThreshold, dumpLLVMPasses, softmaxCvtPack, optimizeLLVM);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";
     os.clear_error();
     return 1;
   }
+  if (!exported)
+    return 1;
   llvm::outs() << "[d] llvmIR has been output to: " << outputPath << "\n";
   llvm::outs().flush();
   #endif
@@ -1594,7 +1670,7 @@ void testLinalgCopy() {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [carrier-words:24576,0=unlimited] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     return 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
