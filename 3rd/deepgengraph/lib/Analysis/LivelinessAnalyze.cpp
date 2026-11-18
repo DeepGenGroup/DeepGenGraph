@@ -702,7 +702,7 @@ bool isInBlockUniformControlFlow(Operation *op) {
 // 规则：
 //   循环含 DMA：循环尾必须有 barrier（wait 只发布新数据，不等旧读者）。
 //   无 DMA：如果 buffer 在循环内既写又读，prefix 或 tail 要有 barrier。
-// 第 33 项 elideBackedgeBarrier 删除的就是这里插入的循环尾 barrier。
+// ThreadElideBackedgeBarrier 在最终 ThreadIR 调度后消除可证明冗余的尾 barrier。
 unsigned synchronizeSharedMemoryLoopBackedges(func::FuncOp kernel) {
   if (kernel.isExternal() || !kernel->hasAttr("thread_num") ||
       !llvm::hasSingleElement(kernel.getBody()))

@@ -17,9 +17,5 @@ void prefetchNextK(llvm::Module &, bool enabled = false);
 /// Preserve denominator lifetimes for SharedMemoryPlan's early cross-iteration
 /// schedule. Does not move DMA, select LDS storage or reconstruct the schedule.
 void anchorNextKSums(llvm::Module &);
-// Erase the barrier ending each iteration once it orders nothing the next
-// iteration's opening barrier does not. Requires completed cross-iteration
-// scheduling (SharedMemoryPlan or the legacy prefetchNextK transformation).
-void elideBackedgeBarrier(llvm::Module &);
 }
 #endif

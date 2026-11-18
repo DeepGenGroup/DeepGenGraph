@@ -40,7 +40,8 @@ and prevent subsequent async scheduling from changing their order.
 The next copy starts **after** current readiness: this backend's readiness
 operation waits for DMA completion and synchronizes the block. It also releases
 old readers of the alternate slot. Each stage retains its own readiness event,
-and loop-backedge reader protection remains in place.
+and loop-backedge reader protection remains in place until the final ThreadIR
+barrier-elision check.
 
 Candidates require 2–32 stages with distinct reusable logical allocations,
 matching sizes and a common global source. Physical addresses must prove full,
@@ -114,7 +115,28 @@ Only scheduling protection remains in LLVM on the main export path:
 `anchorNextKSums` anchors the scalar FP32 recurrence additions before register
 lifetime optimization. The standalone legacy LLVM exporter retains the old
 transformation for compatibility and regression comparisons. The optional
-backedge-barrier removal checks the exit drain for a shared execution plan.
+`frisk-thread-elide-backedge-barrier` pass runs after the final ThreadIR LDS
+schedule, before `frisk-lower-async-copy`. MyTest's existing
+`--elide-backedge-barrier=0|1` switch controls it (default: enabled). There is no
+LLVM backedge-barrier pass or legacy-exporter elision option.
+
+The pass requires a block-uniform affine/scf loop marked by the shared execution
+plan. It removes only a trailing `gpu.barrier` when the next iteration starts
+with readiness for a loop-carried task, and the loop exit drains that exact task
+result. Only region-free, pure operations and register-only GPU shuffles may
+separate the barriers. Memory accesses, DMA, unknown effects and control regions
+reject removal. Readiness waits and their publication barriers are preserved,
+including the exit drain for zero trips. Run this after the backedge insertion
+and memory scheduling passes; scheduling memory across the proven interval or
+re-running unconditional backedge insertion invalidates the placement contract.
+
+The regression checks negative hazards and task mismatches, preserves waits
+through lowering, and runs the cyclic DMA ownership model on affine/scf loops
+with zero, one, multiple and dynamic trips:
+
+```sh
+python3 3rd/deepgengraph/test/check_thread_backedge_barrier.py
+```
 
 Additional validation:
 

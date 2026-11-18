@@ -24,6 +24,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   PrefetchMMACFragments.cpp
   ScheduleSoftmaxFragments.cpp
   ThreadInterleavePV.cpp
+  ThreadElideBackedgeBarrier.cpp
   ThreadPrefetchPairedLDS.cpp
   ThreadScheduleSoftmaxFragments.cpp
   PrefetchPairedLDS.cpp

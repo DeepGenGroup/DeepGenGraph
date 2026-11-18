@@ -1,5 +1,5 @@
 // ===========================================================================
-// 本文件包含两个顺序相关的 Pass。详细说明见仓库根目录 SafeSoftmax最后两项优化说明.md。
+// Legacy LLVM cross-iteration prefetch and denominator scheduling anchors.
 //
 // prefetchNextK（PrefetchNextKPass）   优化汇总.py 第 32 项，LLVM 阶段，--cross-bn-k0=1
 //   下一轮的 K0 DMA 原本在下一轮开头才发，只能干等。改成：
@@ -8,9 +8,6 @@
 //   分母锚定（sum anchor）：改写新增了一个 if 分支，LLVM 会把分母加法全沉到分支之后，输入一直存活，
 //   导致 VGPR 256、scratch 20，反而变慢。所以每条分母加法后加一个空 asm，把它钉在原地。
 //   这两件事必须同时做。
-//
-// elideBackedgeBarrier   第 33 项，--elide-backedge-barrier=1，未实测
-//   删除循环尾的 reader barrier。必须在 prefetchNextK 之后运行，见函数前的说明。
 //
 // 流程（prefetchNextK）：
 //   run    函数级检查：kernel、1D wave64、唯一静态 LDS、控制流 uniform、只有一个顶层循环。
@@ -50,7 +47,7 @@ using detail::isWaitCall;
 using detail::isWorkgroupUniform;
 using detail::matchSync;
 using detail::LDSAddress;
-// Marker：函数属性，也标在新 DMA 上。elideBackedgeBarrier 用它确认前置 Pass 已运行。
+// Marker：函数属性，也标在新 DMA 上，标识已经完成的跨迭代调度。
 // SumMarker：标在分母锚定的空 asm 上。
 constexpr StringLiteral Marker = "frisk.cross_bn_k0";
 constexpr StringLiteral SumMarker = "frisk.cross_bn_sum_anchor";
@@ -471,75 +468,4 @@ void anchorNextKSums(llvm::Module &module) {
   }
 }
 
-// After next-K0 prefetch, the barrier ending an iteration releases V3 readers,
-// but nothing touches LDS before the wait+barrier opening the next iteration.
-// That second barrier therefore orders the same accesses. On the last iteration
-// the loop exits without any later LDS user, so no ordering is needed at all.
-//
-// Keep this after cross-iteration scheduling. V double buffering alone does
-// not move K0 and cannot release a slot used by the preceding iteration.
-// Legacy prefetchNextK also anchors on this barrier, so it must stay until
-// that pass has run on the standalone LLVM path.
-//
-// The legacy marker proves no LDS user outside the loop. SharedMemoryPlan
-// permits later users, so that path additionally needs its exit drain barrier.
-// Lane-sum deferral can insert register-only reductions before this drain.
-void elideBackedgeBarrier(llvm::Module &module) {
-  using namespace llvm;
-  for (auto &f : module) {
-    if (f.isDeclaration() || !f.hasFnAttribute(Marker)) continue;
-    auto skip = [&](StringRef why) {
-      errs() << "Elide backedge barrier: skipped, function=" << f.getName() << ": " << why << "\n";
-    };
-    DominatorTree dt(f); LoopInfo loops(dt);
-    if (std::distance(loops.begin(),loops.end()) != 1) { skip("requires one top-level loop"); continue; }
-    Loop &loop = **loops.begin();
-    auto *latch = loop.getLoopLatch(), *header = loop.getHeader();
-    if (!latch || latch == header || !isa<UncondBrInst>(latch->getTerminator())) { skip("noncanonical latch"); continue; }
-
-    // The last synchronization in the latch must have nothing but pure address
-    // math after it, and must not complete any DMA.
-    // tail：latch 里的最后一个同步，必须不带 wait，也就是 reader barrier。
-    // onlyAddressMath：两点之间只有地址计算。
-    std::optional<Sync> tail;
-    for (auto &i : *latch) if (auto s = matchSync(&i)) tail = s;
-    if (!tail || tail->wait) { skip("latch does not end in a reader barrier"); continue; }
-    auto onlyAddressMath = [](Inst *from, Inst *to) {
-      for (auto *i = from; i != to; i = i->getNextNode())
-        if (!addressOp(i)) return false;
-      return true;
-    };
-    if (!onlyAddressMath(tail->acquire->getNextNode(),latch->getTerminator())) { skip("work after latch barrier"); continue; }
-
-    // The next barrier on the backedge path must complete pending DMA and be
-    // reached through pure control only.
-    auto *branch = dyn_cast<CondBrInst>(header->getTerminator());
-    auto *body = branch ? branch->getSuccessor(loop.contains(branch->getSuccessor(0)) ? 0 : 1) : nullptr;
-    if (!body || !loop.contains(body) || body == latch) { skip("noncanonical loop header"); continue; }
-    if (llvm::any_of(*header,[&](Inst &i) { return !isa<PHINode,ICmpInst,CondBrInst>(i); })) { skip("noncanonical loop header"); continue; }
-    // head：下一轮开头的同步，必须带 wait。它之前只有地址计算，所以能代替 tail 保证同样的顺序。
-    std::optional<Sync> head;
-    for (auto &i : *body) if (auto s = matchSync(&i)) { head = s; break; }
-    if (!head || !head->wait) { skip("next iteration does not open with wait+barrier"); continue; }
-    if (!onlyAddressMath(&body->front(),head->wait)) { skip("LDS or DMA before next barrier"); continue; }
-
-    if (f.getFnAttribute(Marker).getValueAsString() == "shared-plan-v1") {
-      BasicBlock *exit = loop.getUniqueExitBlock();
-      std::optional<Sync> drain;
-      if (exit) for (auto &i : *exit) if (auto s = matchSync(&i)) { drain = s; break; }
-      bool registerOnly = drain && drain->wait;
-      if (registerOnly)
-        for (auto *i = &exit->front(); i != drain->wait; i = i->getNextNode())
-          if (!isPureInst(i) && !knownCall(i)) { registerOnly = false; break; }
-      if (!registerOnly) {
-        skip("shared execution plan requires an exit drain before memory effects"); continue;
-      }
-    }
-
-    tail->acquire->eraseFromParent();
-    tail->barrier->eraseFromParent();
-    tail->release->eraseFromParent();
-    errs() << "Elide backedge barrier: removed 1 per iteration, function=" << f.getName() << "\n";
-  }
-}
 } // namespace mlir::frisk

@@ -123,6 +123,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadSoftmaxCvtPackPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadInterleavePVPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadElideBackedgeBarrierPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadScheduleSoftmaxFragmentsPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSTailPass(); });

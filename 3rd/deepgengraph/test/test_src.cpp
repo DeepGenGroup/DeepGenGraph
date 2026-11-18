@@ -392,7 +392,7 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
                              bool fuseAccumulators,
                              bool canonicalizeExport = false,
-                             bool reuseLeaderRead = false, bool elideBackedgeBarrier = false,
+                             bool reuseLeaderRead = false,
                              bool dumpPasses = false,
                              bool optimizeLLVM = true) {
   mlir::frisk::prepareRegisterMMAForLLVM(module);
@@ -420,10 +420,6 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   dumpLLVMPass(module, dumpPasses, "canonicalizeLLVMExport");
   mlir::frisk::anchorNextKSums(module);
   dumpLLVMPass(module, dumpPasses, "anchorNextKSums");
-  // Only legal after cross-iteration scheduling; the helper checks the backedge
-  // and the shared execution plan's exit drain before removing a barrier.
-  if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(module);
-  dumpLLVMPass(module, dumpPasses, "elideBackedgeBarrier");
 
   // Match the standalone pre-link opt -passes='default<O3>' stage. Keep
   // TargetMachine unset: target-specific optimization and device-library
@@ -1345,6 +1341,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  if (elideBackedgeBarrier) {
+    AddFuncPass(frisk::createThreadElideBackedgeBarrierPass());
+    llvm::outs() << "\n---- after frisk-thread-elide-backedge-barrier -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // Storage planning and scheduling are complete. Expose wave setup before
   // firstLowering destroys affine loops; preserve all other high-level ops.
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
@@ -1434,7 +1436,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   bool exported = printLLVM22CompatibleIR(*llvmModule, os,
       dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0,
-      hoistLDSBases, elideBackedgeBarrier, dumpLLVMPasses, optimizeLLVM);
+      hoistLDSBases, dumpLLVMPasses, optimizeLLVM);
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

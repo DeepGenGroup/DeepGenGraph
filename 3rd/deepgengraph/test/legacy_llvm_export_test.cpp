@@ -42,7 +42,7 @@ static void replaceLegacyExp2(llvm::Module &module) {
 int main(int argc, char **argv) {
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
-  bool crossBNK0 = false, crossBNK0Specified = false, elideBackedgeBarrier = false;
+  bool crossBNK0 = false, crossBNK0Specified = false;
   bool softmaxCvtPack = false;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
@@ -62,7 +62,10 @@ int main(int argc, char **argv) {
       llvm::errs() << "use --cross-bn-k0=0|1\n"; return 1;
     }
     if (consumed) { crossBNK0Specified = true; continue; }
-    if (option == "--elide-backedge-barrier=1") { elideBackedgeBarrier = true; continue; }
+    if (option.starts_with("--elide-backedge-barrier")) {
+      llvm::errs() << "backedge barrier elision moved to ThreadIR; use MyTest or ThreadTilingTest\n";
+      return 1;
+    }
     if (option.starts_with("--lazy-softmax-base")) {
       llvm::errs() << "lazy softmax base moved to ThreadIR; use MyTest or ThreadTilingTest\n";
       return 1;
@@ -142,7 +145,6 @@ int main(int argc, char **argv) {
     if (!deferLaneSum.empty() && deferLaneSum != "off")
       mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
     mlir::frisk::prefetchNextK(*module, crossBNK0);
-    if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(*module);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;

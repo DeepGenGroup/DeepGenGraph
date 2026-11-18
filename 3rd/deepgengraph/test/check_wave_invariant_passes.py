@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""frisk-simplify-bounded-affine, frisk-hoist-wave-invariants, elideBackedgeBarrier.
+"""frisk-simplify-bounded-affine, frisk-hoist-wave-invariants.
 
 Covers what each may rewrite, what it must refuse, and, for the affine pass,
 brute-force equality of every rewritten map against the original.
 """
-import importlib.util
 from itertools import product
 from pathlib import Path
 import re
@@ -15,11 +14,7 @@ import unittest
 HERE = Path(__file__).resolve().parent
 BUILD = HERE.parent / 'build/test'
 OPT_TOOL = BUILD / 'ThreadTilingTest'
-EXPORT_TOOL = BUILD / 'LegacyLLVMExportTest'
 LLVM_OPT = Path('/data2/xsl/install/bin/opt')
-spec = importlib.util.spec_from_file_location('cross_bn', HERE / 'check_cross_bn_k0.py')
-cross_bn = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cross_bn)
 
 
 def run_pass(text, *flags):
@@ -436,74 +431,6 @@ class StructuredWaveInvariants(unittest.TestCase):
                                          input=translated.stdout, text=True, capture_output=True)
                 self.assertEqual(verified.returncode, 0, verified.stderr)
 
-
-class ElideBackedgeBarrier(unittest.TestCase):
-    def export(self, text, *flags):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'input.ll'
-            path.write_text(text)
-            result = subprocess.run([EXPORT_TOOL, '--cross-bn-k0=1', *flags, path], text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
-            path.write_text(result.stdout)
-            verify = subprocess.run([LLVM_OPT, '-passes=default<O3>,verify', '-disable-output', path],
-                                    text=True, capture_output=True)
-            self.assertEqual(verify.returncode, 0, verify.stderr)
-        return result
-
-    def test_removes_only_the_backedge_barrier(self):
-        for threads, packets, width, tiles in [(64, 1, 8, 1), (128, 2, 8, 7), (256, 1, 16, 19)]:
-            with self.subTest(threads=threads, packets=packets):
-                text = cross_bn.fixture(threads, packets, width, tiles)
-                kept = self.export(text)
-                elided = self.export(text, '--elide-backedge-barrier=1')
-                count = lambda s, what: s.count(what)
-                self.assertIn('Elide backedge barrier: removed', elided.stderr)
-                barrier = 'call void @llvm.amdgcn.s.barrier'
-                self.assertEqual(count(elided.stdout, barrier), count(kept.stdout, barrier) - 1)
-                self.assertEqual(count(elided.stdout, 'fence'), count(kept.stdout, 'fence') - 2)
-                self.assertEqual(count(elided.stdout, 's_waitcnt vmcnt(0)'), count(kept.stdout, 's_waitcnt vmcnt(0)'))
-                # The join block must no longer end in a barrier.
-                join = elided.stdout[elided.stdout.index('k0.join:'):]
-                join = join[:join.index('\n}')]
-                self.assertNotIn(barrier, join)
-
-    def test_inert_without_k0_prefetch(self):
-        text = cross_bn.fixture(64, 1, 8, 5)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'input.ll'
-            path.write_text(text)
-            off = subprocess.run([EXPORT_TOOL, '--cross-bn-k0=0', '--elide-backedge-barrier=1', path],
-                                 text=True, capture_output=True)
-        self.assertEqual(off.returncode, 0, off.stderr[-3000:])
-        self.assertNotIn('Elide backedge barrier', off.stderr)
-        self.assertEqual(off.stdout.count('call void @llvm.amdgcn.s.barrier'),
-                         text.count('call void @llvm.amdgcn.s.barrier'))
-
-    def test_shared_plan_exit_reduction_precedes_drain(self):
-        text = self.export(cross_bn.fixture()).stdout.replace(
-            '"frisk.cross_bn_k0"="sum-anchor-v1"',
-            '"frisk.cross_bn_k0"="shared-plan-v1"')
-        text = text.replace('define amdgpu_kernel',
-            'declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)\n\ndefine amdgpu_kernel', 1)
-        for prefix, allowed in [
-            ('  %bits = bitcast float %sum to i32\n'
-             '  %peer = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 %bits)\n'
-             '  %pf = bitcast i32 %peer to float\n'
-             '  %reduced = fadd float %sum, %pf\n', True),
-            ('  %read = load i32, ptr addrspace(3) %kp\n', False),
-            ('  store float %sum, ptr addrspace(1) %out\n', False),
-            ('  call void @unknown()\n', False),
-        ]:
-            with self.subTest(prefix=prefix):
-                # The exporter prints predecessors on the exit label line.
-                source = re.sub(r'^(exit:.*\n)',
-                    lambda m: m[0] + prefix + cross_bn.WAIT + cross_bn.SYNC,
-                    text, flags=re.M)
-                self.assertNotEqual(source, text)
-                result = self.export(source, '--elide-backedge-barrier=1')
-                self.assertEqual('Elide backedge barrier: removed' in result.stderr, allowed)
-                self.assertEqual(result.stdout.count('call void @llvm.amdgcn.s.barrier'),
-                                 source.count('call void @llvm.amdgcn.s.barrier') - int(allowed))
 
 
 if __name__ == '__main__':

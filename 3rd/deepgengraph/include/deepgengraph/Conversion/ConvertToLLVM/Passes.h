@@ -34,6 +34,8 @@ std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSPass(unsigned distance 
 std::unique_ptr<mlir::Pass> createThreadScheduleSoftmaxFragmentsPass(
     SoftmaxFragmentMode mode = SoftmaxFragmentMode::Off);
 std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSTailPass(unsigned distance = 0);
+// After every ThreadIR memory schedule, before lowering async readiness.
+std::unique_ptr<mlir::Pass> createThreadElideBackedgeBarrierPass();
 // Only tagged scalar FP reduction chains; run after thread loop unrolling.
 std::unique_ptr<mlir::Pass> createThreadLocalReductionPass(
     LocalReductionOptions options = {});
