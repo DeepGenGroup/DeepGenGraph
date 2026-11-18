@@ -21,11 +21,11 @@ def check(tool, directory):
                          ("3.2", "noKPack"), ("3.3", "useKPack")):
         name = f"layout-{layout}-{mode}"
         ir, log = directory / (name + ".ll"), directory / (name + ".log")
-        command = [str(tool), str(HERE / "test_input_spidD.mlir"), "0", str(ir),
-                   "1", "1", layout, "34816", "approx", "256", "4,1",
+        command = [str(tool), str(HERE / "test_input_shared_d.mlir"), "0", str(ir),
+                   "1", "1", layout, "approx", "256", "4,1",
                    "1", "1", "1", "0", "0", mode]
         # Deliberately omit the export argument: automatic wide DMA must be
-        # executable through the default export, including mixed 4B/16B calls.
+        # executable through the default export for aligned shared tile loads.
         with log.open("w") as output:
             subprocess.run(command, cwd=directory, env=env, stdout=output,
                            stderr=subprocess.STDOUT, check=True, timeout=240)
@@ -38,7 +38,7 @@ def check(tool, directory):
         matrix_reads = len(re.findall(r"call .*@llvm.hcu.ds.read.m32x16", text))
         assert matrix_reads == 32, matrix_reads  # V only; K uses vector reads.
         narrow = len(re.findall(r"call void @llvm.amdgcn.global.load.async.lds\(", text))
-        assert (narrow > 0) == (mode == "legacy"), narrow
+        assert narrow == 0, narrow
         assert "call void @llvm.hcu.global.load" not in text
         assert not re.search(r"call void @llvm.amdgcn.(?:asyncmark|wait.asyncmark)\(", text)
         assert "load <4 x half>" in text

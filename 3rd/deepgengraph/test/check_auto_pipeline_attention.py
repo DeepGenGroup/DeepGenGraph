@@ -64,8 +64,8 @@ def module_after(log, marker):
 
 
 def main():
-    source = (HERE / "test_input_spidD.mlir").read_text()
-    pattern = r"\s*\{\s*frisk\.pipeline_hint(?:\s*=\s*\d+\s*:\s*i64)?\s*\}"
+    source = (HERE / "test_input_shared_d.mlir").read_text()
+    pattern = r",\s*frisk\.qk_pipeline_hint\s*=\s*\d+\s*:\s*i64"
     assert len(re.findall(pattern, source)) == 1
     rng = np.random.default_rng(42)
     q, k, v = [rng.normal(size=(2, 4096, 128)).astype(np.float16) for _ in range(3)]
@@ -77,9 +77,9 @@ def main():
             name = f"s{stages}-bk{bk}-{packing}"
             mlir, output, logpath = [work / (name + suffix) for suffix in (".mlir", ".ll", ".log")]
             mlir.write_text(re.sub(pattern, "" if stages is None else
-                                  f" {{frisk.pipeline_hint = {stages} : i64}}", source))
+                                  f", frisk.qk_pipeline_hint = {stages} : i64", source))
             cmd = [str(TOOL), str(mlir), "0", str(output),
-                   "1", "1", "3.3", "34816", "approx", "256", "4,1",
+                   "1", "1", "3.3", "approx", "256", "4,1",
                    "1", "1", "1", "0", "0", packing, "asm128", str(bk), "32"]
             with logpath.open("w") as log:
                 proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT,

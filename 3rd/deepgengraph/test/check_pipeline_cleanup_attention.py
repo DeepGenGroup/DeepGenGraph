@@ -35,8 +35,8 @@ def check(work, tool, llvm, existing):
     for name, loop, waits in [("baseline", 0, 0), ("wait_only", 0, 1),
                               ("loop_only", 1, 0), ("combined", 1, 1)]:
         out, log = work / (name + ".ll"), work / (name + ".log")
-        command = [str(tool), str(HERE / "test_input_spidD.mlir"), "0", str(out),
-                   "1", "1", "3.3", "34816", "approx", "256", "4,1",
+        command = [str(tool), str(HERE / "test_input_shared_d.mlir"), "0", str(out),
+                   "1", "1", "3.3", "approx", "256", "4,1",
                    "1", "1", "1", "0", "0", "useKPack", "asm128", "32", "32",
                    "--frag-prefetch=1", "--frag-prefetch-words=4",
                    f"--simplify-loop-control={loop}", f"--coalesce-waits={waits}"]

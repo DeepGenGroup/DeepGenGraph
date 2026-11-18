@@ -160,7 +160,7 @@ def main():
         cases += 1
         # The production flag still validates widths; the removed LLVM pass
         # must not remain as a silent fallback in the legacy exporter.
-        p = subprocess.run([str(args.tool.parent/'MyTest'), str(ROOT/'test/test_input_spidD.mlir'),
+        p = subprocess.run([str(args.tool.parent/'MyTest'), str(ROOT/'test/test_input_shared_d.mlir'),
                             '0', str(tmp/'unused.ll'), '--pv-interleave=3'],
                            capture_output=True, text=True, timeout=30)
         assert p.returncode and 'use --pv-interleave=0|1|2|4' in p.stderr

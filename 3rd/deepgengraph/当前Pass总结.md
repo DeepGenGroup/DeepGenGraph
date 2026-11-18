@@ -82,17 +82,18 @@ simplify → erase-type → replace-exp-and-log → equivalent-transform
 | 1 | `frisk::createDeepgenGraphSimplifyPass` | 内联 device kernel，整理返回值为输出参数，简化指针与 kernel 表示 | [DeepgengraphSimplify.cpp](lib/Dialect/Frisk/Transforms/DeepgengraphSimplify.cpp) |
 | 2 | `createAddKernelargPermuteInfoPass` / `add-kernel-arg-info` | 记录 kernel 参数的 permute 信息 | 同上 |
 | 3 | `createConvertScfForOpPass` | 将可处理的 `scf.for` 改为 `affine.for` | [DeepgengraphToFrisk.cpp](lib/Dialect/Frisk/Transforms/DeepgengraphToFrisk.cpp) |
-| 4 | `optimize-tensor-loops` | 经检查的 unroll-and-jam、循环递推 CSE、LICM，共享不变张量工作 | [OptimizeTensorLoops.cpp](lib/Conversion/FriskToBase/OptimizeTensorLoops.cpp) |
-| 5 | `createMemspaceAnalyzePass` / `add-memspace` | 推导、标注张量所在存储空间，为 buffer 化提供依据 | [DgMemspaceAnalyze.cpp](lib/Dialect/Frisk/Transforms/DgMemspaceAnalyze.cpp) |
-| 6 | `kernelop-convert-to-frisk` | 将 Deepgengraph Kernel 转为 Frisk Kernel，整理参数和并行结构 | [DeepgengraphToFrisk.cpp](lib/Dialect/Frisk/Transforms/DeepgengraphToFrisk.cpp) |
-| 7 | `dg-convert-to-frisk` | 将内存、计算算子转换为 Frisk 的 copy、gemm、block、reduce 等 | 同上 |
-| 8 | `reconcile-unrealized-casts` | 清理转换期间的临时类型桥接 | 标准 MLIR pass |
-| 9 | `createFriskFuseBlockOpsPass` | 根据 buffer 数据流融合相连 block，消除中间读写 | [FriskCanonicalize.cpp](lib/Dialect/Frisk/Transforms/FriskCanonicalize.cpp) |
-| 10 | `convert-frisk-to-base` | 将 Frisk Kernel/parallel/block/for 等降低为 func、显式循环和 block tile 操作 | [FriskToBasePass.cpp](lib/Conversion/FriskToBase/FriskToBasePass.cpp) |
-| 11 | `frisk-reorder-workgroups`，可选 | 重排 query/head workgroup 编号；支持分组、反向 query、尾组 | [ReorderWorkgroups.cpp](lib/Conversion/FriskToBase/ReorderWorkgroups.cpp) |
-| 12 | `normalize-attention-k-layout` | 对特定 attention ABI 将 K 从 BHDS 改为 BHSD，内部保留零拷贝转置视图 | [NormalizeAttentionKLayout.cpp](lib/Conversion/FriskToBase/NormalizeAttentionKLayout.cpp) |
+| 4 | `createMemspaceAnalyzePass` / `add-memspace` | 推导、标注张量所在存储空间，为 buffer 化提供依据 | [DgMemspaceAnalyze.cpp](lib/Dialect/Frisk/Transforms/DgMemspaceAnalyze.cpp) |
+| 5 | `kernelop-convert-to-frisk` | 将 Deepgengraph Kernel 转为 Frisk Kernel，整理参数和并行结构 | [DeepgengraphToFrisk.cpp](lib/Dialect/Frisk/Transforms/DeepgengraphToFrisk.cpp) |
+| 6 | `dg-convert-to-frisk` | 将内存、计算算子转换为 Frisk 的 copy、gemm、block、reduce 等 | 同上 |
+| 7 | `reconcile-unrealized-casts` | 清理转换期间的临时类型桥接 | 标准 MLIR pass |
+| 8 | `createFriskFuseBlockOpsPass` | 根据 buffer 数据流融合相连 block，消除中间读写 | [FriskCanonicalize.cpp](lib/Dialect/Frisk/Transforms/FriskCanonicalize.cpp) |
+| 9 | `convert-frisk-to-base` | 将 Frisk Kernel/parallel/block/for 等降低为 func、显式循环和 block tile 操作 | [FriskToBasePass.cpp](lib/Conversion/FriskToBase/FriskToBasePass.cpp) |
+| 10 | `frisk-tile-attention` | 独立切 QK 归约轴和 V/O 输出列，将切片推到加载与暂存分配，保持共享 softmax | [TileAttention.cpp](lib/Conversion/FriskToBase/TileAttention.cpp) |
+| 11 | `frisk-op-fuse` | 将独立乘积与后续加法融合到 GEMM 累加器；浮点重结合由 math!=strict 授权 | [FriskOpFuse.cpp](lib/Dialect/Frisk/Transforms/FriskOpFuse.cpp) |
+| 12 | `frisk-reorder-workgroups`，可选 | 重排 query/head workgroup 编号；支持分组、反向 query、尾组 | [ReorderWorkgroups.cpp](lib/Conversion/FriskToBase/ReorderWorkgroups.cpp) |
+| 13 | `normalize-attention-k-layout` | 对特定 attention ABI 将 K 从 BHDS 改为 BHSD，内部保留零拷贝转置视图 | [NormalizeAttentionKLayout.cpp](lib/Conversion/FriskToBase/NormalizeAttentionKLayout.cpp) |
 
-`optimize-tensor-loops` 默认 `max-jam-factor=8`、`max-carrier-words=24576`。后者是每 block 的嵌套活跃 tensor carrier 预算，单位为 32-bit word；0 表示关闭预算限制。
+当前 attention 从生成时就共享 QK/softmax，保留 full-D O；已删除旧 tensor unroll-and-jam Pass 及其 carrier 预算。MyTest 的位置参数在 layout 后直接接 math，再接 threads/waves；QK/VO 在 Frisk Base 层独立分块。
 
 `normalize-attention-k-layout` 当前专用于四参数 `Attn_p2` 模式：Q 为参数 0、O 为参数 3，K 从参数 1/2 中识别。它改变外部存储约定，调用方需要提供 BHSD 的 K；当 S 与 D 相等、不能靠 shape 区分时，需要显式指定 `key-arg`。它不是任意函数的通用转置优化。
 

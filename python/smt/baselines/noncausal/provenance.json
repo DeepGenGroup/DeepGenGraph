@@ -12,14 +12,28 @@
     "measured_in_this_run": false
   },
   "input_source": "generated_ir/async_task_noncausal/input.mlir",
-  "input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "historical_input_sha256": "6b8daeaa02cc1ba5e6d740d105b1425bd043561eb35761a0489ea86f180a0f66",
+  "input_sha256": "ec1f39681f31e5d6be4182207dce9893223ea32f0ded2170116511cd2a8c0d5d",
+  "input_generation": {
+    "generator": "generate_attention_ir.py",
+    "shape": [
+      1,
+      32,
+      4096,
+      128
+    ],
+    "bm": 128,
+    "bn": 128,
+    "bk_hint": 32,
+    "softmax": "online",
+    "causal": false
+  },
   "config_source": "generated_ir/noncausal_cvt_pack_pass/mytest_lowering/command.sh",
   "parameters": {
     "pipeline": "0",
     "reorder": "1",
     "pack": "1",
     "layout": "3.3",
-    "carrier": "34816",
     "math": "approx",
     "threads": "256",
     "waves": "4,1",
@@ -73,12 +87,11 @@
     "FRISK_GM_TO_SHM_MODE": "async",
     "FRISK_GM_TO_SHM_ALIGNMENT": "16"
   },
-  "mytest_sha256": "2b3824c053485cadaac6f968299dcbc341479b98c97506833b9ec91dcd39718c",
+  "mytest_sha256": "fae12b5d77d6d6a1a88e8d7db8ed7122c7151b9645637a4d7390af1a27ea6fc5",
   "mytest_arguments_after_output": [
     "1",
     "1",
     "3.3",
-    "34816",
     "approx",
     "256",
     "4,1",
@@ -123,18 +136,10 @@
     "--lazy-softmax-base=8",
     "--softmax-cvt-pack=rtz"
   ],
-  "fingerprint": "5ba25a6778ae168ac9ecbc01b74dd50c4697a561cef087ae98b8e07f2263e90e",
-  "base_sha256": "f99957f3932bd33e712b628eb042024d4a701c3ddeb1e4223d7e5f6100329662",
+  "fingerprint": "11200117d8c346ef96c7ff3bce33f188f73818de2e1932a2eea27da976d6d152",
+  "base_sha256": "19cbc289463a42a853f726c60668fe10d90e0d0e05260833dc86f4643b45a33e",
   "identity_replay_exact": true,
   "final_llvm_identity_replay_exact": true,
   "note": "schedule.json records the current compiler's original Base order with this config. Historical winners include later fragment/LLVM transformations and are not reproduced solely by this Base schedule. No new GPU timing is claimed.",
-  "historical_manifest": "generated_ir/noncausal_cvt_pack_pass/manifest.json",
-  "analysis_update": {
-    "mytest_sha256": "421a5f64766d4f84b0b61d3698a9b5f5f60f32abc3cf9fb5377e3fbebd93f4b1",
-    "base_ir_unchanged": true,
-    "fields_added": [
-      "buffers.liveness",
-      "dma_summary"
-    ]
-  }
+  "historical_manifest": "generated_ir/noncausal_cvt_pack_pass/manifest.json"
 }

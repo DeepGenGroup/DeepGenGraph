@@ -3,16 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def OptimizeTensorLoops: Pass<"optimize-tensor-loops", "::mlir::ModuleOp"> {
-  let summary = "Share invariant tensor work through checked unroll-and-jam, recurrence CSE and LICM";
-  let constructor = "mlir::frisk::createOptimizeTensorLoopsPass()";
-  let options = [Option<"maxJamFactor", "max-jam-factor", "unsigned", "8",
-    "Maximum unroll-and-jam factor (divisors of the trip count are considered)">,
-    Option<"maxCarrierWords", "max-carrier-words", "uint64_t", "24576",
-    "Maximum nested live tensor carrier footprint per block, in 32-bit words; 0 disables the budget">];
-  let dependentDialects = ["mlir::affine::AffineDialect", "mlir::arith::ArithDialect"];
-}
-
 def ConvertFriskToBase: Pass<"convert-frisk-to-base", "::mlir::ModuleOp"> {
   let summary = "convert frisk to base";
   let description = [{}];

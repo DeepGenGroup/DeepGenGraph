@@ -1,11 +1,16 @@
-cd /data2/xsl/DeepGenGraph
-case_dir=generated_ir/best_noncausal_early_wave
+#!/usr/bin/env bash
+set -euo pipefail
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+case_dir="$repo_dir/generated_ir/best_noncausal_early_wave"
+mkdir -p -- "$case_dir"
+python3 "$repo_dir/generate_attention_ir.py" --softmax legacy --non-causal \
+  --bm 128 --bn 128 --bk 32 --output "$case_dir/input.mlir"
 
 env FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
-  ./test/MyTest \
-  "/home/chenguanyu/DeepGenGraph/3rd/deepgengraph/test/test_input_spidD_noncasual.mlir" \
-  0 \
-  1 1 3.3 34816 approx 256 4,1 1 1 1 0 0 useKPack asm128 32 32 \
+  "$repo_dir/3rd/deepgengraph/build/test/MyTest" \
+  "$case_dir/input.mlir" \
+  0 "$case_dir/kernel.ll" \
+  1 1 3.3 approx 256 4,1 1 1 1 0 0 useKPack asm128 32 32 \
   --frag-prefetch=0 --frag-prefetch-words=4 --retain-fragment-words=32 \
   --pv-interleave=4 --v-double-buffer=1 \
   --k-dma=64-swizzle --k-dma-arg=1 \
@@ -20,4 +25,4 @@ env FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
   --lazy-softmax-base=8 --softmax-cvt-pack=rtz \
   --hoist-lds-bases=1 --hoist-lane-shuffles=1 \
   --dump-llvm-passes=1 \
-  > lll.log 2>&1
+  > "$case_dir/lowering.log" 2>&1

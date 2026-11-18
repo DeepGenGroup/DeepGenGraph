@@ -48,8 +48,7 @@ class AttentionShapeTests(unittest.TestCase):
             ir, _ = generate_ir(TEMPLATE.read_text(), 64, 32, bk,
                                 b=2, h=3, s=256, d=64)
             kernel = ir.split("  deepgengraph.kernel", 1)[1]
-            values = {"%bz": 1, "%by": 2, "%bx": 3, "%od": 0,
-                      "%dk": 0, "%n": 0}
+            values = {"%bz": 1, "%by": 2, "%bx": 3, "%n": 32}
             offsets = {}
             for line in kernel.splitlines():
                 constant = re.search(r"(%\w+) = arith.constant (\d+) : index", line)
@@ -63,22 +62,23 @@ class AttentionShapeTests(unittest.TestCase):
                 elif pointer:
                     offsets[pointer[1]] = values[pointer[2]]
             self.assertEqual(offsets, {"argQ": 94208, "argO": 94208,
-                                       "argK": 81920, "argV": 81920})
+                                       "argK": 81952, "argV": 83968})
 
     def test_defaults_and_partial_override(self):
         source = TEMPLATE.read_text()
-        fixture = TEMPLATE.with_name("test_input_spidD.mlir").read_text()
-        bm, bn, bk = (int(re.search(rf"%c{name} = arith.constant (\d+)", fixture)[1])
-                      for name in ("BM", "BN", "BK"))
-        def algorithm(text):
-            # The benchmark fixture adds comments and a scheduling hint.
-            text = re.sub(r"//[^\n]*", "", text)
-            text = text.replace("{frisk.pipeline_hint = 2 : i64}", "")
-            return " ".join(text.split())
-
-        self.assertEqual(algorithm(generate_ir(source, bm, bn, bk, "legacy")[0]),
-                         algorithm(fixture))
-        self.assertEqual(generate_ir(source, 64, 32, h=4)[1], (1, 4, 4096, 128))
+        ir, shape = generate_ir(source, 64, 32, 32, "legacy")
+        self.assertEqual(shape, (1, 32, 4096, 128))
+        kernel = ir.split("  deepgengraph.kernel", 1)[1]
+        self.assertIn("frisk.attention_tiles = array<i64: 32, 32>", kernel)
+        self.assertIn("iter_args(%accO = %outZero, %accL = %rowZero)", kernel)
+        self.assertIn("tensor<64x128xf32>", kernel)
+        self.assertEqual(kernel.count("deepgengraph.precise_dot_op"), 2)
+        self.assertEqual(len(re.findall(r"(?:scf|affine)\.for", kernel)), 1)
+        self.assertNotRegex(kernel, r"%(?:od|dk|cBK)\b")
+        partial, shape = generate_ir(source, 64, 32, h=4)
+        self.assertEqual(shape, (1, 4, 4096, 128))
+        self.assertIn("grid = [1, 4, 64]", partial)
+        self.assertNotIn("frisk.attention_tiles", partial)
 
     def test_cli(self):
         with tempfile.TemporaryDirectory() as directory:

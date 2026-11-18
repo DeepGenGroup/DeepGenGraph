@@ -4,7 +4,7 @@
 用法：
   python3 generate_attention_ir.py --bm 128 --bn 64
   python3 generate_attention_ir.py --bm 32 64 128 --bn 32 64 --output-dir generated_ir
-  python3 generate_attention_ir.py --bm 64 --bn 32 --bk 32 --output 3rd/deepgengraph/test/test_input_spidD.mlir
+  python3 generate_attention_ir.py --bm 64 --bn 32 --bk 32 --output 3rd/deepgengraph/test/test_input_shared_d.mlir
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 64 --output-dir generated_ir
   python3 generate_attention_ir.py --b 2 --h 8 --s 1024 --d 64 --bm 64 --bn 32 --output-dir generated_ir
 
@@ -12,7 +12,6 @@
   set -o pipefail
   python3 generate_attention_ir.py --bm 64 --bn 32 --bk 16 32 --output-dir generated_ir/tiles |
     python3 TuneAttention.py --input-list - --case baseline
-未指定 --bk 时，可使用 TuneAttention 的 --case legacy-baseline。
 在目标 GPU 环境给 TuneAttention 加 --benchmark，可继续生成 HSACO 并校验、测时。
 
 输出名：test_input_{B}x{H}x{S}x{D}-{BM}-{BN}.mlir。
@@ -23,9 +22,9 @@
 默认 causal；--non-causal 移除高层及 kernel 的 mask，并遍历全部 S 个 key。
 BM、BN 必须为 S 的正整数因子，因为模板没有尾块越界保护。
 生成 IR 不代表所有分块都满足后端的硬件指令和共享内存限制。
-指定 BK 时输出名增加 -{BK}；BK 必须整除 D。不指定则保留原 BM/BN 模式。
-split-D 的 QK 使用 f32 累加，完成整个 D 的规约后才计算 mask/exp2。
-V/O 按输出列分块（不沿输出 D 求和），每个输出块重算 QK/分母。
+指定 BK 时输出名增加 -{BK}；BK 必须为 16 的正整数倍且整除 D。
+BK 仅作为 block lowering 的 QK/V/O 分块提示，不改变 tensor IR 的完整 D 维度。
+QK、softmax 和 PV 在一个 key 循环中共享，输出累加器保持完整 D 列。
 默认维护跨 key tile 的行最大值，并同步重缩放分母和输出累加器。
 --softmax legacy 可复现历史非稳定 exp2 版本；online 文件名增加 -online。
 """
@@ -82,8 +81,8 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
             raise ValueError(f"{name}={value} 必须为正整数")
     if bm <= 0 or bn <= 0 or s % bm or s % bn:
         raise ValueError(f"BM={bm}、BN={bn} 必须为正整数且均能整除 S={s}")
-    if bk is not None and (bk <= 0 or d % bk):
-        raise ValueError(f"BK={bk} 必须为正整数且能整除 D={d}")
+    if bk is not None and (not isinstance(bk, int) or bk <= 0 or bk % 16 or d % bk):
+        raise ValueError(f"BK={bk} 必须为 16 的正整数倍且能整除 D={d}")
     # 以下映射专用于给定模板。若基础模板改变，明确报错，避免误改 H/D。
     if old_d != 128 or not re.search(r"sizes = \[64, 32\]", kernel):
         raise ValueError("此脚本要求模板 D=128、BM=64、BN=32")
@@ -191,10 +190,12 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
                           lambda m: f"{m[1]}[0, {bn}]")
     kernel = replace_once(kernel, r"(block_advance %tempV, offsets = )\[32, 0\]",
                           lambda m: f"{m[1]}[{bn}, 0]")
+    kernel = shared_attention_kernel(kernel, b, h, s, d, bm, bn)
     if bk is not None:
-        kernel = split_d_kernel(kernel, b, h, s, d, bm, bn, bk)
+        kernel = replace_once(kernel, r"attributes \{parallel_map =",
+                              f"attributes {{frisk.attention_tiles = array<i64: {bk}, {bk}>, parallel_map =")
     if softmax == "online":
-        kernel = online_softmax_kernel(kernel, bm, bn, d, bk)
+        kernel = online_softmax_kernel(kernel, bm, bn, d)
     # causal attention 需覆盖当前 Q tile 的全部有效 key：(bx + 1) * BM。
     # BN > BM 也可用；多加载的未来 key 由原有 causal mask 排除。
     if softmax == "online":
@@ -205,8 +206,7 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
         prefix = replace_once(prefix, r"(?m)^    %0 = deepgengraph.trilu[^\n]*\n", "")
         prefix = replace_once(prefix, r"(?m)^    %6 = deepgengraph.add %5, %0[^\n]*\n", "")
         prefix = re.sub(r"%6\b", "%5", prefix)
-        mask, masked_score, score = (("%mask", "%masked", "%qk") if bk is not None
-                                     else ("%25", "%26", "%24"))
+        mask, masked_score, score = "%mask", "%masked", "%qk"
         kernel = replace_once(
             kernel, rf"(?ms)^[ \t]*{mask} = deepgengraph.mask starts = .*?"
             r"^[ \t]*} : \(index, index\) -> tensor<[^>]+>\n", "")
@@ -240,7 +240,7 @@ def stable_reference_function(text):
     return text[:match.start()] + replacement + text[match.end():]
 
 
-def online_softmax_kernel(kernel, bm, bn, d, bk):
+def online_softmax_kernel(kernel, bm, bn, d):
     """m'=max(m, rowmax(s)); alpha=exp2(m-m'); (l,o)'=alpha*(l,o)+(sum(p),pV).
 
     Scores already use log2(e)/sqrt(D). Every causal row includes key zero in
@@ -250,46 +250,41 @@ def online_softmax_kernel(kernel, bm, bn, d, bk):
     """
     row = f"tensor<{bm}x1xf32>"
     score = f"tensor<{bm}x{bn}xf32>"
-    out = f"tensor<{bm}x{bk or d}xf32>"
-    split = bk is not None
-    zero, old_m = ("%rowZero", "%accM") if split else ("%15", "%accM")
-    old_l, old_o = ("%accL", "%accO") if split else ("%arg14", "%arg13")
-    masked, weights = ("%masked", "%weights") if split else ("%26", "%27")
-    init = (f"\n        %maxInitValue = arith.constant dense<0xFF800000> : tensor<1xf32>\n"
-            f"        %rowNegInf = deepgengraph.add {zero}, %maxInitValue : ({row}, tensor<1xf32>) -> {row}")
+    out = f"tensor<{bm}x{d}xf32>"
+    zero, old_m = "%rowZero", "%accM"
+    old_l, old_o = "%accL", "%accO"
+    masked, weights = "%masked", "%weights"
+    init = (f"\n      %maxInitValue = arith.constant dense<0xFF800000> : tensor<1xf32>\n"
+            f"      %rowNegInf = deepgengraph.add {zero}, %maxInitValue : ({row}, tensor<1xf32>) -> {row}")
     kernel = replace_once(kernel, rf"({re.escape(zero)} = deepgengraph.zero[^\n]+)", lambda m: m[0] + init)
-    if split:
-        kernel = replace_once(kernel, r"%attention:2 = ([^\n]+)%accL = %rowZero\) -> \(([^\n]+)\) \{",
-                              r"%attention:3 = \1%accL = %rowZero, %accM = %rowNegInf) -> (\2, " + row + ") {")
-    else:
-        kernel = replace_once(kernel, r"%19:4 = ([^\n]+)%arg14 = %15\) -> \(([^\n]+)\) \{",
-                              r"%19:5 = \1%arg14 = %15, %accM = %rowNegInf) -> (\2, " + row + ") {")
+    kernel = replace_once(kernel, r"%attention:2 = ([^\n]+)%accL = %rowZero\) -> \(([^\n]+)\) \{",
+                          r"%attention:3 = \1%accL = %rowZero, %accM = %rowNegInf) -> (\2, " + row + ") {")
     stable = (f"%nextM = deepgengraph.reduce({masked}, init = {old_m}), dim = 1, op = MAX, keep_dim = true : ({score}, {row}) -> {row}\n"
-              f"          %shifted = deepgengraph.sub {masked}, %nextM : ({score}, {row}) -> {score}\n"
-              f"          %maxDelta = deepgengraph.sub {old_m}, %nextM : ({row}, {row}) -> {row}\n"
-              f"          %alpha = deepgengraph.exp2 %maxDelta : ({row}) -> {row}\n"
-              f"          %scaledL = deepgengraph.mul {old_l}, %alpha : ({row}, {row}) -> {row}\n"
-              f"          {weights} = deepgengraph.exp2 %shifted : ({score}) -> {score}")
+              f"        %shifted = deepgengraph.sub {masked}, %nextM : ({score}, {row}) -> {score}\n"
+              f"        %maxDelta = deepgengraph.sub {old_m}, %nextM : ({row}, {row}) -> {row}\n"
+              f"        %alpha = deepgengraph.exp2 %maxDelta : ({row}) -> {row}\n"
+              f"        %scaledL = deepgengraph.mul {old_l}, %alpha : ({row}, {row}) -> {row}\n"
+              f"        {weights} = deepgengraph.exp2 %shifted : ({score}) -> {score}")
     kernel = replace_once(kernel, rf"{re.escape(weights)} = deepgengraph.exp2 {re.escape(masked)}[^\n]+", stable)
     kernel = replace_once(kernel, rf"(deepgengraph.reduce\({re.escape(weights)}, init = ){re.escape(old_l)}", r"\1%scaledL")
-    next_o = "%nextO" if split else "%31"
+    next_o = "%nextO"
     kernel = replace_once(kernel, rf"({re.escape(next_o)} = deepgengraph.add ){re.escape(old_o)}",
-                          f"%scaledO = deepgengraph.mul {old_o}, %alpha : ({out}, {row}) -> {out}\n          " + r"\1%scaledO")
-    yields = "%nextO, %nextL" if split else "%32, %33, %31, %28"
+                          f"%scaledO = deepgengraph.mul {old_o}, %alpha : ({out}, {row}) -> {out}\n        " + r"\1%scaledO")
+    yields = "%nextO, %nextL"
     kernel = replace_once(kernel, rf"scf.yield {re.escape(yields)} : ([^\n]+)",
                           f"scf.yield {yields}, %nextM : " + r"\1, " + row)
     return kernel
 
 
-def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
+def shared_attention_kernel(kernel, b, h, s, d, bm, bn):
     """Replace only the device body, retaining the template's signature/ABI.
 
     The existing compiler interprets base_offset in each argument's permuted
     layout (Q/V/O: BHSD; K: BHDS), and remaps the original BSHD strides.
-    In particular K's reduction offset is dk*S, not dk. The subsequent
+    In particular K's key offset is n, not n*D. The subsequent
     NormalizeAttentionKLayout pass exposes contiguous BHSD K at launch time.
-    Use explicit offsets: nested block_advance currently flattens parent loops
-    in the lowering and would incorrectly carry Q/K pointers across key tiles.
+    Use explicit offsets and loads in the key loop so the block tiler can
+    push independently selected QK and V/O slices into global buffer views.
     """
     full = f"tensor<{b}x{s}x{h}x{d}xf16>"
     ptr = f"!deepgengraph_triton.ptr<{full}>"
@@ -307,13 +302,12 @@ def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
                 f"block_shape = [{rows}, {cols}], order = [{order[0]}, {order[1]}] "
                 f": ({ptr}, index) -> {block(rows, cols)}")
 
-    q, k, v = tile(bm, bk), tile(bk, bn), tile(bn, bk)
+    q, k, v = tile(bm, d), tile(d, bn), tile(bn, d)
     score, prob = tile(bm, bn, "f32"), tile(bm, bn)
-    out, row = tile(bm, bk, "f32"), tile(bm, 1, "f32")
+    out, row = tile(bm, d, "f32"), tile(bm, 1, "f32")
     # Preserve the template's exp2 scale, including its f16 conversion.
     scale = re.search(r"%cst = arith.constant dense<([^>]+)>", kernel)[1]
     body = f"""
-      // BK splits QK's reduction dimension and V/O's output columns.
       %scale32 = arith.constant dense<{scale}> : tensor<1xf32>
       %scale = deepgengraph.convert %scale32, type = f16 : (tensor<1xf32>) -> tensor<1xf16>
       %negInf = arith.constant 0xFF800000 : f32
@@ -322,7 +316,6 @@ def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
       %c1 = arith.constant 1 : index
       %cBM = arith.constant {bm} : index
       %cBN = arith.constant {bn} : index
-      %cBK = arith.constant {bk} : index
       %cD = arith.constant {d} : index
       %cS = arith.constant {s} : index
       %cSD = arith.constant {s*d} : index
@@ -334,57 +327,43 @@ def split_d_kernel(kernel, b, h, s, d, bm, bn, bk):
       %qOffset = arith.muli %qStart, %cD : index
       %qBase = arith.addi %headBase, %qOffset : index
       %keyEnd = arith.addi %qStart, %cBM : index
-      // Output D is NOT a reduction axis of PV. Store each BK-column slice.
-      affine.for %od = 0 to {d} step {bk} {{
-        %outOffset = arith.addi %qBase, %od : index
-        {pointer('outPtr', 'argO', 'outOffset', bm, bk, (bm, d), (h*d, 1), (1, 0))}
-        %outZero = deepgengraph.zero shape = [{bm}, {bk}], type = f32 : () -> {out}
-        %rowZero = deepgengraph.zero shape = [{bm}, 1], type = f32 : () -> {row}
-        %attention:2 = scf.for %n = %c0 to %keyEnd step %cBN iter_args(%accO = %outZero, %accL = %rowZero) -> ({out}, {row}) {{
-          %scoreZero = deepgengraph.zero shape = [{bm}, {bn}], type = f32 : () -> {score}
-          // Reset Q/K and the f32 score accumulator for EVERY key tile.
-          %qk = scf.for %dk = %c0 to %cD step %cBK iter_args(%accQK = %scoreZero) -> ({score}) {{
-            %qTileOffset = arith.addi %qBase, %dk : index
-            %kDOffset = arith.muli %dk, %cS : index
-            %kHeadOffset = arith.addi %headBase, %kDOffset : index
-            %kTileOffset = arith.addi %kHeadOffset, %n : index
-            {pointer('qPtr', 'argQ', 'qTileOffset', bm, bk, (bm, d), (h*d, 1), (1, 0))}
-            {pointer('kPtr', 'argK', 'kTileOffset', bk, bn, (d, s), (1, h*d), (0, 1))}
-            %qTile = deepgengraph_triton.block_load %qPtr : ({block(bm, bk)}) -> {q}
-            %kTile = deepgengraph_triton.block_load %kPtr : ({block(bk, bn)}) -> {k}
-            %qScaled = deepgengraph.mul %qTile, %scale : ({q}, tensor<1xf16>) -> {q}
-            %partialQK = deepgengraph.precise_dot_op %qScaled, %kTile, acc = f32 : ({q}, {k}) -> {score}
-            %nextQK = deepgengraph.add %accQK, %partialQK : ({score}, {score}) -> {score}
-            scf.yield %nextQK : {score}
+      {pointer('outPtr', 'argO', 'qBase', bm, d, (bm, d), (h*d, 1), (1, 0))}
+      %outZero = deepgengraph.zero shape = [{bm}, {d}], type = f32 : () -> {out}
+      %rowZero = deepgengraph.zero shape = [{bm}, 1], type = f32 : () -> {row}
+      %attention:2 = scf.for %n = %c0 to %keyEnd step %cBN iter_args(%accO = %outZero, %accL = %rowZero) -> ({out}, {row}) {{
+        %kTileOffset = arith.addi %headBase, %n : index
+        {pointer('qPtr', 'argQ', 'qBase', bm, d, (bm, d), (h*d, 1), (1, 0))}
+        {pointer('kPtr', 'argK', 'kTileOffset', d, bn, (d, s), (1, h*d), (0, 1))}
+        %qTile = deepgengraph_triton.block_load %qPtr : ({block(bm, d)}) -> {q}
+        %kTile = deepgengraph_triton.block_load %kPtr : ({block(d, bn)}) -> {k}
+        %qScaled = deepgengraph.mul %qTile, %scale : ({q}, tensor<1xf16>) -> {q}
+        %qk = deepgengraph.precise_dot_op %qScaled, %kTile, acc = f32 : ({q}, {k}) -> {score}
+        %mask = deepgengraph.mask starts = [%qStart, %n], sizes = [{bm}, {bn}], type = f32 {{
+        ^bb0(%qi: index, %ki: index):
+          %nextRow = arith.addi %qi, %c1 : index
+          %future = arith.cmpi ule, %nextRow, %ki : index
+          %maskValue = scf.if %future -> (f32) {{
+            scf.yield %negInf : f32
+          }} else {{
+            scf.yield %zero : f32
           }}
-          %mask = deepgengraph.mask starts = [%qStart, %n], sizes = [{bm}, {bn}], type = f32 {{
-          ^bb0(%qi: index, %ki: index):
-            %nextRow = arith.addi %qi, %c1 : index
-            %future = arith.cmpi ule, %nextRow, %ki : index
-            %maskValue = scf.if %future -> (f32) {{
-              scf.yield %negInf : f32
-            }} else {{
-              scf.yield %zero : f32
-            }}
-            deepgengraph.mask_yield %maskValue : f32
-          }} : (index, index) -> {score}
-          %masked = deepgengraph.add %qk, %mask : ({score}, {score}) -> {score}
-          %weights = deepgengraph.exp2 %masked : ({score}) -> {score}
-          %nextL = deepgengraph.reduce(%weights, init = %accL), dim = 1, op = ADD, keep_dim = true : ({score}, {row}) -> {row}
-          %p = deepgengraph.convert %weights, type = f16 : ({score}) -> {prob}
-          %vRowOffset = arith.muli %n, %cD : index
-          %vHeadOffset = arith.addi %headBase, %vRowOffset : index
-          %vTileOffset = arith.addi %vHeadOffset, %od : index
-          {pointer('vPtr', 'argV', 'vTileOffset', bn, bk, (s, d), (h*d, 1), (1, 0))}
-          %vTile = deepgengraph_triton.block_load %vPtr : ({block(bn, bk)}) -> {v}
-          %partialO = deepgengraph.precise_dot_op %p, %vTile, acc = f32 : ({prob}, {v}) -> {out}
-          %nextO = deepgengraph.add %accO, %partialO : ({out}, {out}) -> {out}
-          scf.yield %nextO, %nextL : {out}, {row}
-        }}
-        %normalized = deepgengraph.div %attention#0, %attention#1 : ({out}, {row}) -> {out}
-        %result = deepgengraph.convert %normalized, type = f16 : ({out}) -> {q}
-        deepgengraph_triton.block_store %outPtr, %result : ({block(bm, bk)}, {q}) -> ()
+          deepgengraph.mask_yield %maskValue : f32
+        }} : (index, index) -> {score}
+        %masked = deepgengraph.add %qk, %mask : ({score}, {score}) -> {score}
+        %weights = deepgengraph.exp2 %masked : ({score}) -> {score}
+        %nextL = deepgengraph.reduce(%weights, init = %accL), dim = 1, op = ADD, keep_dim = true : ({score}, {row}) -> {row}
+        %p = deepgengraph.convert %weights, type = f16 : ({score}) -> {prob}
+        %vRowOffset = arith.muli %n, %cD : index
+        %vTileOffset = arith.addi %headBase, %vRowOffset : index
+        {pointer('vPtr', 'argV', 'vTileOffset', bn, d, (s, d), (h*d, 1), (1, 0))}
+        %vTile = deepgengraph_triton.block_load %vPtr : ({block(bn, d)}) -> {v}
+        %partialO = deepgengraph.precise_dot_op %p, %vTile, acc = f32 : ({prob}, {v}) -> {out}
+        %nextO = deepgengraph.add %accO, %partialO : ({out}, {out}) -> {out}
+        scf.yield %nextO, %nextL : {out}, {row}
       }}
+      %normalized = deepgengraph.div %attention#0, %attention#1 : ({out}, {row}) -> {out}
+      %result = deepgengraph.convert %normalized, type = f16 : ({out}) -> {q}
+      deepgengraph_triton.block_store %outPtr, %result : ({block(bm, d)}, {q}) -> ()
 """
     start = kernel.index("\n", kernel.index("    ^bb0("))
     end = kernel.index("\n    } :", start) + 1
@@ -403,7 +382,7 @@ def main():
     parser.add_argument("--bn", "--BN", type=int, nargs="+", required=True,
                         help="K/V 序列分块大小，可输入多个值；与 BM 取笛卡尔积")
     parser.add_argument("--bk", "--BK", type=int, nargs="+",
-                        help="D 轴分块大小，可输入多个值；必须整除 D")
+                        help="block lowering 的 QK/V/O 分块提示；须为 16 的正整数倍且整除 D")
     parser.add_argument("--softmax", choices=("online", "legacy"), default="online",
                         help="默认 online：MAX 归约及跨 key tile 重缩放；legacy 复现旧非稳定版本")
     mode = parser.add_mutually_exclusive_group()
@@ -411,7 +390,7 @@ def main():
     mode.add_argument("--non-causal", dest="causal", action="store_false",
                       help="生成无 mask、遍历全部 key 的 full attention")
     parser.add_argument("--output", type=Path,
-                        help="单组参数的指定输出文件（例如 test_input_spidD.mlir）")
+                        help="单组参数的指定输出文件（例如 test_input_shared_d.mlir）")
     parser.add_argument("--output-dir", type=Path, default=ROOT,
                         help="输出目录，默认脚本所在目录")
     args = parser.parse_args()

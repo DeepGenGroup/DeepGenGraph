@@ -300,9 +300,9 @@ From the repository root, regenerate the mixed candidate with:
 ```bash
 FRISK_GM_TO_SHM_MODE=hybrid FRISK_GM_TO_SHM_ALIGNMENT=4 \
   3rd/deepgengraph/build/test/MyTest \
-  "$PWD/3rd/deepgengraph/test/test_input_spidD.mlir" 0 \
+  "$PWD/3rd/deepgengraph/test/test_input_shared_d.mlir" 0 \
   "$PWD/generated_ir/test_input_spidD_best_k5_hybrid.ll" \
-  1 1 3.3 34816 approx 256 4,1 1 1 1 0 \
+  1 1 3.3 approx 256 4,1 1 1 1 0 \
   > generated_ir/test_input_spidD_best_k5_hybrid.log 2>&1
 ```
 

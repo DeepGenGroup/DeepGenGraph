@@ -2,6 +2,7 @@
 """Regress attention modes, launch geometry, and batch runner validation."""
 import json
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
-from TuneAttention import launch_config
+from TuneAttention import default_paths, launch_config, prepare_input
 
 LLVM = """define amdgpu_kernel void @Attn_p2() !reqd_work_group_size !7 {
   ret void
@@ -21,9 +22,88 @@ LLVM = """define amdgpu_kernel void @Attn_p2() !reqd_work_group_size !7 {
 
 
 class AttentionRunnerTests(unittest.TestCase):
+    def test_default_input_uses_shared_tensor_attention(self):
+        source,_ = default_paths()
+        self.assertEqual(source.name,'test_input_shared_d.mlir')
+        text=source.read_text().split('  deepgengraph.kernel',1)[1]
+        self.assertEqual(text.count('deepgengraph.precise_dot_op'),2)
+        self.assertNotIn('affine.for %od',text)
+
+    def test_shared_input_pipeline_switches_change_lowering_hints(self):
+        source=default_paths()[0].read_text()
+        disabled=prepare_input(source,{'pipeline-stages':'none','loop-mark':'0'},'qk')
+        self.assertNotIn('frisk.qk_pipeline_hint',disabled)
+        self.assertIn('frisk.qk_simplify_loop = false',disabled)
+        enabled=prepare_input(source,{'pipeline-stages':'3','loop-mark':'1'},'qk')
+        self.assertIn('frisk.qk_pipeline_hint = 3 : i64',enabled)
+        self.assertIn('frisk.qk_simplify_loop = true',enabled)
+        self.assertEqual(source.split('deepgengraph_triton.device_kernel',1)[1],
+                         enabled.split('deepgengraph_triton.device_kernel',1)[1])
+
     def run_script(self, name, *args):
         return subprocess.run([sys.executable, str(ROOT / name), *map(str, args)],
                               capture_output=True, text=True, cwd="/tmp")
+
+    def test_dry_run_has_math_after_layout_and_correct_tile_positions(self):
+        args = ["--dry-run", "--case", "baseline"]
+        for option in ("layout=3.2", "math=mmac", "threads=128", "waves=2,1",
+                       "masks=0", "prefetch=0", "fuse=1", "reuse=8",
+                       "qk-tile=64", "vo-tile=32"):
+            args += ["--set", option]
+        result = self.run_script("TuneAttention.py", *args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [shlex.split(line)[3:] for line in result.stdout.splitlines()
+                    if line.startswith("env ")]
+        self.assertEqual(len(commands), 1, result.stdout)
+        argv = commands[0]
+        self.assertEqual(argv[4:19], ["1", "1", "3.2", "mmac", "128", "2,1",
+            "1", "0", "0", "1", "8", "useKPack", "asm128", "64", "32"])
+        self.assertTrue(argv[19].startswith("--"), argv)
+
+    def test_removed_carrier_set_and_sweep_are_rejected(self):
+        for option in ("--set", "--sweep"):
+            with self.subTest(option=option):
+                args = ["--dry-run", option, "carrier=0"]
+                if option == "--set":
+                    args += ["--case", "baseline"]
+                result = self.run_script("TuneAttention.py", *args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertNotIn("carrier", result.stderr.partition("KEY 可取：")[2])
+
+    def test_candidate_preparation_preserves_input_in_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "input.mlir"
+            original = default_paths()[0].read_bytes()
+            source.write_bytes(original)
+            result = self.run_script("3rd/deepgengraph/test/generate_attention_candidates.py",
+                "--input", source, "--output-dir", directory, "--tool", "/bin/false")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(source.read_bytes(), original)
+
+    def test_candidate_preparation_rejects_snapshot_source_collision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "prepared_input.mlir"
+            original = default_paths()[0].read_bytes()
+            source.write_bytes(original)
+            result = self.run_script("3rd/deepgengraph/test/generate_attention_candidates.py",
+                "--input", source, "--output-dir", directory, "--tool", "/bin/false")
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(source.read_bytes(), original)
+
+    def test_shared_input_auto_target_controls_generated_qk_loop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'prepared.mlir'
+            result = self.run_script('TuneAttention.py', '--prepare-input', output,
+                                     '--set', 'pipeline-stages=none', '--set', 'loop-mark=0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            prepared = output.read_text()
+            self.assertNotIn('frisk.qk_pipeline_hint', prepared)
+            self.assertIn('frisk.qk_simplify_loop = false', prepared)
+            result = self.run_script('TuneAttention.py', '--dry-run', '--case', 'baseline',
+                                     '--set', 'pipeline-stages=3', '--set', 'loop-mark=1')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--loop-iv qk', result.stdout)
+            self.assertIn('pipeline-stages=3', result.stdout)
 
     def test_noncausal_removes_mask_and_visits_all_keys(self):
         # A missing bound change silently computes only a causal prefix.
@@ -119,6 +199,8 @@ class AttentionRunnerTests(unittest.TestCase):
                 import sys
                 assert Path(sys.argv[1]).is_file()
                 assert sys.argv[2] == '0'
+                assert sys.argv[7] == 'approx'
+                assert sys.argv[8:10] == ['256', '4,1']
                 Path(sys.argv[3]).write_text({LLVM!r})
                 """))
             compiler.chmod(0o755)

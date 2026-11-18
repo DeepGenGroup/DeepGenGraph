@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 split-D attention 的 MyTest 调优候选并导出 LLVM IR。
+"""生成 attention 的 MyTest 调优候选并导出 LLVM IR。
 
 默认仅导出 IR；--hsaco 生成 HSACO，--benchmark 继续启动、校验并测量性能。
 运行 `python3 TuneAttention.py --help` 查看参数和示例。
@@ -28,13 +28,13 @@ ROOT = Path(__file__).resolve().parent
 
 def default_paths():
     repo = next((path for path in (ROOT, *ROOT.parents)
-                 if (path / "3rd/deepgengraph/test/test_input_spidD.mlir").is_file()), ROOT)
+                 if (path / "3rd/deepgengraph/test/test_input_shared_d.mlir").is_file()), ROOT)
     tool = ROOT / "MyTest"
     if not tool.is_file():
         tool = repo / "3rd/deepgengraph/build/test/MyTest"
-    source = ROOT / "test_input_spidD.mlir"
+    source = ROOT / "test_input_shared_d.mlir"
     if not source.is_file():
-        source = repo / "3rd/deepgengraph/test/test_input_spidD.mlir"
+        source = repo / "3rd/deepgengraph/test/test_input_shared_d.mlir"
     return source, tool
 
 
@@ -232,16 +232,16 @@ def run_stage(command, directory, logpath, timeout):
 
 
 HELP = r"""
-默认优先使用脚本同目录的 MyTest 和 test_input_spidD.mlir，缺失时查找上层仓库。
+默认优先使用脚本同目录的 MyTest 和 test_input_shared_d.mlir，缺失时查找上层仓库。
 --tool 可显式覆盖工具路径；独立目录中可用 --input 指定生成的 MLIR。
 --input 接受一个或多个文件；--input-dir 接受目录下的全部 *.mlir（不递归）。
 --input-list FILE 接受每行一个路径的列表；--input-list - 读取标准输入，
 可直接接收 generate_attention_ir.py 的标准输出。相对路径以当前工作目录为准。
 多输入按“输入 × 候选”编译，独立保存到同一 run-*，结果统一使用 JSON。
-baseline 保留历史 nohint 展开配置；不指定 --case/--sweep 时枚举 coverage，
+baseline 保留历史编译参数；不指定 --case/--sweep 时枚举 coverage，
 并非只运行 baseline。默认只导出 IR；各配置性能仍需在目标 GPU 上验证。
 完整参数对照见同目录《调优参数说明.md》。
-生成器默认 --softmax online；本脚本默认输入 test_input_spidD.mlir 仍是历史输入。
+生成器默认 --softmax online；本脚本默认输入 test_input_shared_d.mlir 使用共享 tensor IR 和 legacy softmax。
 online-baseline 只设置编译参数，不会将已有输入转换为 online softmax。
 
 完整流程（可选）：
@@ -269,8 +269,8 @@ online-baseline 只设置编译参数，不会将已有输入转换为 online so
                                0 不会关闭 frisk.pipeline_hint 自动流水线！
   pipeline-stages=none|keep|N   修改目标循环的 frisk.pipeline_hint；none 删除，
                                keep 保留输入，N 为 1..64；1 禁用，2 双缓冲。
-  loop-mark=0|1|keep           修改目标循环的 frisk.simplify_loop；1 添加，
-                               允许 nohint 循环独立展开；0 删除，keep 保留。
+  loop-mark=0|1|keep           控制目标循环的 frisk.simplify_loop；1 启用，
+                               允许 nohint 循环独立展开；0 关闭，keep 保留。
   simplify-loop-control=0|1    是否运行循环简化 Pass（默认 1）。
   coalesce-waits=0|1           是否合并重复 wait/barrier（此处默认 0）。
   mask-add-bypass=off|legal|approx  零 mask 分支直通；默认 off，approx 需 math=approx。
@@ -279,15 +279,16 @@ online-baseline 只设置编译参数，不会将已有输入转换为 online so
   local-reduce=off|legal|approx  通用线程内归约；默认 off，approx 需 math=approx。
   local-reduce-chains=4 local-reduce-min-inputs=16 local-reduce-ops=all
     ops 可为 add,mul,and,or,xor,min,max 的逗号组合；min-inputs 至少为 chains 的两倍。
-默认 --loop-iv auto：有 %dk 时修改该循环；没有时保留所有循环标记，并提示跳过。
-因此也接受 generate_attention_ir.py 未指定 --bk 的非 split-D 输出。
-非 split-D 输入建议使用 --case legacy-baseline；baseline 的 useKPack 和显式
-qk-tile/vo-tile 要求 split-D 结构，脚本不会偷偷替换这些编译参数，失败会记录到汇总。
+默认 --loop-iv auto：有 %dk 时修改该循环；共享 tensor 输入则修改 QK lowering 提示。
+共享输入使用 frisk.qk_pipeline_hint / frisk.qk_simplify_loop；后者缺省为 true。
+所有当前输入使用共享 tensor IR；qk-tile/vo-tile 在 block 层独立分块。
+strict 模式保留 QK=D；显式请求更小 QK 会报错，失败会记录到汇总。
 显式 --loop-iv dk 时，只修改唯一的 scf.for %dk；缺失或不唯一时报错。
+显式 --loop-iv qk 时，修改唯一的 Attn_p2 tensor kernel 提示属性。
 其他循环的属性保留。每候选保存 input.mlir，绝不改写原始输入。
 
 MyTest 位置参数顺序（命名参数不改变位置；完整命名参数见下文）：
-  input pipeline output reorder pack layout carrier math threads waves \
+  input pipeline output reorder pack layout math threads waves \
   lifetimes masks prefetch fuse reuse dma-pack dma-export qk-tile vo-tile \
   --frag-prefetch=N --frag-prefetch-words=N --retain-fragment-words=N \
   --simplify-loop-control=N --coalesce-waits=N
@@ -299,7 +300,6 @@ lds-bytes 修改导出 IR，不属于 MyTest argv。
   reorder/pack/lifetimes/masks/prefetch/fuse：0/1，分别为指令重排、packed LDS、
     存活期优化、有效 tile mask 简化、global packet 寄存器预取、mask/add 融合。
   layout：3.1/shared、3.2/shuffle、3.3/b-permute。
-  carrier：非负 64 位整数，单位 words/block，0=不限；不是 VGPR 上限。
   math：strict/mmac/mmac-exp2/mmac-recip/approx；approx 需检查数值误差。
   threads：64..1024 的 64 倍数；waves：M,N，各 1..16，M*N=threads/64。
   reuse：非负 32 位整数，LDS fragment 寄存器复用预算 words/thread，0=关闭；
@@ -413,7 +413,7 @@ config.json、result.json。result.json 包含输入/IR SHA256、静态 LDS 字�
 
 # 保留原脚本基线，避免历史 k5 预设随新基线一起漂移。
 LEGACY_BASE = dict(
-    pipeline="0", reorder="1", pack="1", layout="3.3", carrier="34816",
+    pipeline="0", reorder="1", pack="1", layout="3.3",
     math="strict", threads="256", waves="4,1", lifetimes="1", masks="0",
     prefetch="0", fuse="1", reuse="0", copy="legacy", alignment="0",
     **{"dma-pack": "legacy", "dma-export": "auto", "qk-tile": "0", "vo-tile": "0",
@@ -448,7 +448,7 @@ KDMA64_BASE = dict(ONLINE_BASE, **{"workgroup-group-size": "32", "workgroup-reve
     "pv-interleave": "4", "v-double-buffer": "1", "k-dma": "64-swizzle"})
 KEYS = list(BASE)
 POSITIONAL_KEYS = (
-    "reorder", "pack", "layout", "carrier", "math", "threads", "waves",
+    "reorder", "pack", "layout", "math", "threads", "waves",
     "lifetimes", "masks", "prefetch", "fuse", "reuse", "dma-pack", "dma-export",
     "qk-tile", "vo-tile",
 )
@@ -556,30 +556,50 @@ def closing_brace(text, start):
     raise ValueError("目标循环或属性字典的花括号不完整")
 
 
+def target_loop_iv(source, requested):
+    if requested != "auto":
+        return requested
+    code = masked(source)
+    if re.search(r"\bscf\.for\s+%dk\s*=", code):
+        return "dk"
+    if re.search(r"\bdeepgengraph\.kernel\s+@Attn_p2\b", code):
+        return "qk"
+    return None
+
+
 def prepare_input(source, cfg, iv):
-    """Edit only the selected SCF loop's trailing attribute dictionary."""
+    """Edit the selected SCF attributes or shared attention's QK lowering hints."""
     if cfg is None or (cfg["pipeline-stages"] == cfg["loop-mark"] == "keep"):
         return source
     code = masked(source)
-    loops = list(re.finditer(r"\bscf\.for\s+%" + re.escape(iv) + r"\s*=", code))
-    if len(loops) != 1:
-        raise ValueError(f"需要唯一 scf.for %{iv}，找到 {len(loops)} 个；请设置 --loop-iv")
-    # Find the region opener outside parentheses/types in the loop header.
-    depth = 0
-    start = loops[0].end()
-    for start in range(start, len(code)):
-        char = code[start]
-        if char == "{" and depth == 0:
-            break
-        if char in "(<[": depth += 1
-        if char in ")>]" and code[start - 1] != "-": depth -= 1
+    shared = iv == "qk"
+    if shared:
+        kernels = list(re.finditer(
+            r"\bdeepgengraph\.kernel\s+@Attn_p2\b[^{}]*\battributes\s*\{", code))
+        if len(kernels) != 1:
+            raise ValueError(f"需要唯一带 attributes 的 Attn_p2 tensor kernel，找到 {len(kernels)} 个")
+        end = attr_start = kernels[0].end() - 1
+        has_attrs = True
     else:
-        raise ValueError("目标循环缺少 region")
-    end = closing_brace(code, start) + 1
-    attr_start = end
-    while attr_start < len(code) and code[attr_start].isspace():
-        attr_start += 1
-    has_attrs = attr_start < len(code) and code[attr_start] == "{"
+        loops = list(re.finditer(r"\bscf\.for\s+%" + re.escape(iv) + r"\s*=", code))
+        if len(loops) != 1:
+            raise ValueError(f"需要唯一 scf.for %{iv}，找到 {len(loops)} 个；请设置 --loop-iv")
+        # Find the region opener outside parentheses/types in the loop header.
+        depth = 0
+        start = loops[0].end()
+        for start in range(start, len(code)):
+            char = code[start]
+            if char == "{" and depth == 0:
+                break
+            if char in "(<[": depth += 1
+            if char in ")>]" and code[start - 1] != "-": depth -= 1
+        else:
+            raise ValueError("目标循环缺少 region")
+        end = closing_brace(code, start) + 1
+        attr_start = end
+        while attr_start < len(code) and code[attr_start].isspace():
+            attr_start += 1
+        has_attrs = attr_start < len(code) and code[attr_start] == "{"
     attr_end = closing_brace(code, attr_start) + 1 if has_attrs else end
     raw = source[attr_start + 1:attr_end - 1] if has_attrs else ""
     clean = masked(raw)
@@ -593,11 +613,16 @@ def prepare_input(source, cfg, iv):
             begin = i + 1
     fields.append(raw[begin:].strip())
     updates = {}
+    pipeline_key = "frisk.qk_pipeline_hint" if shared else "frisk.pipeline_hint"
+    simplify_key = "frisk.qk_simplify_loop" if shared else "frisk.simplify_loop"
     if cfg["pipeline-stages"] != "keep":
         stages = cfg["pipeline-stages"]
-        updates["frisk.pipeline_hint"] = None if stages == "none" else f"frisk.pipeline_hint = {stages} : i64"
+        updates[pipeline_key] = None if stages == "none" else f"{pipeline_key} = {stages} : i64"
     if cfg["loop-mark"] != "keep":
-        updates["frisk.simplify_loop"] = "frisk.simplify_loop" if cfg["loop-mark"] == "1" else None
+        if shared:
+            updates[simplify_key] = f"{simplify_key} = {'true' if cfg['loop-mark'] == '1' else 'false'}"
+        else:
+            updates[simplify_key] = simplify_key if cfg["loop-mark"] == "1" else None
     kept = []
     for field in fields:
         # MLIR attribute names may also be quoted.
@@ -608,7 +633,7 @@ def prepare_input(source, cfg, iv):
         if key not in updates and without_comments:
             kept.append(without_comments)
     kept += [value for value in updates.values() if value is not None]
-    attrs = " {" + ", ".join(kept) + "}" if kept else ""
+    attrs = ("{" if shared else " {") + ", ".join(kept) + "}" if kept or shared else ""
     return source[:end] + attrs + source[attr_end:]
 
 
@@ -709,7 +734,7 @@ def ir_facts(text, diagnostics):
 def main(argv=None):
     """解析配置、生成候选，再按顺序导出；导入模块时不启动调优。"""
     argv = sys.argv[1:] if argv is None else argv
-    p = argparse.ArgumentParser(prog="TuneAttention.py", description="生成 split-D attention 的 MyTest 调优候选。",
+    p = argparse.ArgumentParser(prog="TuneAttention.py", description="生成 attention 的 MyTest 调优候选。",
                                 epilog=HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     default_input, default_tool = default_paths()
     inputs = p.add_mutually_exclusive_group()
@@ -717,7 +742,7 @@ def main(argv=None):
     inputs.add_argument("--input-dir", type=Path, help="生成结果目录，读取其中全部 *.mlir")
     inputs.add_argument("--input-list", metavar="FILE", help="每行一个输入路径；- 读取生成器标准输出")
     p.add_argument("--tool", type=Path, default=default_tool, help="默认优先使用脚本同目录的 MyTest")
-    p.add_argument("--loop-iv", default="auto", help="待修改标记的 scf.for IV；默认 auto 检测 dk，无 dk 则保留标记")
+    p.add_argument("--loop-iv", default="auto", help="SCF IV 或共享 QK 提示（qk）；auto 检测 dk 或 Attn_p2 kernel")
     p.add_argument("--output-dir", type=Path, help="父目录；每次建立独立 run-* 子目录")
     p.add_argument("--summary-dir", type=Path, help="额外实时写入 summary.json / best_by_shape.json 的新目录")
     p.add_argument("--case", action="append", default=[], help="候选名或 glob，可重复")
@@ -800,7 +825,7 @@ def main(argv=None):
                 if not re.fullmatch(r"[0-9]+", value) or not 1 <= int(value) <= 64:
                     p.error("pipeline-stages 必须为 none、keep 或 1..64")
                 value = str(int(value))
-        limits = {"carrier": 2**64, "reuse": 2**32, "threads": 2**32,
+        limits = {"reuse": 2**32, "threads": 2**32,
                   "alignment": 2**63, "qk-tile": 2**63, "vo-tile": 2**63,
                   "frag-prefetch-words": 2**32, "retain-fragment-words": 2**32,
                   "lds-bytes": 2**32, "workgroup-group-size": 2**63, "k-dma-arg": 2**32, "k-lds-prefetch": 9, "k-tail-prefetch": 9}
@@ -852,9 +877,7 @@ def main(argv=None):
                 if a.prepare_input.resolve() == input_path:
                     p.error("不允许覆盖原始输入；请选择不同的 --prepare-input 路径")
                 source = input_path.read_text()
-                iv = a.loop_iv
-                if iv == "auto":
-                    iv = "dk" if re.search(r"\bscf\.for\s+%dk\s*=", masked(source)) else None
+                iv = target_loop_iv(source, a.loop_iv)
                 content = prepare_input(source, cfg, iv) if iv else source
                 a.prepare_input.parent.mkdir(parents=True, exist_ok=True)
                 a.prepare_input.write_text(content)
@@ -892,7 +915,7 @@ def main(argv=None):
         dimensions.update({k: v for k, v in ENUMS.items() if k not in WORKGROUP_AXIS_KEYS})
         dimensions.update({key: ("off", "8:6") for key in SWIZZLE_KEYS})
         dimensions["workgroup-group-size"] = ("1", "4", "8", "16")
-        dimensions.update(carrier=("0", "24576", "28672", "34816"), reuse=("0", "4", "8", "16"))
+        dimensions.update(reuse=("0", "4", "8", "16"))
         dimensions.update({"pipeline-stages": ("none", "1", "2", "3", "4"),
                            "qk-tile": ("16", "32", "64"), "vo-tile": ("16", "32", "64"),
                            "frag-prefetch-words": ("4", "8", "16"),
@@ -1007,12 +1030,10 @@ def main(argv=None):
         paths = input_paths(a, default_input)
         for input_index, input_path in enumerate(paths, 1):
             original_source = input_path.read_text()
-            iv = a.loop_iv
-            if iv == "auto":
-                iv = "dk" if re.search(r"\bscf\.for\s+%dk\s*=", masked(original_source)) else None
-                if iv is None:
-                    print(f"{input_path}: 无 %dk，保留循环标记（pipeline-stages/loop-mark 不适用）",
-                          file=sys.stderr)
+            iv = target_loop_iv(original_source, a.loop_iv)
+            if iv is None:
+                print(f"{input_path}: 无 %dk 或 Attn_p2 tensor kernel，保留循环标记（pipeline-stages/loop-mark 不适用）",
+                      file=sys.stderr)
             # 索引避免不同目录的同名文件发生覆盖。
             prefix = f"input-{input_index:04d}-{input_path.stem}" if len(paths) > 1 else ""
             snapshots.append((prefix, input_path, original_source, iv))

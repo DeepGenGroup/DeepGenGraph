@@ -109,7 +109,7 @@ class SchedulerTests(unittest.TestCase):
                 env.pop('FRISK_GM_TO_SHM_MODE', None)
                 if copy_mode != 'default':
                     env['FRISK_GM_TO_SHM_MODE'] = copy_mode
-                    flags[12:14] = ['legacy', 'split32']  # positional DMA pack/export
+                    flags[11:13] = ['legacy', 'split32']  # positional DMA pack/export
                 command = [str(ROOT / '3rd/deepgengraph/build/test/MyTest'),
                            str(base / 'input.mlir'), '0', str(work / 'unused.ll'), *flags,
                            f'--cpsat-export={work / "problem.json"}',

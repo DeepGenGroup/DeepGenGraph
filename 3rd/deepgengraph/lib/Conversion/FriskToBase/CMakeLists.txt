@@ -2,7 +2,7 @@ add_deepgengraph_library(FriskToBase
   FriskToBasePass.cpp
   ReorderWorkgroups.cpp
   NormalizeAttentionKLayout.cpp
-  OptimizeTensorLoops.cpp
+  TileAttention.cpp
   WmmaLayoutConversion.cpp
   # FriskBaseToTheadlevelIR.cpp
   # FriskBaseToTheadlevelIR_selfTry.cpp
