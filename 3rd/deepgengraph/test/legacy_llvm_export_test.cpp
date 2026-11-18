@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
   bool fragPrefetch = false;
   unsigned fragPrefetchWords = 8;
   bool crossBNK0 = false, crossBNK0Specified = false, elideBackedgeBarrier = false;
-  bool softmaxCvtPack = false, softmaxCvtPackSpecified = false;
+  bool softmaxCvtPack = false;
   llvm::StringRef localReduce;
   mlir::frisk::LocalReductionOptions localReductionOptions;
   llvm::StringRef deferLaneSum;
@@ -70,7 +70,10 @@ int main(int argc, char **argv) {
     if (!mlir::frisk::parseSoftmaxCvtPackOption(option, softmaxCvtPack, consumed)) {
       llvm::errs() << "use --softmax-cvt-pack=off|rtz (rtz changes rounding)\n"; return 1;
     }
-    if (consumed) { softmaxCvtPackSpecified = true; continue; }
+    if (consumed) {
+      llvm::errs() << "softmax cvt pack moved to ThreadIR; use MyTest or ThreadTilingTest\n";
+      return 1;
+    }
     if (option.starts_with("--k-dma")) {
       llvm::errs() << "DMA/layout planning moved to Frisk Base IR; use MyTest --shared-copy-constraints\n";
       return 1;
@@ -122,9 +125,9 @@ int main(int argc, char **argv) {
   }
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
-  if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified || softmaxCvtPackSpecified) {
+  if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified) {
     if (argc != 2 || fragPrefetch) {
-      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] [--softmax-cvt-pack=off|rtz] <input.ll>\n";
+      llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] <input.ll>\n";
       return 1;
     }
     llvm::LLVMContext context;
@@ -140,7 +143,6 @@ int main(int argc, char **argv) {
       mlir::frisk::deferLaneSums(*module, deferLaneSumOptions);
     mlir::frisk::prefetchNextK(*module, crossBNK0);
     if (elideBackedgeBarrier) mlir::frisk::elideBackedgeBarrier(*module);
-    mlir::frisk::softmaxCvtPack(*module, softmaxCvtPack);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
     return 0;

@@ -773,6 +773,29 @@ def Frisk_CastOp : Frisk_Op<"cast", [
 }
 
 
+// Register conversion with an explicit rounding contract. Keep a typed half
+// vector at the MMA boundary; the target lowering chooses the packed registers.
+def Frisk_ConvertPackOp : Frisk_Op<"convert_pack", [Pure]> {
+  let summary = "Convert four f32 register elements to packed f16 with RTZ rounding";
+  let description = [{
+    Numerically converts vector<4xf32> to vector<4xf16>, rounding toward zero.
+    Lane order is preserved: lanes 0/1 and 2/3 form the two packed words, with
+    the earlier lane in the low half of each word. Unlike a bitcast, this changes
+    the floating-point representation. Only rounding = "rtz" is supported.
+
+    This target-specific ThreadIR operation lowers on ROCm to two
+    v_cvt_pkrtz_f16_f32 instructions. Lowering materializes the input and output
+    register boundaries to preserve the established softmax/PV schedule.
+    Inserting this operation instead of arith.truncf requires explicit consent
+    to the rounding change. Other targets must reject it rather than silently
+    fall back to a conversion with different rounding.
+  }];
+  let arguments = (ins AnyVectorOfNonZeroRank:$input, StrAttr:$rounding);
+  let results = (outs AnyVectorOfNonZeroRank:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 // convert layout op
 def Frisk_ConvertLayoutOp: Frisk_Op<"convert_layout", [MemoryEffects<[MemWrite, MemRead]>]> {
   let summary = "layout conversion";

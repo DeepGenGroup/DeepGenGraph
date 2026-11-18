@@ -31,6 +31,10 @@ struct TestExp2ToROCDLPass
 struct TestAsyncToLLVMPass
     : mlir::PassWrapper<TestAsyncToLLVMPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAsyncToLLVMPass)
+  TestAsyncToLLVMPass() = default;
+  TestAsyncToLLVMPass(const TestAsyncToLLVMPass &other) : PassWrapper(other) {}
+  Option<bool> nativeExp2{*this, "native-exp2", llvm::cl::init(false)};
+  Option<bool> cuda{*this, "cuda", llvm::cl::init(false)};
   llvm::StringRef getArgument() const final { return "test-async-to-llvm"; }
   llvm::StringRef getDescription() const final { return "Exercise the complete GPU lowering"; }
   void getDependentDialects(mlir::DialectRegistry &registry) const final {
@@ -47,7 +51,9 @@ struct TestAsyncToLLVMPass
     early.addPass(mlir::frisk::createHoistWaveInvariantsPass());
     if (failed(early.run(module))) return signalPassFailure();
     if (!mlir::frisk::firstLowering(module, &getContext()) ||
-        !mlir::frisk::secondLowering(module, &getContext(), mlir::frisk::Target::ROCm))
+        !mlir::frisk::secondLowering(module, &getContext(),
+            cuda ? mlir::frisk::Target::CUDA : mlir::frisk::Target::ROCm,
+            /*coalesceWaits=*/true, nativeExp2))
       signalPassFailure();
   }
 };
@@ -115,6 +121,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadLocalReductionPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadSoftmaxCvtPackPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadInterleavePVPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadScheduleSoftmaxFragmentsPass(); });

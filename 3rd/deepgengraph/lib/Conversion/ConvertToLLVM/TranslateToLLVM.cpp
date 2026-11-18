@@ -148,9 +148,28 @@ void prepareRegisterMMAForLLVM(llvm::Module &module) {
     for (llvm::BasicBlock &block : function)
       for (llvm::Instruction &inst : block) {
         auto *call = llvm::dyn_cast<llvm::CallInst>(&inst);
-        if (!call || call->getNumOperandBundles() || call->arg_size() != 3)
+        if (!call || call->getNumOperandBundles())
           continue;
         auto *assembly = llvm::dyn_cast<llvm::InlineAsm>(call->getCalledOperand());
+        // MLIR inline_asm exports convergence, but has no memory-effects or
+        // willreturn properties. Complete the contract of register identities
+        // emitted by convert_pack lowering. This performs no conversion,
+        // rounding selection or softmax matching; empty tied-register asm is
+        // intrinsically memory-free. Keep its side effect as a lifetime anchor.
+        if (assembly && !assembly->isAlignStack() && !assembly->canThrow() &&
+            assembly->hasSideEffects() && assembly->getAsmString().empty() &&
+            assembly->getConstraintString() == "=v,0" && call->arg_size() == 1 &&
+            call->getType() == call->getArgOperand(0)->getType() &&
+            (call->getType() == float4 || call->getType() == half4)) {
+          call->setMemoryEffects(llvm::MemoryEffects::none());
+          call->setDoesNotThrow();
+          call->addFnAttr(llvm::Attribute::WillReturn);
+          call->addFnAttr(llvm::Attribute::Convergent);
+          call->setMetadata(detail::RegisterLifetimesMarker,
+                            llvm::MDNode::get(module.getContext(), {}));
+          continue;
+        }
+        if (call->arg_size() != 3) continue;
         if (!assembly || assembly->isAlignStack() || assembly->canThrow() ||
             !isRegisterMMA(assembly->getAsmString(), assembly->getConstraintString()) ||
             call->getType() != float4 || call->getArgOperand(0)->getType() != half4 ||

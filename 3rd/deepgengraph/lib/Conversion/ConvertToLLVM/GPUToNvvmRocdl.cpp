@@ -603,6 +603,43 @@ struct ReadMatrixFromShmLowering
   }
 };
 
+// All selection/rounding proofs belong to ThreadIR. This lowering preserves
+// lane order and both lifetime boundaries, without rediscovering softmax.
+struct ConvertPackLowering : ConvertOpToLLVMPattern<frisk::ConvertPackOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(frisk::ConvertPackOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &r) const override {
+    auto loc = op.getLoc();
+    auto anchor = [&](Value value) -> Value {
+      return r.create<LLVM::InlineAsmOp>(
+          loc, value.getType(), ValueRange{value}, "", "=v,0",
+          /*has_side_effects=*/true, /*is_align_stack=*/false,
+          LLVM::tailcallkind::TailCallKind::None, /*convergent=*/true,
+          /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr).getResult(0);
+    };
+    Value input = anchor(adaptor.getInput());
+    Value elements[4];
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      Value index = r.create<LLVM::ConstantOp>(loc, r.getI32Type(), lane);
+      elements[lane] = r.create<LLVM::ExtractElementOp>(loc, input, index);
+    }
+    Value packed = r.create<LLVM::PoisonOp>(loc, VectorType::get({2}, r.getI32Type()));
+    for (unsigned pair = 0; pair < 2; ++pair) {
+      Value word = r.create<LLVM::InlineAsmOp>(
+          loc, r.getI32Type(), ValueRange{elements[2 * pair], elements[2 * pair + 1]},
+          "v_cvt_pkrtz_f16_f32 $0, $1, $2", "=v,v,v",
+          /*has_side_effects=*/false, /*is_align_stack=*/false,
+          LLVM::tailcallkind::TailCallKind::None, /*convergent=*/false,
+          /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr).getResult(0);
+      Value index = r.create<LLVM::ConstantOp>(loc, r.getI32Type(), pair);
+      packed = r.create<LLVM::InsertElementOp>(loc, packed, word, index);
+    }
+    Value result = r.create<LLVM::BitcastOp>(loc, op.getType(), packed);
+    r.replaceOp(op, anchor(result));
+    return success();
+  }
+};
+
 // Registered only for explicitly approximate exp2 modes. The existing ROCDL
 // scalarization pattern handles vectors before this scalar pattern is retried.
 // Higher benefit wins over the default OCML call pattern for f32 only.
@@ -666,12 +703,13 @@ struct GPUToROCDLOrNVVMPass : public PassWrapper<GPUToROCDLOrNVVMPass, Operation
 
     Codetarget.addIllegalDialect<gpu::GPUDialect>();
     // No CUDA fallback: this collective's lane semantics are HCU-specific.
-    Codetarget.addIllegalOp<frisk::ReadMatrixFromShmOp>();
+    Codetarget.addIllegalOp<frisk::ReadMatrixFromShmOp, frisk::ConvertPackOp>();
     Codetarget.addLegalDialect<LLVM::LLVMDialect, ROCDL::ROCDLDialect, NVVM::NVVMDialect>();
 
     if (target == Target::ROCm) {
       Codetarget.addLegalDialect<arith::ArithDialect>();
       patterns.add<ReadMatrixFromShmLowering>(typeConverter);
+      patterns.add<ConvertPackLowering>(typeConverter);
       // populateGpuToROCDLConversionPatterns(typeConverter, patterns, gpu::amd::Runtime::HIP);
       patterns.add<GPUIndexIntrinsicOpLowering<gpu::BlockIdOp, ROCDL::BlockIdXOp, 
                                                ROCDL::BlockIdYOp, ROCDL::BlockIdZOp>>(typeConverter, &getContext(), "range");

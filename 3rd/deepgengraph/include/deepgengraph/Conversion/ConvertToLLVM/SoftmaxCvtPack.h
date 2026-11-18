@@ -1,19 +1,16 @@
 #ifndef DEEPGENGRAPH_CONVERSION_SOFTMAXCVTPACK_H
 #define DEEPGENGRAPH_CONVERSION_SOFTMAXCVTPACK_H
 #include "llvm/ADT/StringRef.h"
-#include "llvm/IR/PassManager.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir::frisk {
 // RTZ changes rounding relative to fptrunc: require explicit opt-in.
 bool parseSoftmaxCvtPackOption(llvm::StringRef arg, bool &enabled, bool &consumed);
 
-// Fuse only compiler-marked four-element softmax conversions feeding MMAC A.
-// Run after scheduling and LazySoftmaxBase; no uniform-control-flow requirement.
-class SoftmaxCvtPackPass : public llvm::OptionalPassInfoMixin<SoftmaxCvtPackPass> {
-public:
-  llvm::PreservedAnalyses run(llvm::Function &, llvm::FunctionAnalysisManager &);
-};
-
-void softmaxCvtPack(llvm::Module &, bool enabled = false);
+// After ThreadIR scheduling and LazySoftmaxBase, before firstLowering.
+// nativeExp2 is the pipeline's exp2 selection, not an additional accuracy opt-in.
+// The pass preserves the historical restriction to native-exp2 softmax paths.
+std::unique_ptr<Pass> createThreadSoftmaxCvtPackPass(bool enabled = false,
+                                                 bool nativeExp2 = false);
 } // namespace mlir::frisk
 #endif

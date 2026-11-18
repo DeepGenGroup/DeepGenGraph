@@ -7,6 +7,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ThreadLazySoftmaxBase.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 
 namespace mlir::frisk {
 

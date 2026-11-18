@@ -43,6 +43,15 @@ namespace frisk {
 namespace mlir {
 namespace frisk {
 
+LogicalResult ConvertPackOp::verify() {
+  if (getInput().getType() != VectorType::get({4}, Float32Type::get(getContext())) ||
+      getResult().getType() != VectorType::get({4}, Float16Type::get(getContext())))
+    return emitOpError("requires vector<4xf32> -> vector<4xf16>");
+  if (getRounding() != "rtz")
+    return emitOpError("requires rounding = \"rtz\"");
+  return success();
+}
+
 LogicalResult LDSLoadOp::verify() {
   auto type = cast<MemRefType>(getSource().getType());
   auto space = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
