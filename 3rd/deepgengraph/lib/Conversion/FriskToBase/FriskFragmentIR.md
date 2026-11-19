@@ -10,21 +10,24 @@ A、B、acc 的类型，再以 `->` 指定结果类型；acc 与结果必须同�
 
 Tiling 把 acc 转为 C 的线程布局，提取每个 MN 位置的片段作为 K 循环初值，
 再把最终 MMA 片段插入结果。typed 和 vector 两条路径均如此，不修改输入 acc。
-因此显式累加器不依赖 `fuse-fragment-accumulator` 或 LLVM `FuseMMACAccumulator`。
+因此显式累加器不依赖 `fuse-fragment-accumulator` 或 LLVM 累加器融合。
 
-这两个优化仍保留给独立的 `gemm(a, b, zero) + old`：前者缩短中间值生命周期，
-保持先乘积后加法的顺序；后者只在允许重结合时把 old 放入 MMA 初值。
+对于独立的 `gemm(a, b, zero) + old`，fragment 优化缩短中间值生命周期，
+保持先乘积后加法的顺序。LLVM `FuseMMACAccumulatorPass` 的实现已删除；
+`cleanupRegisterMMA` 保留 MMA 准备、InstCombine 和可选的 SimplifyCFG 清理。
 `PreciseDot` lowering 先产生零累加器；随后 `FriskOpFusePass` 在 block IR 层将
 可融合的 `gemm(a, b, zero) + acc` 改成 `gemm(a, b, acc)`。独立命令为
 `--frisk-op-fuse=allow-reassociation=true`；默认不允许浮点重结合。
-MyTest 在 `convert-frisk-to-base` 之后、layout 推断和 fragment tiling 之前执行它，
+MyTest 在 `convert-frisk-to-base` 之后、attention tiling 之前先执行它，
+让完整 PV 的显式 acc 随 V/O 一起分块，避免分块后后续 V 的分配/拷贝阻挡前三块融合。
+attention tiling 后、layout 推断和 fragment tiling 前再运行一次，处理新暴露的机会。
 依据 `math` 模式启用：`strict` 保持原顺序，`mmac` / `approx` 等非 strict 模式融合。
 
 该融合支持加法两侧互换、同形同元素类型的 vector/memref 累加器，以及 GEMM
 之后计算的 seed（例如 `alpha * old`）。GEMM 必须仅由该 add 使用且初值为零；
 广播、非零初值、多用户、跨 block、跨写内存/同步操作、已 tiled 或已设置 pipeline
 调度的 IR 均保留原形式。已融合路径无需后端 accumulator fusion；剩余路径仍可
-使用现有 fragment/LLVM 优化。
+使用 fragment 生命周期优化，但不再由 LLVM 兜底做累加重结合。
 
 `LowerInfoMap::GemmLayouts` 分别记录 `computation`（指令实际使用的 C 布局）和
 `result`（向下游提供的结果布局）。普通布局推断在 acc 和 C 两侧都传播 result，

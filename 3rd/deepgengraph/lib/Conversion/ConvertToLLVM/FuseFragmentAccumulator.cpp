@@ -17,7 +17,7 @@
 //   fuseAccumulator       旧路径，处理 vector.insert_strided_slice 链 + arith.addf。
 //
 // 注意：不把 S 作为 MMAC 的初值（C 输入）。K reduce 仍从 0 开始，保持精度和操作数顺序。
-// 真正把旧值喂给 MMAC 是 LLVM 阶段 fuseMMACAccumulators 在 approx 约定下做的事。
+// 非 strict 模式由上游 FriskOpFusePass 将旧值放入 GEMM 的显式 acc，再 lowering 到 MMAC。
 //
 // 产物属性：
 //   frisk.fragment_accumulate  标在融合后的 add 上。

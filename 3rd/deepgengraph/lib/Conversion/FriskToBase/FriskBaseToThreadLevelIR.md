@@ -86,7 +86,7 @@ plan2 的 typed fragment 与 vector 路径也使用同一约定。
 上游 `PreciseDot` 仍表示零初值乘积；`FriskOpFusePass` 在允许重结合时融合其转换后的
 GEMM + Add。其余独立的 `Add` 不能在严格浮点模式下
 自动变成非零初值 GEMM，因为这会改变求和顺序。因此保留 `FuseFragmentAccumulator`
-处理独立加法，并保留非 strict 模式的 `FuseMMACAccumulator` 作为旧表达式的优化。
+处理独立加法。LLVM 累加器融合实现已删除；`cleanupRegisterMMA` 仅保留属性和 CFG/指令清理。
 
 完整 thread lowering 后，先 canonicalize 恒等提取循环，再执行
 `createFuseFragmentAccumulatorPass()`。它匹配带 `frisk.mma_fragment` 标记的

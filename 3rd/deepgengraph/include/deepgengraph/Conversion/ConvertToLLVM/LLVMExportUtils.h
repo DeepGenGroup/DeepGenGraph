@@ -50,11 +50,10 @@ void splitFullWaveAsyncDMAToDwords(llvm::Module &module);
 // straight to M0 instead of being read a second time at the DMA.
 void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bool reuseLeaderRead = false);
 
-/// Run the opt-in MMAC accumulator fusion pipeline after LLVM translation.
-/// Reassociates MMAC accumulation only; retains OCML exp2 and exact division.
-/// Enable CFG cleanup on the final retry after thread-bound/lifetime rewrites.
-/// Early math fusion keeps the CFG used by reduction and lifetime matching.
-void fuseMMACAccumulators(llvm::Module &module, bool simplifyCFG = false);
+/// Prepare register MMA attributes and run InstCombine without reassociation.
+/// Enable CFG cleanup after late thread-bound/lifetime rewrites; early cleanup
+/// preserves the CFG used by reduction and lifetime matching.
+void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG = false);
 
 /// Shorten address, integer-predicate and math/narrowing live ranges on AMDGPU.
 /// Repeated i64 predicates with common upper words share those tests and use
@@ -65,11 +64,11 @@ void optimizeRegisterLifetimes(llvm::Module &module);
 /// Expose only proven constant LDS pointer differences; does not force read2.
 void canonicalizeLDSGEPs(llvm::Module &module);
 
-/// Explicit approximate mode: reassociate single-use MMA accumulator chains,
-/// and share reciprocal divisions. Native f32 exp2 is selected during MLIR lowering.
+/// Explicit approximate mode: share reciprocal divisions.
+/// Native f32 exp2 is selected during MLIR lowering.
 /// Never enabled by the strict export path; no nnan/ninf assumptions are made.
 void optimizeApproximateRegisterMath(llvm::Module &module);
-/// Optional reciprocal approximation, including MMAC fusion and canonicalization.
+/// Optional reciprocal approximation, including register MMA cleanup.
 void optimizeRegisterMath(llvm::Module &module, bool reciprocal);
 /// Hoist a bounded batch of global loads across pure exp2 work, before lifetime scheduling.
 void prefetchGlobalPackets(llvm::Module &module, unsigned maxWords = 8);

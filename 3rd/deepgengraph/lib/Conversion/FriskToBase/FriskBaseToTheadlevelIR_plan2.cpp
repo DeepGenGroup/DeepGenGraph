@@ -1059,7 +1059,7 @@ static void foldInverseLayoutConversions(func::FuncOp kernel, LowerInfoMap &info
 //   before:  for { pv = mmac(...); s = convert(pv); O = alpha * O + s; copy(O) }
 //   after:   for { pv = mmac(...); O = alpha * O + pv; copy(O) }  然后 convert(O)
 // 跨 lane 重排（ds.bpermute）从每轮一次变成循环结束一次。
-// 额外好处：O 和 MMAC 的 C 布局一致后，fuseMMACAccumulators 才能把 alpha * O 融进 MMAC。
+// 显式 GEMM acc 也沿用 C 布局，避免每轮在 alpha * O 和 MMAC 之间做布局转换。
 static void sinkLoopLayoutConversions(func::FuncOp kernel, LowerInfoMap &infos) {
   // 候选为 GEMM 的结果转换；后续同时匹配 Add 递推和已融合的 acc 递推。
   SmallVector<frisk::ConvertLayoutOp> candidates;

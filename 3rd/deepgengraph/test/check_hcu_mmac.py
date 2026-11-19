@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check DTK HCU MMAC ABI, SSA chains, fallback and accumulator fusion.
+"""Check DTK HCU MMAC ABI, SSA chains, fallback and accumulator preservation.
 
 Usage: check_hcu_mmac.py [ThreadTilingTest] [LLVM bin dir]
 This verifies host IR export/optimization; DTK codegen and gfx936 execution
@@ -64,7 +64,7 @@ def check_calls(ir, variant):
     assert 'asm sideeffect' not in ir and 's_nop' not in ir
 
 
-def check_fusion():
+def check_cleanup():
     source = f'''declare <4 x float> @{HALF}(<4 x half>, <4 x half>, <4 x float>, i1, i1)
 '''
     for name, seed, lit, extra in [
@@ -83,15 +83,17 @@ def check_fusion():
     tool = TOOL.with_name('LegacyLLVMExportTest')
     strict = command([tool, '-'], source)
     assert strict.count('fadd ') == 5
-    fused = command([tool, '--fuse-mmac-accumulator', '-'], source)
+    cleaned = command([tool, '--cleanup-register-mma', '-'], source)
     for name in ('fuse', 'nonzero', 'modified', 'multiuse'):
-        body = re.search(r'define [^@]*@' + name + r'\(.*?\n\}', fused, re.S)[0]
-        assert ('fadd ' not in body) == (name == 'fuse'), body
-        if name == 'fuse':
+        body = re.search(r'define [^@]*@' + name + r'\(.*?\n\}', cleaned, re.S)[0]
+        assert body.count('fadd ') == (2 if name == 'multiuse' else 1), body
+        assert ('zeroinitializer' in body) == (name != 'nonzero'), body
+        if name == 'nonzero':
             assert '<4 x float> %c, i1 false, i1 false)' in body
-            assert 'zeroinitializer' not in body
+        if name == 'modified':
+            assert body.count('i1 true, i1 false)') == 2, body
         assert body.count('@' + HALF + '(') == 2
-    print('PASS intrinsic accumulator fusion and nonzero/modifier/multi-use exclusions')
+    print('PASS intrinsic cleanup preserves accumulator seeds, adds, controls and chains')
 
 
 def main():
@@ -132,7 +134,7 @@ def main():
     ]:
         assert message in lower(source, '--thread-ir-legalize', ok=False)
     print('PASS malformed fragments, attributes and conflicting declarations')
-    check_fusion()
+    check_cleanup()
 
 
 if __name__ == '__main__':

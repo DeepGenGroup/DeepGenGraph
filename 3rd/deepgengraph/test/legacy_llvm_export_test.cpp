@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
   bool ldsGeps = argc == 3 && llvm::StringRef(argv[1]) == "--canonicalize-lds-geps";
   bool ldsGepsOnly = argc == 3 && llvm::StringRef(argv[1]) == "--canonicalize-lds-geps-only";
   bool approximate = argc == 3 && llvm::StringRef(argv[1]) == "--approx-register-math";
-  bool fuseMMAC = argc == 3 && llvm::StringRef(argv[1]) == "--fuse-mmac-accumulator";
+  bool cleanupMMA = argc == 3 && llvm::StringRef(argv[1]) == "--cleanup-register-mma";
   bool lifetimes = argc == 3 && llvm::StringRef(argv[1]) == "--optimize-register-lifetimes";
   bool nativeExp2 = argc == 3 && llvm::StringRef(argv[1]) == "--native-exp2";
   bool reciprocal = argc == 3 && llvm::StringRef(argv[1]) == "--reciprocal";
@@ -177,8 +177,8 @@ int main(int argc, char **argv) {
   bool hcuDMA = argc == 3 && llvm::StringRef(argv[1]) == "--hcu-wide-dma";
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
-  if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !fuseMMAC && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--fuse-mmac-accumulator|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--cross-bn-k0=0|1] <input.ll or ->\n";
+  if (argc != 2 && !ldsGeps && !ldsGepsOnly && !approximate && !cleanupMMA && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
+    llvm::errs() << "usage: LegacyLLVMExportTest [--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--cleanup-register-mma|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--cross-bn-k0=0|1] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -207,8 +207,8 @@ int main(int argc, char **argv) {
     mlir::frisk::canonicalizeLDSGEPs(*module);
   else if (approximate)
     mlir::frisk::optimizeApproximateRegisterMath(*module);
-  else if (fuseMMAC)
-    mlir::frisk::fuseMMACAccumulators(*module, /*simplifyCFG=*/true);
+  else if (cleanupMMA)
+    mlir::frisk::cleanupRegisterMMA(*module, /*simplifyCFG=*/true);
   else if (lifetimes)
     mlir::frisk::optimizeRegisterLifetimes(*module);
   else if (nativeExp2 || reciprocal)

@@ -2,8 +2,8 @@
 """Approximate-mode legality and scalar reciprocal CPU numerics.
 
 MMAC and native exp2 accuracy still require DTK hardware. The strict exporter
-must retain the original operations; opaque asm and multi-use chains are not
-eligible for accumulator reassociation.
+and register cleanup paths must retain MMAC accumulation order. LLVM no longer
+reassociates accumulator chains, including in approximate math modes.
 """
 import re
 import subprocess
@@ -114,7 +114,7 @@ define <4 x float> @reverse_add(<4 x half> %a, <4 x half> %b, <4 x float> %acc) 
 '''
     # Layout 3.1 leaves MMACs and their terminal fadd in separate blocks.
     # Thread-bound simplification proves the LDS writeback guard true only
-    # late in the export pipeline; CFG cleanup must precede the fusion retry.
+    # late in the export pipeline; cleanup must still remove those branches.
     for name, branch in [('constant_guard', 'br i1 true, label %writeback, label %exit'),
                          ('unconditional_guard', 'br label %writeback')]:
         source += f'''define <4 x float> @{name}(<4 x half> %a, <4 x half> %b, <4 x float> %acc) {{
@@ -136,46 +136,49 @@ exit:
     assert reciprocal_only.count('fdiv arcp') == 1 and '@llvm.amdgcn.exp2' not in reciprocal_only
     assert '@__ocml_exp2_f32' in reciprocal_only
     assert strict.count('fdiv float') == 2 and '@llvm.amdgcn.exp2' not in strict
-    fusion = run([tool, '--fuse-mmac-accumulator', '-'], source)
-    fused_body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', fusion, re.S)[0]
-    for name in ('fuse', 'late_extract', 'reverse_add', 'late_scale', 'late_broadcast_scale',
-                 'constant_guard', 'unconditional_guard', 'cross_block'):
-        assert 'fadd' not in fused_body(name) and '<4 x float> zeroinitializer' not in fused_body(name)
-    # SimplifyCFG may safely speculate a bare fadd and replace the branch with
-    # a select. A conditional side effect must still keep its guarded block.
-    assert 'select i1 %cond' in fused_body('cross_block')
-    assert 'br i1 %cond' in fused_body('guarded_store')
-    for name in ('nonzero', 'multiuse', 'late_load', 'guarded_store', 'unknown_asm', 'strict_fp',
-                 'strict_scale', 'late_loaded_scale'):
-        assert 'fadd' in fused_body(name), name
-    assert fused_body('late_load').index('call ') < fused_body('late_load').index('load volatile')
-    assert fused_body('late_scale').index('fmul ') < fused_body('late_scale').index('call ')
-    assert fused_body('late_loaded_scale').index('call ') < fused_body('late_loaded_scale').index('load volatile')
-    assert fusion.count('v_mmac_') == source.count('v_mmac_')
-    assert fused_body('normalize').count('fdiv float') == 2
-    assert '@__ocml_exp2_f32' in fused_body('normalize')
-    assert '@llvm.amdgcn.exp2' not in fusion and ' arcp ' not in fusion
-    # LLVM's parser may reorder predecessor-use lists; these comments do not
-    # describe an IR change when round-tripping a newly merged return block.
+    removed = subprocess.run([str(tool), '--fuse-mmac-accumulator', '-'],
+                             input=source, text=True, capture_output=True, timeout=180)
+    assert removed.returncode != 0 and 'usage:' in removed.stderr
+    cleanup = run([tool, '--cleanup-register-mma', '-'], source)
+    cleaned_body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', cleanup, re.S)[0]
+    names = re.findall(r'define [^@]*@(\w+)\(', source)
+    for name in names:
+        original = re.search(r'define [^@]*@' + name + r'\(.*?\n\}', source, re.S)[0]
+        result = cleaned_body(name)
+        assert result.count('fadd ') == original.count('fadd '), name
+        if '<4 x float> zeroinitializer' in original:
+            assert '<4 x float> zeroinitializer' in result, name
+    # SimplifyCFG may speculate a bare fadd. Conditional side effects must
+    # retain their guards, while constant/unconditional guards disappear.
+    assert 'select i1 %cond' in cleaned_body('cross_block')
+    assert 'br i1 %cond' in cleaned_body('guarded_store')
+    for name in ('constant_guard', 'unconditional_guard'):
+        assert 'br ' not in cleaned_body(name), name
+    for name in ('late_load', 'late_loaded_scale'):
+        assert cleaned_body(name).index('call ') < cleaned_body(name).index('load volatile')
+    assert cleaned_body('late_scale').index('call ') < cleaned_body('late_scale').index('fmul ')
+    assert cleanup.count('v_mmac_') == source.count('v_mmac_')
+    assert cleaned_body('normalize').count('fdiv float') == 2
+    assert '@__ocml_exp2_f32' in cleaned_body('normalize')
+    assert '@llvm.amdgcn.exp2' not in cleanup and ' arcp ' not in cleanup
+    # LLVM's parser may reorder predecessor-use lists when round-tripping.
     without_preds = lambda text: re.sub(r'; preds =[^\n]*', '', text)
-    assert without_preds(run([tool, '--fuse-mmac-accumulator', '-'], fusion)) == without_preds(fusion)
-    print('PASS independent MMAC pass: constant/unconditional CFG cleanup, both add orders, no load motion, idempotence, exp2/div unchanged')
+    assert without_preds(run([tool, '--cleanup-register-mma', '-'], cleanup)) == without_preds(cleanup)
+    print('PASS register MMA cleanup: CFG simplification, no reassociation/load motion, idempotence, removed fusion option rejected')
     approximate = run([tool, '--approx-register-math', '-'], source)
     body = lambda name: re.search(r'define [^@]*@' + name + r'\(.*?\n\}', approximate, re.S)[0]
-    assert 'fadd' not in body('fuse')
-    assert 'zeroinitializer' not in body('fuse')
-    assert 'fadd' in body('nonzero') and 'zeroinitializer' in body('multiuse')
+    for name in names:
+        assert body(name).count('fadd ') == cleaned_body(name).count('fadd '), name
+    assert 'zeroinitializer' in body('fuse')
     assert approximate.count('v_mmac_') == source.count('v_mmac_')
-    assert 'fadd' not in body('late_extract')
-    assert body('late_extract').index('extractvalue') < body('late_extract').index('call ')
     assert body('normalize').count('fdiv arcp') == 1
     assert body('normalize').count('fmul float') == 2
     assert not re.search(r'\b(nnan|ninf|fast)\b', approximate)
     assert '@llvm.amdgcn.exp2.f32' in approximate
-    print('PASS strict unchanged, single-use zero MMA fusion, multi-use/nonzero fallbacks, shared reciprocal')
+    print('PASS approximate math retains MMA/add order and shares reciprocal')
 
     # Supply the thread range that GPU lowering now exports. Check that the
-    # existing cleanup/fusion pipeline can use it without late range inference.
+    # existing cleanup pipeline can use it without late range inference.
     guarded = f'''declare i32 @llvm.amdgcn.workitem.id.x()
 define amdgpu_kernel void @thread_guard(<4 x half> %a, <4 x half> %b, <4 x float> %acc, ptr addrspace(3) %out) {{
 entry:
@@ -194,13 +197,13 @@ exit:
 !1 = !{{i32 0, i32 256}}
 '''
     early = run([tool, '--approx-register-math', '-'], guarded)
-    assert 'fadd' not in run([tool, '--fuse-mmac-accumulator', '-'], early)
+    assert 'fadd' in run([tool, '--cleanup-register-mma', '-'], early)
     bounded = run([tool, '--optimize-register-lifetimes', '-'], early)
     assert 'br i1 true' in bounded and 'fadd' in bounded
-    final = run([tool, '--fuse-mmac-accumulator', '-'], bounded)
-    assert 'fadd' not in final and 'br i1' not in final
+    final = run([tool, '--cleanup-register-mma', '-'], bounded)
+    assert 'fadd' in final and 'br i1' not in final
     assert final.count('v_mmac_') == 2 and final.count('store volatile') == 1
-    print('PASS late fusion after lifetime/thread-bound simplification')
+    print('PASS late CFG cleanup after lifetime/thread-bound simplification retains fadd')
 
     # Execute the actual transformed division code on the CPU. Use positive
     # normal row sums and signed numerators; native exp2 is tested separately
@@ -229,9 +232,9 @@ define i32 @main() {
     numerics += f'  %status = select i1 {result}, i32 0, i32 1\n  ret i32 %status\n}}\n'
     with tempfile.TemporaryDirectory(prefix='register-math-') as tmp:
         path = Path(tmp) / 'cpu.ll'
-        # Execute the transformed seed wiring on CPU with an elementwise
+        # Execute the cleaned-up chain on CPU with an elementwise
         # MMAC stand-in. This checks SSA/data flow, not DCU rounding behavior.
-        cpu = fused_body('fuse')
+        cpu = cleaned_body('fuse')
         cpu = re.sub(r'asm(?: sideeffect)? "[^"\n]*", "[^"\n]*"', '@mock_mmac', cpu)
         cpu = re.sub(r' #\d+', '', cpu)
         cpu += '''
@@ -258,7 +261,7 @@ define i32 @main() {
 '''
         path.write_text(cpu)
         run([llvm / 'lli', path])
-        print('PASS fused MMAC seed wiring CPU emulation')
+        print('PASS unchanged MMAC/add data flow CPU emulation')
         path.write_text(run([tool, '--approx-register-math', '-'], numerics))
         run([llvm / 'lli', path])
         path.write_text('define amdgpu_kernel void @exp(ptr addrspace(1) %out, float %x) {\n'

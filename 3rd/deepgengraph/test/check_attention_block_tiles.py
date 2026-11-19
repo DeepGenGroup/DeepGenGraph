@@ -11,10 +11,10 @@ HERE = Path(__file__).resolve().parent
 TOOL = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else HERE.parent / 'build/test/ThreadTilingTest'
 SOURCE = (HERE / 'attention_full_d_block.mlir').read_text()
 
-def run(text, qk, vo, reassociate=True, ok=True, extra=()):
+def run(text, qk, vo, reassociate=True, ok=True, extra=(), before=()):
     with tempfile.TemporaryDirectory(prefix='block-tiles-') as tmp:
         out = Path(tmp) / 'out.mlir'
-        cmd = [str(TOOL), '--verify-each', f'--frisk-tile-attention=qk-tile={qk} vo-tile={vo} allow-reassociation={str(reassociate).lower()}', *extra, '-o', str(out)]
+        cmd = [str(TOOL), '--verify-each', *before, f'--frisk-tile-attention=qk-tile={qk} vo-tile={vo} allow-reassociation={str(reassociate).lower()}', *extra, '-o', str(out)]
         r = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=60)
         if not ok:
             assert r.returncode != 0, 'invalid tiling accepted'
@@ -96,5 +96,34 @@ def main():
                             'thread_num = 64 : i32, frisk.qk_simplify_loop = false')
     assert run(rolled,32,32,extra=('--frisk-simplify-loop-control',)).count('frisk.gemm(') == 5
     print('PASS strict grouping and invalid tiles')
+
+    # Fuse before V/O tiling: otherwise the first three GEMMs are separated
+    # from their adds by later V staging writes and must not be moved across
+    # them. Explicit full-D seeds must split into the correct output columns.
+    fuse = '--frisk-op-fuse=allow-reassociation=true'
+    late_only = run(SOURCE, 32, 32, extra=(fuse,))
+    pv_adds = lambda ir, vo: re.findall(
+        rf'frisk.add [^\n]*-> memref<32x{vo}xf32>', ir)
+    assert len(pv_adds(late_only, 32)) == 3, late_only
+    for qk, vo in ((32, 32), (64, 16), (32, 64), (128, 128)):
+        early = run(SOURCE, qk, vo, before=(fuse,), extra=(fuse,))
+        assert not pv_adds(early, vo), early
+        seeds = set(re.findall(r'(%\w+) = frisk.mul [^\n]*-> memref<32x' + str(vo) + r'xf32>', early))
+        gemm_seeds = re.findall(r'frisk.gemm\(%\w+, %\w+, (%\w+)\)', early)
+        assert len(seeds) == 128 // vo and seeds.issubset(gemm_seeds), early
+        assert early.count('frisk.exp2 ') == 2, 'softmax duplicated by seed slicing'
+        assert run(early, qk, vo, before=(fuse,), extra=(fuse,)) == early
+        for block in (0, 2):
+            np.testing.assert_allclose(evaluate(early, (q, k, v), block),
+                                       evaluate(SOURCE, (q, k, v), block),
+                                       atol=2e-4, rtol=2e-3)
+        print('PASS pre-tiling PV fusion, sliced seeds and CPU numerics', qk, vo, flush=True)
+    no_fuse = '--frisk-op-fuse=allow-reassociation=false'
+    strict = run(SOURCE, 128, 32, reassociate=False, before=(no_fuse,), extra=(no_fuse,))
+    assert strict == run(SOURCE, 128, 32, reassociate=False)
+    assert len(pv_adds(strict, 32)) == 4
+    strict_function = SOURCE.replace('thread_num = 64 : i32', 'thread_num = 64 : i32, llvm.strictfp')
+    assert len(pv_adds(run(strict_function, 128, 32, before=(fuse,), extra=(fuse,)), 32)) == 4
+    print('PASS strict mode/function preserve all unfused PV additions')
 
 if __name__ == '__main__':main()

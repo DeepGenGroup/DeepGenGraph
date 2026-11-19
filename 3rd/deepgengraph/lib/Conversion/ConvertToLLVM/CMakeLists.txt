@@ -9,7 +9,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   HoistWaveInvariants.cpp
   IROptimize.cpp
   FuseFragmentAccumulator.cpp
-  FuseMMACAccumulator.cpp
+  CleanupRegisterMMA.cpp
   ThreadMaskAddBypass.cpp
   LocalReduction.cpp
   ThreadLocalReduction.cpp

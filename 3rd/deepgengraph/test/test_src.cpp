@@ -390,7 +390,7 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 
 bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
-                             bool fuseAccumulators,
+                             bool cleanupMMA,
                              bool canonicalizeExport = false,
                              bool reuseLeaderRead = false,
                              bool dumpPasses = false,
@@ -406,11 +406,11 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   dumpLLVMPass(module, dumpPasses, "lowerAsyncDMA");
 
   // Lifetime optimization exposes thread bounds and folds LDS leader guards.
-  // After all late rewrites, merge the now-constant branches before retrying
-  // the same-block MMAC accumulator matcher. Keep early math fusion intact.
-  if (fuseAccumulators)
-    mlir::frisk::fuseMMACAccumulators(module, /*simplifyCFG=*/true);
-  dumpLLVMPass(module, dumpPasses, "fuseMMACAccumulators");
+  // After all late rewrites, merge the now-constant branches and clean up
+  // register expressions. Accumulator fusion is complete in block IR.
+  if (cleanupMMA)
+    mlir::frisk::cleanupRegisterMMA(module, /*simplifyCFG=*/true);
+  dumpLLVMPass(module, dumpPasses, "cleanupRegisterMMA");
 
   // PV, paired LDS and softmax schedules are complete in ThreadIR.
   // DMA lowering still creates duplicate descriptors. Retain the generic
@@ -1019,6 +1019,23 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after createConvertFriskToBasePass ---------\n"; llvm::outs().flush();src->dump();
 #endif
 
+  // Fuse the full-width PV recurrence before output tiling interleaves each
+  // GEMM with the next V slice's allocation/copy. The tiler then slices the
+  // explicit accumulator together with V/O; no fusion needs to cross writes.
+  auto fuseBlockAccumulators = [&]() -> LogicalResult {
+    auto pass = frisk::createFriskOpFusePass();
+    if (failed(pass->initializeOptions(
+            std::string("allow-reassociation=") +
+                (mathMode != "strict" ? "true" : "false"),
+            [](const llvm::Twine &m) { llvm::errs() << m << '\n'; return failure(); })))
+      return failure();
+    AddFuncPass(std::move(pass));
+    return success();
+  };
+  if (failed(fuseBlockAccumulators())) return 1;
+  llvm::outs() << "\n---------- after pre-tiling frisk-op-fuse ---------\n";
+  llvm::outs().flush(); src->dump();
+
   // Tile before layout/DMA planning so allocation sizes and all their producer
   // accesses describe the selected physical staging granularity. CLI axes
   // override hints independently. useKPack coarsens only unspecified axes.
@@ -1060,14 +1077,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after frisk-tile-attention ---------\n";
   llvm::outs().flush(); src->dump();
 
-  // All executable kernel computations are now Frisk block IR. Preserve
-  // strict sums; the modes that already permit MMAC reassociation fuse here.
-  auto opFuse = frisk::createFriskOpFusePass();
-  if (failed(opFuse->initializeOptions(
-          std::string("allow-reassociation=") + (mathMode != "strict" ? "true" : "false"),
-          [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
-    return 1;
-  AddFuncPass(std::move(opFuse));
+  // Retain a second attempt for opportunities exposed by block tiling.
+  if (failed(fuseBlockAccumulators())) return 1;
   llvm::outs() << "\n---------- after frisk-op-fuse ---------\n";
   llvm::outs().flush(); src->dump();
 
@@ -1401,10 +1412,10 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvmModule->setSourceFileName(argv[1]);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
   // Approximate division is complete in thread IR; native exp2 is selected
-  // by MLIR lowering. Keep the independent legacy MMAC fusion fallback.
+  // by MLIR lowering. Preserve the existing register MMA cleanup.
   if (mathMode != "strict")
-    frisk::fuseMMACAccumulators(*llvmModule);
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterMath");
+    frisk::cleanupRegisterMMA(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "cleanupRegisterMMA");
   // Local reductions and deferred lane sums are complete in thread IR.
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
@@ -1435,7 +1446,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   bool exported = printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*fuseAccumulators=*/mathMode != "strict", kLDSPrefetch != 0,
+      dmaExport == "split32", asmSourceBytes, /*cleanupMMA=*/mathMode != "strict", kLDSPrefetch != 0,
       hoistLDSBases, dumpLLVMPasses, optimizeLLVM);
   os.close();
   if (os.has_error()) {
