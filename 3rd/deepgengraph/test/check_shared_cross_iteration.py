@@ -201,6 +201,12 @@ def main():
                     assert '!frisk.async_task' not in lowered and 'llvm.func' in lowered
                 count += 1
         out, _ = run(path, base)
+        scheduled = base.replace('}\nreturn', '} {pipeline.scheduled}\nreturn')
+        assert scheduled != base
+        preserved, diagnostic = run(path, scheduled)
+        baseline, _ = run(path, scheduled, False)
+        assert preserved == baseline
+        assert 'existing pipeline schedule owns task/slot lifetimes' in diagnostic, diagnostic
         last_slot = re.findall(r'frisk.read_matrix_from_shm (%\w+)\[', out)[-1]
         broken = re.sub(r'(frisk.async_copy_gm_to_shm %\w+ to )%\w+( \{[^\n]*frisk.cross_bn_k0)',
                         lambda m: m[1] + last_slot + m[2], out)

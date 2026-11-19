@@ -49,14 +49,23 @@ def paired(count=8, spacing=128, tail=False, boundary='', align=8, views=False):
     return '\n'.join(lines)
 
 
-def softmax(count=4, boundary='', wrapped_sum=False):
+def softmax(count=4, boundary='', wrapped_sum=False, score='sub'):
     lines = ['module {', 'func.func private @unknown()',
              'func.func @kernel(%s: vector<4xf32>, %max: vector<4xf32>, '
              '%b: vector<4xf16>, %seed: vector<4xf32>) -> (vector<4xf32>, f32) {',
              '%zero = arith.constant 0.0 : f32']
+    if score == 'select':
+        lines += ['%mask = arith.cmpf olt, %s, %max : vector<4xf32>']
     for i in range(count):
-        lines += [f'%s{i} = arith.subf %s, %max : vector<4xf32>',
-                  f'%e{i} = math.exp2 %s{i} : vector<4xf32>',
+        exponent = f'%s{i}'
+        if score in ('sub', 'add'):
+            lines += [f'%s{i} = arith.{score}f %s, %max : vector<4xf32>']
+        elif score == 'select':
+            lines += [f'%s{i} = arith.select %mask, %s, %max : vector<4xi1>, vector<4xf32>']
+        else:
+            assert score == 'direct'
+            exponent = '%s'
+        lines += [f'%e{i} = math.exp2 {exponent} : vector<4xf32>',
                   f'%x{i} = vector.extract %e{i}[0] : f32 from vector<4xf32>',
                   f'%p{i} = arith.truncf %e{i} : vector<4xf32> to vector<4xf16>']
     for i in range(count):
@@ -188,6 +197,27 @@ def main():
         assert run(result, SOFT+'pv') == result
         export(result)
         cases += 1
+    for score in ('add', 'select', 'direct'):
+        for mode in ('fragment', 'pv'):
+            source = run(softmax(wrapped_sum=True, score=score))
+            result = run(source, SOFT+mode)
+            assert graph(result) == graph(source), score
+            assert result.count('llvm.call @llvm.amdgcn.sched.barrier') == 4
+            if mode == 'pv':
+                assert re.findall(r'math.exp2|v_mmac_f32', result) == ['math.exp2', 'v_mmac_f32'] * 4
+            assert run(result, SOFT+mode) == result
+            export(result)
+            # The new score forms cannot bypass unknown-effect boundaries.
+            blocked = softmax(score=score, boundary='func.call @unknown() : () -> ()')
+            assert run(blocked, SOFT+mode) == run(blocked)
+            cases += 1
+    shared = softmax(score='add').replace('%e1 = math.exp2 %s1 : vector<4xf32>', '').replace('%e1', '%e0')
+    source = run(shared)
+    result = run(source, SOFT+'pv')
+    assert graph(result) == graph(source)
+    assert result.count('math.exp2') == 3
+    assert run(result, SOFT+'pv') == result
+    export(result)
     legacy = ROOT / 'build/test/LegacyLLVMExportTest'
     for option in ('--k-lds-prefetch=8', '--k-tail-prefetch=4', '--softmax-fragments=pv',
                    '--k-lds-prefetch=0', '--k-tail-prefetch=0', '--softmax-fragments=off'):

@@ -136,6 +136,41 @@ assert result.count('alignment = 4 : i64') == 2, result
 export(result)
 print('PASS: global-backed shared pool follows the same alignment contract')
 
+# Both arms of a ping-pong select contribute to the alignment guarantee.
+# In particular an aligned first arm must not hide a shifted/unknown second.
+def selected_pool(shift=65536, unknown=False, nested=False):
+    source = fixture().replace('%out: memref<2xf32, 1>',
+        '%out: memref<2xf32, 1>, %cond: i1, %unknown: memref<16384xf32, 3>')
+    storage = f'''
+    %pool = memref.alloc() alignment = 64 : memref<131136xi8, 3>
+    %begin = arith.constant 0 : index
+    %shift = arith.constant {shift} : index
+    %left = memref.view %pool[%begin][] : memref<131136xi8, 3> to memref<16384xf32, 3>
+    %right = memref.view %pool[%shift][] : memref<131136xi8, 3> to memref<16384xf32, 3>
+    %selected = arith.select %cond, %left, {'%unknown' if unknown else '%right'} : memref<16384xf32, 3>
+    '''
+    storage += ('%s = arith.select %cond, %left, %selected : memref<16384xf32, 3>'
+                if nested else '%s = memref.cast %selected : memref<16384xf32, 3> to memref<16384xf32, 3>')
+    return source.replace('%s = memref.alloc() alignment = 16 : memref<16384xf32, 3>', storage)
+
+for shift, alignment in ((65536, 8), (65540, 4), (65544, 8)):
+    for nested in (False, True):
+        result = transform(selected_pool(shift, nested=nested))
+        assert result.count(f'alignment = {alignment} : i64') == 2, result
+        assert transform(result) == result
+        export(result)
+unknown = transform(selected_pool(unknown=True, nested=True))
+assert 'alignment = 8 : i64' not in unknown and 'alignment = 4 : i64' not in unknown, unknown
+export(unknown)
+dag = selected_pool()
+links = ['%link0 = arith.select %cond, %left, %right : memref<16384xf32, 3>']
+for i in range(1, 40):
+    links.append(f'%link{i} = arith.select %cond, %link{i-1}, %link{i-1} : memref<16384xf32, 3>')
+dag = dag.replace('%selected = arith.select %cond, %left, %right : memref<16384xf32, 3>',
+    '\n'.join(links)+'\n%selected = arith.select %cond, %link39, %right : memref<16384xf32, 3>')
+assert transform(dag).count('alignment = 8 : i64') == 2
+print('PASS: selected/nested ping-pong views, weakened alignment, unknown arm and replay')
+
 # Exercise real lowering on CPU with thread IDs supplied by an ordinary argument.
 # Strip only the GPU address-space spelling after LLVM conversion. The load/GEP
 # instructions, their offsets and alignment are exactly those emitted above.

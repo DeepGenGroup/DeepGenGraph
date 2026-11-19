@@ -35,10 +35,13 @@ Thread IR: the pass preserves their exact SSA values and never assumes they
 are a particular low/high half. This avoids depending on LLVM InstCombine
 folding thread-bound affine expressions into constant shuffles.
 
-Chains are grouped by their identical ordered matrix-packet producers. Limits
-remain 2–16 chains, 2–32 distinct packets per chain, and 2048 operations in one
-block. Chain count must be divisible by width; all packets must precede all
-candidate MMACs. No memory access is hoisted.
+Chains of equal depth can use different matrix-packet producers, as happens
+for different output columns in causal attention. Limits remain 2–16 chains,
+2–32 distinct packets per chain, and 2048 operations in one block. Chain count
+must be divisible by width; every packet from every chain must precede all
+candidate MMACs. No memory access is hoisted. If the combined group fails the
+legality checks, groups with identical ordered packets are tried separately
+to preserve existing scheduling opportunities.
 
 The pass constructs a complete topological plan before mutation. GPU barriers,
 Frisk sync operations, async copies and readiness waits remain in order at

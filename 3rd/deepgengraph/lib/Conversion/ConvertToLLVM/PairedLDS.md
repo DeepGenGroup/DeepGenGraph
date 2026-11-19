@@ -19,9 +19,18 @@ Pure vector wrappers may remain in ThreadIR regions; only loads and checked
 integer address dependencies are hoisted. Tail excludes already protected
 loads and requires a local reduction.
 
-Softmax matching uses vector `arith.subf -> math.exp2 -> arith.truncf` and the
-actual MMAC A uses. It no longer depends on the register-lifetime pass's empty
-asm identities. The existing FP32 sum DAG and vector wrappers are scheduled
+The physical-address proof propagates the common guaranteed alignment of
+both `arith.select` arms. This includes the byte shift of each pool view;
+an unknown or less-aligned arm weakens the result. This preserves alignment
+for ping-pong slots without assuming a particular iteration or selected arm.
+
+Softmax matching uses vector `math.exp2 -> arith.truncf` and the actual MMAC A
+uses. A same-block pure `arith.subf`, `arith.addf`, or `arith.select` exponent
+producer may travel with the packet; other exponent producers stay fixed.
+This covers stable score-minus-max and unshifted score-plus-mask forms without
+changing either algorithm. Shared producers are emitted once. Matching does
+not depend on the register-lifetime pass's empty asm identities.
+The existing FP32 sum DAG and vector wrappers are scheduled
 when ready, including broadcasts, shape casts and vector FP32 additions in
 the lane-local recurrence. Leaving these wrappers fixed would force the entire
 exp2 row ahead of PV despite moving the casts. Scheduling preserves arithmetic,

@@ -26,6 +26,7 @@ class Addresses {
   std::optional<frisk::ThreadIdRange> threads;
   SmallVector<Value> symbols;
   DenseMap<Value, AffineExpr> expressions;
+  DenseMap<Value, uint64_t> baseAlignments;
   std::map<void *, Table> tables;
   DenseSet<Value> unknown;
 
@@ -199,6 +200,14 @@ public:
   // Views shift that pointer; subviews/reinterpret_casts only change metadata.
   uint64_t baseAlignment(Value buffer, unsigned depth = 0) {
     if (depth > 128) return 1;
+    if (auto it = baseAlignments.find(buffer); it != baseAlignments.end())
+      return it->second;
+    uint64_t alignment = computeBaseAlignment(buffer, depth);
+    baseAlignments[buffer] = alignment;
+    return alignment;
+  }
+
+  uint64_t computeBaseAlignment(Value buffer, unsigned depth) {
     if (auto alloc = buffer.getDefiningOp<memref::AllocOp>())
       return alloc.getAlignment().value_or(1);
     if (auto alloc = buffer.getDefiningOp<memref::AllocaOp>())
@@ -207,6 +216,12 @@ public:
       auto global = SymbolTable::lookupNearestSymbolFrom<memref::GlobalOp>(get, get.getNameAttr());
       return global ? global.getAlignment().value_or(1) : 1;
     }
+    // Ping-pong slots are selected at runtime. The descriptor can point at
+    // either arm, so retain only their common guarantee, including each
+    // view's byte shift. Never infer which arm a thread/iteration will select.
+    if (auto select = buffer.getDefiningOp<arith::SelectOp>())
+      return std::min(baseAlignment(select.getTrueValue(), depth + 1),
+                      baseAlignment(select.getFalseValue(), depth + 1));
     if (auto cast = buffer.getDefiningOp<memref::CastOp>())
       return baseAlignment(cast.getSource(), depth + 1);
     if (auto sub = buffer.getDefiningOp<memref::SubViewOp>())

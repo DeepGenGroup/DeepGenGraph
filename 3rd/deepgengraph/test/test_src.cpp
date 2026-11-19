@@ -551,9 +551,33 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   frisk::DeferLaneSumOptions deferLaneSumOptions;
   unsigned fragPrefetchWords = 8;
   unsigned retainFragmentWords = 0;
+  // Named aliases share the legacy validation/defaults without filling omitted
+  // arguments: absence of --threads must still preserve input thread attributes.
+  const char *argumentNames[] = {nullptr,
+      "input", "pipeline", "output", "reorder", "pack-shared", "wmma-layout", "math", "threads", "block-warps", "register-lifetimes", "uniform-masks", "prefetch-packets", "fuse-mask-add", "lds-reuse-words", "dma-pack", "dma-export", "qk-tile", "vo-tile"};
+  const char *arguments[19] = {};
   SmallVector<char *> positional{argv[0]};
   for (int i = 1; i < argc; ++i) {
     StringRef option(argv[i]);
+    bool namedArgument = false;
+    if (option.starts_with("--")) {
+      auto named = option.drop_front(2).split('=');
+      for (unsigned index = 1; index < 19; ++index) {
+        if (named.first != argumentNames[index]) continue;
+        if (named.second.empty()) {
+          llvm::errs() << "use --" << named.first << "=VALUE (nonempty value required)\n";
+          return 1;
+        }
+        if (arguments[index]) {
+          llvm::errs() << "duplicate option --" << named.first << "\n";
+          return 1;
+        }
+        arguments[index] = named.second.data();
+        namedArgument = true;
+        break;
+      }
+    }
+    if (namedArgument) continue;
     if (option.consume_front("--llvm-opt=")) {
       if (option != "0" && option != "3") {
         llvm::errs() << "use --llvm-opt=0|3 (default: 3; 0 disables export optimization)\n";
@@ -724,24 +748,48 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     } else if (option.starts_with("--frag-prefetch")) {
       llvm::errs() << "use --frag-prefetch=0|1 and --frag-prefetch-words=N\n";
       return 1;
+    } else if (option.starts_with("--")) {
+      llvm::errs() << "unknown option: " << option << "\n";
+      return 1;
     } else {
       positional.push_back(argv[i]);
     }
   }
-  argc = positional.size();
-  argv = positional.data();
-  if (argc < 2 || argc > 19) {
+  if (positional.size() > 19) {
     llvm::errs() << "expected an input and at most 17 positional tuning arguments\n";
+    return 1;
+  }
+  // Preserve the historical <input> <output.ll> shorthand. Positional
+  // arguments retain their original indices when mixed with named options.
+  bool outputShorthand = positional.size() == 3 &&
+      StringRef(positional[2]) != "0" && StringRef(positional[2]) != "1";
+  for (unsigned index = 1; index < positional.size(); ++index) {
+    unsigned slot = outputShorthand && index == 2 ? 3 : index;
+    if (arguments[slot]) {
+      llvm::errs() << "--" << argumentNames[slot]
+                   << " also supplied positionally\n";
+      return 1;
+    }
+    arguments[slot] = positional[index];
+  }
+  auto hasArgument = [&](unsigned index) { return arguments[index] != nullptr; };
+  if (!hasArgument(1)) {
+    llvm::errs() << "expected input.mlir or --input=PATH\n";
+    return 1;
+  }
+  if (hasArgument(2) && StringRef(arguments[2]) != "0" &&
+      StringRef(arguments[2]) != "1") {
+    llvm::errs() << "pipeline must be 0 or 1\n";
     return 1;
   }
   const char *copyModeEnv = std::getenv("FRISK_GM_TO_SHM_MODE");
   // CP-SAT needs explicit block-level DMA tasks, before fragment lowering.
   // An explicitly selected legacy/sync mode still retains its own semantics.
   StringRef copyMode = copyModeEnv ? copyModeEnv : (cpsat.enabled() ? "async" : "legacy");
-  StringRef dmaPackMode = argc > 15 ? argv[15] : "legacy";
+  StringRef dmaPackMode = hasArgument(15) ? arguments[15] : "legacy";
   // gfx936's DTK rejects the wide HCU global-load intrinsic. Packed DMA
   // uses the hardware-validated buffer inline asm unless explicitly overridden.
-  StringRef dmaExport = argc > 16 ? argv[16]
+  StringRef dmaExport = hasArgument(16) ? arguments[16]
                                 : (copyMode == "async" || copyMode == "hybrid" ? "asm128" : "split32");
   if (dmaExport != "split32" && dmaExport != "hcu128" && dmaExport != "asm128") {
     llvm::errs() << "DMA export must be split32, hcu128, or asm128\n";
@@ -761,25 +809,21 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   }
   int64_t qkTile = 0, voTile = 0;
-  if ((argc > 17 && (StringRef(argv[17]).getAsInteger(10, qkTile) || qkTile < 0)) ||
-      (argc > 18 && (StringRef(argv[18]).getAsInteger(10, voTile) || voTile < 0))) {
+  if ((hasArgument(17) && (StringRef(arguments[17]).getAsInteger(10, qkTile) || qkTile < 0)) ||
+      (hasArgument(18) && (StringRef(arguments[18]).getAsInteger(10, voTile) || voTile < 0))) {
     llvm::errs() << "QK/VO tile must be nonnegative; 0 selects the independent automatic default\n";
     return 1;
   }
-  bool isPipelineSched = argc > 2 && StringRef(argv[2]) == "1";
+  bool isPipelineSched = hasArgument(2) && StringRef(arguments[2]) == "1";
   if ((cpsat.enabled() && isPipelineSched) || (cpsatStopAfter && !cpsat.enabled())) {
-    llvm::errs() << "CP-SAT requires pipeline positional switch 0; stop-after needs export/import/baseline\n";
+    llvm::errs() << "CP-SAT requires --pipeline=0; stop-after needs export/import/baseline\n";
     return 1;
   }
-  // Preserve the historical <input> <output.ll> spelling as well as the
-  // numeric pipeline switch. Expose independent reorder A/B runs explicitly.
-  const char *outputPath = argc > 3 ? argv[3] :
-      argc > 2 && StringRef(argv[2]) != "0" && StringRef(argv[2]) != "1"
-          ? argv[2] : "finalLLVMText.ll";
-  bool reorderEnabled = argc < 5 || StringRef(argv[4]) == "1";
-  bool packSharedEnabled = argc < 6 || StringRef(argv[5]) == "1";
-  StringRef wmmaLayout = argc > 6 ? argv[6] : "shuffle";
-  StringRef mathMode = argc > 7 ? argv[7] : "strict";
+  const char *outputPath = hasArgument(3) ? arguments[3] : "finalLLVMText.ll";
+  bool reorderEnabled = !hasArgument(4) || StringRef(arguments[4]) == "1";
+  bool packSharedEnabled = !hasArgument(5) || StringRef(arguments[5]) == "1";
+  StringRef wmmaLayout = hasArgument(6) ? arguments[6] : "shuffle";
+  StringRef mathMode = hasArgument(7) ? arguments[7] : "strict";
   if (!localReductionOptions.valid()) {
     llvm::errs() << "local-reduce requires chains=2..16, min-inputs>=2*chains and <=2048\n";
     return 1;
@@ -805,40 +849,40 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::errs() << "mask-add-bypass=approx requires math=approx; use off for strict math\n";
     return 1;
   }
-  bool optimizeLifetimes = argc < 11 || StringRef(argv[10]) == "1";
-  bool uniformMasks = argc > 11 && StringRef(argv[11]) == "1";
-  bool prefetchPackets = argc > 12 && StringRef(argv[12]) == "1";
-  bool fuseMaskAdd = argc < 14 || StringRef(argv[13]) == "1";
+  bool optimizeLifetimes = !hasArgument(10) || StringRef(arguments[10]) == "1";
+  bool uniformMasks = hasArgument(11) && StringRef(arguments[11]) == "1";
+  bool prefetchPackets = hasArgument(12) && StringRef(arguments[12]) == "1";
+  bool fuseMaskAdd = !hasArgument(13) || StringRef(arguments[13]) == "1";
   unsigned ldsReuseWords = 0;
-  if (argc > 14 && StringRef(argv[14]).getAsInteger(10, ldsReuseWords)) {
+  if (hasArgument(14) && StringRef(arguments[14]).getAsInteger(10, ldsReuseWords)) {
     llvm::errs() << "lds-reuse-words must be a nonnegative number of 32-bit words/thread\n";
     return 1;
   }
-  if (argc > 13 && StringRef(argv[13]) != "0" && StringRef(argv[13]) != "1") {
+  if (hasArgument(13) && StringRef(arguments[13]) != "0" && StringRef(arguments[13]) != "1") {
     llvm::errs() << "fuse-mask-add must be 0 or 1\n";
     return 1;
   }
-  if (argc > 12 && StringRef(argv[12]) != "0" && StringRef(argv[12]) != "1") {
+  if (hasArgument(12) && StringRef(arguments[12]) != "0" && StringRef(arguments[12]) != "1") {
     llvm::errs() << "prefetch-packets must be 0 or 1\n";
     return 1;
   }
-  if (argc > 11 && StringRef(argv[11]) != "0" && StringRef(argv[11]) != "1") {
+  if (hasArgument(11) && StringRef(arguments[11]) != "0" && StringRef(arguments[11]) != "1") {
     llvm::errs() << "uniform-masks must be 0 or 1\n";
     return 1;
   }
-  if (argc > 10 && StringRef(argv[10]) != "0" && StringRef(argv[10]) != "1") {
+  if (hasArgument(10) && StringRef(arguments[10]) != "0" && StringRef(arguments[10]) != "1") {
     llvm::errs() << "register-lifetimes must be 0 or 1\n";
     return 1;
   }
   unsigned threads = 128;
-  if (argc > 8 && (StringRef(argv[8]).getAsInteger(10, threads) ||
+  if (hasArgument(8) && (StringRef(arguments[8]).getAsInteger(10, threads) ||
                   threads == 0 || threads > 1024 || threads % 64)) {
     llvm::errs() << "threads must be a multiple of 64 in [64,1024]\n";
     return 1;
   }
   SmallVector<int64_t> blockWarps;
-  if (argc > 9) {
-    auto axes = StringRef(argv[9]).split(',');
+  if (hasArgument(9)) {
+    auto axes = StringRef(arguments[9]).split(',');
     unsigned m = 0, n = 0;
     if (axes.first.getAsInteger(10, m) || axes.second.getAsInteger(10, n) ||
         !m || !n || m > 16 || n > 16 || m * n != threads / 64) {
@@ -862,11 +906,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::errs() << "WMMA layout must be 3.1/shared, 3.2/shuffle, 3.3/b-permute, or 3.4/inner-inst-b-permute\n";
     return 1;
   }
-  if (argc > 5 && StringRef(argv[5]) != "0" && StringRef(argv[5]) != "1") {
+  if (hasArgument(5) && StringRef(arguments[5]) != "0" && StringRef(arguments[5]) != "1") {
     llvm::errs() << "pack-shared must be 0 or 1\n";
     return 1;
   }
-  if (argc > 4 && StringRef(argv[4]) != "0" && StringRef(argv[4]) != "1") {
+  if (hasArgument(4) && StringRef(arguments[4]) != "0" && StringRef(arguments[4]) != "1") {
     llvm::errs() << "reorder must be 0 or 1\n";
     return 1;
   }
@@ -899,12 +943,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   
   // 读入文件
-  auto src = parseSourceFile<ModuleOp>(argv[1], ctx.get());
+  auto src = parseSourceFile<ModuleOp>(arguments[1], ctx.get());
   if (!src) {
-    llvm::errs() << "Failed to parse input MLIR file: " << argv[1] << "\n";
+    llvm::errs() << "Failed to parse input MLIR file: " << arguments[1] << "\n";
     return 1;
   }
-  attachSourceLocationsFromText(*src, argv[1]);
+  attachSourceLocationsFromText(*src, arguments[1]);
   unsigned asmSourceBytes = 0;
   if (dmaExport == "asm128") {
     auto function = src->lookupSymbol<func::FuncOp>("Attn");
@@ -1000,7 +1044,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   src->walk([&](func::FuncOp function) {
     if (!function->hasAttr("thread_num")) return;
     OpBuilder builder(function);
-    if (argc > 8) {
+    if (hasArgument(8)) {
       function->setAttr("thread_num", builder.getI32IntegerAttr(threads));
       function.walk([&](gpu::ThreadIdOp id) {
         if (id.getDimension() == gpu::Dimension::x)
@@ -1394,7 +1438,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush();
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
-  attachLLVMDebugScopes(mod, argv[1]);
+  attachLLVMDebugScopes(mod, arguments[1]);
   
 
   // ------- convert to llvmir text
@@ -1403,13 +1447,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // 3. 将 MLIR ModuleOp 转换为 llvm::Module
   std::unique_ptr<llvm::Module> llvmModule =
-      mlir::translateModuleToLLVMIR(mod, llvmContext, argv[1]);
+      mlir::translateModuleToLLVMIR(mod, llvmContext, arguments[1]);
 
   if (!llvmModule) {
     llvm::errs() << "Failed to translate MLIR ModuleOp to LLVM IR.\n";
     return 1;
   }
-  llvmModule->setSourceFileName(argv[1]);
+  llvmModule->setSourceFileName(arguments[1]);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
   // Approximate division is complete in thread IR; native exp2 is selected
   // by MLIR lowering. Preserve the existing register MMA cleanup.
@@ -1734,9 +1778,11 @@ void testLinalgCopy() {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
+  bool help = argc == 2 && StringRef(argv[1]) == "--help";
+  if (argc < 2 || help) {
     llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
-    return 1;
+    llvm::errs() << "Named aliases (use --name=value; legacy positional arguments remain supported):\n  --input=VALUE\n  --pipeline=VALUE\n  --output=VALUE\n  --reorder=VALUE\n  --pack-shared=VALUE\n  --wmma-layout=VALUE\n  --math=VALUE\n  --threads=VALUE\n  --block-warps=VALUE\n  --register-lifetimes=VALUE\n  --uniform-masks=VALUE\n  --prefetch-packets=VALUE\n  --fuse-mask-add=VALUE\n  --lds-reuse-words=VALUE\n  --dma-pack=VALUE\n  --dma-export=VALUE\n  --qk-tile=VALUE\n  --vo-tile=VALUE\nNamed and positional values for the same argument cannot be combined.\n";
+    return help ? 0 : 1;
   }
   return readDeepgenGraphIRAndConvertToFriskPipeline(argc, argv);
 

@@ -133,14 +133,15 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module) {
   Operation *lastRead = nullptr, *lastMMA = nullptr;
   unsigned firstMMA = positions.size();
   llvm::SmallPtrSet<Operation *, 32> mmas;
-  for (Operation *read : chains.front()->packets)
-    if (!lastRead || positions[read] > positions[lastRead]) lastRead = read;
-  for (Chain *chain : chains)
+  for (Chain *chain : chains) {
+    for (Operation *read : chain->packets)
+      if (!lastRead || positions[read] > positions[lastRead]) lastRead = read;
     for (Operation *mma : chain->mmas) {
       mmas.insert(mma);
       firstMMA = std::min(firstMMA, positions[mma]);
       if (!lastMMA || positions[mma] > positions[lastMMA]) lastMMA = mma;
     }
+  }
   if (!lastRead || positions[lastRead] >= firstMMA ||
       positions[lastMMA] - positions[lastRead] > 2048) return false;
   Operation *end = lastMMA->getNextNode();
@@ -253,11 +254,33 @@ public:
           if (!visited.insert(&seed).second) continue;
           SmallVector<Chain *> group{&seed};
           for (Chain &other : candidates)
-            if (!visited.contains(&other) && seed.packets == other.packets) {
+            // Output columns need not use the same V packets. Combining all
+            // equal-depth independent chains avoids rejecting a region just
+            // because other output columns occur between two row fragments.
+            // schedule() proves every packet is already available and checks
+            // the complete SSA/effect window before committing any movement.
+            if (!visited.contains(&other) && seed.mmas.size() == other.mmas.size()) {
               group.push_back(&other);
               visited.insert(&other);
             }
-          changed += schedule(group, width, module);
+          if (schedule(group, width, module)) {
+            ++changed;
+            continue;
+          }
+          // A large group or an intervening memory effect may prevent the
+          // combined schedule. Preserve previously supported packet-local
+          // opportunities rather than letting an unrelated chain disable them.
+          llvm::SmallPtrSet<Chain *, 16> localVisited;
+          for (Chain *localSeed : group) {
+            if (!localVisited.insert(localSeed).second) continue;
+            SmallVector<Chain *> local{localSeed};
+            for (Chain *other : group)
+              if (!localVisited.contains(other) && localSeed->packets == other->packets) {
+                local.push_back(other);
+                localVisited.insert(other);
+              }
+            if (local.size() != group.size()) changed += schedule(local, width, module);
+          }
         }
       });
       llvm::errs() << "Thread PV interleave: " << changed << " regions, width="

@@ -11,19 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 LLVM = Path('/data2/xsl/install/bin')
 
 
-def fixture(chains=4, steps=3, dynamic=False, warp=False):
+def fixture(chains=4, steps=3, dynamic=False, warp=False, distinct_packets=False):
     vt = 'vector<4xf32>'
     lines = ['module {', 'func.func private @unknown()',
              f'func.func @kernel(%sm: memref<4096xf16, 3>, %out: memref<4xf32>, %a: vector<4xf16>, %seed: {vt}, %idx: index) -> (' + ', '.join([vt]*chains) + ') {',
              '%i = arith.constant 0 : index']
-    for k in range(steps):
-        lines += [f'%r{k} = frisk.read_matrix_from_shm %sm[%i] {{m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64, offset = {k*256} : i32}} : memref<4096xf16, 3> -> vector<4xi32>',
-                  f'%v{k} = vector.bitcast %r{k} : vector<4xi32> to vector<8xf16>']
+    for c in range(chains if distinct_packets else 1):
+        for k in range(steps):
+            packet = f'{c}_{k}' if distinct_packets else str(k)
+            lines += [f'%r{packet} = frisk.read_matrix_from_shm %sm[%i] {{m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64, offset = {(c*steps+k)*256} : i32}} : memref<4096xf16, 3> -> vector<4xi32>',
+                      f'%v{packet} = vector.bitcast %r{packet} : vector<4xi32> to vector<8xf16>']
     for c in range(chains):
         for k in range(steps):
+            packet = f'{c}_{k}' if distinct_packets else str(k)
             for j in range(4):
                 pos = '%idx' if dynamic and c % 2 else str((c % 2)*4+j)
-                lines += [f'%b{c}_{k}_{j} = vector.extract %v{k}[{pos}] : f16 from vector<8xf16>']
+                lines += [f'%b{c}_{k}_{j} = vector.extract %v{packet}[{pos}] : f16 from vector<8xf16>']
             lines += [f'%b{c}_{k} = vector.from_elements ' + ', '.join(f'%b{c}_{k}_{j}' for j in range(4)) + ' : vector<4xf16>']
             prev = '%seed' if k == 0 else f'%s{c}_{k-1}'
             tag = f'test.id = "{c}:{k}"'
@@ -102,6 +105,45 @@ def main():
                 assert ids(cleaned) == expected
                 assert cleaned.count('llvm.call @llvm.amdgcn.sched.barrier') == (24 if width else 0)
                 cases += 1
+
+    for chains in (4, 8, 16):
+        source = fixture(chains=chains, steps=2, distinct_packets=True)
+        out = transform(source)
+        assert result_graph(out) == result_graph(run(source))
+        assert ids(out) == [f'{c}:{k}' for group in range(0, chains, 4)
+                            for k in range(2) for c in range(group, group+4)]
+        assert transform(out) == out
+        assert len(ids(out.split('gpu.barrier')[0])) == 1
+        cases += 1
+    # The availability proof must include every chain's packets, not just
+    # the first chain. A late read in another output column is not movable.
+    source = fixture(distinct_packets=True)
+    lines = source.splitlines()
+    moving = [l for l in lines if l.startswith(('%r3_2 =', '%v3_2 ='))]
+    lines = [l for l in lines if l not in moving]
+    at = next(i for i, l in enumerate(lines) if l.startswith('%b3_2_0'))
+    lines[at:at] = moving
+    reject('\n'.join(lines))
+
+    # Two otherwise valid packet-local windows separated by fresh LDS reads:
+    # the combined group must fail, while both former opportunities survive.
+    lines = fixture(chains=8, steps=2).splitlines()
+    packet_lines = []
+    for line in lines:
+        if line.startswith(('%r0 =', '%v0 =', '%r1 =', '%v1 =')):
+            packet_lines.append(re.sub(r'%([rv])([01])\b',
+                lambda m: '%'+m[1]+str(int(m[2])+2), line))
+    at = next(i for i,l in enumerate(lines) if l.startswith('%b4_0_0'))
+    lines[at:at] = packet_lines
+    for i,line in enumerate(lines):
+        if re.match(r'%b[4-7]_\d_\d = vector.extract',line):
+            lines[i] = re.sub(r'%v([01])\b',lambda m: '%v'+str(int(m[1])+2),line)
+    source = '\n'.join(lines)
+    out = transform(source)
+    assert result_graph(out) == result_graph(run(source))
+    assert ids(out) == [f'{c}:{k}' for group in (0,4) for k in range(2) for c in range(group,group+4)]
+    assert transform(out) == out
+    cases += 1
 
     base = fixture()
     bad = {

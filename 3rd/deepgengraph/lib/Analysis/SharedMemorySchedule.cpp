@@ -340,8 +340,10 @@ static bool collectCrossIteration(func::FuncOp kernel, Operation *loop,
   auto fail = [&](StringRef why) { reason = why.str(); return false; };
   Block *body = loopBody(loop);
   if (!body || loop->getBlock() != &kernel.getBody().front() ||
-      !isInBlockUniformControlFlow(body->getTerminator()) || hasAnyScheduleAttr(loop))
-    return fail("requires an unscheduled block-uniform outer loop");
+      !isInBlockUniformControlFlow(body->getTerminator()))
+    return fail("requires a block-uniform outer loop");
+  if (hasAnyScheduleAttr(loop))
+    return fail("existing pipeline schedule owns task/slot lifetimes; no second cross-iteration schedule");
   if (auto scf = dyn_cast<scf::ForOp>(loop)) {
     auto step = constant(scf.getStep());
     if (!step || *step <= 0 || !scf.getInductionVar().getType().isIndex())

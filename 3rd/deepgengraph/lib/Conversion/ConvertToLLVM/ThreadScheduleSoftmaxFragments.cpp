@@ -23,9 +23,15 @@ bool matchPacket(arith::TruncFOp cast, Packet &packet) {
         use.getOwner()->getBlock() != cast->getBlock()) return false;
   auto exp = cast.getIn().getDefiningOp<math::Exp2Op>();
   if (!exp || exp->getBlock() != cast->getBlock()) return false;
-  auto sub = exp.getOperand().getDefiningOp<arith::SubFOp>();
-  if (!sub || sub->getBlock() != cast->getBlock()) return false;
-  packet = {cast, exp, {sub, exp, cast}};
+  // Stable softmax has score-max; the unshifted form has score+mask (or
+  // a finite-mask select). The scheduling proof depends on SSA and effects,
+  // not on the arithmetic used to form the exponent. Move only recognized
+  // pure producers; an arbitrary exponent remains a fixed dependency.
+  packet = {cast, exp, {exp, cast}};
+  if (auto *score = exp.getOperand().getDefiningOp();
+      score && score->getBlock() == cast->getBlock() && pure(score) &&
+      isa<arith::SubFOp, arith::AddFOp, arith::SelectOp>(score))
+    packet.nodes.insert(packet.nodes.begin(), score);
   return true;
 }
 
@@ -73,7 +79,9 @@ unsigned schedule(Block &block, SoftmaxFragmentMode mode) {
   for (auto &packet : packets) {
     anchors.insert(packet.packed);
     for (Operation *op : packet.nodes) {
-      if (!moving.insert(op).second) return 0;
+      // Two conversions may share an exponent/score. Schedule that producer
+      // once, retaining all of its original uses and floating-point flags.
+      moving.insert(op);
       first = std::min(first, index[op]);
     }
     work.push_back(packet.exp);
