@@ -102,6 +102,19 @@ bool PrefetchLoop::localDestination(Value value) {
 }
 
 bool PrefetchLoop::safeEffects(Operation *op) {
+  // A causal mask computes a fresh tile from its coordinate arguments. Keep
+  // the region in the consumer iteration, and accept it only when every
+  // nested operation is free of memory effects (including nested control
+  // flow). An opaque or effectful mask body must still reject prefetching.
+  if (isa<frisk::MaskOp>(op)) {
+    for (Region &region : op->getRegions())
+      if (region.walk([](Operation *nested) {
+            return isMemoryEffectFree(nested) ? WalkResult::advance()
+                                             : WalkResult::interrupt();
+          }).wasInterrupted())
+        return false;
+    return true;
+  }
   if (producers.contains(op) || waits.contains(op) ||
       isa<frisk::AllocBufferOp, frisk::ZeroOp>(op) || readsOperands(op))
     return true;
@@ -423,6 +436,14 @@ void PrefetchLoop::build() {
     steady.getBody()->back().erase();
   b.setInsertionPointToEnd(steady.getBody());
   b.create<affine::AffineYieldOp>(loc, results);
+  // Keep completion explicit for every FIFO slot, including a prologue task
+  // carried through a zero/short loop. Bounds guards normally leave completed
+  // tasks here, but storage liveness must not depend on recognizing that guard
+  // arithmetic. Draining the exact exit tokens closes the structured task-flow
+  // proof and permits storage reuse before/after the entire pipeline region.
+  b.setInsertionPointAfter(steady);
+  for (Value task : steady.getResults().drop_front(originalCarriers))
+    b.create<frisk::WaitBufferReadyOp>(loc, task);
   loop.replaceAllUsesWith(steady.getResults().take_front(originalCarriers));
   loop.erase();
 }

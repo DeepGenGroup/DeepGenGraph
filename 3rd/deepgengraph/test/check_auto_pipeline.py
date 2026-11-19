@@ -205,6 +205,30 @@ def main():
         assert "pipeline.scheduled" in out
         print("PASS synchronous result aliases, multiple hinted loops, no iter_args, idempotence")
 
+        mask = """    %mask = frisk.mask starts = [%i, %c0], sizes = [1, 1], type = f32 {
+    ^bb0(%row: index, %col: index):
+      %future = arith.cmpi ult, %row, %col : index
+      %value = scf.if %future -> (f32) {
+        scf.yield %zero : f32
+      } else {
+        scf.yield %three : f32
+      }
+      frisk.mask_yield %value : f32
+    } : (index, index) -> memref<1x1xf32>
+"""
+        masked = fixture().replace("    %p = arith.mulf", mask + "    %p = arith.mulf")
+        out, err = run([TOOL, PASS, "--verify-each"], masked)
+        assert "pipeline.scheduled" in out and "skipped" not in err, err
+        assert out.count("frisk.mask starts") == 1, "mask must stay in the consumer loop"
+        effectful_mask = masked.replace(
+            "        scf.yield %zero : f32",
+            "        memref.store %zero, %srca[%c0] : memref<64xf32, 1>\n"
+            "        scf.yield %zero : f32")
+        out, err = run([TOOL, PASS, "--verify-each"], effectful_mask)
+        assert "automatic pipeline skipped" in err, err
+        assert out == run([TOOL], effectful_mask)[0]
+        print("PASS pure causal mask accepted, nested effectful mask rejected unchanged")
+
         plain = fixture(None)
         assert run([TOOL], plain)[0] == run([TOOL, PASS], plain)[0]
         disabled = fixture("1 : i64")

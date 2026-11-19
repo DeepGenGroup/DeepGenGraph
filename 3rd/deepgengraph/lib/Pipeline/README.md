@@ -123,6 +123,18 @@ for tile i（原来的 bounds、step、iter_args）:
 * 已有手工 pipeline scheme 不叠加自动调度；standalone Pass 不直接转换
   tensor/SCF IR，应先运行既有前端 lowering。
 
+循环出口对 FIFO 的全部 task 结果保留显式 `wait_buffer_ready`，与循环内对
+队首 task 的等待共同构成跨迭代完成证明。即使边界 guard 通常已将末尾 task
+替换为 completed token，存储分析也不需要猜测这组算术条件。少一个出口等待、
+缺失循环内等待或 token 逃逸时，仍保守拒绝复用；跨迭代 buffer 也不会被误判为
+迭代局部。完成证明闭合后，流水开始前已读完的缓冲区可以与轮换槽共享物理空间，
+分配器在首次覆盖前插入 block 交接屏障。各个同时存活的轮换槽保持互不重叠。
+
+`check_auto_pipeline_shm_reuse.py` 检查真实自动流水生成结果的 2/3/4 stages，
+包括前置缓冲复用、交接屏障、逐一删除出口等待、后续读导致的真实冲突，以及
+零次、短循环、非零/负起点和多轮 slot 轮换的延迟 DMA CPU 执行。
+该模型不模拟独立 wave 时序或 GPU 性能。
+
 所选槽位沿用完整 shared alias group 的布局约束；最大宽度 DMA 对整组规划，
 统一修改所有槽位，防止 prologue/steady 两次规划改变 consumer width 或 kpack。
 
