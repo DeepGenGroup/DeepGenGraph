@@ -15,14 +15,25 @@ namespace mlir::frisk::thread_schedule {
 using Ops = SmallVector<Operation *, 64>;
 constexpr StringLiteral Barrier = "llvm.amdgcn.sched.barrier";
 
-inline bool mma(Operation *op) {
+inline bool mma(Operation *op, bool allowShapeAliases = false) {
   if (!op || op->getNumOperands() != 3 || op->getNumResults() != 1) return false;
   auto *ctx = op->getContext();
   auto ab = VectorType::get({4}, Float16Type::get(ctx));
   auto cd = VectorType::get({4}, Float32Type::get(ctx));
-  if (op->getOperand(0).getType() != ab || op->getOperand(1).getType() != ab ||
-      op->getOperand(2).getType() != cd || op->getResult(0).getType() != cd) return false;
-  if (isa<WarpMmaRROp>(op)) {
+  auto matches = [&](Type type, VectorType expected) {
+    if (type == expected) return true;
+    auto vector = dyn_cast<VectorType>(type);
+    return allowShapeAliases && vector && !vector.isScalable() &&
+           vector.getNumElements() == expected.getNumElements() &&
+           vector.getElementType() == expected.getElementType();
+  };
+  if (!matches(op->getOperand(0).getType(), ab) ||
+      !matches(op->getOperand(1).getType(), ab) ||
+      !matches(op->getOperand(2).getType(), cd) ||
+      op->getResult(0).getType() != op->getOperand(2).getType()) return false;
+  auto semantics = getExecutionSemantics(op);
+  if (semantics.kind == ScheduleKind::MMA && semantics.registerOnly &&
+      semantics.scope == ExecutionScope::Warp) {
     auto name = op->getAttrOfType<StringAttr>("inst_name");
     auto constraints = op->getAttrOfType<StringAttr>("inst_constraints");
     return name && constraints && isRegisterMMA(name, constraints);
@@ -47,8 +58,7 @@ inline bool protectedFunction(func::FuncOp f) {
 }
 
 inline bool pure(Operation *op) {
-  return !op->getNumRegions() && !op->hasTrait<OpTrait::IsTerminator>() &&
-         isMemoryEffectFree(op) && isSpeculatable(op);
+  return isOrdinaryRegisterComputation(op);
 }
 // A planned next-iteration launch stays fixed while register-only softmax
 // computations are scheduled around it. Check the region, not just its marker.

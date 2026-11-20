@@ -5,7 +5,7 @@ include "deepgengraph/Dialect/Frisk/IR/FriskDialect.td"
 include "deepgengraph/Dialect/Frisk/IR/FriskEnums.td"
 include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.td"
 include "deepgengraph/Dialect/Frisk/IR/FriskTypes.td"
-// include "Dialect/Frisk/IR/FriskInterfaces.td"
+include "deepgengraph/Dialect/Frisk/IR/FriskInterfaces.td"
 
 include "mlir/IR/OpBase.td"
 // include "mlir/IR/AttrTypeBase.td"
@@ -23,7 +23,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultRank
 
 // Op Base
 class Frisk_Op<string mnemonic, list<Trait> traits = []> :
-  Op<Frisk_Dialect, mnemonic, traits>;
+  Op<Frisk_Dialect, mnemonic, !listconcat(traits, [Frisk_ExecutionOpInterface])>;
 
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
 
@@ -577,7 +577,7 @@ def Frisk_AsyncTaskCompletedOp : Frisk_Op<"async_task_completed", [Pure]> {
 }
 
 def Frisk_ReadMatrixFromShmOp : Frisk_Op<"read_matrix_from_shm", [
-    Frisk_ComputedTile, MemoryEffects<[MemRead]>
+    Frisk_ComputedTile
 ]> {
   let summary = "Collective HCU matrix read from shared memory into registers";
   let description = [{
@@ -690,7 +690,8 @@ def Frisk_CopyToRegOp : Frisk_Op<"copy_to_reg", [
 
 // 2. 定义通用的二元算子基类模板
 class Frisk_ArithmeticOp<string mnemonic, list<Trait> traits = []> :
-    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile, MemoryEffects<[MemRead]>])> {
+    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile,
+      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>])> {
 
   let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
   let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
@@ -718,7 +719,8 @@ class Frisk_ArithmeticOp<string mnemonic, list<Trait> traits = []> :
 }
 
 class Frisk_UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
-    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile, MemoryEffects<[MemRead]>])> {
+    Frisk_Op<mnemonic, !listconcat(traits, [Frisk_ComputedTile,
+      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>])> {
 
   let summary = "Element-wise " # mnemonic # " operation on memrefs or scalars";
   let description = "Performs element-wise " # mnemonic # " operation on memrefs or scalar values (f16/f32).";
@@ -753,7 +755,7 @@ def Frisk_Exp2Op : Frisk_UnaryArithmeticOp<"exp2">;
 
 // Element-wise data type conversion.
 def Frisk_CastOp : Frisk_Op<"cast", [
-    Frisk_ComputedTile, MemoryEffects<[MemRead]>, SameOperandsAndResultShape
+    Frisk_ComputedTile, DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, SameOperandsAndResultShape
 ]> {
   let summary = "Convert the data type of a scalar, memref or vector";
   let description = [{

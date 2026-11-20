@@ -22,8 +22,9 @@ set(LLVM_TARGET_DEFINITIONS FriskTypes.td)
 mlir_tablegen(FriskTypes.h.inc -gen-typedef-decls)
 mlir_tablegen(FriskTypes.cpp.inc -gen-typedef-defs)
 
-# mlir_tablegen(FriskInterfaces.h.inc -gen-op-interface-decls)
-# mlir_tablegen(FriskInterfaces.cpp.inc -gen-op-interface-defs)
+set(LLVM_TARGET_DEFINITIONS FriskInterfaces.td)
+mlir_tablegen(FriskInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(FriskInterfaces.cpp.inc -gen-op-interface-defs)
 
 set(LLVM_TARGET_DEFINITIONS FriskEnums.td)
 mlir_tablegen(FriskEnums.h.inc -gen-enum-decls -dialect=frisk)

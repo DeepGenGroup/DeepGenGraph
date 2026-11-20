@@ -128,6 +128,10 @@ func.func @boundary(%a: memref<1xf32>, %x: f32, %cond: i1) -> f32 {
     tagged = mma_source.replace('%x = vector.load %a[%c0]', '%x = vector.load %a[%c0] {test.id = "load0"}').replace(
         '%y = vector.load %a[%c0]', '%y = vector.load %a[%c0] {test.id = "load1"}')
     assert ids(optimize(tagged)) == ['load0', 'load1', 'mma0', 'mma1']
+    # Register MMA scheduling is independent of the generic side-effect bit.
+    no_effects = tagged.replace('has_side_effects ', '')
+    assert ids(optimize(no_effects)) == ['load0', 'load1', 'mma0', 'mma1']
+    assert optimize(no_effects) == optimize(tagged).replace('has_side_effects ', '')
     tuned = 's_nop 1\\0A\\09v_mmac_f32_16x16x16_f16 $0, $1, $2, $3\\0A\\09s_nop 1\\0A\\09'
     tuned_result = optimize(tagged.replace(asm, tuned))
     assert ids(tuned_result) == ['load0', 'load1', 'mma0', 'mma1']
@@ -138,6 +142,8 @@ func.func @boundary(%a: memref<1xf32>, %x: f32, %cond: i1) -> f32 {
         ('memory_clobber', tagged.replace('"=v,v,v,0"', '"=v,v,v,0,~{memory}"')),
     ]:
         assert ids(optimize(source)) == ['load0', 'mma0', 'load1', 'mma1'], name
+        assert ids(optimize(source.replace('has_side_effects ', ''))) == [
+            'load0', 'mma0', 'load1', 'mma1'], name
         print('PASS conservative asm recognition', name)
 
     with tempfile.TemporaryDirectory(prefix='post-unroll-') as tmp:

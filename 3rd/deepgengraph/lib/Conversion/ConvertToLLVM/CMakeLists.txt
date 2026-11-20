@@ -2,6 +2,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   TheadlevelIRLegalize.cpp
   GPUToNvvmRocdl.cpp
   TranslateToLLVM.cpp
+  FriskLLVMTranslation.cpp
   LowerPipe.cpp
   LowerFriskAsyncCopy.cpp
   CoalesceWaitsAndBarriers.cpp

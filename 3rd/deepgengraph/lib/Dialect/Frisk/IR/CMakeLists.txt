@@ -1,6 +1,7 @@
 add_deepgengraph_library(FriskIR
   FriskAttributes.cpp
   FriskEnums.cpp
+  FriskInterfaces.cpp
   FriskOps.cpp
   FriskFragmentOps.cpp
   FriskOps_Reduce.cpp

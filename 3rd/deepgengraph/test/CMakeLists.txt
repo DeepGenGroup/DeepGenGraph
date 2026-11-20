@@ -21,6 +21,8 @@ llvm_update_compile_flags(LowerInfoLayoutTest)
 target_link_libraries(LowerInfoLayoutTest PRIVATE
   DeepgengraphAnalysis DeepgengraphTritonIR MLIRFuncDialect)
 add_executable(LegacyLLVMExportTest legacy_llvm_export_test.cpp)
+add_executable(FriskSemanticsTest frisk_semantics_test.cpp)
+llvm_update_compile_flags(FriskSemanticsTest)
 llvm_update_compile_flags(ThreadTilingTest)
 llvm_update_compile_flags(LegacyLLVMExportTest)
 # add_executable(MyTest friskTest.cpp)
@@ -30,6 +32,11 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 # get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 get_property(deepgengraph_libs GLOBAL PROPERTY DEEPGENGRAPH_LIBS)
+target_link_libraries(FriskSemanticsTest PRIVATE
+  ${dialect_libs} ${conversion_libs} ${extension_libs}
+  FriskIR ConvertThreadToLLVMIR MLIRParser MLIRTargetLLVMIRExport
+  MLIRBuiltinToLLVMIRTranslation MLIRLLVMToLLVMIRTranslation
+  MLIRROCDLToLLVMIRTranslation LLVMPasses)
 target_link_libraries(ThreadTilingTest PRIVATE
   MLIRRegisterAllDialects
   ${dialect_libs} ${conversion_libs} ${extension_libs}

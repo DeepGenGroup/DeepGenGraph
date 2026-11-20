@@ -929,6 +929,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
+  mlir::frisk::registerFriskLLVMTranslation(registry);
   auto ctx = std::make_unique<mlir::MLIRContext>(registry);
 
   // 首先，注册需要的 dialect

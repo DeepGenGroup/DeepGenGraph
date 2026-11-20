@@ -133,6 +133,35 @@ typed fragment 优化结束前运行 `frisk-schedule-async-copies`，根据逻�
 分支 yield 和多槽 token FIFO，要求循环头消费与所有尾部 drain；缺少完成
 证明时禁用对应 buffer 的复用。跨迭代任务保守覆盖整个循环及出口 wait。
 
+## 执行语义与调度约束
+
+Frisk 的 block、fragment、thread op 共用 `ExecutionOpInterface`，返回
+`ExecutionSemantics`：执行范围、调度类别、是否仅计算 SSA 寄存器值、是否
+collective，以及是否为普通寄存器调度的边界。未分类 op 保守返回 unknown
+和边界。固定语义由 op 类型、operand 类型和已验证属性推导，不接受用户
+任意标注 `register_only` 来放宽优化。register-only 不保证后端不 spill。
+
+此接口独立于 `MemoryEffectsOpInterface` 和 `ConditionallySpeculatable`。
+普通调度必须同时满足三者的约束；专门的 MMA 调度仍需证明参与线程、SSA、
+内存、任务依赖，并保留原有调度屏障。接口不会让通用 CSE/LICM 自动理解
+collective，也不允许凭无内存副作用跨分支移动 MMA。
+
+block 算术和 cast 的读效应绑定具体 memref operand；vector/scalar operand
+没有内存读效应。memref 形式的逻辑 tile 继续保守视为读取，不仅依据地址
+空间推断为寄存器。matrix read 去掉重复的全局读效应，保留 source 上的读。
+layout conversion、DMA issue/wait、同步操作继续保留既有保守效应。
+
+ThreadIR 的 MMA 识别共用 `ThreadScheduleUtils.h`，不依赖 inline asm 的
+`has_side_effects`。lowering 仍保留该标志，避免改变 MLIR 通用优化的时机；
+精确匹配的 f16 MMA 带 `frisk.register_mma`，注册 Frisk LLVM translation
+interface 的导出入口在生成 call 时设置 convergent/nounwind/willreturn/
+memory(none) 并清除 sideeffect。无此扩展的外部 mlir-translate 仍输出保守
+asm，旧 LLVM-only 输入仍由 `prepareRegisterMMAForLLVM` 兼容处理。
+
+验证入口：`FriskSemanticsTest` 和 `test/check_frisk_semantics.py`，覆盖语义
+查询、具体内存效应、CSE 写入边界、带/不带 sideeffect 的 MMA 调度、即时
+LLVM 属性及伪造 marker 拒绝；原有 fragment、PV/QK、异步任务测试继续适用。
+
 此阶段不生成物理 LDS pool，也不把 wait 移过另一条 DMA。线程访问展开和
 shared packing 后仍重新调度、重新分析，再落实共享存储复用与交接 barrier。
 测试：`python3 3rd/deepgengraph/test/check_fragment_async_liveness.py`。

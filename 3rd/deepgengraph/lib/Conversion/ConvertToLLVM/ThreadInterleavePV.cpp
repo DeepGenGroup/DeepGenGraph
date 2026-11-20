@@ -23,30 +23,7 @@ constexpr StringLiteral Barrier = "llvm.amdgcn.sched.barrier";
 using Ops = SmallVector<Operation *, 32>;
 
 bool isMMA(Operation *op) {
-  if (!op || op->getNumOperands() != 3 || op->getNumResults() != 1)
-    return false;
-  auto vector = [](Type type, unsigned bits, unsigned elements) {
-    auto v = dyn_cast<VectorType>(type);
-    return v && !v.isScalable() && v.getNumElements() == elements &&
-           isa<FloatType>(v.getElementType()) &&
-           v.getElementTypeBitWidth() == bits;
-  };
-  if (!vector(op->getOperand(0).getType(), 16, 4) ||
-      !vector(op->getOperand(1).getType(), 16, 4) ||
-      !vector(op->getOperand(2).getType(), 32, 4) ||
-      op->getResult(0).getType() != op->getOperand(2).getType()) return false;
-  if (auto mma = dyn_cast<WarpMmaRROp>(op)) {
-    auto name = op->getAttrOfType<StringAttr>("inst_name");
-    auto constraints = op->getAttrOfType<StringAttr>("inst_constraints");
-    return name && constraints && isRegisterMMA(name, constraints);
-  }
-  // Thread legalization currently emits the validated register-only template
-  // with has_side_effects. Recognize the complete instruction and constraints,
-  // exactly as prepareRegisterMMAForLLVM does, without trusting a marker.
-  auto assembly = dyn_cast<LLVM::InlineAsmOp>(op);
-  return assembly && !assembly.getIsAlignStack() &&
-         !assembly.getOperandAttrs() &&
-         isRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
+  return thread_schedule::mma(op, /*allowShapeAliases=*/true);
 }
 
 // Only transparent register views of one explicit B packet are accepted.
@@ -90,8 +67,7 @@ Operation *matrixPacket(Value value, bool qk, unsigned depth = 0) {
 }
 
 bool pure(Operation *op) {
-  return !op->getNumRegions() && !op->hasTrait<OpTrait::IsTerminator>() &&
-         !isMMA(op) && isMemoryEffectFree(op) && isSpeculatable(op);
+  return !isMMA(op) && thread_schedule::pure(op);
 }
 
 bool fixed(Operation *op) {

@@ -18,6 +18,7 @@
 #include "deepgengraph/Analysis/ThreadBounds.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
+#include "ThreadScheduleUtils.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -311,20 +312,9 @@ struct IssueNode {
 // memory operations, clobbers, waits or other effects. Keep all MMAs in their
 // original relative order, including independent accumulator chains.
 static bool isSchedulableRegisterMMA(Operation *op) {
-  auto assembly = dyn_cast<LLVM::InlineAsmOp>(op);
-  if (!assembly || assembly.getConstraints() != "=v,v,v,0" ||
-      !assembly.getHasSideEffects() || assembly.getIsAlignStack() ||
-      assembly.getOperandAttrs() || op->getNumOperands() != 3 ||
-      op->getNumResults() != 1)
-    return false;
-  auto half4 = VectorType::get({4}, Float16Type::get(op->getContext()));
-  auto float4 = VectorType::get({4}, Float32Type::get(op->getContext()));
-  if (op->getOperand(0).getType() != half4 ||
-      op->getOperand(1).getType() != half4 ||
-      op->getOperand(2).getType() != float4 ||
-      op->getResult(0).getType() != float4)
-    return false;
-  return isRegisterMMA(assembly.getAsmString(), assembly.getConstraints());
+  // The validated instruction contract determines scheduling eligibility;
+  // has_side_effects only controls generic MLIR side-effect reasoning.
+  return thread_schedule::mma(op);
 }
 
 // 把 op 分类成调度节点。LDS 合并和调度都用这里的分类。

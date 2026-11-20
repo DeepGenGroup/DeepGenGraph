@@ -15,6 +15,7 @@
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
@@ -325,6 +326,15 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
         /*has_side_effects=*/true, /*is_align_stack=*/false,
         LLVM::tailcallkind::TailCallKind::None, /*convergent=*/true,
         /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr);
+    // Keep the MLIR side-effect anchor through scheduling. The translation
+    // interface validates this contract and sets LLVM call attributes as soon
+    // as the call is emitted, before any LLVM cleanup pass.
+    if (isRegisterMMA(asm_string, constraints) &&
+        newA.getType() == VectorType::get({4}, rewriter.getF16Type()) &&
+        newB.getType() == newA.getType() &&
+        newC.getType() == VectorType::get({4}, rewriter.getF32Type()) &&
+        newRetTy == newC.getType())
+      asmOp->setAttr("frisk.register_mma", rewriter.getUnitAttr());
     auto ret = asmOp.getResult(0);
 
     if(isConverted){

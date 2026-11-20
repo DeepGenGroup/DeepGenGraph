@@ -380,7 +380,7 @@ static bool tryFuse(Loop a, Loop b, AliasAnalysis &aliases) {
     return false;
   // Crossing pure, speculatable setup is safe only if it does not consume A.
   for (Operation *op = a->getNextNode(); op != b; op = op->getNextNode()) {
-    if (!isMemoryEffectFree(op) || !isSpeculatable(op) || op->getNumRegions())
+    if (!isOrdinaryRegisterComputation(op))
       return false;
     for (Value operand : op->getOperands())
       if (operand.getDefiningOp() == a)
@@ -534,8 +534,7 @@ static bool pipelineFragments(Loop loop) {
       return true;
     // A dependent memory read is not a pure address calculation. Reject
     // indirect loads rather than duplicating or moving them into the prologue.
-    if (groups.contains(def) || def->getNumRegions() ||
-        !isMemoryEffectFree(def) || !isSpeculatable(def))
+    if (groups.contains(def) || !isOrdinaryRegisterComputation(def))
       return false;
     if (!llvm::all_of(def->getOperands(), addDependency))
       return false;
@@ -1003,7 +1002,7 @@ class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorde
             changed = tryFuse(a, b, aliases);
             break;
           }
-          if (!isMemoryEffectFree(next) || !isSpeculatable(next) || next->getNumRegions())
+          if (!isOrdinaryRegisterComputation(next))
             break;
         }
         return changed ? WalkResult::interrupt() : WalkResult::advance();

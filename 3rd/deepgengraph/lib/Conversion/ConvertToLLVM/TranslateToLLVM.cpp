@@ -649,6 +649,7 @@ std::string translateMLIRToLLVMIR(mlir::ModuleOp module, Target target, const in
   registerLLVMDialectTranslation(registry);
   registerNVVMDialectTranslation(registry);
   registerROCDLDialectTranslation(registry);
+  registerFriskLLVMTranslation(registry);
   module.getContext()->appendDialectRegistry(registry);
 
   llvm::LLVMContext llvmContext;

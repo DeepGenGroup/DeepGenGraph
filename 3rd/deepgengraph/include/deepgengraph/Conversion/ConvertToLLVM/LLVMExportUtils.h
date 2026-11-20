@@ -6,8 +6,12 @@
 namespace llvm {
 class Module;
 }
+namespace mlir { class DialectRegistry; }
 
 namespace mlir::frisk {
+/// Translate the validated Frisk register-MMA contract on LLVM inline asm at
+/// export time. MLIR retains its scheduling anchors until translation.
+void registerFriskLLVMTranslation(mlir::DialectRegistry &registry);
 /// Emit LLVM 24 floating-point literals in LLVM 22 syntax without changing
 /// their bit patterns. Preserve LLVM 22 memory effects, flags and attributes.
 void legalizeLLVMTextForLLVM22(std::string &text);
