@@ -234,7 +234,7 @@ secondLowering:
 
 | 调用入口 | 主要作用 | 默认状态 / 条件 | 实现文件 |
 | --- | --- | --- | --- |
-| `optimizeApproximateRegisterMath` / `optimizeRegisterMath` / `fuseMMACAccumulators` | 根据数学模式执行 MMAC 累加融合、exp2/reciprocal 等优化 | `math=strict` 时不调用这些入口；其他模式分别选择 | `OptimizeRegisterMath.cpp`、`FuseMMACAccumulator.cpp` |
+| `cleanupRegisterMMA`；兼容入口 `optimizeApproximateRegisterMath` / `optimizeRegisterMath` | 主路径保留 MMA 属性与 InstCombine 清理；兼容入口提供 reciprocal 优化，累加融合已移至上游 | 主路径仅非 strict 模式调用清理 | `CleanupRegisterMMA.cpp`、`OptimizeRegisterMath.cpp` |
 | `bypassMaskAdds` | 对 mask 为 0 的路径绕过适用的加法 | `--mask-add-bypass=off`；支持 legal/approx | `MaskAddBypass.cpp` |
 | `optimizeLocalReductions` | 将长串行归约拆成多条短链，降低依赖深度 | `--local-reduce=off`；合法性或近似模式控制浮点重结合 | `LocalReduction.cpp` |
 | `deferLaneSums` | 循环内维护局部和，在出口执行跨 lane 求和 | `--defer-lane-sum=off`；要求组内一致的缩放、控制流等条件 | `DeferLaneSum.cpp` |
@@ -254,7 +254,7 @@ secondLowering:
 | --- | --- | --- |
 | 1 | `prepareRegisterMMAForLLVM` | 整理 register MMA 的 LLVM 导出表示 |
 | 2 | `lowerWideAsyncDMAToBufferAsm` / `splitFullWaveAsyncDMAToDwords` / `lowerWideAsyncDMAToHCU` | 选择 `asm128` / `split32` / `hcu128` DMA 导出形式，并保护源地址表达式；async/hybrid 默认 asm128，其他默认 split32 |
-| 3 | `fuseMMACAccumulators(..., simplifyCFG=true)` | 非 strict 数学模式下，在晚期 CFG 简化后再次尝试累加器融合 |
+| 3 | `cleanupRegisterMMA(..., simplifyCFG=true)` | 非 strict 数学模式下，保留晚期 SimplifyCFG / InstCombine 清理；不再做累加重结合 |
 | 4 | `interleavePVAccumulators` | 交错独立 PV 累加链；宽度默认 0 关闭 |
 | 5 | `doubleBufferV` | 证明 LDS 访问范围及所有权后，为 V 引入双 buffer 与提前 DMA；默认关闭 |
 | 6 | `narrowKDMA` | 按显式配置调整 K DMA；默认 mode=128，显式不支持的配置报错 |
@@ -262,7 +262,7 @@ secondLowering:
 | 8 | `scheduleSoftmaxFragments` | 按 fragment 或 PV 消费点安排 softmax 转换；默认 off |
 | 9 | `prefetchPairedLDSTail` | 对与局部归约交错的尾部区域补充成对 LDS 预取；默认 0 |
 | 10 | `prefetchNextK` | 在最后的 PV 阶段提前发起下一 tile 的首组 K DMA；默认关闭 |
-| 11 | `elideBackedgeBarrier` | 消除适用的循环回边 barrier；开关默认开启，但只处理前一步已成功转换的函数 |
+| — | `frisk-thread-elide-backedge-barrier`（已前移） | 在最后的 ThreadIR LDS 调度之后、async lowering 之前消除冗余回边 reader barrier；保留 readiness 和匹配的 exit drain。`--elide-backedge-barrier=1` 默认开启；LLVM 实现已删除 |
 | 12 | `lazySoftmaxBase` | online softmax 使用滞后基准，超过阈值时才更新基准并重缩放；默认关闭，目前仅支持 non-causal |
 | 13 | `softmaxCvtPack` | 对编译器标记的 softmax 转换进行 packed conversion；默认关闭，RTZ 会改变相对 fptrunc 的舍入行为 |
 | 14 | `legalizeLLVMTextForLLVM22` | 对最终文本做 LLVM 22 兼容处理 |

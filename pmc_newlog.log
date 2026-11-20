@@ -1,0 +1,440 @@
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn16_no_backedge_barrier/kernel.ll
+HSACO (ms): min=1.470880, median=1.477840, p90=1.480607, max=1.504479
+PyTorch SDPA (ms): min=1.106400, median=1.119520, p90=1.123216, max=1.278880
+time_our_mid=1.477840006351471, time_base_mid=1.1195200085639954, speedup=0.7575380310131777x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn32_q_stage16k/kernel.ll
+HSACO (ms): min=1.252800, median=1.263040, p90=1.275232, max=1.294080
+PyTorch SDPA (ms): min=1.108639, median=1.118880, p90=1.124496, max=1.138880
+time_our_mid=1.2630399465560913, time_base_mid=1.118880033493042, speedup=0.8858627445187877x
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn16_q_stage16k/kernel.ll
+HSACO (ms): min=1.223360, median=1.234320, p90=1.237872, max=1.243520
+PyTorch SDPA (ms): min=1.106560, median=1.117040, p90=1.123904, max=1.134238
+time_our_mid=1.2343195080757141, time_base_mid=1.1170400381088257, speedup=0.9049845123571567x
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn16_qk_interleave_guarded/kernel.ll
+HSACO (ms): min=1.367360, median=1.376080, p90=1.379536, max=1.385920
+PyTorch SDPA (ms): min=1.108320, median=1.118320, p90=1.125136, max=1.139520
+time_our_mid=1.37608003616333, time_base_mid=1.1183199882507324, speedup=0.8126852790981094x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn16_qk_interleave/kernel.ll
+HSACO (ms): min=1.472480, median=1.481040, p90=1.483392, max=1.489760
+PyTorch SDPA (ms): min=1.107360, median=1.118560, p90=1.125200, max=1.134079
+time_our_mid=1.4810400009155273, time_base_mid=1.118560016155243, speedup=0.7552530758546616x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn32_sched_guards_off/kernel.ll
+HSACO (ms): min=1.639840, median=1.648479, p90=1.652383, max=1.661280
+PyTorch SDPA (ms): min=1.104960, median=1.116640, p90=1.132015, max=1.217438
+time_our_mid=1.6484794616699219, time_base_mid=1.1166399717330933, speedup=0.6773757257502794x
+
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_schedule_experiments_20261119/bn32_pv_off/kernel.ll
+HSACO (ms): min=1.580320, median=1.589840, p90=1.592623, max=1.596959
+PyTorch SDPA (ms): min=1.107999, median=1.116799, p90=1.123743, max=1.137120
+time_our_mid=1.589839518070221, time_base_mid=1.116798996925354, speedup=0.7024602069779641x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_bm128_bn32_single_buffer_20261119/256/kernel.ll
+HSACO (ms): min=1.575840, median=1.587039, p90=1.591871, max=1.595520
+PyTorch SDPA (ms): min=1.108320, median=1.121120, p90=1.126400, max=1.128478
+time_our_mid=1.5870394706726074, time_base_mid=1.121120035648346, speedup=0.7064222764246696x
+BM=128、BN=32、D=128、256线程。K/V 双缓冲已关闭：pipeline_hint=1、v-double-buffer=0、cross-bn-k0=0 
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                414
+ thread id                                 414
+ grid size                                 262144
+ work group size                           256
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                176
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.001585(s)
+ processed ALU instructions                47.6360755687(%)
+ performance                               4944.469119(Gflops)
+ shared memory operation                   4907008
+ shared memory bank conflict               0.1364075542(%)
+ L1 cache unit is active                   52.5723156106(%)
+ L1 cache unit is stalled                  2.5775711812(%)
+ L2 cache write unit is stalled            0.1101484340(%)
+ L2 cache hit rate                         80.771574(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_bm128_bn16_d128_20261119/256/kernel.ll
+BM=128， BN=16
+HSACO (ms): min=1.475520, median=1.484480, p90=1.486592, max=1.489280
+PyTorch SDPA (ms): min=1.108960, median=1.119360, p90=1.126752, max=1.134560
+time_our_mid=1.4844800233840942, time_base_mid=1.1193600296974182, speedup=0.7540418274849328x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     5
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      23
+ process id                                245
+ thread id                                 245
+ grid size                                 262144
+ work group size                           256
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                144
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.001479(s)
+ processed ALU instructions                55.8451393806(%)
+ performance                               6048.468023(Gflops)
+ shared memory operation                   4636672
+ shared memory bank conflict               0.1461137697(%)
+ L1 cache unit is active                   57.4328435377(%)
+ L1 cache unit is stalled                  2.7543758773(%)
+ L2 cache write unit is stalled            0.1073290538(%)
+ L2 cache hit rate                         80.693594(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_bm64_bn16_d128_20261119/256/kernel.ll
+修改 BM=64,BN=16, 不切dim。256线程
+env FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 /data2/xsl/DeepGenGraph/3rd/deepgengraph/build/test/MyTest --input=/data2/xsl/DeepGenGraph/generated_ir/causal_bm64_bn16_d128_20261119/test_input.mlir --pipeline=0 --output=/data2/xsl/DeepGenGraph/generated_ir/causal_bm64_bn16_d128_20261119/256/kernel.ll --reorder=1 --pack-shared=1 --wmma-layout=inner-inst-b-permute --math=approx --threads=256 --block-warps=4,1 --register-lifetimes=1 --uniform-masks=0 --prefetch-packets=1 --fuse-mask-add=0 --lds-reuse-words=0 --dma-pack=useKPack --dma-export=asm128 --qk-tile=128 --vo-tile=128 --frag-prefetch=0 --frag-prefetch-words=4 --retain-fragment-words=32 --pv-interleave=4 --v-double-buffer=1 --k-dma=64-swizzle --k-dma-arg=1 --k-lds-prefetch=8 --simplify-loop-control=1 --coalesce-waits=1 --mask-add-bypass=approx --defer-lane-sum=approx --local-reduce=approx --local-reduce-chains=4 --local-reduce-min-inputs=16 --local-reduce-ops=all --swizzle-q=off --swizzle-k=8:6 --swizzle-v=off --swizzle-q-arg=-1 --swizzle-k-arg=-1 --swizzle-v-arg=-1 --workgroup-group-size=8 --workgroup-reverse=1 --workgroup-query-axis=x --workgroup-head-axis=y --softmax-fragments=pv --k-tail-prefetch=4 --cross-bn-k0=1 --simplify-bounded-affine=1 --hoist-lds-bases=1 --hoist-lane-shuffles=1 --elide-backedge-barrier=1 --lazy-softmax-base=off --softmax-cvt-pack=rtz --causal-mask=finite --llvm-opt=3
+HSACO (ms): min=1.691838, median=1.704558, p90=1.707854, max=1.711038
+PyTorch SDPA (ms): min=1.104318, median=1.113359, p90=1.120303, max=1.127837
+time_our_mid=1.7045584917068481, time_base_mid=1.113358974456787, speedup=0.6531656026317598x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     5
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      23
+ process id                                478
+ thread id                                 478
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        16384
+ scratch size                              0
+ vgpr count                                80
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.001701(s)
+ processed ALU instructions                62.4766202296(%)
+ performance                               7435.681880(Gflops)
+ shared memory operation                   9895936
+ shared memory bank conflict               0.1272922353(%)
+ L1 cache unit is active                   88.3271732484(%)
+ L1 cache unit is stalled                  1.7205263779(%)
+ L2 cache write unit is stalled            0.0765276195(%)
+ L2 cache hit rate                         79.595287(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_pass_fix_20261119/128/kernel.ll
+HSACO (ms): min=2.405118, median=2.454318, p90=2.497613, max=2.515198
+PyTorch SDPA (ms): min=1.106559, median=1.117198, p90=1.126239, max=1.131357
+time_our_mid=2.454318046569824, time_base_mid=1.1171984672546387, speedup=0.45519710406564656x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_pass_fix_20261119/256/kernel.ll
+HSACO (ms): min=1.798878, median=1.843359, p90=1.872222, max=1.897279
+PyTorch SDPA (ms): min=1.107039, median=1.119759, p90=1.133951, max=1.452479
+time_our_mid=1.8433585166931152, time_base_mid=1.1197589635849, speedup=0.6074558765669125x
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_tuning_20261119/coalesce256_g8
+HSACO (ms): min=1.894240, median=1.914560, p90=1.926416, max=1.939680
+PyTorch SDPA (ms): min=1.105440, median=1.113760, p90=1.121360, max=1.123840
+time_our_mid=1.9145600199699402, time_base_mid=1.113759994506836, speedup=0.58173156385263x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                380
+ thread id                                 380
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                108
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.001901(s)
+ processed ALU instructions                49.7150587956(%)
+ performance                               5697.176170(Gflops)
+ shared memory operation                   8830976
+ shared memory bank conflict               0.1138458481(%)
+ L1 cache unit is active                   79.7005188519(%)
+ L1 cache unit is stalled                  1.6069851488(%)
+ L2 cache write unit is stalled            0.1736107492(%)
+ L2 cache hit rate                         83.775121(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_tuning_20261119/coalesce256_g4
+HSACO (ms): min=1.965760, median=2.078560, p90=2.127248, max=2.136000
+PyTorch SDPA (ms): min=1.102240, median=1.112880, p90=1.125296, max=1.141920
+time_our_mid=2.078559994697571, time_base_mid=1.112879991531372, speedup=0.5354091266888331x
+
+
+coalesce128
+HSACO (ms): min=2.584170, median=2.628090, p90=2.657928, max=2.696650
+PyTorch SDPA (ms): min=1.088164, median=1.102324, p90=1.108676, max=1.112964
+time_our_mid=2.6280895471572876, time_base_mid=1.1023235321044922, speedup=0.41943910674460727x
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/mytest_128.o3.ll
+HSACO (ms): min=2.568638, median=2.626157, p90=2.648413, max=2.670557
+PyTorch SDPA (ms): min=1.105599, median=1.118478, p90=1.126623, max=1.143519
+time_our_mid=2.6261569261550903, time_base_mid=1.118478000164032, speedup=0.42589914906630344x
+group4 变为 group8
+kernel-name:"Attn_p2"
+ kernel dispatch index                     5
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      23
+ process id                                415
+ thread id                                 415
+ grid size                                 262144
+ work group size                           128
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                184
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.002579(s)
+ processed ALU instructions                32.3234215154(%)
+ performance                               3518.325274(Gflops)
+ shared memory operation                   4571136
+ shared memory bank conflict               0.0841208107(%)
+ L1 cache unit is active                   60.0496617762(%)
+ L1 cache unit is stalled                  2.4380286752(%)
+ L2 cache write unit is stalled            0.1169086218(%)
+ L2 cache hit rate                         79.015684(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/mytest_128.o3.ll
+thread=128, BM=64, BN=32.
+  --input=/data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/input.mlir \
+  --pipeline=0 \
+  --output=/data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/mytest_128.o3.ll \
+  --reorder=1 \
+  --pack-shared=1 \
+  --wmma-layout=inner-inst-b-permute \
+  --math=approx \
+  --threads=128 \
+  --block-warps=2,1 \
+  --register-lifetimes=1 \
+  --uniform-masks=0 \
+  --prefetch-packets=1 \
+  --fuse-mask-add=0 \
+  --lds-reuse-words=0 \
+  --dma-pack=useKPack \
+  --dma-export=asm128 \
+  --qk-tile=128 \
+  --vo-tile=128 \
+  --frag-prefetch=0 \
+  --frag-prefetch-words=4 \
+  --retain-fragment-words=32 \
+  --pv-interleave=4 \
+  --v-double-buffer=1 \
+  --k-dma=64-swizzle \
+  --k-dma-arg=1 \
+  --k-lds-prefetch=8 \
+  --simplify-loop-control=1 \
+  --coalesce-waits=0 \
+  --mask-add-bypass=approx \
+  --defer-lane-sum=approx \
+  --local-reduce=approx \
+  --local-reduce-chains=4 \
+  --local-reduce-min-inputs=16 \
+  --local-reduce-ops=all \
+  --swizzle-q=off \
+  --swizzle-k=8:6 \
+  --swizzle-v=off \
+  --swizzle-q-arg=-1 \
+  --swizzle-k-arg=-1 \
+  --swizzle-v-arg=-1 \
+  --workgroup-group-size=4 \
+  --workgroup-reverse=1 \
+  --workgroup-query-axis=x \
+  --workgroup-head-axis=y \
+  --softmax-fragments=pv \
+  --k-tail-prefetch=4 \
+  --cross-bn-k0=1 \
+  --simplify-bounded-affine=1 \
+  --hoist-lds-bases=1 \
+  --hoist-lane-shuffles=1 \
+  --elide-backedge-barrier=1 \
+  --lazy-softmax-base=off \
+  --softmax-cvt-pack=rtz \
+  --causal-mask=finite \
+  --llvm-opt=3
+
+HSACO (ms): min=2.525917, median=2.554557, p90=2.571805, max=2.586717
+PyTorch SDPA (ms): min=1.102079, median=1.111119, p90=1.120879, max=1.135519
+time_our_mid=2.5545570850372314, time_base_mid=1.1111189723014832, speedup=0.4349556245227885x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                246
+ thread id                                 246
+ grid size                                 262144
+ work group size                           128
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                184
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.002569(s)
+ processed ALU instructions                32.4113444689(%)
+ performance                               3531.250074(Gflops)
+ shared memory operation                   4571136
+ shared memory bank conflict               0.0843496278(%)
+ L1 cache unit is active                   61.7562261521(%)
+ L1 cache unit is stalled                  2.8944152093(%)
+ L2 cache write unit is stalled            0.2055455865(%)
+ L2 cache hit rate                         58.281712(%)
+
+
+data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/mytest.o3.ll
+inner-inst permute B
+HSACO (ms): min=2.015839, median=2.102640, p90=2.147968, max=2.224159
+PyTorch SDPA (ms): min=1.104800, median=1.116000, p90=1.129200, max=1.162240
+time_our_mid=2.10263991355896, time_base_mid=1.11599999666214, speedup=0.5307613488479734x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     26
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      72
+ process id                                218
+ thread id                                 218
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                108
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.002107(s)
+ processed ALU instructions                44.9311778825(%)
+ performance                               5141.259139(Gflops)
+ shared memory operation                   8830976
+ shared memory bank conflict               0.1028909183(%)
+ L1 cache unit is active                   79.7086811386(%)
+ L1 cache unit is stalled                  1.6356282098(%)
+ L2 cache write unit is stalled            0.1477675359(%)
+ L2 cache hit rate                         72.496138(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_kv_shm_reuse_20261119/mask_finite_pk_rtz.o3.ll
+shm 复用分析能力的修复。shm占用降低
+HSACO (ms): min=2.169919, median=2.254799, p90=2.357839, max=2.368959
+PyTorch SDPA (ms): min=1.107679, median=1.114079, p90=1.122831, max=1.141278
+time_our_mid=2.2547985315322876, time_base_mid=1.114079475402832, speedup=0.4940926915744175x
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                218
+ thread id                                 218
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        32768
+ scratch size                              0
+ vgpr count                                108
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.002258(s)
+ processed ALU instructions                47.1094485868(%)
+ performance                               5597.143676(Gflops)
+ shared memory operation                   13090816
+ shared memory bank conflict               0.0960314916(%)
+ L1 cache unit is active                   74.9942009792(%)
+ L1 cache unit is stalled                  1.4437473734(%)
+ L2 cache write unit is stalled            0.1585773929(%)
+ L2 cache hit rate                         71.864619(%)
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_test_input_kv_double_buffer_20261119/mask_finite_pk_rtz.o3.ll  
+acc=0.3174, 修复了double buffer KV 
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                387
+ thread id                                 387
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        49152
+ scratch size                              0
+ vgpr count                                132
+ sgpr count                                112
+ signal handle                             0x0
+ kernel time                               0.003522(s)
+ processed ALU instructions                30.1518663273(%)
+ performance                               3570.035941(Gflops)
+ shared memory operation                   13090816
+ shared memory bank conflict               0.0617115269(%)
+ L1 cache unit is active                   42.6473817517(%)
+ L1 cache unit is stalled                  0.7837649229(%)
+ L2 cache write unit is stalled            0.1307000721(%)
+ L2 cache hit rate                         72.094542(%)
+
+
+
+/data2/xsl/DeepGenGraph/generated_ir/causal_test_input_20261119/mask_finite_pk_rtz.o3.ll  
+acc=0.20  test_input.mlir 起点
+kernel-name:"Attn_p2"
+ kernel dispatch index                     15
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      45
+ process id                                217
+ thread id                                 217
+ grid size                                 524288
+ work group size                           256
+ shared memory size                        6144
+ scratch size                              0
+ vgpr count                                68
+ sgpr count                                64
+ signal handle                             0x0
+ kernel time                               0.005468(s)
+ processed ALU instructions                34.5729746778(%)
+ performance                               4622.732158(Gflops)
+ shared memory operation                   40747008
+ shared memory bank conflict               2.5916959430(%)
+ L1 cache unit is active                   87.0067272854(%)
+ L1 cache unit is stalled                  0.8608890849(%)
+ L2 cache write unit is stalled            0.0093085534(%)
+ L2 cache hit rate                         23.273742(%)
+
+
+
+kernel-name:"_Z31flash_fwd_kernel_16x64_prefetchI38Flash_fwd_kernel_16x64_prefetch_traitsILi128ELi128ELi64ELi4EN7cutlass6half_tELi3ELb0ELi128E19Flash_kernel_traitsILi128ELi128ELi64ELi4ES2_EELb0ELb1ELb0ELb0ELb1ELb1ELb0ELb0ELb1EEv16Flash_fwd_params"
+官方sdpa
+ kernel dispatch index                     16
+ gpu id                                    0
+ dispatch queue id                         0
+ dispatch queue index                      46
+ process id                                217
+ thread id                                 217
+ grid size                                 131072
+ work group size                           256
+ shared memory size                        16384
+ scratch size                              0
+ vgpr count                                188
+ sgpr count                                96
+ signal handle                             0x0
+ kernel time                               0.001077(s)
+ processed ALU instructions                57.3012000657(%)
+ performance                               5177.864368(Gflops)
+ shared memory operation                   4882432
+ shared memory bank conflict               0.0000000000(%)
+ L1 cache unit is active                   65.8135364566(%)
+ L1 cache unit is stalled                  14.3100311596(%)
+ L2 cache write unit is stalled            0.0664116394(%)
+ L2 cache hit rate                         73.430233(%)
