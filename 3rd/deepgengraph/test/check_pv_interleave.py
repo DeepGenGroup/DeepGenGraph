@@ -55,7 +55,7 @@ def result_graph(text):
         definition = re.match(r'\s*(%[\w]+) = (.*)', line)
         if definition:
             name, body = definition.groups()
-            body = re.sub(r'frisk.pv_interleave = \d+ : i32,? ?', '', body)
+            body = re.sub(r'frisk.(?:pv|qk)_interleave = \d+ : i32,? ?', '', body)
             body = re.sub(r'%\w+', resolve, body)
             digest = hashlib.sha256(body.encode()).hexdigest()
             values[name] = digest

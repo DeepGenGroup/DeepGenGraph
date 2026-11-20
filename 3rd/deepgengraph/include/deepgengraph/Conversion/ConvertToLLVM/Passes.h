@@ -27,7 +27,12 @@ std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 std::unique_ptr<mlir::Pass> createApproximateThreadMathPass();
 std::unique_ptr<mlir::Pass> createThreadMaskAddBypassPass();
 // After thread loop unrolling and reduction rewrites; before async/GPU lowering.
-std::unique_ptr<mlir::Pass> createThreadInterleavePVPass(unsigned width = 0);
+// guardGroup: -1 preserves per-MMA before/after guards, 0 disables guards,
+// positive values emit one guard after each group (including a partial tail).
+std::unique_ptr<mlir::Pass> createThreadInterleavePVPass(unsigned width = 0,
+                                                     int guardGroup = -1);
+std::unique_ptr<mlir::Pass> createThreadInterleaveQKPass(unsigned width = 0,
+    int guardGroup = 2, unsigned prefetchWords = 32);
 // After physical LDS address canonicalization, unrolling and PV interleaving.
 // Keep this order: paired loads, softmax fragments, reduction-aware tail loads.
 std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSPass(unsigned distance = 0);

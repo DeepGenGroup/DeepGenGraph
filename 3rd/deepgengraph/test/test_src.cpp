@@ -524,6 +524,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool fragPrefetch = false;
   frisk::SoftmaxFragmentMode softmaxFragments = frisk::SoftmaxFragmentMode::Off;
   unsigned pvInterleave = 0;
+  frisk::MMAChainScheduleOptions mmaSchedule;
   bool vDoubleBuffer = false;
   // Compatibility spelling only. Translate into generic early constraints;
   // there is no LLVM-level K DMA transformation.
@@ -657,6 +658,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       return 1;
     }
     if (consumed) { continue; }
+    if (!frisk::parseMMAChainScheduleOption(option, mmaSchedule, consumed)) {
+      llvm::errs() << "invalid MMA schedule option: " << option
+                   << " (qk-interleave=0|1|2|4, guard-group=-1|0..32, qk-prefetch-words>=0)\n";
+      return 1;
+    }
+    if (consumed) continue;
     if (!frisk::parsePVInterleaveOption(option, pvInterleave, consumed)) {
       llvm::errs() << "use --pv-interleave=0|1|2|4 (0=off, 1=guarded serial)\n";
       return 1;
@@ -1371,18 +1378,26 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
 
   if (pvInterleave) {
-    AddPass(frisk::createThreadInterleavePVPass(pvInterleave));
+    AddPass(frisk::createThreadInterleavePVPass(pvInterleave, mmaSchedule.pvGuardGroup));
     llvm::outs() << "\n---- after frisk-thread-interleave-pv -----\n";
     llvm::outs().flush(); src->dump();
   }
 
-  if (kLDSPrefetch || kTailPrefetch) {
+  if (kLDSPrefetch || kTailPrefetch || mmaSchedule.qkWidth) {
     // Required even when the optional standalone canonicalizer was disabled.
     AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
   }
   if (kLDSPrefetch) {
     AddPass(frisk::createThreadPrefetchPairedLDSPass(kLDSPrefetch));
     llvm::outs() << "\n---- after thread prefetchPairedLDS -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+  // Run after optional LDS dedup/pairing and before softmax schedules introduce
+  // guards. QK respects existing pair/guard boundaries and never crosses DMA.
+  if (mmaSchedule.qkWidth) {
+    AddPass(frisk::createThreadInterleaveQKPass(mmaSchedule.qkWidth,
+        mmaSchedule.qkGuardGroup, mmaSchedule.qkPrefetchWords));
+    llvm::outs() << "\n---- after frisk-thread-interleave-qk -----\n";
     llvm::outs().flush(); src->dump();
   }
   if (softmaxFragments != frisk::SoftmaxFragmentMode::Off) {
@@ -1780,6 +1795,10 @@ void testLinalgCopy() {
 int main(int argc, char** argv) {
   bool help = argc == 2 && StringRef(argv[1]) == "--help";
   if (argc < 2 || help) {
+    llvm::errs() << "MMA scheduling: --qk-interleave=0|1|2|4 (default 0), "
+                 << "--pv-guard-group=-1|0..32 (default -1), "
+                 << "--qk-guard-group=-1|0..32 (default 2), "
+                 << "--qk-prefetch-words=N (default 32 words/thread)\n";
     llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     llvm::errs() << "Named aliases (use --name=value; legacy positional arguments remain supported):\n  --input=VALUE\n  --pipeline=VALUE\n  --output=VALUE\n  --reorder=VALUE\n  --pack-shared=VALUE\n  --wmma-layout=VALUE\n  --math=VALUE\n  --threads=VALUE\n  --block-warps=VALUE\n  --register-lifetimes=VALUE\n  --uniform-masks=VALUE\n  --prefetch-packets=VALUE\n  --fuse-mask-add=VALUE\n  --lds-reuse-words=VALUE\n  --dma-pack=VALUE\n  --dma-export=VALUE\n  --qk-tile=VALUE\n  --vo-tile=VALUE\nNamed and positional values for the same argument cannot be combined.\n";
     return help ? 0 : 1;
