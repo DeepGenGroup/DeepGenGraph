@@ -10,7 +10,8 @@ Examples (run from any directory):
 --b/--h/--s/--d and --bm/--bn/--bk lists form a Cartesian product.
 Use repeated --shape BHSD to select exact shapes instead.
 Default tiles: BM=128, BN=128, BK=32, online softmax, TuneAttention baseline.
-BM/BN must divide S, BK must divide D; backend hardware limits still apply.
+S may be any positive integer; tail tiles use checked IO and key masking.
+BK must divide D; backend hardware limits still apply.
 GenHsaco inherits LLVM_DIR, ROCM_BC, GPU_ARCH, GPU_FEATURES, DWARF_VERSION.
 --launch-python selects the Python environment with HIP PyTorch.
 """

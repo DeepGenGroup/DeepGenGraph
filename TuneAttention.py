@@ -197,7 +197,10 @@ def launch_config(source, llvm_ir, k_layout="bhsd"):
     if any(x <= 0 for x in [b, h, s, d, *grid, *block]):
         raise ValueError("启动尺寸必须为正数")
     kernel_code = code[re.search(r"deepgengraph\.kernel\s+@Attn_p2\b", code).start():]
-    causal = bool(re.search(r"\bdeepgengraph\.mask\b", kernel_code))
+    # Tail masks also exist in non-causal attention. New generators declare
+    # the mode explicitly; retain mask inference for historical aligned IR.
+    declared = re.search(r"\bfrisk\.attention_causal\s*=\s*(true|false)\b", kernel_code)
+    causal = declared[1] == "true" if declared else bool(re.search(r"\bdeepgengraph\.mask\b", kernel_code))
     return {"schema_version": 1, "kernel": "Attn_p2", "shape": [b, h, s, d],
             "grid": grid, "block": block, "shared_mem": 0, "k_layout": k_layout,
             "causal": causal}

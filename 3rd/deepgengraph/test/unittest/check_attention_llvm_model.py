@@ -34,5 +34,28 @@ def main():
     np.testing.assert_array_equal(halves[:,0],np.tile(np.array([1,-1,.333251953125,-.333251953125],np.float16),16))
     np.testing.assert_array_equal(halves[:,1],np.full(64,.5,np.float16))
     print('PASS packed probabilities round toward zero')
+    # A partially active load must not touch the five-element source for the
+    # other 59 lanes; the reconverged PHI supplies zeros to those lanes.
+    guarded = '''@shm_0 = addrspace(3) global [128 x i8] undef
+define amdgpu_kernel void @test() {
+4:
+  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+  %inside = icmp ult i32 %tid, 5
+  br i1 %inside, label %read, label %join
+read:
+  %ptr = getelementptr half, ptr addrspace(1) %1, i32 %tid
+  %value = load half, ptr addrspace(1) %ptr
+  br label %join
+join:
+  %result = phi half [ %value, %read ], [ 0.0, %4 ]
+  %out = getelementptr half, ptr addrspace(1) %3, i32 %tid
+  store half %result, ptr addrspace(1) %out
+  ret void
+}
+'''
+    q = np.zeros(64, dtype=np.float16)
+    model = LLVMWorkgroupModel(guarded, q, np.arange(5, dtype=np.float16), q, threads=64)
+    np.testing.assert_array_equal(model.run(), np.r_[np.arange(5), np.zeros(59)])
+    print('PASS divergent guarded load, exact buffer bounds and reconverged PHI')
 
 if __name__ == '__main__':main()

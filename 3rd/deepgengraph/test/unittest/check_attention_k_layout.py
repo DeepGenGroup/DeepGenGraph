@@ -166,6 +166,12 @@ def main():
     assert "memref.transpose" not in other and "frisk.k_layout_bhsd" not in other
     run(fixture(sequence=4), error="S == D is ambiguous")
     assert "memref.transpose" in run(fixture(sequence=4), "key-arg=1")
+    for key_arg in (1, 2):
+        permutations = ['array<i64: 0, 2, 1, 3>'] * 4
+        permutations[key_arg] = 'array<i64: 0, 2, 3, 1>'
+        source = fixture(key_arg, sequence=4).replace('thread_num = 64 : i32',
+            'thread_num = 64 : i32, arg_permutes = [' + ', '.join(permutations) + ']')
+        assert f'memref.transpose %arg{key_arg}' in run(source)
     run(fixture(), "key-arg=0", error="key-arg must be 1 or 2")
     run(fixture(), "key-arg=2", error="expected contiguous BHDS K")
     direct = fixture().replace("%view = frisk.buffer_view", """

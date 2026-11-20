@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from generate_attention_ir import TEMPLATE, generate_ir
 from check_attention_split_d import SSA, expr, parse_region
@@ -50,11 +50,15 @@ def execute_tensor(nodes, env):
             else:
                 value = -np.inf if literal == "0xFF800000" else float(literal)
                 value = int(value) if ": index" in op else np.float32(value)
-        elif op.startswith(("arith.addi", "arith.muli")):
+        elif op.startswith(("arith.addi", "arith.muli", "arith.minsi", "arith.ori")):
             lhs, rhs = (env[name] for name in args[:2])
-            value = lhs + rhs if op.startswith("arith.addi") else lhs * rhs
+            fn = {"arith.addi": np.add, "arith.muli": np.multiply,
+                  "arith.minsi": np.minimum, "arith.ori": np.logical_or}[op.split()[0]]
+            value = fn(lhs, rhs)
         elif op.startswith("arith.cmpi ule"):
             value = env[args[0]] <= env[args[1]]
+        elif op.startswith("arith.cmpi uge"):
+            value = env[args[0]] >= env[args[1]]
         elif op.startswith("scf.if"):
             value = np.where(env[args[0]], execute_tensor(body, dict(env))[0],
                              execute_tensor(alternate, dict(env))[0])
@@ -66,11 +70,15 @@ def execute_tensor(nodes, env):
             batch, head, row, col = np.unravel_index(origin, array.shape)
             shape, _ = tensor_type(op)
             value = array[batch, head, row:row + shape[0], col:col + shape[1]]
-            assert value.shape == shape, (value.shape, shape, origin)
+            assert env.get("checked_io") or value.shape == shape, (value.shape, shape, origin)
+            value = (value, shape)
         elif op.startswith("deepgengraph_triton.block_load"):
-            value = np.copy(env[args[0]])
+            source, shape = env[args[0]]
+            value = np.zeros(shape, dtype=source.dtype)
+            value[:source.shape[0], :source.shape[1]] = source
         elif op.startswith("deepgengraph_triton.block_store"):
-            np.copyto(env[args[0]], env[args[1]])
+            destination, _ = env[args[0]]
+            np.copyto(destination, env[args[1]][:destination.shape[0], :destination.shape[1]])
             continue
         elif op.startswith("deepgengraph.zero"):
             shape, dtype = tensor_type(op)
@@ -149,7 +157,10 @@ class SharedAttentionGeneratorTests(unittest.TestCase):
         rng = np.random.default_rng(7)
         # Unequal S/D and BN > BM expose transposed-K origin mistakes and
         # partial causal tiles hidden by the square baseline configuration.
-        for s, d, bm, bn in ((64, 64, 32, 16), (128, 32, 32, 64)):
+        cases = [(64, 64, 32, 16), (128, 32, 32, 64)]
+        cases += [(s, 64, bm, bn) for s in (1, 15, 31, 32, 33, 63, 65, 127, 129)
+                  for bm, bn in ((64, 32), (32, 64))]
+        for s, d, bm, bn in cases:
             q, k, v = [rng.normal(size=(2, 3, s, d)).astype(np.float16) for _ in range(3)]
             for softmax in ("online", "legacy"):
                 for causal in (True, False):
@@ -159,10 +170,11 @@ class SharedAttentionGeneratorTests(unittest.TestCase):
                         device = ir.split("    ^bb0(", 1)[1].split("\n    } :", 1)[0]
                         nodes, _ = parse_region([line.strip() for line in device.splitlines()[1:]])
                         output = np.full_like(q, np.nan)
-                        for batch, head, block in ((0, 0, 0), (1, 2, s // bm - 1)):
+                        for batch, head, block in ((0, 0, 0), (1, 2, (s - 1) // bm)):
                             execute_tensor(nodes, {"%bz": batch, "%by": head, "%bx": block,
+                                "checked_io": "frisk.checked_global_io" in ir,
                                 "%argQ": q, "%argK": k, "%argV": v, "%argO": output})
-                            start, end = block * bm, (block + 1) * bm
+                            start, end = block * bm, min((block + 1) * bm, s)
                             key_end = end if causal else s
                             scores = q[batch, head, start:end].astype(np.float32) @ k[batch, head, :key_end].astype(np.float32).T / np.sqrt(d)
                             if causal:

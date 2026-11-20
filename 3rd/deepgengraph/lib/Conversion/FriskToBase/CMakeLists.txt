@@ -3,6 +3,7 @@ add_deepgengraph_library(FriskToBase
   ReorderWorkgroups.cpp
   NormalizeAttentionKLayout.cpp
   TileAttention.cpp
+  CheckedGlobalIO.cpp
   WmmaLayoutConversion.cpp
   # FriskBaseToTheadlevelIR.cpp
   # FriskBaseToTheadlevelIR_selfTry.cpp

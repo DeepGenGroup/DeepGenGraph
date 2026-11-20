@@ -45,6 +45,9 @@ struct PromoteGlobalToSharedAsyncPass
       getOperation().emitError("assume-alignment must be zero or a positive power of two");
       return signalPassFailure();
     }
+    // DMA currently has no logical per-axis bounds/zero-fill contract.
+    // Keep checked copies synchronous until that contract is implemented.
+    if (getOperation()->hasAttr("frisk.checked_global_io")) return;
     // Schemes have one entry per top-level operation. Rebuild them when one
     // synchronous copy becomes issue+wait, retaining its original schedule.
     // schedule：op -> (pipeline stage, pipeline order)。

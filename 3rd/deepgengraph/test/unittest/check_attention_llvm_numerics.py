@@ -196,6 +196,8 @@ class LLVMWorkgroupModel:
         args = [self.typed(x) for x in split_args(args)] if args else []
         if name.startswith('llvm.maxnum.'):
             return np.fmax(args[0], args[1])
+        if name.startswith('llvm.smin.'):
+            return np.minimum(args[0], args[1])
         if name == 'llvm.amdgcn.ballot.i64':
             result = np.zeros(self.t,dtype=np.uint64)
             for wave in range(self.t//64):
@@ -334,27 +336,30 @@ class LLVMWorkgroupModel:
             a, b = split_args(body)
             ty, _ = self.parse_type(a)
             a, b = (self.typed(a), self.value(b, ty))
-            if pred[0] == 'u' and ty == 'i32':
-                a, b = (a % (1 << 32), b % (1 << 32))
+            if pred[0] == 'u':
+                bits = int(ty[1:])
+                a, b = a.astype(np.uint64), b.astype(np.uint64)
+                if bits < 64:
+                    a, b = a % (1 << bits), b % (1 << bits)
             return {'eq': np.equal, 'ne': np.not_equal, 'slt': np.less, 'sle': np.less_equal, 'sgt': np.greater, 'sge': np.greater_equal, 'ult': np.less, 'ule': np.less_equal, 'ugt': np.greater, 'uge': np.greater_equal}[pred](a, b)
         a, b = split_args(body)
         ty, _ = self.parse_type(a)
         a, b = (self.typed(a), self.value(b, ty))
         bits_match = re.search(r'i(\d+)', ty)
         bits = int(bits_match[1]) if bits_match else None
-        if op == 'urem':
+        if op in ('urem', 'udiv'):
             # Non-power-of-two pipeline slot counts retain integer remainder.
             a, b = a.astype(np.uint64), b.astype(np.uint64)
             if bits < 64:
                 a, b = a % (1 << bits), b % (1 << bits)
             assert np.all(b != 0)
-            return np.remainder(a, b).astype(np.int64)
-        if op == 'sdiv':
+            return (np.remainder(a, b) if op == 'urem' else a // b).astype(np.int64)
+        if op in ('sdiv', 'srem'):
             if bits < 64:
                 a, b = [np.where(x % (1 << bits) >= (1 << (bits - 1)),
                                   x % (1 << bits) - (1 << bits), x % (1 << bits))
                         for x in (a, b)]
-            return np.trunc(a / b).astype(np.int64)
+            return np.fmod(a, b) if op == 'srem' else np.trunc(a / b).astype(np.int64)
         if op == 'lshr' and bits < 64:
             a = a % (1 << bits)
         funcs = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or, 'xor': np.bitwise_xor, 'shl': np.left_shift, 'lshr': np.right_shift, 'ashr': np.right_shift, 'fadd': np.add, 'fsub': np.subtract, 'fmul': np.multiply, 'fdiv': np.divide}
@@ -366,13 +371,35 @@ class LLVMWorkgroupModel:
 
     def run(self):
         current = '4'
-        previous = None
+        previous = np.full(self.t, '', dtype=object)
         steps = 0
         reconverge = []
+        # Structured divergent branches now occur in checked tail loads/stores.
+        # Compute postdominators so both arms execute under their own lane mask
+        # and PHIs merge at the join before collective instructions resume.
+        successors = {}
+        for label, lines in self.blocks.items():
+            successors[label] = re.findall(r'label %([\w.-]+)', lines[-1]) or ['exit']
+        postdom = {label: set(self.blocks) | {'exit'} for label in self.blocks}
+        postdom['exit'] = {'exit'}
+        changed = True
+        while changed:
+            changed = False
+            for label in self.blocks:
+                value = {label} | set.intersection(*(postdom[s] for s in successors[label]))
+                if value != postdom[label]:
+                    postdom[label] = value
+                    changed = True
         while True:
-            if reconverge and current == reconverge[-1][0]:
-                _, self.active = reconverge.pop()
-                assert not any(' = phi ' in line for line in self.blocks[current]), 'unsupported divergent PHI'
+            if reconverge and current == reconverge[-1]['join']:
+                frame = reconverge[-1]
+                frame['previous'][self.active] = previous[self.active]
+                if frame['pending'] is not None:
+                    current, self.active, previous = frame['pending']
+                    frame['pending'] = None
+                    continue
+                self.active, previous = frame['active'], frame['previous']
+                reconverge.pop()
             pending = {}
             for line in self.blocks[current]:
                 m = re.match(r'(%[\w.-]+) = (.*)', line)
@@ -381,9 +408,16 @@ class LLVMWorkgroupModel:
                     if expr.startswith('phi '):
                         ty, rest = self.parse_type(expr[4:])
                         incoming = split_args(rest)
-                        selected = [split_args(x[1:-1])[0] for x in incoming if split_args(x[1:-1])[1] == '%' + previous]
-                        assert len(selected) == 1, (previous, expr)
-                        pending[name] = self.value(selected[0], ty).copy()
+                        merged = np.zeros((self.t,) + self.shape(ty), dtype=self.dtype(ty))
+                        covered = np.zeros(self.t, dtype=bool)
+                        for item in incoming:
+                            value, predecessor = split_args(item[1:-1])
+                            lanes = self.active & (previous == predecessor[1:])
+                            if lanes.any():
+                                merged[lanes] = self.value(value, ty)[lanes]
+                                covered |= lanes
+                        assert np.all(covered[self.active]), (previous, expr)
+                        pending[name] = merged
                         continue
                     self.values.update(pending)
                     pending = {}
@@ -392,40 +426,30 @@ class LLVMWorkgroupModel:
                         if len(args) == 1:
                             target = args[0].split('%')[1]
                         else:
-                            cond = self.typed(args[0])
+                            cond = self.typed(args[0]).astype(bool)
                             live = cond[self.active]
                             if np.all(live == live[0]):
                                 target = args[1 if live[0] else 2].split('%')[1]
                             else:
-                                # Full-width noKPack uses a result-free if over
-                                # complete waves. Accept only a single straight
-                                # arm with an explicit reconvergence successor.
                                 yes, no = [arg.split('%')[1] for arg in args[1:]]
-                                if self.blocks[yes][-1] == 'br label %' + no:
-                                    arm, join, mask = yes, no, cond
-                                elif self.blocks[no][-1] == 'br label %' + yes:
-                                    arm, join, mask = no, yes, ~cond
-                                else:
-                                    raise AssertionError('unsupported divergent control flow')
-                                if not np.all(mask.reshape(-1, 64) == mask.reshape(-1, 64)[:, :1]):
-                                    # Reduced rows use one leader lane to
-                                    # publish replicated values into LDS.
-                                    # Allow only a straight-line store arm;
-                                    # collective operations still need whole
-                                    # waves and must execute after the join.
-                                    arm_lines = self.blocks[arm]
-                                    stores = [line for line in arm_lines if line.startswith('store ')]
-                                    assert stores and all('ptr addrspace(3)' in line for line in stores), 'partial-wave arm must store only to LDS'
-                                    assert not any('load ' in line or 'fence ' in line or 'atomic' in line or
-                                                   ('call ' in line and 'asm sideeffect "", "=v,0"' not in line)
-                                                   for line in arm_lines), 'unsupported partial-wave arm'
-                                reconverge.append((join, self.active.copy()))
-                                self.active &= mask
-                                target = arm
-                        previous, current = (current, target)
+                                candidates = postdom[current] - {current}
+                                join = max(candidates, key=lambda label: len(postdom[label]))
+                                assert join != 'exit', 'divergent returns are not modeled'
+                                reconverge.append(dict(join=join, active=self.active.copy(),
+                                    previous=np.full(self.t, '', dtype=object),
+                                    pending=(no, self.active & ~cond,
+                                             np.full(self.t, current, dtype=object))))
+                                self.active &= cond
+                                target = yes
+                        previous = np.full(self.t, current, dtype=object)
+                        current = target
                         break
                     if expr == 'ret void':
                         return self.mem[4 << 32]
+                    if 'call ' in expr and any(token in expr for token in
+                            ('v_mmac_', 's.barrier', 'ds.bpermute', 'readfirstlane')):
+                        assert np.all(self.active.reshape(-1, 64) ==
+                                      self.active.reshape(-1, 64)[:, :1]), 'partial collective wave'
                     value = self.operation(expr)
                     if name:
                         self.values[name] = value
@@ -433,7 +457,7 @@ class LLVMWorkgroupModel:
                     print('FAILED BLOCK', current, 'INSTRUCTION', line)
                     raise
             steps += 1
-            assert steps < 10000
+            assert steps < 100000
 
 
 def reference(q, k, v, head, block, rows=128):

@@ -544,6 +544,8 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
 
     auto newKernelOp = rewriter.create<frisk::KernelOp>(loc, op.getName(), newFuncType);
     newKernelOp->setAttr("grid", gridAttr);
+    if (auto checked = op->getAttr("frisk.checked_global_io"))
+      newKernelOp->setAttr("frisk.checked_global_io", checked);
     if (permuteAttr)
       newKernelOp->setAttr("arg_permutes", permuteAttr);
     rewriter.inlineRegionBefore(op->getRegion(0), newKernelOp.getRegion(), newKernelOp.getRegion().end());
@@ -1232,7 +1234,15 @@ struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
     std::map<int, Value> arglist_ub;
     
     auto lbexpr = GetExprOfValue(op.getLowerBound(), dims_lb, arglist_lb);
-    auto ubexpr = GetExprOfValue(op.getUpperBound(), dims_ub, arglist_ub);
+    // A clamped tail loop has two affine upper bounds. Preserve the min
+    // instead of treating its result as an opaque/non-affine dimension.
+    SmallVector<AffineExpr> ubexprs;
+    if (auto min = op.getUpperBound().getDefiningOp<arith::MinSIOp>()) {
+      ubexprs.push_back(GetExprOfValue(min.getLhs(), dims_ub, arglist_ub));
+      ubexprs.push_back(GetExprOfValue(min.getRhs(), dims_ub, arglist_ub));
+    } else {
+      ubexprs.push_back(GetExprOfValue(op.getUpperBound(), dims_ub, arglist_ub));
+    }
     
     std::vector<Value> lbvr, ubvr;
     for(int i=0;i<arglist_lb.size();++i){
@@ -1243,7 +1253,7 @@ struct SCFForToAffineFor : public OpConversionPattern<scf::ForOp> {
     }
     
     auto lbMap = AffineMap::get(dims_lb.size(), 0, lbexpr);
-    auto ubMap = AffineMap::get(dims_ub.size(), 0, ubexpr);
+    auto ubMap = AffineMap::get(dims_ub.size(), 0, ubexprs, rewriter.getContext());
 
     int stepNum;
     auto stepOp = op.getStep().getDefiningOp<arith::ConstantOp>();

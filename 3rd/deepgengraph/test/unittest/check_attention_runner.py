@@ -10,9 +10,10 @@ import tempfile
 import textwrap
 import unittest
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from TuneAttention import default_paths, launch_config, prepare_input
+from generate_attention_ir import TEMPLATE, generate_ir
 
 LLVM = """define amdgpu_kernel void @Attn_p2() !reqd_work_group_size !7 {
   ret void
@@ -136,6 +137,16 @@ class AttentionRunnerTests(unittest.TestCase):
                 source = (ROOT / "3rd/deepgengraph/test" / filename).read_text()
                 self.assertIs(launch_config(source, LLVM).get("causal"), causal)
 
+    def test_tail_mask_does_not_imply_causal_attention(self):
+        for s in (1, 65, 129):
+            for causal in (True, False):
+                source, _ = generate_ir(TEMPLATE.read_text(), 64, 32,
+                    b=2, h=3, s=s, causal=causal)
+                self.assertIn("deepgengraph.mask", source)
+                config = launch_config(source, LLVM)
+                self.assertEqual(config["grid"], [(s + 63) // 64, 3, 2])
+                self.assertIs(config["causal"], causal)
+
     def test_runner_cartesian_shapes_modes_and_isolated_outputs(self):
         with tempfile.TemporaryDirectory(prefix="attention runner ") as directory:
             args = ["--b", "1", "2", "--h", "3", "--s", "256", "--d", "64",
@@ -157,10 +168,10 @@ class AttentionRunnerTests(unittest.TestCase):
     def test_invalid_batch_does_not_write_partial_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "invalid"
-            result = self.run_script("RunAttention.py", "--s", "256", "255",
+            result = self.run_script("RunAttention.py", "--s", "256", "0",
                                      "--stage", "ir", "--output-dir", output)
             self.assertEqual(result.returncode, 2, result.stderr)
-            self.assertIn("S=255", result.stderr)
+            self.assertIn("S=0", result.stderr)
             self.assertFalse(output.exists())
 
     def test_flat_bundle_generates_user_sweep(self):

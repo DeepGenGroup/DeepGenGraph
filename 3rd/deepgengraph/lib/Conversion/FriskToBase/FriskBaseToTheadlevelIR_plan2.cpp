@@ -61,6 +61,7 @@
 //   sinkWaitBufferReady         推迟 wait。
 // 这里只是在 alloc 和 DMA 上打属性，真正改写地址的是 PackSharedMemory.cpp（第 15 项）。
 // ===========================================================================
+#include "CheckedGlobalIO.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -3285,9 +3286,14 @@ public:
     // The legacy () -> (rank) map denotes a whole-buffer copy. Other maps
     // describe a slice on the larger side, as in the old copy lowering.
     bool sameShape = srcTy.getShape() == dstTy.getShape();
-    bool sourceSlice = !sameShape && srcTy.getNumElements() > dstTy.getNumElements();
-    auto copyShape = sourceSlice ? dstTy.getShape() : srcTy.getShape();
     auto map = op.getOffsetMap();
+    // The mapped rank identifies the global side even when a tail tile is
+    // larger than the entire tensor (e.g. S=1, BM=64).
+    bool sourceSlice = !sameShape &&
+        (srcTy.getRank() != dstTy.getRank()
+             ? map.getNumResults() == srcTy.getRank()
+             : srcTy.getNumElements() > dstTy.getNumElements());
+    auto copyShape = sourceSlice ? dstTy.getShape() : srcTy.getShape();
     bool sentinel = map.getNumInputs() == 0 && map.getNumResults() == 1 &&
         isa<AffineConstantExpr>(map.getResult(0)) &&
         cast<AffineConstantExpr>(map.getResult(0)).getValue() == dstTy.getRank();
@@ -5128,6 +5134,7 @@ public:
       signalPassFailure();
       return;
     }
+    if (failed(lowerCheckedGlobalIO(kernel))) return signalPassFailure();
     // Shared storage planning is deferred until after fragment scheduling.
 
     // Fragment regions and loops are deliberately preserved here. The late

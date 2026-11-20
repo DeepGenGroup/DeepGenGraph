@@ -31,8 +31,27 @@ python3 RunAttention.py --bm 64 128 --bn 32 64 --bk 32 --causal both
 ```
 
 `--shape` 不能与 `--b/--h/--s/--d` 混用。重复配置会去重。
-BM 和 BN 必须整除 S，BK 必须整除 D；当前模板没有尾块越界保护。
+S 支持任意正整数，BM/BN 不必整除 S；BK 仍须为 16 的正整数倍且整除 D。
+尾块使用固定 BM/BN：Q/K/V 越界读取补零、O 越界行不写回，softmax 屏蔽无效 key。
+non-causal 也保留尾块 mask。当前非整除配置使用受保护的同步访存，整除配置保持原路径。
 生成合法输入后，分块仍需满足 MyTest 后端的硬件指令和共享内存限制。
+
+```bash
+python3 RunAttention.py --s 1 65 129 1000 --bm 64 --bn 32 --bk 32 --causal both --stage ir
+```
+
+这是静态 shape 支持：每个 S 生成独立 IR，尚未增加运行时 seqLen 参数。
+生成器为非整除配置设置 `frisk.checked_global_io` kernel 属性，并向下传递到 `func.func`。
+`FinalizeThreadTiling` 在 view 索引合并后、地址展平前，按原始 tensor 的每个维度检查
+global load/store；向量包完全有效时保留向量访存，跨边界时逐元素保护。
+该属性的语义是越界读零、越界写忽略，不依赖调用方分配 padding。
+此路径不提升为 DMA；手写的未降为同步 copy 的异步访存会报错。
+
+回归测试（CPU LLVM 执行模型，不模拟 GPU 时序）：
+
+```bash
+python3 3rd/deepgengraph/test/unittest/check_attention_tails.py
+```
 
 ## 工具与编译参数
 

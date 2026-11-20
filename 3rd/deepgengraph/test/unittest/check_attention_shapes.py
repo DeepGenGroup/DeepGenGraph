@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 from generate_attention_ir import TEMPLATE, generate_ir
 
@@ -92,7 +92,6 @@ class AttentionShapeTests(unittest.TestCase):
             self.assertIn("tensor<2x256x3x64xf16>", output.read_text())
             for flags, message in ((["--b", "0"], "B"), (["--h", "-1"], "H"),
                                    (["--s", "0"], "S"), (["--d", "0"], "D"),
-                                   (["--s", "255"], "S=255"),
                                    (["--d", "48", "--bk", "32"], "D=48")):
                 invalid_dir = Path(directory) / "invalid"
                 result = subprocess.run(command + ["--output-dir", str(invalid_dir)] + flags,
@@ -100,6 +99,21 @@ class AttentionShapeTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(message, result.stderr)
                 self.assertFalse(invalid_dir.exists())
+
+    def test_tail_geometry_and_masks(self):
+        for s in (1, 15, 31, 33, 63, 65, 127, 129, 255):
+            for causal in (True, False):
+                ir, _ = generate_ir(TEMPLATE.read_text(), 64, 32, 32,
+                                    b=2, h=3, s=s, causal=causal)
+                kernel = ir.split("  deepgengraph.kernel", 1)[1]
+                self.assertIn(f"grid = [2, 3, {(s + 63) // 64}]", kernel)
+                self.assertIn("frisk.checked_global_io", kernel)
+                self.assertIn("%pastEnd = arith.cmpi uge, %ki, %cS", kernel)
+                self.assertIn("scf.if %invalid" if causal else "scf.if %pastEnd", kernel)
+                self.assertIn("to %keyEnd" if causal else "to %cS", kernel)
+        aligned, _ = generate_ir(TEMPLATE.read_text(), 64, 32, s=256, causal=False)
+        self.assertNotIn("frisk.checked_global_io", aligned)
+        self.assertNotIn("deepgengraph.mask ", aligned)
 
 
 if __name__ == "__main__":

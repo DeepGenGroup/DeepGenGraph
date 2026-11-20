@@ -10,7 +10,7 @@
 // 硬编码前提（只服务这个例子，不是通用 Pass）：
 //   - 函数名是 Attn_p2，4 个 memref 参数，无返回值。
 //   - 参数 0 = Q，参数 3 = O，K 是 1/2 中 trailing shape 相对 Q 翻转的那个。
-//   - S == D 时形状无法区分 K 和 V，必须用 key-arg 显式指定。
+//   - S == D 时使用前端 arg_permutes；缺少该信息时须用 key-arg 显式指定。
 //
 // 产物：
 //   frisk.k_layout_bhsd（函数属性）    标记已处理，重复运行时直接返回。
@@ -53,6 +53,28 @@ class NormalizeAttentionKLayout
     std::swap(bhds[2], bhds[3]);
     // index：K 的参数下标。-1 表示按形状自动识别。
     int index = keyArg;
+    // Shape equality cannot distinguish K from V when S == D. The tensor
+    // frontend already records their logical permutations; use that evidence
+    // before falling back to shape inference for hand-written Frisk input.
+    if (index == -1 && bhds[2] == bhds[3]) {
+      auto permutes = func->getAttrOfType<ArrayAttr>("arg_permutes");
+      if (permutes && permutes.size() == 4) {
+        auto q = dyn_cast<DenseI64ArrayAttr>(permutes[0]);
+        if (q && q.size() == 4) {
+          SmallVector<int64_t> transposed(q.asArrayRef());
+          std::swap(transposed[2], transposed[3]);
+          for (int i : {1, 2}) {
+            auto p = dyn_cast<DenseI64ArrayAttr>(permutes[i]);
+            if (!p || p.asArrayRef() != ArrayRef<int64_t>(transposed)) continue;
+            if (index != -1) {
+              reject("multiple K permutation candidates; specify key-arg explicitly");
+              return;
+            }
+            index = i;
+          }
+        }
+      }
+    }
     if (index == -1) {
       if (bhds[2] == bhds[3]) {
         reject("S == D is ambiguous; specify key-arg=1 or key-arg=2 for BHDS K");

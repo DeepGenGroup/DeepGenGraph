@@ -83,6 +83,10 @@ struct KernelOpConversion : public OpConversionPattern<KernelOp> {
     func::FuncOp funcOp = rewriter.create<func::FuncOp>(kernelOp.getLoc(), kernelOp.getSymName(), funcType);
 
     // 3. 转移所需的属性
+    if (auto checked = kernelOp->getAttr("frisk.checked_global_io"))
+      funcOp->setAttr("frisk.checked_global_io", checked);
+    if (auto permutes = kernelOp->getAttr("arg_permutes"))
+      funcOp->setAttr("arg_permutes", permutes);
     if (auto threadNumAttr = kernelOp->getAttr("thread_num")) {
       funcOp->setAttr("thread_num", threadNumAttr);
     }

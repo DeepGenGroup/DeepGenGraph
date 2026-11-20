@@ -19,8 +19,8 @@
 --b/--h/--s/--d 必须为正整数，未指定的维度沿用模板（默认 1/32/4096/128）。
 尺寸改变时同步更新高层 Attn 和 kernel 的类型、寻址、grid 及 D 相关缩放；
 默认生成 online softmax。
-默认 causal；--non-causal 移除高层及 kernel 的 mask，并遍历全部 S 个 key。
-BM、BN 必须为 S 的正整数因子，因为模板没有尾块越界保护。
+默认 causal；--non-causal 移除 causal mask、保留尾块 mask，并遍历全部 S 个 key。
+S 可为任意正整数；不满 BM/BN 的尾块使用受保护访存及 key mask。
 生成 IR 不代表所有分块都满足后端的硬件指令和共享内存限制。
 指定 BK 时输出名增加 -{BK}；BK 必须为 16 的正整数倍且整除 D。
 BK 仅作为 block lowering 的 QK/V/O 分块提示，不改变 tensor IR 的完整 D 维度。
@@ -79,8 +79,9 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
     for name, value in (("B", b), ("H", h), ("S", s), ("D", d)):
         if not isinstance(value, int) or value <= 0:
             raise ValueError(f"{name}={value} 必须为正整数")
-    if bm <= 0 or bn <= 0 or s % bm or s % bn:
-        raise ValueError(f"BM={bm}、BN={bn} 必须为正整数且均能整除 S={s}")
+    if bm <= 0 or bn <= 0:
+        raise ValueError(f"BM={bm}、BN={bn} 必须为正整数")
+    has_tail = bool(s % bm or s % bn)
     if bk is not None and (not isinstance(bk, int) or bk <= 0 or bk % 16 or d % bk):
         raise ValueError(f"BK={bk} 必须为 16 的正整数倍且能整除 D={d}")
     # 以下映射专用于给定模板。若基础模板改变，明确报错，避免误改 H/D。
@@ -154,13 +155,13 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
         kernel,
         r"(arg_dims = \[1, -1, -1\], res_dims = \[1\], )"
         r"size_per_unit = 64 : i64, unit_num = \d+ : i64",
-        lambda m: f"{m[1]}size_per_unit = {bm} : i64, unit_num = {s // bm} : i64",
+        lambda m: f"{m[1]}size_per_unit = {bm} : i64, unit_num = {(s + bm - 1) // bm} : i64",
     )
     # Grid follows entry argument order [z, y, x]; bx denotes the query tile.
     axes = re.search(r"\^bb0\(%bz: index, %(bx|by): index, %(bx|by): index,", kernel)
     if axes is None or axes[1] == axes[2]:
         raise ValueError("模板入口必须包含 bz 和不同的 bx/by 轴")
-    extents = {"bx": s // bm, "by": h}
+    extents = {"bx": (s + bm - 1) // bm, "by": h}
     kernel = replace_once(kernel, r"grid = \[\d+, \d+, \d+\]",
                           f"grid = [{b}, {extents[axes[1]]}, {extents[axes[2]]}]")
 
@@ -194,6 +195,17 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
     if bk is not None:
         kernel = replace_once(kernel, r"attributes \{parallel_map =",
                               f"attributes {{frisk.attention_tiles = array<i64: {bk}, {bk}>, parallel_map =")
+    if has_tail:
+        kernel = replace_once(kernel, r"attributes \{",
+                              "attributes {frisk.checked_global_io, "
+                              f"frisk.attention_causal = {str(causal).lower()}, ")
+        kernel = replace_once(kernel, r"%keyEnd = arith.addi %qStart, %cBM : index",
+                              "%qEnd = arith.addi %qStart, %cBM : index\n"
+                              "      %keyEnd = arith.minsi %qEnd, %cS : index")
+        kernel = replace_once(kernel, r"%maskValue = scf.if %future",
+                              "%pastEnd = arith.cmpi uge, %ki, %cS : index\n"
+                              "          %invalid = arith.ori %future, %pastEnd : i1\n"
+                              "          %maskValue = scf.if %invalid")
     if softmax == "online":
         kernel = online_softmax_kernel(kernel, bm, bn, d)
     # causal attention 需覆盖当前 Q tile 的全部有效 key：(bx + 1) * BM。
@@ -207,12 +219,20 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
         prefix = replace_once(prefix, r"(?m)^    %6 = deepgengraph.add %5, %0[^\n]*\n", "")
         prefix = re.sub(r"%6\b", "%5", prefix)
         mask, masked_score, score = "%mask", "%masked", "%qk"
-        kernel = replace_once(
-            kernel, rf"(?ms)^[ \t]*{mask} = deepgengraph.mask starts = .*?"
-            r"^[ \t]*} : \(index, index\) -> tensor<[^>]+>\n", "")
-        kernel = replace_once(
-            kernel, rf"(?m)^[ \t]*{masked_score} = deepgengraph.add {score}, {mask}[^\n]*\n", "")
-        kernel = re.sub(rf"{masked_score}\b", score, kernel)
+        if has_tail:
+            # Non-causal attention still excludes keys beyond the real S.
+            for pattern in (r"%nextRow = arith.addi %qi, %c1 : index",
+                            r"%future = arith.cmpi ule, %nextRow, %ki : index",
+                            r"%invalid = arith.ori %future, %pastEnd : i1"):
+                kernel = replace_once(kernel, rf"(?m)^[ \t]*{pattern}\n", "")
+            kernel = kernel.replace("scf.if %invalid", "scf.if %pastEnd")
+        else:
+            kernel = replace_once(
+                kernel, rf"(?ms)^[ \t]*{mask} = deepgengraph.mask starts = .*?"
+                r"^[ \t]*} : \(index, index\) -> tensor<[^>]+>\n", "")
+            kernel = replace_once(
+                kernel, rf"(?m)^[ \t]*{masked_score} = deepgengraph.add {score}, {mask}[^\n]*\n", "")
+            kernel = re.sub(rf"{masked_score}\b", score, kernel)
         kernel = replace_once(kernel, r"to %(?:keyEnd|loopUb) step %cBN", "to %cS step %cBN")
     return prefix + kernel + source[end:], (b, h, s, d)
 
@@ -388,7 +408,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--causal", "--casual", dest="causal", action="store_true", default=True)
     mode.add_argument("--non-causal", dest="causal", action="store_false",
-                      help="生成无 mask、遍历全部 key 的 full attention")
+                      help="生成遍历全部有效 key 的 full attention，仅保留尾块 mask")
     parser.add_argument("--output", type=Path,
                         help="单组参数的指定输出文件（例如 test_input_shared_d.mlir）")
     parser.add_argument("--output-dir", type=Path, default=ROOT,
