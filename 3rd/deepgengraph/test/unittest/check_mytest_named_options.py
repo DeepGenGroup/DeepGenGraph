@@ -43,6 +43,8 @@ def main():
         check([value for _, value in pairs], parsed)
         named = [f'--{name}={value}' for name, value in pairs]
         check(named + ['--llvm-opt=0'], parsed)
+        for mode in ('both', 'early', 'late', 'none'):
+            check(named + [f'--llvm-cleanup={mode}'], parsed)
         check(list(reversed(named)), parsed)
         check([f'--input={missing}', '--wmma-layout=b-permute'], parsed)
         # Sparse options preserve defaults, including the implicit 128 threads.
@@ -58,6 +60,7 @@ def main():
             (['--vo-tile=abc'], 'QK/VO tile must be nonnegative'),
             (['--prefetch-packets=2'], 'prefetch-packets must be 0 or 1'),
             (['--math=strict', '--local-reduce=approx'], 'requires math=approx'),
+            (['--llvm-cleanup=invalid'], 'use --llvm-cleanup=both|early|late|none'),
             (['--typo=1'], 'unknown option: --typo=1'),
             (['--input=another.mlir'], '--input also supplied positionally'),
             (['0', '--pipeline=0'], '--pipeline also supplied positionally'),

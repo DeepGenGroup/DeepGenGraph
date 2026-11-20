@@ -390,12 +390,11 @@ void dumpLLVMPass(llvm::Module &module, bool enabled, llvm::StringRef name) {
 
 bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool splitPackedDMA, unsigned asmSourceBytes,
-                             bool cleanupMMA,
+                             bool cleanupLate,
                              bool canonicalizeExport = false,
                              bool reuseLeaderRead = false,
                              bool dumpPasses = false,
                              bool optimizeLLVM = true) {
-  mlir::frisk::prepareRegisterMMAForLLVM(module);
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes, reuseLeaderRead);
   else if (splitPackedDMA)
@@ -408,9 +407,9 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // Lifetime optimization exposes thread bounds and folds LDS leader guards.
   // After all late rewrites, merge the now-constant branches and clean up
   // register expressions. Accumulator fusion is complete in block IR.
-  if (cleanupMMA)
-    mlir::frisk::cleanupRegisterMMA(module, /*simplifyCFG=*/true);
-  dumpLLVMPass(module, dumpPasses, "cleanupRegisterMMA");
+  if (cleanupLate)
+    mlir::frisk::cleanupLLVMInstructions(module, /*simplifyCFG=*/true);
+  dumpLLVMPass(module, dumpPasses, "cleanupLLVMInstructions.late");
 
   // PV, paired LDS and softmax schedules are complete in ThreadIR.
   // DMA lowering still creates duplicate descriptors. Retain the generic
@@ -541,6 +540,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   bool elideBackedgeBarrier = true;
   bool dumpLLVMPasses = false;
   bool optimizeLLVM = true;
+  StringRef llvmCleanup = "both";
   bool analyzeRegisterPressure = false;
   bool simplifyLoopControl = true;
   bool coalesceWaits = true;
@@ -579,6 +579,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       }
     }
     if (namedArgument) continue;
+    if (option.consume_front("--llvm-cleanup=")) {
+      if (option != "both" && option != "early" && option != "late" && option != "none") {
+        llvm::errs() << "use --llvm-cleanup=both|early|late|none (default: both)\n";
+        return 1;
+      }
+      llvmCleanup = option;
+      continue;
+    }
     if (option.consume_front("--llvm-opt=")) {
       if (option != "0" && option != "3") {
         llvm::errs() << "use --llvm-opt=0|3 (default: 3; 0 disables export optimization)\n";
@@ -1471,11 +1479,11 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   llvmModule->setSourceFileName(arguments[1]);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
-  // Approximate division is complete in thread IR; native exp2 is selected
-  // by MLIR lowering. Preserve the existing register MMA cleanup.
-  if (mathMode != "strict")
-    frisk::cleanupRegisterMMA(*llvmModule);
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "cleanupRegisterMMA");
+  // Registered translation already supplies MMA and convert_pack anchor
+  // contracts, including strict math and cleanup-disabled configurations.
+  if (mathMode != "strict" && (llvmCleanup == "both" || llvmCleanup == "early"))
+    frisk::cleanupLLVMInstructions(*llvmModule);
+  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "cleanupLLVMInstructions.early");
   // Local reductions and deferred lane sums are complete in thread IR.
   if (prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
@@ -1506,7 +1514,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   bool exported = printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*cleanupMMA=*/mathMode != "strict", kLDSPrefetch != 0,
+      dmaExport == "split32", asmSourceBytes, /*cleanupLate=*/mathMode != "strict" &&
+          (llvmCleanup == "both" || llvmCleanup == "late"), kLDSPrefetch != 0,
       hoistLDSBases, dumpLLVMPasses, optimizeLLVM);
   os.close();
   if (os.has_error()) {
@@ -1800,7 +1809,7 @@ int main(int argc, char** argv) {
                  << "--pv-guard-group=-1|0..32 (default -1), "
                  << "--qk-guard-group=-1|0..32 (default 2), "
                  << "--qk-prefetch-words=N (default 32 words/thread)\n";
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--llvm-cleanup=both|early|late|none (default:both; strict skips cleanup)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     llvm::errs() << "Named aliases (use --name=value; legacy positional arguments remain supported):\n  --input=VALUE\n  --pipeline=VALUE\n  --output=VALUE\n  --reorder=VALUE\n  --pack-shared=VALUE\n  --wmma-layout=VALUE\n  --math=VALUE\n  --threads=VALUE\n  --block-warps=VALUE\n  --register-lifetimes=VALUE\n  --uniform-masks=VALUE\n  --prefetch-packets=VALUE\n  --fuse-mask-add=VALUE\n  --lds-reuse-words=VALUE\n  --dma-pack=VALUE\n  --dma-export=VALUE\n  --qk-tile=VALUE\n  --vo-tile=VALUE\nNamed and positional values for the same argument cannot be combined.\n";
     return help ? 0 : 1;
   }

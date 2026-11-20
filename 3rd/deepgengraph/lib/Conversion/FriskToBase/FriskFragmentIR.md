@@ -14,7 +14,9 @@ Tiling 把 acc 转为 C 的线程布局，提取每个 MN 位置的片段作为 
 
 对于独立的 `gemm(a, b, zero) + old`，fragment 优化缩短中间值生命周期，
 保持先乘积后加法的顺序。LLVM `FuseMMACAccumulatorPass` 的实现已删除；
-`cleanupRegisterMMA` 保留 MMA 准备、InstCombine 和可选的 SimplifyCFG 清理。
+Frisk LLVM translation 补齐导出契约；`prepareLLVMExportContracts` 仅供旧输入兼容。
+`cleanupLLVMInstructions` 独立执行
+InstCombine 和可选的 SimplifyCFG。`cleanupRegisterMMA` 仅保留为兼容组合入口。
 `PreciseDot` lowering 先产生零累加器；随后 `FriskOpFusePass` 在 block IR 层将
 可融合的 `gemm(a, b, zero) + acc` 改成 `gemm(a, b, acc)`。独立命令为
 `--frisk-op-fuse=allow-reassociation=true`；默认不允许浮点重结合。
@@ -156,7 +158,36 @@ ThreadIR 的 MMA 识别共用 `ThreadScheduleUtils.h`，不依赖 inline asm 的
 精确匹配的 f16 MMA 带 `frisk.register_mma`，注册 Frisk LLVM translation
 interface 的导出入口在生成 call 时设置 convergent/nounwind/willreturn/
 memory(none) 并清除 sideeffect。无此扩展的外部 mlir-translate 仍输出保守
-asm，旧 LLVM-only 输入仍由 `prepareRegisterMMAForLLVM` 兼容处理。
+asm，旧 LLVM-only 输入由 `prepareLLVMExportContracts` 兼容处理，旧名称
+`prepareRegisterMMAForLLVM` 保留为别名。
+
+`convert_pack` lowering 给输入/输出的空 asm 加 `frisk.register_anchor`。
+同一导出钩子校验空指令文本、`=v,0`、单参数、相同的 v4f32/v4f16 输入输出、
+sideeffect，以及无 alignstack/unwind/operand bundle，再补齐上述四个调用属性
+和 `!frisk.register_lifetimes`；锚点的 sideeffect 保持为 true。
+任意指令或伪造标记不能放宽内存效应。MMA 与锚点契约均在翻译时完成，包括
+strict 和关闭 cleanup 的配置；MyTest 与库导出路径不再执行后置 Module 扫描。
+旧 LLVM-only 输入仍显式调用兼容入口；fragment prefetch 要求调用者先完成契约。
+`test/unittest/check_register_anchor_export.py` 验证真实 producer、非法标记、
+O3 锚点保留及与旧导出加兼容补齐的结果一致。
+日志 BK32 配置验证：32 个向量锚点和 256 次 MMA 在翻译时已具备完整契约；
+新翻译结果等于旧翻译加后置补齐，后续各阶段和 raw/O3 输出均一致（忽略
+调试信息、文件路径与 metadata 编号，仍比较实际属性和生命周期 metadata）。
+
+`--llvm-cleanup=both|early|late|none` 独立控制两轮通用清理，默认 both：
+early 在生命周期/预取变换前运行两次 InstCombine；late 在 DMA 导出改写后
+运行 SimplifyCFG 和两次 InstCombine。strict 保持跳过这两轮清理。
+`--llvm-opt=0|3` 独立控制后续 O3；none 不关闭其他专用 Pass 内部的清理。
+四种模式用于同一输入的消融比较；不能仅凭一次配置相同就删除全局清理。
+验证入口 `test/unittest/check_llvm_cleanup_contracts.py` 检查职责分离、
+生命周期锚点属性、幂等性与兼容入口的组合等价性。
+
+`pmc_test.log` 1–24 行的 noncausal BK32 配置对照：both/early/late/none
+导出前 LLVM 输入相同，O3 后静态指令数分别为 3024/3018/3044/3058；
+省略任一轮都会改变最终 IR。默认 both 与原性能基线的 raw/O3 IR 经
+llvm-diff 比较一致。两轮并非此配置下的完全重复；保留默认 both，其他
+模式供 GPU 性能对照，不能由静态指令数直接推断性能。
+
 
 验证入口：`FriskSemanticsTest` 和 `test/check_frisk_semantics.py`，覆盖语义
 查询、具体内存效应、CSE 写入边界、带/不带 sideeffect 的 MMA 调度、即时

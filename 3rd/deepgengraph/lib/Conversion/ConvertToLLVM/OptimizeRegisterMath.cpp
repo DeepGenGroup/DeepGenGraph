@@ -3,7 +3,7 @@
 // MyTest performs reciprocal sharing in frisk-approximate-thread-math.
 //
 // 作用：
-//   1. 先调用 cleanupRegisterMMA，准备 MMA 属性并执行 InstCombine 清理。
+//   1. 分别补齐导出契约并执行通用 LLVM 指令清理。
 //   2. native exp2 已在 MLIR 的 GPUToROCDLOrNVVMPass 中直接 lowering。
 //   3. reciprocalMode：同一基本块内相同分母的 fdiv 共用一次 1/x，变成 a * (1/x)。
 //
@@ -18,7 +18,8 @@
 
 namespace mlir::frisk {
 void optimizeRegisterMath(llvm::Module &module, bool reciprocalMode) {
-  cleanupRegisterMMA(module);
+  prepareLLVMExportContracts(module);
+  cleanupLLVMInstructions(module);
   llvm::FunctionAnalysisManager analyses;
   llvm::ModuleAnalysisManager modules;
   llvm::LoopAnalysisManager loops;

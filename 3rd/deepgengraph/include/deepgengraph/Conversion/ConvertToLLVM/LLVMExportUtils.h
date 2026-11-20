@@ -9,8 +9,8 @@ class Module;
 namespace mlir { class DialectRegistry; }
 
 namespace mlir::frisk {
-/// Translate the validated Frisk register-MMA contract on LLVM inline asm at
-/// export time. MLIR retains its scheduling anchors until translation.
+/// Translate validated register-MMA and convert_pack lifetime-anchor contracts
+/// on LLVM inline asm at export time. Lifetime anchors retain sideeffect.
 void registerFriskLLVMTranslation(mlir::DialectRegistry &registry);
 /// Emit LLVM 24 floating-point literals in LLVM 22 syntax without changing
 /// their bit patterns. Preserve LLVM 22 memory effects, flags and attributes.
@@ -20,10 +20,14 @@ void legalizeLLVMTextForLLVM22(std::string &text);
 /// existing legacy text rewrites. Unmatched memory effects are not stripped.
 void legalizeLLVMTextForLegacyLLVM(std::string &text);
 
-/// Restore precise effects for the exact register MMA emitted by Frisk.
-/// Remove sideeffect; set convergent, memory(none), nounwind and willreturn.
-/// Preserve operands, constraints and hardware padding. Run
-/// immediately after MLIR translation, before LLVM optimizations or printing.
+/// Complete export contracts without folding instructions or changing the CFG.
+/// Validate legacy register MMA, remove its sideeffect and restore convergent,
+/// memory(none), nounwind and willreturn. Also annotate empty tied-register
+/// lifetime anchors, retaining their sideeffect. Compatibility for LLVM-only
+/// input or external translators without the Frisk export hook. Idempotent;
+/// registered MLIR export already prepares both MMA and lifetime anchors.
+void prepareLLVMExportContracts(llvm::Module &module);
+/// Compatibility alias for prepareLLVMExportContracts.
 void prepareRegisterMMAForLLVM(llvm::Module &module);
 
 /// Fold duplicate export-created DMA descriptors and address expressions.
@@ -54,9 +58,14 @@ void splitFullWaveAsyncDMAToDwords(llvm::Module &module);
 // straight to M0 instead of being read a second time at the DMA.
 void lowerWideAsyncDMAToBufferAsm(llvm::Module &module, unsigned sourceBytes, bool reuseLeaderRead = false);
 
-/// Prepare register MMA attributes and run InstCombine without reassociation.
-/// Enable CFG cleanup after late thread-bound/lifetime rewrites; early cleanup
-/// preserves the CFG used by reduction and lifetime matching.
+/// Generic instruction cleanup; does not recognize MMA or restore contracts.
+/// Runs two InstCombine passes, optionally preceded by SimplifyCFG after late
+/// thread-bound/lifetime rewrites. Early cleanup preserves the existing CFG.
+/// Requires contracts supplied by registered MLIR export or, for LLVM-only
+/// inputs, a separate prepareLLVMExportContracts call before optimization.
+void cleanupLLVMInstructions(llvm::Module &module, bool simplifyCFG = false);
+
+/// Compatibility wrapper: prepareLLVMExportContracts + cleanupLLVMInstructions.
 void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG = false);
 
 /// Shorten address, integer-predicate and math/narrowing live ranges on AMDGPU.
@@ -86,6 +95,7 @@ void reuseLDSFragments(llvm::Module &module, unsigned maxWords = 8);
 /// (including address temporaries); this is not a physical VGPR allocation cap.
 /// Scheduling barriers are compiler hints, never waits. Machine wait insertion
 /// remains responsible for dependencies after instruction selection/allocation.
+/// Requires contracts from registered MLIR export or prepareLLVMExportContracts.
 void prefetchMMACFragments(llvm::Module &module, unsigned maxExtraWords = 8);
 
 /// LLVM 15 LDS lowering can miss shared pointers hidden inside constant memref

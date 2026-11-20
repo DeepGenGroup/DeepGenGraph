@@ -141,7 +141,7 @@ llvm::Value *splitDescriptorPhi(PHINode *phi, llvm::Type *type,
 }
 } // namespace
 
-void prepareRegisterMMAForLLVM(llvm::Module &module) {
+void prepareLLVMExportContracts(llvm::Module &module) {
   auto *half4 = llvm::FixedVectorType::get(llvm::Type::getHalfTy(module.getContext()), 4);
   auto *float4 = llvm::FixedVectorType::get(llvm::Type::getFloatTy(module.getContext()), 4);
   for (llvm::Function &function : module)
@@ -191,6 +191,10 @@ void prepareRegisterMMAForLLVM(llvm::Module &module) {
         // Preserve cross-lane convergence; do not add speculatable/nosync.
         call->addFnAttr(llvm::Attribute::Convergent);
       }
+}
+
+void prepareRegisterMMAForLLVM(llvm::Module &module) {
+  prepareLLVMExportContracts(module);
 }
 
 void protectAsyncDMASourceAddresses(llvm::Module &module) {
@@ -568,7 +572,6 @@ void legalizeLLVMTextForLegacyLLVM(std::string &text) {
 }
 
 static void printLLVM22CompatibleIR(Module &module, raw_ostream &os) {
-  prepareRegisterMMAForLLVM(module);
   protectAsyncDMASourceAddresses(module);
   lowerWideAsyncDMAToHCU(module);
   std::string text;
@@ -666,7 +669,7 @@ std::string translateMLIRToLLVMIR(mlir::ModuleOp module, Target target, const in
 //       return nullptr;
 //   }
 
-  prepareRegisterMMAForLLVM(*llvmModule);
+  // Frisk translation has already completed MMA and lifetime-anchor contracts.
   auto optPipeline = makeOptimizingPipeline(/*optLevel=*/3, /*targetMachine=*/nullptr);
   if (auto err = optPipeline(llvmModule.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";

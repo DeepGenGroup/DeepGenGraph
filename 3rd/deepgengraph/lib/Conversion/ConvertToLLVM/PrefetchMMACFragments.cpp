@@ -209,7 +209,6 @@ bool prefetchPair(llvm::CallInst *current, llvm::CallInst *next,
 
 void prefetchMMACFragments(llvm::Module &module, unsigned maxExtraWords) {
   if (!maxExtraWords) return;
-  prepareRegisterMMAForLLVM(module);
   unsigned prefetched = 0, budgetSkips = 0, groupSkips = 0;
   for (auto &function : module) {
     const auto &triple = module.getTargetTriple();

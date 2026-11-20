@@ -611,11 +611,13 @@ struct ConvertPackLowering : ConvertOpToLLVMPattern<frisk::ConvertPackOp> {
                                 ConversionPatternRewriter &r) const override {
     auto loc = op.getLoc();
     auto anchor = [&](Value value) -> Value {
-      return r.create<LLVM::InlineAsmOp>(
+      auto assembly = r.create<LLVM::InlineAsmOp>(
           loc, value.getType(), ValueRange{value}, "", "=v,0",
           /*has_side_effects=*/true, /*is_align_stack=*/false,
           LLVM::tailcallkind::TailCallKind::None, /*convergent=*/true,
-          /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr).getResult(0);
+          /*asm_dialect=*/nullptr, /*operand_attrs=*/nullptr);
+      assembly->setAttr("frisk.register_anchor", r.getUnitAttr());
+      return assembly.getResult(0);
     };
     Value input = anchor(adaptor.getInput());
     Value elements[4];

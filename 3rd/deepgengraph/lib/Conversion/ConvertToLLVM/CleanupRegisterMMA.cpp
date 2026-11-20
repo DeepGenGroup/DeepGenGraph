@@ -1,4 +1,4 @@
-// Preserve the register MMA preparation and cleanup used by LLVM export.
+// Generic LLVM instruction cleanup, independent of export contracts.
 // Accumulator reassociation is handled by FriskOpFusePass before tiling.
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "llvm/IR/Module.h"
@@ -7,8 +7,7 @@
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 
 namespace mlir::frisk {
-void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG) {
-  prepareRegisterMMAForLLVM(module);
+void cleanupLLVMInstructions(llvm::Module &module, bool simplifyCFG) {
   llvm::FunctionAnalysisManager analyses;
   llvm::ModuleAnalysisManager modules;
   llvm::LoopAnalysisManager loops;
@@ -26,5 +25,9 @@ void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG) {
   pipeline.addPass(llvm::InstCombinePass());
   for (llvm::Function &function : module)
     if (!function.isDeclaration()) pipeline.run(function, analyses);
+}
+void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG) {
+  prepareLLVMExportContracts(module);
+  cleanupLLVMInstructions(module, simplifyCFG);
 }
 } // namespace mlir::frisk
