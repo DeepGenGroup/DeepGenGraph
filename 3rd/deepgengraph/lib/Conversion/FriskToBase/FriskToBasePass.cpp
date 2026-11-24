@@ -79,6 +79,12 @@ struct KernelOpConversion : public OpConversionPattern<KernelOp> {
     FunctionType funcType = mlir::dyn_cast<FunctionType>(kernelOp.getFunctionType());
     if (!funcType) return failure();
 
+    auto roles = kernelOp->getAttrOfType<ArrayAttr>("frisk.arg_roles");
+    if (kernelOp->hasAttr("frisk.arg_roles") &&
+        (!roles || roles.size() != funcType.getNumInputs() ||
+         llvm::any_of(roles, [](Attribute attr) { return !isa<StringAttr>(attr); })))
+      return kernelOp.emitError("frisk.arg_roles must contain one string per launch argument");
+
     // 2. 使用 rewriter 创建新的 func::FuncOp
     func::FuncOp funcOp = rewriter.create<func::FuncOp>(kernelOp.getLoc(), kernelOp.getSymName(), funcType);
 
@@ -87,6 +93,12 @@ struct KernelOpConversion : public OpConversionPattern<KernelOp> {
       funcOp->setAttr("frisk.checked_global_io", checked);
     if (auto permutes = kernelOp->getAttr("arg_permutes"))
       funcOp->setAttr("arg_permutes", permutes);
+    if (auto layouts = kernelOp->getAttr("frisk.arg_layouts"))
+      funcOp->setAttr("frisk.arg_layouts", layouts);
+    if (roles)
+      for (auto [i, role] : llvm::enumerate(roles))
+        if (!cast<StringAttr>(role).getValue().empty())
+          funcOp.setArgAttr(i, "frisk.shared_role", role);
     if (auto threadNumAttr = kernelOp->getAttr("thread_num")) {
       funcOp->setAttr("thread_num", threadNumAttr);
     }

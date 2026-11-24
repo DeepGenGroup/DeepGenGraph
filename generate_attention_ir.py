@@ -234,6 +234,13 @@ def generate_ir(source, bm, bn, bk=None, softmax="online", *,
                 kernel, rf"(?m)^[ \t]*{masked_score} = deepgengraph.add {score}, {mask}[^\n]*\n", "")
             kernel = re.sub(rf"{masked_score}\b", score, kernel)
         kernel = replace_once(kernel, r"to %(?:keyEnd|loopUb) step %cBN", "to %cS step %cBN")
+    # Launch buffers are BHSD; layouts are indexed by each argument's logical
+    # axes after arg_permutes. K therefore has BHDS shape with D stride one.
+    normal = f"strided<[{h*s*d}, {s*d}, {d}, 1]>"
+    key = f"strided<[{h*s*d}, {s*d}, 1, {d}]>"
+    kernel = replace_once(kernel, r"attributes \{",
+                          f"attributes {{frisk.arg_layouts = [{normal}, {key}, {normal}, {normal}], "
+                          'frisk.arg_roles = ["q", "k", "v", ""], ')
     return prefix + kernel + source[end:], (b, h, s, d)
 
 
@@ -301,8 +308,8 @@ def shared_attention_kernel(kernel, b, h, s, d, bm, bn):
 
     The existing compiler interprets base_offset in each argument's permuted
     layout (Q/V/O: BHSD; K: BHDS), and remaps the original BSHD strides.
-    In particular K's key offset is n, not n*D. The subsequent
-    NormalizeAttentionKLayout pass exposes contiguous BHSD K at launch time.
+    In particular K's key offset is n, not n*D.
+    Explicit argument layouts expose BHSD storage with a logical BHDS K view.
     Use explicit offsets and loads in the key loop so the block tiler can
     push independently selected QK and V/O slices into global buffer views.
     """

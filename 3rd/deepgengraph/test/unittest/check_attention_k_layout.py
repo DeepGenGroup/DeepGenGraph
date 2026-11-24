@@ -131,8 +131,56 @@ def check_partial_copy(tool):
     print("PASS transposed partial copy: offset slice, vector loads and unconditional barrier")
 
 
+def check_strided_input(tool):
+    # Logical BHDS accesses must retain their coordinates; the input type,
+    # rather than a transpose producer, supplies physical BHSD addressing.
+    for key_arg in (1, 2):
+        source = fixture(key_arg).replace(
+            "memref<2x3x4x8xf16, 1>",
+            "memref<2x3x4x8xf16, strided<[96, 32, 1, 4]>, 1>")
+        proc = subprocess.run([tool, "--finalize-thread-tiling"],
+                              input=source, capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        ir = proc.stdout
+        assert "memref.transpose" not in ir and "frisk.buffer_view" not in ir
+        constants = dict(re.findall(r"(%\w+) = arith.constant (\d+) : index", ir))
+        load = re.search(r"memref.load %arg" + str(key_arg) + r"\[([^]]+)\]", ir)
+        coordinates = [int(constants[x.strip()]) for x in load[1].split(",")]
+        assert coordinates == [1, 2, 2, 3], ir
+        assert sum(i * s for i, s in zip(coordinates, (96, 32, 1, 4))) == 174
+
+    # Padded rows and a nonzero source offset exercise linear packet views:
+    # retain 128-bit GLOBAL loads along D, including partial-block masking.
+    for stride, offset in ((16, 0), (20, 7)):
+        source = f"""module {{
+          func.func @copy_strided(
+              %src: memref<16x8xf16, strided<[1, {stride}], offset: {offset}>, 1>,
+              %dst: memref<8x4xf16, 3>) attributes {{thread_num = 64 : i32}} {{
+            %v = frisk.buffer_view %src[4, 2], ranges = [8, 4]
+              : memref<16x8xf16, strided<[1, {stride}], offset: {offset}>, 1> -> memref<8x4xf16, 1>
+            frisk.copy %v to %dst [affine_map<() -> (2)>]
+              : memref<8x4xf16, 1>, memref<8x4xf16, 3>
+            return
+          }}
+        }}"""
+        with tempfile.TemporaryDirectory(prefix="strided-copy-") as directory:
+            output = Path(directory) / "copy.mlir"
+            proc = subprocess.run([tool, "--convert-friskbase-to-thread", "--finalize-thread-tiling",
+                                   "-o", str(output)],
+                                  input=source, capture_output=True, text=True, timeout=60)
+            assert proc.returncode == 0, proc.stderr
+            ir = output.read_text()
+        assert "memref.transpose" not in ir and "frisk.buffer_view" not in ir
+        assert "memref.reinterpret_cast" in ir and "vector<8xf16>" in ir, ir
+        assert f"offset: [{offset}]" in ir and f"sizes: [{16 + 7 * stride}]" in ir, ir
+        assert "arith.cmpi ult" in ir and "scf.if" in ir
+        assert ir.count("memref.store") == 8
+    print("PASS direct strided K: nested views, padded/offset vector copies and partial blocks")
+
+
 def main():
     tool = sys.argv[1]
+    check_strided_input(tool)
 
     def run(source, options="", finalize=False, error=None):
         command = [tool, "--normalize-attention-k-layout" +

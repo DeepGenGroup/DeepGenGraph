@@ -169,9 +169,8 @@ static Value getViewBuffer(Value value) {
   return value;
 }
 
-// Which logical tile axis becomes the physical minor axis after folding all
-// views/transposes? A stride-one axis alone is not enough for vector.load:
-// it must become the final axis of the memref used by that operation.
+// Which logical tile axis is contiguous in storage? Explicit input layouts
+// can put it on a non-final axis; vector loads then use a linear storage view.
 static std::optional<unsigned> getPhysicalMinorCopyAxis(Value source) {
   auto type = dyn_cast<MemRefType>(source.getType());
   if (!type || type.getRank() != 2)
@@ -192,8 +191,15 @@ static std::optional<unsigned> getPhysicalMinorCopyAxis(Value source) {
       }
     }
     auto rootType = cast<MemRefType>(buffer.getType());
-    if (mappedAxis + 1 == unsigned(rootType.getRank()) &&
-        rootType.isLastDimUnitStride())
+    SmallVector<int64_t> strides;
+    int64_t offset;
+    if (succeeded(rootType.getStridesAndOffset(strides, offset)) &&
+        strides[mappedAxis] == 1 &&
+        ((mappedAxis + 1 == unsigned(rootType.getRank())) ||
+         (rootType.hasStaticShape() && !ShapedType::isDynamic(offset) &&
+          llvm::all_of(strides, [](int64_t s) {
+            return !ShapedType::isDynamic(s) && s > 0;
+          }))))
       return axis;
   }
   return std::nullopt;
@@ -501,6 +507,37 @@ static void resolveViewAccess(OpBuilder &b, Location loc, Value &buffer,
     indices.assign(mapped.begin(), mapped.end());
     buffer = view.getSource();
   }
+}
+
+// vector.load walks the final memref axis. For a statically strided input
+// whose contiguous axis is elsewhere, expose its storage as a rank-one view
+// and linearize the already-resolved coordinates. No data is moved. Include
+// padding in the span and preserve the source offset exactly once.
+static Value loadContiguousGlobalPacket(OpBuilder &b, Location loc,
+                                        VectorType vectorType, Value buffer,
+                                        ArrayRef<Value> indices) {
+  auto type = cast<MemRefType>(buffer.getType());
+  if (type.isLastDimUnitStride())
+    return b.create<vector::LoadOp>(loc, vectorType, buffer, indices);
+  SmallVector<int64_t> strides;
+  int64_t offset;
+  auto status = type.getStridesAndOffset(strides, offset);
+  assert(succeeded(status) && type.hasStaticShape());
+  (void)status;
+  int64_t span = 1;
+  AffineExpr linear = b.getAffineConstantExpr(0);
+  for (auto [i, stride] : llvm::enumerate(strides)) {
+    span += (type.getDimSize(i) - 1) * stride;
+    linear = linear + b.getAffineDimExpr(i) * stride;
+  }
+  auto flatType = MemRefType::get({span}, type.getElementType(),
+      StridedLayoutAttr::get(b.getContext(), offset, {1}), type.getMemorySpace());
+  Value flat = b.create<memref::ReinterpretCastOp>(loc, flatType, buffer,
+      b.getIndexAttr(offset), ArrayRef<OpFoldResult>{b.getIndexAttr(span)},
+      ArrayRef<OpFoldResult>{b.getIndexAttr(1)});
+  Value at = composeAccessIndex(b, loc,
+      AffineMap::get(indices.size(), 0, linear), indices);
+  return b.create<vector::LoadOp>(loc, vectorType, flat, ValueRange{at});
 }
 
 static std::optional<LowerInfo> readTileLayout(Value value, DictionaryAttr attrs) {
@@ -3007,7 +3044,10 @@ static LogicalResult lowerGlobalToSharedCopy(
   if (!physicalDst.isLastDimUnitStride())
     return rewriter.notifyMatchFailure(op, "vector copy requires unit destination row stride");
   auto loc = op.getLoc();
-  bool columnMajorSource = getPhysicalMinorCopyAxis(source) == 0;
+  // Checked IO must retain the original multidimensional coordinates until
+  // bounds guards are inserted. A linear view would hide cross-axis OOB.
+  bool columnMajorSource = getPhysicalMinorCopyAxis(source) == 0 &&
+                           !kernel->hasAttr("frisk.checked_global_io");
   int64_t total = ShapedType::getNumElements(shape);
   int64_t perThread = llvm::divideCeil(total, threadsAttr.getInt());
   SharedBufferAliases aliases;
@@ -3152,7 +3192,7 @@ static LogicalResult lowerGlobalToSharedCopy(
       auto at = coordinates(start);
       Value buffer = source;
       resolveViewAccess(rewriter, loc, buffer, at);
-      return Value(rewriter.create<vector::LoadOp>(loc, vectorType, buffer, at));
+      return loadContiguousGlobalPacket(rewriter, loc, vectorType, buffer, at);
     }
     Value packet = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));

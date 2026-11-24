@@ -523,7 +523,8 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
       auto newArgTy = converter->convertType(ty);
       if(mlir::isa<MemRefType>(newArgTy)){
         auto mem = mlir::cast<MemRefType>(newArgTy);
-        auto newMem = MemRefType::get(mem.getShape(), mem.getElementType(), AffineMap{}, int(frisk::attr::MemorySpace::Global));
+        auto newMem = MemRefType::get(mem.getShape(), mem.getElementType(),
+            mem.getLayout(), rewriter.getI64IntegerAttr(int(frisk::attr::MemorySpace::Global)));
         newInputs.push_back(newMem);
       }
       else{
@@ -548,6 +549,9 @@ struct KernelOpConversionPattern : public OpConversionPattern<deepgengraph::Kern
       newKernelOp->setAttr("frisk.checked_global_io", checked);
     if (permuteAttr)
       newKernelOp->setAttr("arg_permutes", permuteAttr);
+    for (StringRef name : {"frisk.arg_layouts", "frisk.arg_roles"})
+      if (auto attr = op->getAttr(name))
+        newKernelOp->setAttr(name, attr);
     rewriter.inlineRegionBefore(op->getRegion(0), newKernelOp.getRegion(), newKernelOp.getRegion().end());
     // 3. replace deepgengraph.return with frisk.end
     auto oldReturn = newKernelOp->getRegion(0).front().getOps<deepgengraph::ReturnOp>().begin();
@@ -672,6 +676,10 @@ struct BlockPointerOfConversionPattern
     }
     auto stride = op.getStride();
 
+    // Block-pointer offsets encode coordinates in the contiguous logical
+    // shape, even when the launch buffer has an explicit strided layout.
+    // Decode those coordinates here; the memref layout supplies physical
+    // strides when buffer_view accesses are lowered.
     auto sourceStrides = getPhysicalStrides(permutedShape);
     llvm::outs() << "sourceStrides:" << sourceStrides[0] << "," << sourceStrides[1] << "," << sourceStrides[2] << "," << sourceStrides[3] << "\n";llvm::outs().flush();
     llvm::outs() << "expr_baseOffset:" << expr_baseOffset << "\n";llvm::outs().flush();
@@ -1877,6 +1885,36 @@ public:
 
     if (hasFailure)
       signalPassFailure();
+
+    // Launch layouts describe the final logical axes (after arg_permutes).
+    // Include output buffers appended by signature conversion. Keeping this
+    // separate from the logical permutation also supports padded inputs.
+    getOperation()->walk([&](frisk::KernelOp kernel) {
+      if (hasFailure || !kernel->hasAttr("frisk.arg_layouts")) return;
+      auto layouts = kernel->getAttrOfType<ArrayAttr>("frisk.arg_layouts");
+      auto inputs = llvm::to_vector(kernel.getFunctionType().getInputs());
+      if (!layouts || layouts.size() != inputs.size()) {
+        kernel.emitError("frisk.arg_layouts must contain one layout per launch argument");
+        hasFailure = true;
+        return;
+      }
+      for (auto [i, attr] : llvm::enumerate(layouts)) {
+        auto type = dyn_cast<MemRefType>(inputs[i]);
+        auto layout = dyn_cast<StridedLayoutAttr>(attr);
+        if (!type || !layout || layout.getStrides().size() != unsigned(type.getRank())) {
+          kernel.emitError("frisk.arg_layouts entry must be a rank-matching strided layout for argument #") << i;
+          hasFailure = true;
+          return;
+        }
+        inputs[i] = MemRefType::get(type.getShape(), type.getElementType(),
+                                   layout, type.getMemorySpace());
+      }
+      for (auto [i, type] : llvm::enumerate(inputs))
+        kernel.getBody(0)->getArgument(i).setType(type);
+      kernel.setFunctionType(FunctionType::get(&getContext(), inputs,
+                                              kernel.getFunctionType().getResults()));
+    });
+    if (hasFailure) signalPassFailure();
 
   }
 };

@@ -80,6 +80,19 @@ class AttentionShapeTests(unittest.TestCase):
         self.assertIn("grid = [1, 4, 64]", partial)
         self.assertNotIn("frisk.attention_tiles", partial)
 
+    def test_explicit_launch_layouts(self):
+        # Include S == D: layout and semantic role cannot be inferred from
+        # shape equality, and must survive independently of that ambiguity.
+        for sequence in (64, 256):
+            ir, _ = generate_ir(TEMPLATE.read_text(), 64, 32,
+                                b=2, h=3, s=sequence, d=64)
+            kernel = ir.split("  deepgengraph.kernel", 1)[1]
+            layouts = re.search(r"frisk.arg_layouts = \[(.*?)\], frisk.arg_roles", kernel)[1]
+            normal = f"strided<[{3*sequence*64}, {sequence*64}, 64, 1]>"
+            key = f"strided<[{3*sequence*64}, {sequence*64}, 1, 64]>"
+            self.assertEqual(layouts, f"{normal}, {key}, {normal}, {normal}")
+            self.assertIn('frisk.arg_roles = ["q", "k", "v", ""]', kernel)
+
     def test_cli(self):
         with tempfile.TemporaryDirectory() as directory:
             command = [sys.executable, str(ROOT / "generate_attention_ir.py"),

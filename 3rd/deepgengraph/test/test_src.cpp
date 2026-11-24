@@ -1149,8 +1149,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     AddFuncPass(std::move(reorder));
     llvm::outs() << "\n---------- after reorder-workgroups ---------\n"; llvm::outs().flush();src->dump();
   }
-  AddPass(frisk::createNormalizeAttentionKLayoutPass());
-  llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n"; llvm::outs().flush();src->dump();
+  // Older tensor fixtures leave launch storage unspecified. Explicit layouts
+  // already encode the logical K transpose and need no ABI normalization.
+  auto attentionWithLayout = src->lookupSymbol<func::FuncOp>("Attn_p2");
+  if (!attentionWithLayout || !attentionWithLayout->hasAttr("frisk.arg_layouts")) {
+    AddPass(frisk::createNormalizeAttentionKLayoutPass());
+    llvm::outs() << "\n---------- after createNormalizeAttentionKLayoutPass ---------\n";
+    llvm::outs().flush(); src->dump();
+  }
   if (copyMode != "legacy") {
     auto promote = frisk::createPromoteGlobalToSharedAsyncPass();
     if (const char *alignment = std::getenv("FRISK_GM_TO_SHM_ALIGNMENT")) {
@@ -1175,6 +1181,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs().flush(); src->dump();
 
   AddFuncPass(frisk::createPromoteGemmMatrixLoadsPass(wmmaLayout.str()));
+  AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---------- after promote-gemm-matrix-loads ---------\n";
   llvm::outs().flush(); src->dump();
 
