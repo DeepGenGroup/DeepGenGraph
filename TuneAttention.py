@@ -356,6 +356,11 @@ lds-bytes 修改导出 IR，不属于 MyTest argv。
     在已测 BM=BN=128、BK=32 输入上保留完整 Q，LDS 16 KiB。
     其他输入仍需检查实际保留数量、VGPR/scratch 和 GPU 正确性/性能。
   baseline / nohint-unrolled：历史起点，nohint + DK 展开，retain=0。
+  early-wave-baseline：完整已测 non-causal 配置，在 online-vdb-k64 上设置
+    k-lds-prefetch=8、softmax-fragments=pv、k-tail-prefetch=4、cross-bn-k0=1、
+    lazy-softmax-base=8、softmax-cvt-pack=rtz，并启用两种 hoist 和 LLVM pass dump。
+    MyTest 内部 llvm-opt=0；HSACO 的 --opt-level 默认仍为3。输入模式由MLIR决定。
+    新增键均支持 --set/--sweep；lazy-softmax-base 为 off 或 (0,15] 内有限值。
   group8-reverse：baseline + group=8 + reverse；swizzle 均关闭。
   online-vdb-k64：group32 forward、PV interleave4、V双缓冲、K 64-bit+swizzle，
     并启用 mask-add-bypass/defer-lane-sum/local-reduce；输入是否causal由MLIR决定。
@@ -430,7 +435,10 @@ LEGACY_BASE = dict(
        "swizzle-q": "off", "swizzle-k": "off", "swizzle-v": "off",
        "swizzle-q-arg": "-1", "swizzle-k-arg": "-1", "swizzle-v-arg": "-1",
        "workgroup-group-size": "0", "workgroup-reverse": "0",
-       "workgroup-query-axis": "auto", "workgroup-head-axis": "auto"})
+       "workgroup-query-axis": "auto", "workgroup-head-axis": "auto",
+       "softmax-fragments": "off", "lazy-softmax-base": "off", "softmax-cvt-pack": "off",
+       "hoist-lds-bases": "1", "hoist-lane-shuffles": "1",
+       "dump-llvm-passes": "0", "llvm-opt": "3"})
 BASE = dict(LEGACY_BASE, math="approx", masks="1", prefetch="1", fuse="0",
             copy="async", alignment="16",
             **{"dma-pack": "useKPack", "dma-export": "asm128", "qk-tile": "32",
@@ -449,6 +457,12 @@ ONLINE_BASE = dict(RETAINED32_BASE, **{"workgroup-group-size": "4", "frag-prefet
 KDMA64_BASE = dict(ONLINE_BASE, **{"workgroup-group-size": "32", "workgroup-reverse": "0",
     "mask-add-bypass": "approx", "defer-lane-sum": "approx", "local-reduce": "approx",
     "pv-interleave": "4", "v-double-buffer": "1", "k-dma": "64-swizzle"})
+# Complete user-measured non-causal configuration; historical presets stay stable.
+EARLY_WAVE_BASE = dict(KDMA64_BASE, **{
+    "k-lds-prefetch": "8", "softmax-fragments": "pv", "k-tail-prefetch": "4",
+    "cross-bn-k0": "1", "lazy-softmax-base": "8", "softmax-cvt-pack": "rtz",
+    "hoist-lds-bases": "1", "hoist-lane-shuffles": "1",
+    "dump-llvm-passes": "1", "llvm-opt": "0"})
 KEYS = list(BASE)
 POSITIONAL_KEYS = (
     "reorder", "pack", "layout", "math", "threads", "waves",
@@ -462,13 +476,19 @@ NAMED_KEYS = ("frag-prefetch", "frag-prefetch-words", "retain-fragment-words",
               "pv-interleave", "v-double-buffer", "k-dma", "k-dma-arg", "k-lds-prefetch", "k-tail-prefetch", "cross-bn-k0",
               "simplify-loop-control", "coalesce-waits", "mask-add-bypass",
               "defer-lane-sum", "local-reduce", "local-reduce-chains", "local-reduce-min-inputs", "local-reduce-ops",
+              "softmax-fragments", "lazy-softmax-base", "softmax-cvt-pack",
+              "hoist-lds-bases", "hoist-lane-shuffles", "dump-llvm-passes", "llvm-opt",
               *SWIZZLE_KEYS, *SWIZZLE_ARG_KEYS, "workgroup-group-size", "workgroup-reverse",
               *WORKGROUP_AXIS_KEYS)
 BOOLS = ("pipeline", "reorder", "pack", "lifetimes", "masks", "prefetch", "fuse",
-         "frag-prefetch", "v-double-buffer", "cross-bn-k0", "simplify-loop-control", "coalesce-waits", "workgroup-reverse")
+         "frag-prefetch", "v-double-buffer", "cross-bn-k0", "simplify-loop-control", "coalesce-waits", "workgroup-reverse",
+         "hoist-lds-bases", "hoist-lane-shuffles", "dump-llvm-passes")
 ENUMS = {"layout": ("3.1", "3.2", "3.3"),
          "k-dma": ("128", "64", "64-swizzle"),
          "pv-interleave": ("0", "1", "2", "4"),
+         "softmax-fragments": ("off", "fragment", "pv"),
+         "softmax-cvt-pack": ("off", "rtz"),
+         "llvm-opt": ("0", "3"),
          "mask-add-bypass": ("off", "legal", "approx"),
          "defer-lane-sum": ("off", "legal", "approx"),
          "local-reduce": ("off", "legal", "approx"),
@@ -795,6 +815,14 @@ def main(argv=None):
         return key, value
 
     def normalize(key, value):
+        if key == "lazy-softmax-base" and value != "off":
+            try:
+                threshold = float(value)
+            except ValueError:
+                p.error("lazy-softmax-base 必须为 off 或 (0,15] 内的有限数值")
+            if not math.isfinite(threshold) or not 0 < threshold <= 15:
+                p.error("lazy-softmax-base 必须为 off 或 (0,15] 内的有限数值")
+            value = format(threshold, ".15g")
         if key == "local-reduce-ops":
             if value != "all" and not all(v in ("add", "mul", "and", "or", "xor", "min", "max")
                                           for v in value.split(",")):
@@ -898,6 +926,7 @@ def main(argv=None):
         yield "online-baseline", ONLINE_BASE.copy()
         yield "online-vdb-k64", KDMA64_BASE.copy()
         yield "online-vdb-k64-lds2", dict(KDMA64_BASE, **{"k-lds-prefetch": "2"})
+        yield "early-wave-baseline", EARLY_WAVE_BASE.copy()
         yield "legacy-baseline", LEGACY_BASE.copy()
         grouped = dict(BASE, **{"workgroup-group-size": "8", "workgroup-reverse": "1"})
         yield "group8-reverse", grouped.copy()

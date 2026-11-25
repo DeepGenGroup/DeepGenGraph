@@ -71,6 +71,66 @@ class AttentionRunnerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                 self.assertNotIn("carrier", result.stderr.partition("KEY 可取：")[2])
 
+    def test_early_wave_preset_forwards_measured_flags_and_external_o3(self):
+        result = self.run_script("TuneAttention.py", "--case", "early-wave-baseline",
+                                 "--benchmark", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [shlex.split(line) for line in result.stdout.splitlines()
+                    if line.startswith("env ")]
+        self.assertEqual(len(commands), 1)
+        argv = commands[0]
+        self.assertEqual(argv[10:13], ["approx", "256", "4,1"])
+        required = ["--pv-interleave=4", "--v-double-buffer=1", "--k-dma=64-swizzle",
+                    "--retain-fragment-words=32", "--frag-prefetch=0",
+                    "--k-lds-prefetch=8", "--softmax-fragments=pv",
+                    "--k-tail-prefetch=4", "--cross-bn-k0=1",
+                    "--lazy-softmax-base=8", "--softmax-cvt-pack=rtz",
+                    "--hoist-lds-bases=1", "--hoist-lane-shuffles=1",
+                    "--dump-llvm-passes=1", "--llvm-opt=0",
+                    "--workgroup-group-size=32", "--workgroup-reverse=0"]
+        for flag in required:
+            self.assertIn(flag, argv)
+        self.assertRegex(result.stdout, r"GenHsaco\.sh kernel\.ll 3 kernel\.hsaco")
+
+    def test_early_wave_sweeps_override_baseline_without_changing_hsaco_o3(self):
+        result = self.run_script("TuneAttention.py", "--sweep-base", "early-wave-baseline",
+            "--sweep", "lazy-softmax-base=off;8", "--sweep", "softmax-cvt-pack=off;rtz",
+            "--sweep", "llvm-opt=0;3", "--set", "k-lds-prefetch=4",
+            "--benchmark", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [shlex.split(line) for line in result.stdout.splitlines()
+                    if line.startswith("env ")]
+        self.assertEqual(len(commands), 8)
+        observed = set()
+        for argv in commands:
+            flags = dict(arg[2:].split("=", 1) for arg in argv if arg.startswith("--"))
+            observed.add((flags["lazy-softmax-base"], flags["softmax-cvt-pack"], flags["llvm-opt"]))
+            self.assertEqual(flags["k-lds-prefetch"], "4")
+            self.assertEqual(flags["softmax-fragments"], "pv")
+        self.assertEqual(observed, {("off", "off", "0"), ("off", "off", "3"),
+            ("off", "rtz", "0"), ("off", "rtz", "3"), ("8", "off", "0"),
+            ("8", "off", "3"), ("8", "rtz", "0"), ("8", "rtz", "3")})
+        self.assertEqual(result.stdout.count("GenHsaco.sh kernel.ll 3 kernel.hsaco"), 8)
+
+    def test_new_options_validate_values_before_writing_outputs(self):
+        for option in ("lazy-softmax-base=0", "lazy-softmax-base=15.01",
+                       "lazy-softmax-base=nan", "lazy-softmax-base=inf",
+                       "softmax-fragments=bad", "softmax-cvt-pack=rne", "llvm-opt=1",
+                       "hoist-lds-bases=2", "hoist-lane-shuffles=2", "dump-llvm-passes=2"):
+            for mode in ("--set", "--sweep"):
+                with self.subTest(option=option, mode=mode):
+                    result = self.run_script("TuneAttention.py", mode, option, "--dry-run")
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(option.split("=")[0], result.stderr)
+                    self.assertNotIn("KEY 可取", result.stderr)
+        result = self.run_script("TuneAttention.py", "--case", "early-wave-baseline",
+            "--set", "lazy-softmax-base=0.125", "--set", "softmax-fragments=fragment",
+            "--set", "hoist-lds-bases=0", "--set", "dump-llvm-passes=0", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for flag in ("--lazy-softmax-base=0.125", "--softmax-fragments=fragment",
+                     "--hoist-lds-bases=0", "--dump-llvm-passes=0"):
+            self.assertIn(flag, result.stdout)
+
     def test_candidate_preparation_preserves_input_in_output_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "input.mlir"
@@ -212,6 +272,10 @@ class AttentionRunnerTests(unittest.TestCase):
                 assert sys.argv[2] == '0'
                 assert sys.argv[7] == 'approx'
                 assert sys.argv[8:10] == ['256', '4,1']
+                assert '--softmax-fragments=pv' in sys.argv
+                assert '--lazy-softmax-base=8' in sys.argv
+                assert '--softmax-cvt-pack=rtz' in sys.argv
+                assert '--llvm-opt=0' in sys.argv
                 Path(sys.argv[3]).write_text({LLVM!r})
                 """))
             compiler.chmod(0o755)

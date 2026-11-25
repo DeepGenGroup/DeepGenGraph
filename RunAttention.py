@@ -9,7 +9,7 @@ Examples (run from any directory):
 
 --b/--h/--s/--d and --bm/--bn/--bk lists form a Cartesian product.
 Use repeated --shape BHSD to select exact shapes instead.
-Default tiles: BM=128, BN=128, BK=32, online softmax, TuneAttention baseline.
+Default tiles: BM=128, BN=128, BK=32, online softmax, early-wave-baseline preset.
 S may be any positive integer; tail tiles use checked IO and key masking.
 BK must divide D; backend hardware limits still apply.
 GenHsaco inherits LLVM_DIR, ROCM_BC, GPU_ARCH, GPU_FEATURES, DWARF_VERSION.
@@ -53,7 +53,8 @@ def main(argv=None):
     parser.add_argument("--stage", choices=("ir", "llvm", "hsaco", "launch"), default="launch",
                         help="执行到指定阶段，默认 launch（包含正确性校验和计时）")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "generated_ir/attention_runs")
-    parser.add_argument("--case", default="baseline", help="TuneAttention 编译预设，默认 baseline")
+    parser.add_argument("--case", default="early-wave-baseline",
+                        help="TuneAttention 编译预设，默认 early-wave-baseline")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                         help="覆盖编译参数，如 --set qk-tile=64；支持键见 TuneAttention.py --help")
     parser.add_argument("--tool", type=Path, default=TuneAttention.default_paths()[1], help="MyTest 路径")

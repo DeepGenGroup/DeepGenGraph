@@ -89,7 +89,30 @@ python3 RunAttention.py --shape 1,32,4096,128 --causal both \
 启动需要对应 GPU、HIP runtime 和 HIP 版 PyTorch。
 `--launch-python` 默认使用运行脚本的 Python；也可指定 `--gen-hsaco` 和 `--launcher`。
 
-默认采用 `TuneAttention.py` 的 `baseline` 编译预设，可以选择其它预设并覆盖参数：
+默认采用 `TuneAttention.py` 的 `early-wave-baseline` 编译预设，使用用户提供的
+完整已测 non-causal 优化参数：K LDS prefetch=8、softmax fragments=pv、K tail
+prefetch=4、cross-BN K0 prefetch、lazy softmax base=8、RTZ 转换和两种 hoist。
+MyTest 内部 `llvm-opt=0`，HSACO 阶段 `--opt-level` 默认仍为 3。
+输入、shape 或 causal 模式改变后，仍需检查数值与性能。旧的 `baseline`
+等预设可显式选择作对照。该设置不重建 MyTest。
+
+已测的 8 个 shape、两种模式的计时、数值检查和优化命中情况见
+[2026-11-25 基线汇总](docs/benchmarks/2026-11-25-early-wave-baseline.md)。
+配置开关是否实际生效取决于输入 IR；测量数据对应报告注明的编译器版本。
+
+在现有 HIP / LLVM nightly 环境下，测试默认形状的 non-causal 输入：
+
+```bash
+python3 RunAttention.py --shape 1,32,4096,128 --non-causal \
+  --case early-wave-baseline --timeout 1200 --warmup 20 --repeat 100
+
+# 按完整预设扫描 lazy softmax 阈值
+python3 TuneAttention.py --input /path/to/noncausal.mlir \
+  --sweep-base early-wave-baseline --sweep 'lazy-softmax-base=off;4;8;12' \
+  --benchmark --timeout 1200
+```
+
+可以选择其它预设并覆盖参数：
 
 ```bash
 python3 RunAttention.py --causal false --case online-vdb-k64
@@ -134,8 +157,8 @@ python3 RunAttention.py --causal both --stage launch --warmup 10 --repeat 50 --d
 ## 本地回归检查
 
 ```bash
-python3 3rd/deepgengraph/test/check_attention_runner.py
-python3 3rd/deepgengraph/test/check_attention_shapes.py
+python3 3rd/deepgengraph/test/unittest/check_attention_runner.py
+python3 3rd/deepgengraph/test/unittest/check_attention_shapes.py
 ```
 
 第一组测试使用后端替身验证完整脚本的参数、产物和失败处理，不替代目标 GPU 验证。
