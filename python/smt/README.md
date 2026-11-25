@@ -1,9 +1,10 @@
-# Frisk Base CP-SAT 调度框架
+# Frisk Fragment CP-SAT 调度框架
 
-在 `PromoteGemmMatrixLoads` 之后、`PipelineSchedule` / fragment lowering 之前交换 JSON：
+MyTest 在 `ConvertFriskBaseToFragmentIR` 和累加器融合之后、`ConvertFragmentToThreadIR` 之前交换 JSON。
+此时 LowerInfo/shared layout 已确定，寄存器 fragment 与真实 SHM 访问已经分离：
 
 ```text
-MyTest：识别 mainloop、分析依赖和 RW 规模 → problem.json
+MyTest：完整展开 mainloop 内静态循环、分析 Fragment 依赖和真实存储 → problem.json
 Python OR-Tools CP-SAT：联合求 op 顺序、stage、buffer 槽数 → schedule.json
 MyTest：重新验证方案 → 同迭代移动，或 PipelineSchedule 展开与 buffer 轮转
 ```
@@ -15,6 +16,7 @@ MyTest：重新验证方案 → 同迭代移动，或 PipelineSchedule 展开与
 
 | 文件 | 作用 |
 |---|---|
+| `run_pipeline.py` | 一键导出 → CP-SAT 求解 → MyTest 验证导入并完整 lowering |
 | `cpsat_scheduler.py` | CLI、`solve(problem, ...)`、整数规划与目标函数 |
 | `cost_model.py` | 可替换的相对耗时估计 |
 | `shm_liveness.py` | 按候选顺序计算 SHM 生命周期/峰值，生成 cumulative 约束 |
@@ -36,6 +38,153 @@ case 求解、导入并完整 lowering，随后用 `llvm-as` 验证，约需数�
 
 ## 使用
 
+### 一键运行
+
+在仓库根目录执行（使用安装了 OR-Tools 的 Python 和已构建的 MyTest）：
+
+```bash
+python python/smt/run_pipeline.py python/smt/baselines/noncausal/input.mlir \
+  --provenance python/smt/baselines/noncausal/provenance.json \
+  --mode intra --time-limit 15 -o /tmp/cpsat-kernel.ll
+```
+
+自定义输入时，把原 MyTest 第三个位置参数（输出文件）之后的调优参数放在 `--` 后：
+
+```bash
+python python/smt/run_pipeline.py /path/to/input.mlir \
+  --work-dir /tmp/my-cpsat-run --mode intra --time-limit 30 \
+  -- --k-tail-prefetch=4
+```
+
+脚本自动执行两次 MyTest（第二个位置参数固定为 `0`），共用输入、调优参数和环境。
+第一次停在 Fragment 导出点，求解成功后第二次导入方案，由 MyTest 验证并继续完整 lowering。
+支持 `--loop`、`--mytest`，以及求解器的 `--costs`、`--scale-work`、`--max-stages`、
+`--max-slots`、`--lds-budget`、`--dma-capacity`、`--shm-check`、`--workers`、`--seed`。
+`--provenance` 读取 baseline 的完整 MyTest 参数和环境；`--` 后的额外参数追加到其后。
+未指定 provenance 时继承当前环境；`FRISK_GM_TO_SHM_MODE` 未设置时使用 `async`。
+`--cpsat-*` 流程控制参数由脚本管理，不接受透传。
+
+默认每次创建 `generated_ir/cpsat_runs/run-*`；显式 `--work-dir` 必须是新目录，避免误用旧产物。
+其中保留 `problem.json`、`baseline.json`、`schedule.json`、`base.mlir`、`scheduled.mlir`、
+最终 `kernel.ll` 和 `export.log` / `solve.log` / `lower.log`，日志首行包含实际命令。
+两次 MyTest 各自在独立子目录中写诊断文件。任一步失败即非零退出并指明日志，
+不会继续执行后续步骤；`-o` 指定的目标只在所有阶段成功且最终 LDS 检查通过后替换。
+LDS 硬上限默认 **16 KiB（16384 字节）**，用 `--lds-budget 32768` 等字节数覆盖。
+同一预算同时约束求解器的逻辑 SHM 峰值和最终 LLVM 的物理 LDS 分配。
+最终检查结果写入 `lds_check.json`；超限或无法确定容量时非零退出，候选 LLVM 留在
+`lower/kernel.ll` 供诊断，不发布顶层 `kernel.ll`，也不覆盖 `-o` 的已有文件。
+物理检查支持 MyTest 当前输出的静态 `addrspace(3)` 字节数组，计入对齐，保守累加
+模块全部 LDS 全局对象；未知形式或动态 LDS 明确拒绝。逻辑模型和物理分配可能不同，
+因此仅运行 `cpsat_scheduler.py` 得到的方案仍需经过此完整流程才能确认物理容量合规。
+这里的验证是调度合法性和编译验证，不包含 GPU 数值或性能测试。
+
+### Fragment 展开与调度所有权
+
+CP-SAT 的第一优化目标是相对成本模型中的稳态 II，随后依次优化 LDS 占用和对源顺序
+的改动；只有前一个目标已证明最优才进入下一个目标。`FEASIBLE` 不表示最优 II。
+这不是整个 kernel 的运行时间模型，不计完整 prologue/epilogue、实际 occupancy 或
+精确的目标 GPU 时延；必须用目标机器的数值和性能测试验收。
+
+对于有寄存器活跃期信息的 Fragment LDS→MMAC 链，默认启用有界 read-ahead 顺序约束：
+下一批 LDS 读在当前批消费者前发出，当前批 MMAC 完成发射后才能打开第三批读取。
+小型 `load_frag` 两个一批，矩阵读一个一批；这是发射顺序约束，不会用虚拟 idle 或
+零成本 view 假装隐藏延迟。规则遇到数据/地址依赖环或不支持的消费者时跳过该组。
+所有方案仍须满足寄存器与 LDS 容量硬约束，预算不足时不会静默放宽上限。
+规则保存在 `schedule.json` 的 `model.lds_read_ahead` 中，并独立检查最终导出顺序。
+可使用 `--no-lds-read-ahead` 关闭规则做对照；求解器和 `run_pipeline.py` 均支持。
+这些约束是可调的调度策略，会缩小搜索空间，不能保证在所有 GPU/形状上更快。
+
+MyTest 的 CP-SAT 路径自动完整展开所选 mainloop 内所有静态 affine 循环，保留外层
+mainloop。不再使用 16 次或 2048 新增操作阈值；动态/不支持的内层循环明确报错。
+展开保留 SSA iter_args/yield 依赖，在克隆模块上完成，导出/导入重复同样准备并校验 fingerprint。
+`--unroll-max-trip-count` / `--unroll-max-expanded-ops` 仅保留旧 Base bridge 的兼容语义，
+不会限制 MyTest Fragment 路径。独立 `FriskScheduleJSONTest --fragment` 可测试 Fragment 输入。
+
+CP-SAT 路径屏蔽 AutoPipeline、FriskFragIRReorder、
+ScheduleAsyncCopies，以及后续 V 双缓冲、cross-BN、QK/PV interleave、LDS/fragment/packet
+prefetch、Softmax fragment schedule、LazySoftmaxBase、局部归约/延迟 lane sum 重组、
+寄存器 math-consumer 重排、IRDeepOptimize 的 reorder、LLVM cleanup/O3 和全局 barrier 优化。
+即使 provenance 中开启了这些参数，此路径也会屏蔽；MyTest 日志会明确提示调度所有权。
+保留数值 lowering、必要的 layout/packing、存储生命周期重算、复用与同步插入。
+LDS 访问合并限制在计算/同步/写入边界内；`--register-lifetimes=1` 在此路径仅重建纯地址
+表达式并删除死代码，不移动 DMA/MMA。地址复用窗口最多覆盖 8 次访存，避免展开后的长块
+把大量地址值保留到循环末尾。局部重复 wait/barrier 清理在 CP-SAT 路径始终启用。
+非 CP-SAT 路径保持原行为。
+循环简化和 invariant fragment retention 在导出/指纹生成前执行；它们不会覆盖求解结果。
+常驻值计入寄存器预算，已经结束的前导 LDS 暂存经用途/异步完成证明后可复用 periodic
+pool，并在交接处插入 barrier；不能证明生命周期互斥的存储仍保持独立。
+
+最终物理 VGPR/spill 必须检查目标后端汇编；Fragment/Thread 活跃值分析不能代替寄存器分配。
+以下检查默认要求 VGPR 数量不超过 250、LDS 不超过 16 KiB、无 spill、无 private/scratch：
+
+```bash
+python python/smt/check_assembly_resources.py kernel.amdgcn.log --vgpr-budget 250 --lds-budget 16384
+```
+
+支持 UTF-8 和带 BOM 的 UTF-16。失败退出码为 1，缺失元数据退出码为 2；预算可由用户调整。
+`v0..v255` 表示 256 个寄存器，后端分配粒度也可能使报告数量向上取整。
+这是后端验收检查，当前 CP-SAT 仍未联合约束物理 VGPR，不能将 IR 生成成功视为无 spill。
+
+Fragment 新导出包含 `register_liveness`：按底层 origin 的 32-bit 字去重计算
+pack/insert/extract 的切片活跃期，并把循环输入映射到前一次迭代的 yield 内容。
+CP-SAT 对周期活跃区间加入 cumulative 硬约束，默认 `--vgpr-budget=250`
+和 `--register-reserve=32`（数据峰值加预留不超过 250）。预留用于地址和后端临时值，
+不等于精确的物理分配；SGPR 不与 VGPR 相加。求解后再次按实际 order 独立检查，
+报告位于 `schedule.json/model/register_liveness`。未知载荷拒绝建模；动态或未更新的
+循环切片保守地保留整周期，
+显式请求预算时缺少活跃期数据也会失败。旧 Base 导出未显式请求预算时仍兼容运行。
+合并访存由固定 layout 和边界内 packing 实现；求解器目前不搜索 lane layout、
+全局访存 transaction 或银行冲突，因此建模周期不能当作 GPU 性能预测。
+静态 pack/insert/extract 等表示操作导出为 `zero_issue`，仅用亚时间单位 tick 保持
+唯一 order，全部 tick 的总成本小于一个模型时间单位；动态 extract 仍计费。
+`shm_issue`（默认 1）与 `shm_reg` 结果延迟（默认 5）分离，SSA 消费者必须等结果，
+中间允许插入独立工作。物理 pool 的 writer handoff barrier 也计入发射成本。
+这些默认值仍是相对代价，尚未用 gfx936 测量校准，也没有细粒度 MMAC/VALU 多发射模型。
+大图初始解优先把下一迭代的 DMA 放在尾部 LDS 读完成之后，并把本轮下一 tile 的
+DMA 提前到上一 tile 的 ready 之后；依赖或周期 packing 不合法时退回保守初始解。
+这些只是 CP-SAT hints，不固定最终决策。过早占住下一迭代 buffer 会阻止本轮双缓冲。
+可用 `compare_llvm_schedule.py best.o3.ll candidate.o3.ll -o comparison.json`
+对比自然循环内的 DMA/MMAC/LDS/wait/barrier；统计会明确列出条件分支块，
+不会把 peeled epilogue 的静态副本误算成每轮两倍工作量。
+若安装了目标兼容的后端，可在 `run_pipeline.py` 上追加
+`--llc /path/to/llc --mcpu gfx936`，自动编译并验收汇编；超限或出现 spill 时不会发布
+`kernel.ll` 或覆盖 `-o` 的已有输出。不提供后端时 `assembly_check.json` 明确记录物理
+寄存器尚未验证。
+
+`fragment-origin-words-v2` 将窄类型 ALU/转换结果按每个标量一个寄存器计费，
+不提前假定独立的 f16 转换结果已经打包；LDS/矩阵读取仍按已打包的 32-bit 字计费。
+v1 导出仍可读，但它的理想打包估算可能偏低。250 是 VGPR 估算硬预算，
+不是精确物理寄存器分配证明；地址、布局降低和后端临时量仍需预留及汇编验收。
+
+CP-SAT preparation 在分配 op ID 之前化简静态 extract/insert 切片、pack/unpack
+和同类型 cast，解除整块向量拼装产生的伪依赖。仅折叠可证明完全包含或不相交的
+静态切片；动态选择、部分重叠保留原依赖。这一步不移动计算 op。新的 source
+fingerprint 会使旧 schedule 失效，应重新导出和求解。
+`register_hint.py` 在求解器内生成优先消费活跃值的拓扑初始解，保持预取模板的
+内存事件顺序，且只将通过寄存器扫描及周期 LDS 检查的 hint 交给 CP-SAT。
+最终 order/stage 仍由 CP-SAT 决定并验证；不启用后续 Fragment/Thread 调度 Pass。
+`issue_units` 估算向量 ALU/reduction 展开后的每线程指令数量，MMAC 的
+`wmma_latency`（默认 4）与发射成本分离，所有 SSA 边保留结果延迟。
+这些是可调的相对成本，并非 gfx936 测量值。
+
+```bash
+python python/smt/run_pipeline.py /path/to/input.mlir \
+  --provenance /path/to/provenance.json \
+  --mode intra --lds-budget 16384 --time-limit 120 --workers 8 -o /tmp/fragment.ll
+```
+
+`base.mlir` 是兼容旧文件名的 **Fragment 调度前快照**，`scheduled.mlir` 是调度后快照。
+Fragment 图不再限制 256 个节点；大图使用 NoOverlap/phase 顺序编码，避免成对排序变量的
+平方增长。仍逐项检查 SSA、读写别名、DMA 完成和 LDS 生命周期；不会用估计时间代替真实 wait。
+大图的第三目标是相对源顺序时间位置的偏移，小图仍使用逆序对数；两者均在 period/存储大小之后。
+
+`pipeline` 仍允许全 stage 0。非零 stage 必须对应实际缓冲版本重叠，不再仅因分配操作被提前而展开流水。
+`--require-cross-iteration` 进一步排除全 stage 0，要求至少一个 buffer 使用多个槽；它只适用于
+`pipeline`，无可行解或超时无解会失败，不会静默退回 intra。也可直接传给 `cpsat_scheduler.py`。
+展开增加求解规模，可能需要更长时间或多个 worker；跨迭代还会增加 LDS 占用，实际性能仍需测量。
+
+### 手动分步运行
+
 保留原来的 MyTest 输入与调优参数，第二个位置参数必须是 `0`。新选项不改变历史位置参数。
 以已保存的 noncausal 输入演示最小命令；重现最佳配置时须使用其 `provenance.json` 内完整参数。
 MyTest 会产生诊断文件，建议在独立工作目录运行。
@@ -48,7 +197,7 @@ input="$repo/python/smt/baselines/noncausal/input.mlir"
 mkdir -p /tmp/frisk-cpsat-demo
 cd /tmp/frisk-cpsat-demo
 
-# 1. 导出到 problem.json，保存原始顺序，停在 Base 阶段。
+# 1. 导出到 problem.json，保存原始顺序，停在 Fragment 阶段。
 FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
   "$mytest" "$input" 0 unused.ll \
   --cpsat-export=problem.json --cpsat-baseline=baseline.json \
@@ -75,9 +224,12 @@ python "$repo/python/smt/cpsat_scheduler.py" problem.json -o pipeline.json \
 `--costs costs.example.json` 覆盖估计参数；`--scale-work` 开启按 RW/计算规模的粗粒度缩放。
 资源默认值集中在 `cpsat_scheduler.py` 开头：`SHM_LIMIT_BYTES`、`DMA_MAX_IN_FLIGHT`、
 `MAX_PIPELINE_STAGES`、`MAX_BUFFER_SLOTS`；CLI 可分别用 `--lds-budget`、`--dma-capacity`、
-`--max-stages`、`--max-slots` 覆盖。SHM 默认 `None`（不限），其余默认 4 / 2 / 2。
-VGPR（每 thread）和 SGPR（每 wave）上限已预留，但当前缺少寄存器活跃区间信息，
-设为非 `None` 会明确报错。求解输出的 `model.resource_limits` 记录实际采用的限额。
+`--max-stages`、`--max-slots` 覆盖。SHM 默认 16384 字节（与 driver 共用
+`lds_budget.py` 的默认值），其余默认 4 / 2 / 2。不支持用 `None` 取消 LDS 约束；
+`--baseline` 导出的原顺序也必须满足给定逻辑预算，MyTest 导出的 `baseline.json` 仅为诊断快照。
+旧 `VGPR_LIMIT_PER_THREAD` / `SGPR_LIMIT_PER_WAVE` 常量仍不约束物理寄存器，
+设为非 `None` 会明确报错；新的 Fragment 数据活跃期约束使用 `--vgpr-budget` /
+`--register-reserve`。求解输出的 `model.resource_limits` 记录实际采用的限额。
 无可行解或超时尚无解时返回非零退出码，不写新方案；目标路径若已有旧文件仍保留，调用方须检查退出码。
 
 `examples/prefetch.mlir` 提供一个可直接演示双缓冲的 Base-IR 小循环，在仓库根目录运行：
@@ -96,8 +248,7 @@ mainloop 自动选择唯一最外层、包含 copy/GEMM 的 affine loop。可在
 歧义时会列出候选并报错，不随意选循环。一次导入只处理一个 loop。
 启用 JSON 路径会跳过前面的 AutoPipeline，防止先展开再调度；输入及配置必须保持一致。
 
-导出点已经在 `PromoteGlobalToSharedAsync` 和 `PromoteGemmMatrixLoads` 之后，
-`ConvertFriskBaseToFragmentIR` 之前，仍是 block 级 IR。启用 CP-SAT 且未设置
+导出点位于 `ConvertFriskBaseToFragmentIR` 之后。启用 CP-SAT 且未设置
 `FRISK_GM_TO_SHM_MODE` 时默认使用 `async`，将可转换的 GM→SHM copy 变为
 `frisk.async_copy_gm_to_shm` + `frisk.wait_buffer_ready`。
 显式选择 `legacy` 会保留同步 copy；选择 `sync` 时在导出前降回同步 copy，
@@ -154,7 +305,7 @@ MLIR 重新分析当前 IR，验证 fingerprint、全部 ID、依赖、锚点及
 同步 op 占用串行 issue 流，DMA 在 issue 后异步持续；wait 的 stall 来自 completion 约束。
 模型包含周期边界上的 DMA 并发容量和后端 wait-all 行为。
 
-依次最小化：估计稳态 period → 新增 SHM 字节数 → 相对原始顺序的逆序对数。
+依次最小化：估计稳态 period → 物理池大小（旧保守路径为新增 SHM 字节数）→ 相对原始顺序的变化。
 每个目标证实最优后才固定它、继续下一目标；超时但已有可行解时返回 `FEASIBLE`。
 `model.lexicographic_solves` 保存各层目标的状态和 bound。
 这些相对权重足以探索方案，但 `OPTIMAL` 只代表该成本模型内的最优，不代表实际 GPU 最快。
@@ -165,13 +316,35 @@ Python 在每个候选方案上重新计算 `begin = stage(writer)*N + order(wri
 同一 op 的输入和输出同时占用存储；DMA 从 issue 开始占用 buffer，至少到真实 wait 之后才结束。
 生命周期使用离散 op 顺序，不会因为估计耗时或虚构 idle gap 而提前释放内存。
 仓库已有的 C++ `analyzeShmLiveness` 主要分析 `memref.alloc` 及其逻辑/物理访问；
-本阶段仍有 `frisk.alloc_buffer` 和计算产生的 tile，因此这里导出 Base 层所有权事实，
+MyTest Fragment 路径按 `memref.alloc` 的物理类型和访问导出所有权事实；旧 Base bridge 仍支持
+`frisk.alloc_buffer` 和计算 tile，
 由 Python 随候选顺序重算，后端再对实际 allocation 做自己的 liveness/reuse 分析。
 
 动态大小在指定预算时拒绝求解；无法证明迭代局部、别名/逃逸未知的 buffer 全程保留。
-跨迭代 FIFO 的所有物化槽也全程计入预算：当前后端不会对这些槽做生命周期复用，
-即使其逻辑内容并非同时存活，也不能把双槽的物理容量算成单槽。
+Fragment 导出的 `storage_contract=periodic-offsets-v1` 支持联合物理规划：当所选循环的
+SHM 均为已证明所有权的完整 DMA buffer 时，pipeline 求解同时决定 stage/order 和
+每个 buffer 在偶数、奇数逻辑迭代中的字节偏移。CP-SAT 的二维不重叠约束保证
+“生命周期 × 物理地址范围”不能同时相交，包含跨周期和两轮后再次使用同一版本的冲突。
+同一 buffer 的两版本、以及不同 buffer 的版本，均可在生命周期不重叠时使用同一地址。
+槽位偏移满足 allocation 对齐，整个物理池不超过用户 LDS 预算。
+旧 Base/缺少所有权证明的路径仍保守地将跨迭代 FIFO 的所有物化槽全程计入预算。
 旧 v1 JSON 没有 `liveness` 字段时，只信任原先 `rotatable` 的完整 DMA 所有权证明，其余保守保留。
+
+`schedule.json` 的 `storage` 字段包含 `pool_bytes`、`alignment`、`budget_bytes` 和
+`buffers: [{id, offsets: [even, odd]}]`。Python 和 C++ 导入端分别按照最终离散顺序校验
+六个相邻迭代的版本冲突。物化器为每次访问选择对应偏移，处理 prologue、steady loop 和
+epilogue；layout packing 后严格转换为同一个 byte pool 上的 views，不再重新分配这些 FIFO。
+每次覆盖写前插入 block barrier，原有 DMA token、wait/readiness 同步保留。
+对称偏移相同也合法，例如先读完当前 K，再覆盖成下一轮 K，可只用一个物理 K 槽。
+
+```bash
+python python/smt/run_pipeline.py input.mlir --provenance baseline/provenance.json \
+  --mode pipeline --require-cross-iteration --lds-budget 16384 --time-limit 120 --workers 8
+```
+
+`--require-cross-iteration` 禁止退回全 stage=0 方案。大图先构造单块 lookahead 的搜索提示，
+使用独立 CP 求解补齐提示中的资源和地址变量；最终优化仍允许改变所有调度/地址决策。
+`FEASIBLE` 表示找到合法方案，不保证性能最优，仍需 GPU 正确性和性能测试。
 
 ```bash
 # 小模型：直接将活跃区间和字节需求加入 CP-SAT cumulative。
@@ -184,36 +357,39 @@ python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
 ```
 
 默认 `--shm-check auto`：有预算且周期区间数不超过 `SHM_MAX_CUMULATIVE_INTERVALS` 时加约束，
-否则使用 post-check。未设置预算仍输出生命周期报告，但不限制容量。
+否则使用 post-check。未指定预算使用 16 KiB 默认硬限制。
 `sum` 保留旧版 `sum(bytes * slots)` 模型，方便对照。
-post-check 使用 stage/order 的 no-good cut，避免只修改 phase 后重复检查同一方案；
+小图 post-check 使用 stage/order 的 no-good cut；大图使用 stage/phase，可能重试同一顺序的
+不同时间安排，因此大图优先使用 `constraint`；
 只有通过内存检查的候选才会固定 II 并进入次级目标。
 耗尽总时间或 `SHM_MAX_POSTCHECK_REJECTIONS` 时，返回已有合法方案；若一个也没有则非零退出，
 不会把超限方案作为可用解输出。达到重试限额不等于证明不存在合法解。
 
 输出 `model.shm_liveness` 包含峰值、峰值位置、各 buffer 区间、保守保留原因和预算检查结果。
-这是 Base 层的逻辑容量规划，尚不包含物理对齐/布局/packing、后续 scratch 和 loop 外无关存储；
-也没有替后端分配共享地址。后端仍需重新做物理存储分配及跨 warp 复用交接 barrier 检查。
-现阶段未建模寄存器占用、具体 WMMA 发射吞吐、bank conflict 或 fragment 指令调度。
+这是布局已确定后的所选循环容量规划，仍需最终检查覆盖对齐、后续物化和循环外存储；
+有 `storage` 的方案已指定共享地址，后端验证 packing 没有改变容量并严格使用这些偏移；
+没有 `storage` 的方案仍由后端分配。最终 LLVM 检查继续覆盖后续 scratch 和循环外存储。
+现阶段未建模物理寄存器占用、具体 WMMA 发射吞吐或 bank conflict。
+未显式物化 LDS scratch 的非 shuffle `convert_layout_frag` 会拒绝导出，不能按零字节放行。
 
 ## 当前支持边界
 
 同迭代模式支持独立 op 重排，不生成额外 buffer；未知副作用和嵌套循环形成 fence。
 真实 wait/barrier 不能被估计耗时替代，逻辑阶段的 DMA/wait 相对同步约束保守保留。
 非 identity 方案标记 `pipeline.scheduled`，使尊重该标记的后续 DMA 调度器跳过此作用域。
-identity baseline 回读是真正的 no-op，不增加标记，因此原有后续优化保持原样。
+identity baseline 回读不移动节点；MyTest 的整个 CP-SAT 路径仍屏蔽旧调度 Pass。
 
 跨迭代 v1 使用现有 `PipelineSchedule` 的 prologue/steady/epilogue 与槽轮转实现，限两级流水、双槽：
 
 - 非空、step 整除区间的常量 affine loop；所属函数有 `thread_num`，外层为常量 affine loop。
 - 没有 opaque/nested region；常量边界保证集体 barrier 一致执行。
-- 版本化对象为自有 SHM `frisk.alloc_buffer`，单个完整 tile 的异步 DMA 写者、唯一局部 wait、直接消费者，无视图或逃逸，源内存不可变。
+- 版本化对象为自有静态 SHM `frisk.alloc_buffer` 或 `memref.alloc`，单个完整 tile 的异步 DMA 写者、唯一局部 wait、直接消费者，无视图或逃逸，源内存不可变。
 - 非版本化可变数据、loop carrier 和计算保持在最后 stage。
 - 支持普通 SSA yield 的多 carrier；旧 destination-style `frisk.copy ... to iter_arg` 限单 carrier。
 - 空循环、动态边界或复杂别名仍可用 intra；跨迭代会说明原因并拒绝。
 
-因此当前 attention 的最外层 mainloop 含嵌套 QK/PV 循环时，先用 intra，不能把嵌套 region 当成已经支持跨迭代的任务。
-后续扩展可在此 JSON 契约下增加递归依赖、更多版本和更通用的展开器，不必改变 Python/MLIR 分工。
+Fragment 全展开后仍需通过跨迭代合法性、buffer 版本和预算检查；能重排不代表必然能
+在同一 LDS 预算下实现跨迭代重叠。`--require-cross-iteration` 无解时不会静默降级。
 
 ## 已保存的最佳 case
 
@@ -231,5 +407,6 @@ python python/smt/capture_baselines.py --verify-lowering
 
 Base 原始方案均为 stage0 的原始顺序；历史最快 kernel 的后续 V 双缓冲、K 预取、LLVM 指令排序不在这份 Base 方案中。
 provenance 另存历史 artifact SHA-256、完整配置和已有的 late-schedule 元数据。
-重新从当前编译器导出的 Base 快照不等于历史 LLVM 产物的逐指令复现。
-`--verify-lowering` 比较当前编译器不导入/identity 导入后的最终 LLVM 是否字节一致；不重新做 GPU 性能测试。
+这些已保存的 Base JSON 属于历史接入点，不能直接导入新的 Fragment 接入点；需要使用原输入
+和 provenance 重新导出。当前重新捕获的是 Fragment 快照，不等于历史 LLVM 产物的逐指令复现。
+`--verify-lowering` 比较相同 CP-SAT 路径上仅导出/identity 导入后的最终 LLVM 是否字节一致；不重新做 GPU 性能测试。

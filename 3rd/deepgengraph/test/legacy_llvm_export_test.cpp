@@ -171,6 +171,8 @@ int main(int argc, char **argv) {
   bool cleanupOnly = argc == 3 && llvm::StringRef(argv[1]) == "--cleanup-llvm-only";
   bool cleanupMMA = argc == 3 && llvm::StringRef(argv[1]) == "--cleanup-register-mma";
   bool lifetimes = argc == 3 && llvm::StringRef(argv[1]) == "--optimize-register-lifetimes";
+  bool scheduledLifetimes = argc == 3 && llvm::StringRef(argv[1]) == "--scheduled-register-lifetimes";
+  lifetimes |= scheduledLifetimes;
   bool nativeExp2 = argc == 3 && llvm::StringRef(argv[1]) == "--native-exp2";
   bool reciprocal = argc == 3 && llvm::StringRef(argv[1]) == "--reciprocal";
   bool prefetch = argc == 3 && llvm::StringRef(argv[1]) == "--prefetch-global-packets";
@@ -219,7 +221,7 @@ int main(int argc, char **argv) {
   else if (cleanupMMA)
     mlir::frisk::cleanupLLVMInstructions(*module, /*simplifyCFG=*/true);
   else if (lifetimes)
-    mlir::frisk::optimizeRegisterLifetimes(*module);
+    mlir::frisk::optimizeRegisterLifetimes(*module, scheduledLifetimes);
   else if (nativeExp2 || reciprocal)
     mlir::frisk::optimizeRegisterMath(*module, reciprocal);
   else if (prefetch)

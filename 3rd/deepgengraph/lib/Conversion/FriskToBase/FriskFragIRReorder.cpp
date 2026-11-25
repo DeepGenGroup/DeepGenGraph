@@ -937,9 +937,143 @@ public:
 //   synchronizeSharedMemoryLoopBackedges   调度改变了访问位置，再检查并补一次。
 //   planSharedMemoryExecution              用计划中的发起时序计算生命周期，再确定槽位和物理地址。
 //   loopUnrollFull                         双缓冲或跨迭代预取开启时先展开，暴露完整 stage/read 流。
+// The importer already proved periodic version disjointness. Preserve the
+// selected addresses after layout packing; do not run another allocator over
+// the asynchronous FIFO aliases and lose that proof.
+static LogicalResult materializeCPSATStorage(func::FuncOp function) {
+  auto bytes = function->getAttrOfType<IntegerAttr>("cpsat.pool_bytes");
+  auto alignment = function->getAttrOfType<IntegerAttr>("cpsat.pool_alignment");
+  if (!bytes || !alignment || bytes.getInt() <= 0 || alignment.getInt() < 16)
+    return function.emitError("missing CP-SAT physical pool contract");
+  SmallVector<memref::AllocOp> allocations;
+  bool invalid = false;
+  function.walk([&](memref::AllocOp alloc) {
+    if (!alloc->hasAttr("cpsat.physical_offsets")) return;
+    auto offset = alloc->getAttrOfType<IntegerAttr>("cpsat.physical_offset");
+    auto expected = alloc->getAttrOfType<IntegerAttr>("cpsat.physical_bytes");
+    auto type = alloc.getType();
+    if (!offset || !expected || !type.hasStaticShape() || !type.getLayout().isIdentity() ||
+        type.getMemorySpaceAsInt() != 3 || !type.getElementType().isIntOrFloat() ||
+        type.getNumElements() * ((type.getElementTypeBitWidth() + 7) / 8) != expected.getInt() ||
+        offset.getInt() < 0 || offset.getInt() % alignment.getInt() ||
+        expected.getInt() > bytes.getInt() || offset.getInt() > bytes.getInt() - expected.getInt()) {
+      alloc.emitError("CP-SAT allocation contract changed during lowering");
+      invalid = true;
+    }
+    allocations.push_back(alloc);
+  });
+  if (invalid || allocations.empty()) return failure();
+  // Retained operands can have staging allocations used only in the prelude.
+  // Reuse offset zero of the periodic pool after proving every access (and
+  // async completion) precedes its first use. Unknown aliases stay separate.
+  auto topLevel = [&](Operation *op) {
+    while (op && op->getBlock() != &function.front()) op = op->getParentOp();
+    return op;
+  };
+  Operation *firstPoolUse = nullptr;
+  for (auto alloc : allocations)
+    for (Operation *user : alloc->getUsers()) {
+      Operation *top = topLevel(user);
+      if (top && (!firstPoolUse || top->isBeforeInBlock(firstPoolUse))) firstPoolUse = top;
+    }
+  struct Prelude { memref::AllocOp alloc; Operation *first, *last; };
+  SmallVector<Prelude> prelude;
+  if (firstPoolUse) function.walk([&](memref::AllocOp alloc) {
+    auto type = alloc.getType();
+    if (alloc->hasAttr("cpsat.physical_offsets") || alloc->hasAttr("frisk.shm_pool") ||
+        alloc->getBlock() != &function.front() || !type.hasStaticShape() ||
+        !type.getLayout().isIdentity() || type.getMemorySpaceAsInt() != 3 ||
+        !type.getElementType().isIntOrFloat() ||
+        type.getNumElements() * ((type.getElementTypeBitWidth() + 7) / 8) > bytes.getInt()) return;
+    if (auto align = alloc.getAlignment(); align && *align > uint64_t(alignment.getInt())) return;
+    Operation *first = nullptr, *last = nullptr;
+    bool safe = true;
+    auto add = [&](Operation *user) {
+      Operation *top = topLevel(user);
+      if (!top || top == firstPoolUse || !top->isBeforeInBlock(firstPoolUse)) { safe = false; return; }
+      if (!first || top->isBeforeInBlock(first)) first = top;
+      if (!last || last->isBeforeInBlock(top)) last = top;
+    };
+    for (Operation *user : alloc->getUsers()) {
+      if (auto dma = dyn_cast<AsyncCopyGmToShmOp>(user)) {
+        if (dma.getDst() != alloc.getResult() || !dma.getToken().hasOneUse()) { safe = false; break; }
+        Operation *wait = *dma.getToken().getUsers().begin();
+        if (!isa<WaitBufferReadyOp>(wait)) { safe = false; break; }
+        add(wait);
+      } else if (!isa<memref::LoadOp, vector::LoadOp, LoadFragOp>(user)) {
+        safe = false; break;
+      }
+      add(user);
+    }
+    if (safe && first) prelude.push_back({alloc, first, last});
+  });
+  llvm::sort(prelude, [](const Prelude &a, const Prelude &b) { return a.first->isBeforeInBlock(b.first); });
+  OpBuilder builder(function.getContext());
+  builder.setInsertionPointToStart(&function.getBody().front());
+  auto type = MemRefType::get({bytes.getInt()}, builder.getI8Type(),
+                             MemRefLayoutAttrInterface{}, builder.getI64IntegerAttr(3));
+  auto pool = builder.create<memref::AllocOp>(function.getLoc(), type, alignment);
+  pool->setAttr("frisk.shm_pool", builder.getUnitAttr());
+  pool->setAttr("cpsat.physical_pool", builder.getUnitAttr());
+  pool->setAttr("tiled", builder.getBoolAttr(true));
+  Operation *previousEnd = nullptr;
+  unsigned reusedPrelude = 0;
+  for (auto entry : prelude) {
+    if (previousEnd && (previousEnd == entry.first || !previousEnd->isBeforeInBlock(entry.first))) continue;
+    builder.setInsertionPoint(entry.alloc);
+    Value zero = builder.create<arith::ConstantIndexOp>(entry.alloc.getLoc(), 0);
+    Value view = builder.create<memref::ViewOp>(entry.alloc.getLoc(), entry.alloc.getType(), pool, zero, ValueRange{});
+    entry.alloc.replaceAllUsesWith(view);
+    entry.alloc.erase();
+    builder.setInsertionPoint(entry.first);
+    builder.create<gpu::BarrierOp>(entry.first->getLoc());
+    previousEnd = entry.last;
+    ++reusedPrelude;
+  }
+  if (reusedPrelude) {
+    builder.setInsertionPoint(firstPoolUse);
+    builder.create<gpu::BarrierOp>(firstPoolUse->getLoc());
+  }
+  for (auto alloc : allocations) {
+    builder.setInsertionPoint(alloc);
+    Value offset = builder.create<arith::ConstantIndexOp>(alloc.getLoc(),
+        alloc->getAttrOfType<IntegerAttr>("cpsat.physical_offset").getInt());
+    auto view = builder.create<memref::ViewOp>(alloc.getLoc(), alloc.getType(), pool, offset, ValueRange{});
+    alloc.getResult().replaceAllUsesWith(view.getResult());
+    alloc.erase();
+  }
+  SmallVector<Operation *> writers;
+  function.walk([&](Operation *op) {
+    if (op->hasAttr("cpsat.storage_handoff")) writers.push_back(op);
+  });
+  for (Operation *op : writers) {
+    builder.setInsertionPoint(op);
+    builder.create<gpu::BarrierOp>(op->getLoc());
+    op->removeAttr("cpsat.storage_handoff");
+  }
+  llvm::errs() << "CP-SAT periodic physical LDS pool: " << bytes.getInt()
+               << " bytes, " << allocations.size() << " version views, "
+               << reusedPrelude << " prelude allocations reused\n";
+  return success();
+}
+
 class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragments> {
   void runOnOperation() override {
     if (failed(packSharedMemory(getOperation()))) return signalPassFailure();
+    if (getOperation()->hasAttr("cpsat.preserve_schedule")) {
+      if (getOperation()->hasAttr("cpsat.pool_bytes")) {
+        if (failed(materializeCPSATStorage(getOperation()))) return signalPassFailure();
+        synchronizeSharedMemoryLoopBackedges(getOperation());
+        return;
+      }
+      // CP-SAT owns issue/wait ordering. Only add required storage-handoff
+      // synchronization and allocate against the actual final lifetimes.
+      synchronizeSharedMemoryLoopBackedges(getOperation());
+      auto plan = planSharedMemoryExecution(getOperation(), false, false);
+      plan.dump(llvm::errs());
+      if (failed(plan.materializeExecution())) signalPassFailure();
+      return;
+    }
     // Establish old-reader protection before considering moving readiness
     // barriers across direct launches. Recheck after the final schedule too.
     synchronizeSharedMemoryLoopBackedges(getOperation());

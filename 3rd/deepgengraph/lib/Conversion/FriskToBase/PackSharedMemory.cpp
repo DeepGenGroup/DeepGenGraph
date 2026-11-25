@@ -355,6 +355,9 @@ static void packAllocation(memref::AllocOp alloc,
     auto old = cast<memref::AllocOp>(allocation);
     b.setInsertionPoint(old);
     auto storage = b.create<memref::AllocOp>(old.getLoc(), physical, old.getAlignmentAttr());
+    for (auto attr : old->getAttrs())
+      if (attr.getName().strref().starts_with("cpsat."))
+        storage->setAttr(attr.getName(), attr.getValue());
     storage->setAttr("frisk.packed_shape", b.getDenseI64ArrayAttr(type.getShape()));
     storage->setAttr("frisk.packed_axis", b.getI64IntegerAttr(axis));
     storage->setAttr("frisk.packed_width", b.getI64IntegerAttr(pack));

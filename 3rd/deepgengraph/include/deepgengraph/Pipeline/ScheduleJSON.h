@@ -10,6 +10,11 @@ namespace mlir::pipeline {
 // loop of a single kernel. Explicit selectors are "function:affine-preorder-id".
 struct ScheduleJSONOptions {
   std::string exportPath, importPath, baselinePath, loopSelector, dumpIRPath;
+  // Opt-in preparation before fingerprinting, identical on export and import.
+  unsigned unrollMaxTripCount = 0;
+  unsigned unrollMaxExpandedOps = 2048;
+  bool fragmentIR = false;
+  bool unrollAll = false;
   bool enabled() const {
     return !exportPath.empty() || !importPath.empty() || !baselinePath.empty();
   }

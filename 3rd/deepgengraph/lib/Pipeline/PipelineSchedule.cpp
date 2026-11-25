@@ -130,7 +130,7 @@ struct Statement {
 // 一个跨级 buffer。alloc 是原始分配，slots 需要几份，slotValues 是实际克隆出来的每份
 struct RotatedBuffer {
   Value original;
-  frisk::AllocBufferOp alloc;
+  Operation *alloc = nullptr;
   int64_t slots = 1;
   SmallVector<Value> slotValues;
   /// Every value that denotes this buffer: `original` plus the handle of each
@@ -516,6 +516,15 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
       for (Value handle : handles) {
         for (OpOperand &use : handle.getUses()) {
           Operation *user = use.getOwner();
+          // Standard SSA vector carriers are published by affine.yield, not
+          // escaped storage. They must be produced in the current tile's final
+          // stage; build() maps their yields in both steady state and epilogue.
+          if (options.ssaCarriers && isa<VectorType>(handle.getType()) &&
+              user == loop.getBody()->getTerminator()) {
+            if (st.offset != 0)
+              return loop.emitError("SSA vector yields must stay in the final pipeline stage");
+            continue;
+          }
           auto it = opToStmt.find(user);
           // user 不在 opToStmt 里 → 报「写在内、用在外，不支持」
           if (it == opToStmt.end()) {
@@ -553,6 +562,10 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
       }
       // slots = max(1, maxLead + 1) —— 双缓冲公式，offset 差 1 就是 2 槽
       int64_t slots = std::max<int64_t>(1, maxLead + 1);
+      // Even an iteration-local buffer may alternate physical addresses when
+      // sharing a pool with a prefetched version of another buffer.
+      if (auto *alloc = written.getDefiningOp();
+          alloc && alloc->hasAttr("cpsat.physical_offsets")) slots = 2;
       // slots == 1 直接跳过，buffer 原地不动。这就是为什么 QK 的结果 S 不必物化
       if (slots == 1)
         continue;
@@ -563,12 +576,12 @@ LogicalResult PipelineScheduler::collectRotatedBuffers() {
                << " slots but only " << options.maxSlots
                << " are supported (reduce the stage distance)";
       // 必须是 frisk.alloc_buffer 的结果，否则报错
-      auto alloc = written.getDefiningOp<frisk::AllocBufferOp>();
-      if (!alloc)
+      Operation *alloc = written.getDefiningOp();
+      if (!isa_and_nonnull<frisk::AllocBufferOp, memref::AllocOp>(alloc) || alloc->getNumOperands())
         return loop.emitError()
                << "value " << written
                << " crosses pipeline stages but is not the result of a "
-                  "`frisk.alloc_buffer`; materialising it is not supported yet";
+                  "static `frisk.alloc_buffer`/`memref.alloc`; materialising it is not supported yet";
       // 记录成 RotatedBuffer
       RotatedBuffer buffer;
       buffer.original = written;
@@ -755,7 +768,7 @@ void PipelineScheduler::emitStatement(OpBuilder &builder, const Statement &st,
   for (Operation *op : st.ops) {
     // Allocations are hoisted / rotated beforehand.
     // alloc 跳过（前面统一处理过）
-    if (isa<frisk::AllocBufferOp>(op))
+    if (isa<frisk::AllocBufferOp, memref::AllocOp>(op))
       continue;
     // 如果是写 iter_arg 的 copy 且在「丢弃写回」模式（prologue/epilogue），
     // 不克隆，改成记录 writtenIterArgs[dst] = 映射后的 src
@@ -821,8 +834,10 @@ LogicalResult PipelineScheduler::build() {
   // 存进 slotValues。因为插入点在循环前，这些 alloc 都在循环外
   for (RotatedBuffer &buffer : rotated) {
     for (int64_t slot = 0; slot < buffer.slots; ++slot) {
-      Operation *slotAlloc = builder.clone(*buffer.alloc.getOperation());
+      Operation *slotAlloc = builder.clone(*buffer.alloc);
       slotAlloc->setAttr(kSlotAttr, builder.getI64IntegerAttr(slot));
+      if (auto offsets = buffer.alloc->getAttrOfType<DenseI64ArrayAttr>("cpsat.physical_offsets"))
+        slotAlloc->setAttr("cpsat.physical_offset", builder.getI64IntegerAttr(offsets[slot]));
       buffer.slotValues.push_back(slotAlloc->getResult(0));
     }
   }
@@ -833,7 +848,7 @@ LogicalResult PipelineScheduler::build() {
   // 它们在原循环里每次迭代都重新分配，语义上是同一个 buffer，提出来后所有克隆共享，也避免重复分配
   SmallVector<Operation *> hoist;
   for (Operation &op : loop.getBody()->getOperations()) {
-    if (!isa<frisk::AllocBufferOp>(&op))
+    if (!isa<frisk::AllocBufferOp, memref::AllocOp>(&op))
       continue;
     bool rotates = llvm::any_of(rotated, [&](const RotatedBuffer &buffer) {
       return buffer.original == op.getResult(0);
@@ -1048,7 +1063,7 @@ LogicalResult PipelineScheduler::build() {
   // 记录不再用的旧单槽 alloc
   for (RotatedBuffer &buffer : rotated)
     if (buffer.alloc && !loop->isAncestor(buffer.alloc))
-      deadAllocs.push_back(buffer.alloc.getOperation());
+      deadAllocs.push_back(buffer.alloc);
 
   SmallVector<Value> replacements;
   // 重定向原循环结果的 uses：

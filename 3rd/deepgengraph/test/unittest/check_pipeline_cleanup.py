@@ -47,6 +47,12 @@ def sync_checks():
     check("pure index expressions", wait("a") + barrier("b") +
           "%j = arith.addi %n, %c1 : index\n" +
           wait("c") + barrier("d"), ["a", "b"])
+    check("lowered LLVM address setup", wait("a") + barrier("b") +
+          '%p = llvm.mlir.zero : !llvm.ptr<3>\n'
+          '%k = llvm.mlir.constant(4 : i32) : i32\n'
+          '%offset = llvm.add %x, %k : i32\n'
+          '%ptr = llvm.getelementptr %p[%offset] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32\n' +
+          barrier("duplicate"), ["a", "b"])
     check("wait after earlier barrier must be published",
           barrier("a") + wait("b") + barrier("c"), ["a", "b", "c"])
     for label, middle in [
@@ -55,6 +61,8 @@ def sync_checks():
         ("new async group", "rocdl.asyncmark\n"),
         ("unknown effects", '"test.opaque"() : () -> ()\n'),
         ("opaque assembly", 'llvm.inline_asm has_side_effects "", "" : () -> ()\n'),
+        ("LLVM read", '%p = llvm.mlir.zero : !llvm.ptr<3>\n%v = llvm.load %p : !llvm.ptr<3> -> i32\n'),
+        ("LLVM fence", 'llvm.fence syncscope("workgroup") seq_cst\n'),
         ("task wait", "%task = frisk.async_task_completed : !frisk.async_task\nfrisk.wait_buffer_ready %task : !frisk.async_task\n"),
         ("conditional", "scf.if %cond { rocdl.asyncmark }\n"),
     ]:

@@ -1,12 +1,18 @@
 """Memory pressure must follow the emitted schedule, not guessed GPU cycles."""
 from itertools import permutations
+from contextlib import redirect_stdout, redirect_stderr
+import io
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from ortools.sat.python import cp_model
-from cpsat_scheduler import solve
+from cpsat_scheduler import main, solve
 from schedule_schema import baseline_schedule, make_schedule
-from shm_liveness import add_shm_constraint, analyze_shm, lifetime_specs
+from shm_liveness import add_shm_constraint, analyze_shm, lifetime_specs, validate_periodic_storage
+from copy import deepcopy
 
 
 def problem():
@@ -26,6 +32,74 @@ def problem():
 
 
 class ShmLivenessTests(unittest.TestCase):
+    def test_periodic_versions_share_two_physical_slots(self):
+        p = problem()
+        p['storage_contract'] = 'periodic-offsets-v1'
+        for b in p['buffers']:
+            b.update(bytes=16, alignment=16, rotatable=True)
+        for i in (0, 1):
+            p['dependencies'][i]['same_stage'] = False
+        p['operations'][0]['pipeline_anchor'] = False
+        # B is written before the current A is read: a real overlap, while
+        # A's next version can reuse its range after that read completes.
+        p['dependencies'].append(dict(src=1, dst=2, kind='ssa', same_stage=True))
+        result = solve(p, mode='pipeline', require_cross_iteration=True,
+                       lds_budget=32, time_limit=5)
+        self.assertEqual(result['storage']['pool_bytes'], 32)
+        self.assertGreater(result['model']['shared_bytes_upper_bound'], 32)
+        self.assertLessEqual(result['model']['shm_liveness']['peak_bytes'], 32)
+        validate_periodic_storage(p, result)
+        forged = deepcopy(result)
+        for b in forged['storage']['buffers']:
+            b['offsets'] = [0, 0]
+        with self.assertRaisesRegex(ValueError, 'overlapping version'):
+            validate_periodic_storage(p, forged)
+        with self.assertRaises(RuntimeError):
+            solve(p, mode='pipeline', require_cross_iteration=True, lds_budget=15, time_limit=2)
+
+    def test_compact_order_encoding_preserves_lds_peak(self):
+        p = problem()
+        for i in range(4, 260):
+            p['operations'].append(dict(id=i, name='test.op', kind='alu', read_bytes=0,
+                write_bytes=0, compute_ops=1, reads=[], writes=[], pipeline_anchor=True, opaque=False))
+            p['dependencies'].append(dict(src=i-1, dst=i, kind='ssa', same_stage=True))
+        result = solve(p, lds_budget=4, shm_check='constraint', time_limit=5)
+        self.assertEqual(result['model']['order_encoding'], 'phase')
+        self.assertEqual(analyze_shm(p, result)['peak_bytes'], 4)
+        self.assertEqual(sorted(o['order'] for o in result['operations']), list(range(260)))
+
+    def test_baseline_cli_obeys_default_and_explicit_budget(self):
+        p = problem()
+        for b in p['buffers']:
+            b['bytes'] = 16384
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'problem.json', Path(directory) / 'schedule.json'
+            source.write_text(json.dumps(p))
+            command = [str(source), '-o', str(output), '--baseline']
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(main(command), 2)
+                self.assertFalse(output.exists())
+                self.assertEqual(main(command + ['--lds-budget', '32768']), 0)
+            result = json.loads(output.read_text())
+            self.assertEqual(result['model']['resource_limits']['shm_bytes'], 32768)
+
+    def test_default_16k_is_hard_limit_and_user_can_override(self):
+        p = problem()
+        for b in p['buffers']:
+            b['bytes'] = 32768
+        with self.assertRaises(RuntimeError):
+            solve(p, time_limit=2)
+        result = solve(p, lds_budget=32768, time_limit=2)
+        self.assertEqual(result['model']['resource_limits']['shm_bytes'], 32768)
+        self.assertEqual(result['model']['shm_liveness']['peak_bytes'], 32768)
+        for b in p['buffers']:
+            b['bytes'] = 16384
+        result = solve(p, time_limit=2)
+        self.assertEqual(result['model']['resource_limits']['shm_bytes'], 16384)
+        self.assertEqual(result['model']['shm_liveness']['peak_bytes'], 16384)
+        with self.assertRaises(ValueError):
+            solve(p, lds_budget=None)
+
     def test_peak_follows_order_and_shared_endpoints(self):
         p = problem()
         self.assertEqual(analyze_shm(p, baseline_schedule(p))['peak_bytes'], 8)

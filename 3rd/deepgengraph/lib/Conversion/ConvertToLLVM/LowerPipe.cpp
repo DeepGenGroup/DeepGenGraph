@@ -285,6 +285,10 @@ bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
 bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
                     Target target, bool coalesceWaits, bool nativeExp2) {
   mlir::PassManager pm(context);
+  bool preserveSchedule = false;
+  mod.walk([&](mlir::func::FuncOp f) {
+    preserveSchedule |= f->hasAttr("cpsat.preserve_schedule");
+  });
   // DMA and shuffle lowering run before firstLowering, while their invariant
   // setup can still be hoisted using structured loops.
 
@@ -298,10 +302,13 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  if (coalesceWaits)
+  // CP-SAT slot handoffs may add an already satisfied wait/barrier. This
+  // block-local pass removes duplicates only across effect-free operations.
+  if (coalesceWaits || preserveSchedule)
     pm.addNestedPass<mlir::func::FuncOp>(
         mlir::frisk::createCoalesceWaitsAndBarriersPass());
-  pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
+  if (!preserveSchedule)
+    pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
   pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
 
   // 2. 基础控制流、MemRef、Func 降级到 LLVM

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture/replay current Base IR for the two measured historical best configs.
+"""Capture/replay current Fragment IR for the two measured historical best configs.
 
 Historical LLVM instruction schedules are provenance, not Base op schedules.
 All compiler scratch files are isolated in temporary directories.
@@ -104,7 +104,7 @@ def capture(name, case, output, mytest, verify_lowering):
                        f"--cpsat-dump-ir={Path(scratch) / 'replayed.mlir'}", "--cpsat-stop-after=1"],
             env, scratch, dest / "replay.log")
         if (dest / "base.mlir").read_bytes() != (Path(scratch) / "replayed.mlir").read_bytes():
-            raise RuntimeError(f"{name}: identity replay changed Base IR")
+            raise RuntimeError(f"{name}: identity replay changed Fragment IR")
         lowering_equal = None
         if verify_lowering:
             finals = []
@@ -112,7 +112,8 @@ def capture(name, case, output, mytest, verify_lowering):
                 work = Path(scratch) / variant
                 work.mkdir()
                 llvm_file = work / "kernel.ll"
-                flags = [f"--cpsat-import={dest / 'schedule.json'}"] if variant == "replayed" else []
+                flags = ([f"--cpsat-import={dest / 'schedule.json'}"] if variant == "replayed"
+                         else [f"--cpsat-export={work / 'problem.json'}"])
                 run(prefix + [str(llvm_file)] + options + flags, env, work, dest / f"{variant}.log")
                 finals.append(llvm_file.read_bytes())
             lowering_equal = finals[0] == finals[1]
@@ -131,9 +132,9 @@ def capture(name, case, output, mytest, verify_lowering):
         mytest_sha256=sha256(mytest), mytest_arguments_after_output=options,
         fingerprint=problem["fingerprint"], base_sha256=sha256(dest / "base.mlir"),
         identity_replay_exact=True, final_llvm_identity_replay_exact=lowering_equal,
-        note="schedule.json records the current compiler's original Base order with this config. "
+        note="schedule.json records the current compiler's original Fragment order with this config. "
              "Historical winners include later fragment/LLVM transformations and are not "
-             "reproduced solely by this Base schedule. No new GPU timing is claimed.")
+             "reproduced solely by this Fragment schedule. No new GPU timing is claimed.")
     for key in ("historical_late_schedule", "historical_manifest"):
         if key in case:
             provenance[key] = case[key]

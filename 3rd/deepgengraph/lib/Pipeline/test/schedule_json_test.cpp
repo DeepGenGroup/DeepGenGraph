@@ -20,6 +20,13 @@ int main(int argc, char **argv) {
     else if (arg.consume_front("--baseline=")) options.baselinePath = arg.str();
     else if (arg.consume_front("--loop=")) options.loopSelector = arg.str();
     else if (arg.consume_front("--ir=")) options.dumpIRPath = arg.str();
+    else if (arg == "--fragment") { options.fragmentIR = true; options.unrollAll = true; }
+    else if (arg.consume_front("--unroll-max-trip-count=")) {
+      if (arg.getAsInteger(10, options.unrollMaxTripCount)) return 1;
+    }
+    else if (arg.consume_front("--unroll-max-expanded-ops=")) {
+      if (arg.getAsInteger(10, options.unrollMaxExpandedOps)) return 1;
+    }
     else { llvm::errs() << "unknown argument: " << arg << '\n'; return 1; }
   }
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(argv[1], &context);

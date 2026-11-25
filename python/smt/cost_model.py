@@ -12,8 +12,10 @@ from math import ceil
 class CostModel:
     dma: int = 10
     shm_reg: int = 5
+    shm_issue: int = 1
     alu: int = 1
     wmma: int = 1
+    wmma_latency: int = 4
     issue: int = 1
     wait: int = 1
     reference_bytes: int = 8192
@@ -31,8 +33,10 @@ class CostModel:
     def operation(self, op: dict) -> tuple[int, int]:
         """Return (issue-stream occupancy, result/completion latency)."""
         kind = op["kind"]
-        scale = 1
-        if self.scale_work:
+        if op.get('zero_issue', False):
+            return 0, 0
+        scale = op.get('issue_units', 1)
+        if self.scale_work and scale == 1:
             if kind in ("dma", "copy_gm_shm", "shm_reg", "copy"):
                 work = max(op["read_bytes"], op["write_bytes"], 1)
                 scale = max(1, ceil(work / self.reference_bytes))
@@ -44,9 +48,9 @@ class CostModel:
         if kind == "copy_gm_shm":
             duration = self.dma * scale  # Synchronous copy: occupies issue stream.
         elif kind == "shm_reg":
-            duration = self.shm_reg * scale
+            return self.shm_issue * scale, max(self.shm_issue, self.shm_reg) * scale
         elif kind == "wmma":
-            duration = self.wmma * scale
+            return self.wmma * scale, max(self.wmma, self.wmma_latency) * scale
         elif kind == "wait":
             duration = self.wait  # Stall is derived from completion constraints.
         else:

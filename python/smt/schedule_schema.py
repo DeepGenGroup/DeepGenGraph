@@ -23,12 +23,14 @@ def validate_problem(p: dict) -> None:
     if not isinstance(p.get("loop", {}).get("id"), str):
         raise ValueError("missing loop identity")
     ops, buffers = p["operations"], p["buffers"]
-    if not 1 <= len(ops) <= 256:
-        raise ValueError("v1 supports 1..256 atomic operations per loop")
+    if not ops:
+        raise ValueError("scheduling region must contain operations")
     for records, label in ((ops, "operation"), (buffers, "buffer")):
         if [r["id"] for r in records] != list(range(len(records))):
             raise ValueError(f"{label} ids must be contiguous in source order")
     for op in ops:
+        if 'issue_units' in op and (type(op['issue_units']) is not int or not 1 <= op['issue_units'] <= 1000000):
+            raise ValueError('issue_units must be a positive bounded per-thread instruction estimate')
         for field in ("read_bytes", "write_bytes", "compute_ops"):
             if type(op[field]) is not int or op[field] < -1:
                 raise ValueError(f"invalid {field}; -1 denotes unknown")
@@ -41,6 +43,10 @@ def validate_problem(p: dict) -> None:
         if type(edge["same_stage"]) is not bool:
             raise ValueError("same_stage must be boolean")
     for b in buffers:
+        if 'alignment' in b:
+            alignment = b['alignment']
+            if type(alignment) is not int or alignment < 1 or alignment & (alignment - 1):
+                raise ValueError('buffer alignment must be a positive power of two')
         if 'liveness' in b:
             info = b['liveness']
             if (not isinstance(info, dict) or type(info.get('iteration_local')) is not bool or
@@ -111,6 +117,11 @@ def validate_schedule(p: dict, s: dict) -> None:
         raise ValueError("buffer slot counts disagree with lifetimes")
     if any(b["slots"] > p["limits"]["max_slots"] for b in expected):
         raise ValueError("buffer slot limit exceeded")
+    try:
+        from .shm_liveness import validate_periodic_storage
+    except ImportError:
+        from shm_liveness import validate_periodic_storage
+    validate_periodic_storage(p, s)
 
 
 def write_json(path: str | Path, value: dict) -> None:

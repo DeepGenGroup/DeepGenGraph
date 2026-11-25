@@ -72,7 +72,9 @@ void cleanupRegisterMMA(llvm::Module &module, bool simplifyCFG = false);
 /// Repeated i64 predicates with common upper words share those tests and use
 /// local i32 low-word operands, preserving the complete signed/unsigned range.
 /// Does not reassociate FP arithmetic or replace the math implementation.
-void optimizeRegisterLifetimes(llvm::Module &module);
+/// preserveSchedule restricts the transform to pure address rematerialization
+/// and dead code removal; memory operations and math consumers stay in place.
+void optimizeRegisterLifetimes(llvm::Module &module, bool preserveSchedule = false);
 
 /// Expose only proven constant LDS pointer differences; does not force read2.
 void canonicalizeLDSGEPs(llvm::Module &module);

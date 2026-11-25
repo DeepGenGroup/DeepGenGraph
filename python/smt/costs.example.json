@@ -1,8 +1,10 @@
 {
   "dma": 10,
   "shm_reg": 5,
+  "shm_issue": 1,
   "alu": 1,
   "wmma": 1,
+  "wmma_latency": 4,
   "issue": 1,
   "wait": 1,
   "scale_work": false,

@@ -394,7 +394,8 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
                              bool canonicalizeExport = false,
                              bool reuseLeaderRead = false,
                              bool dumpPasses = false,
-                             bool optimizeLLVM = true) {
+                             bool optimizeLLVM = true,
+                             bool preserveSchedule = false) {
   if (asmSourceBytes)
     mlir::frisk::lowerWideAsyncDMAToBufferAsm(module, asmSourceBytes, reuseLeaderRead);
   else if (splitPackedDMA)
@@ -415,9 +416,9 @@ bool printLLVM22CompatibleIR(llvm::Module &module, llvm::raw_ostream &os,
   // DMA lowering still creates duplicate descriptors. Retain the generic
   // cleanup formerly bundled with the LLVM LDS scheduler so cross-BN K0 sees
   // a common resource; this performs no scheduling or pairing.
-  if (canonicalizeExport) mlir::frisk::canonicalizeLLVMExport(module);
+  if (canonicalizeExport && !preserveSchedule) mlir::frisk::canonicalizeLLVMExport(module);
   dumpLLVMPass(module, dumpPasses, "canonicalizeLLVMExport");
-  mlir::frisk::anchorNextKSums(module);
+  if (!preserveSchedule) mlir::frisk::anchorNextKSums(module);
   dumpLLVMPass(module, dumpPasses, "anchorNextKSums");
 
   // Match the standalone pre-link opt -passes='default<O3>' stage. Keep
@@ -606,6 +607,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     if (option.consume_front("--cpsat-import=")) { cpsat.importPath = option.str(); continue; }
     if (option.consume_front("--cpsat-baseline=")) { cpsat.baselinePath = option.str(); continue; }
     if (option.consume_front("--cpsat-loop=")) { cpsat.loopSelector = option.str(); continue; }
+    if (option.consume_front("--cpsat-unroll-max-trip-count=")) {
+      if (option.getAsInteger(10, cpsat.unrollMaxTripCount)) return 1;
+      continue;
+    }
+    if (option.consume_front("--cpsat-unroll-max-expanded-ops=")) {
+      if (option.getAsInteger(10, cpsat.unrollMaxExpandedOps)) return 1;
+      continue;
+    }
     if (option.consume_front("--cpsat-dump-ir=")) { cpsat.dumpIRPath = option.str(); continue; }
     if (option.consume_front("--cpsat-stop-after=")) {
       if (option != "0" && option != "1") { llvm::errs() << "use --cpsat-stop-after=0|1\n"; return 1; }
@@ -1185,18 +1194,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   llvm::outs() << "\n---------- after promote-gemm-matrix-loads ---------\n";
   llvm::outs().flush(); src->dump();
 
-  // The JSON contract describes Frisk Base operations, before fragment tiling.
-  // CP-SAT owns this scheduling region; do not pre-expand AutoPipeline above.
-  if (cpsat.enabled()) {
-    // Model the actual synchronous issue occupancy when sync was requested;
-    // otherwise the exported graph would promise nonexistent DMA overlap.
-    if (copyMode == "sync") AddFuncPass(frisk::createLowerFriskAsyncToSyncPass());
-    if (failed(pipeline::processScheduleJSON(*src, cpsat))) return 1;
-    llvm::outs() << "\n---------- after cpsat-schedule ---------\n";
-    llvm::outs().flush(); src->dump();
-    if (cpsatStopAfter) return 0;
-  }
-
   // 软流水 / software pipelining：把带 `pipeline.stage`/`pipeline.order` 的
   // affine.for 重写成 prologue / steady / epilogue 三级流水（FA3 风格）。
   // 没有标注的循环原样保留：pass 直接返回，不动 IR。
@@ -1241,7 +1238,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(frisk::createFuseFragmentAccumulatorPass());
   llvm::outs() << "\n---- after fragment-level fuse-fragment-accumulator -----\n";
   llvm::outs().flush(); src->dump();
-  AddFuncPass(frisk::createFriskFragIRReorderPass());
+  if (!cpsat.enabled()) AddFuncPass(frisk::createFriskFragIRReorderPass());
   AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   AddPass(mlir::createCSEPass());
   llvm::outs() << "\n---- after fragment-level frisk-frag-ir-reorder -----\n";
@@ -1254,6 +1251,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // These transformations precede export/identity assignment. Invariant
+  // retention changes the work graph, not an already imported schedule; its
+  // persistent values are charged by the Fragment register-liveness model.
   if (retainFragmentWords) {
     auto retain = frisk::createRetainInvariantFragmentsPass();
     if (failed(retain->initializeOptions(
@@ -1267,7 +1267,21 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // Schedule against fragment SHM reads/writes and task completion before
   // lowering. Final packing/scheduling below recomputes physical lifetimes.
-  AddFuncPass(frisk::createScheduleAsyncCopiesPass());
+  if (cpsat.enabled()) {
+    cpsat.fragmentIR = true;
+    cpsat.unrollAll = true;
+    src->walk([](func::FuncOp f) {
+      f->setAttr("cpsat.preserve_schedule", UnitAttr::get(f.getContext()));
+    });
+    llvm::errs() << "CP-SAT owns Fragment scheduling: legacy reorder/prefetch/"
+                    "double-buffer/cross-iteration and LLVM scheduling disabled\n";
+    if (failed(pipeline::processScheduleJSON(*src, cpsat))) return 1;
+    llvm::outs() << "\n---------- after cpsat-fragment-schedule ---------\n";
+    llvm::outs().flush(); src->dump();
+    if (cpsatStopAfter) return 0;
+  } else {
+    AddFuncPass(frisk::createScheduleAsyncCopiesPass());
+  }
   AddFuncPass(frisk::createAnalyzeShmLivenessPass());
   llvm::outs() << "\n---- after fragment-level optimization -----\n";
   llvm::outs().flush(); src->dump();
@@ -1284,8 +1298,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   auto sharedExecution = frisk::createLowerFriskFragmentsPass();
   if (failed(sharedExecution->initializeOptions(
-          std::string("double-buffer=") + (vDoubleBuffer ? "true" : "false") +
-              " cross-iteration=" + (crossBNK0 ? "true" : "false"),
+          std::string("double-buffer=") + (vDoubleBuffer && !cpsat.enabled() ? "true" : "false") +
+              " cross-iteration=" + (crossBNK0 && !cpsat.enabled() ? "true" : "false"),
           [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
     return 1;
   AddFuncPass(std::move(sharedExecution));
@@ -1315,7 +1329,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // mlir::affine::AffineVectorizeOptions opt;  opt.vectorSizes = {4};
   // AddFuncPass(mlir::affine::createAffineVectorize(opt));
   
-  AddFuncPass( mlir::affine::createLoopFusionPass());
+  if (!cpsat.enabled()) AddFuncPass( mlir::affine::createLoopFusionPass());
   AddPass(mlir::createCSEPass());
   AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   
@@ -1324,7 +1338,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(mlir::affine::createAffineScalarReplacementPass());
   auto optimize = frisk::createIRDeepOptimizePass();
   if (failed(optimize->initializeOptions(
-          reorderEnabled ? "reorder-after-unroll=true" : "reorder-after-unroll=false",
+          reorderEnabled && !cpsat.enabled() ? "reorder-after-unroll=true" : "reorder-after-unroll=false",
           [](const llvm::Twine &message) { llvm::errs() << message << "\n"; return failure(); })))
     return 1;
   AddFuncPass(std::move(optimize));
@@ -1378,14 +1392,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // Local scalar chains are exposed after unrolling. Only reductions tagged
   // by lowering (or explicitly by the caller) may be reassociated here.
-  if (localReduce != "off") {
+  if (!cpsat.enabled() && (localReduce != "off")) {
     AddFuncPass(frisk::createThreadLocalReductionPass(localReductionOptions));
     llvm::outs() << "\n---- after frisk-thread-local-reduction -----\n";
     llvm::outs().flush(); src->dump();
   }
 
   // Preserve structured recurrences and explicit XOR collectives for analysis.
-  if (deferLaneSum != "off") {
+  if (!cpsat.enabled() && (deferLaneSum != "off")) {
     AddFuncPass(frisk::createThreadDeferLaneSumPass(deferLaneSumOptions));
     AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
     AddPass(mlir::createCSEPass());
@@ -1393,8 +1407,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
-  if (pvInterleave) {
-    AddPass(frisk::createThreadInterleaveMMAChainsPass({pvInterleave, mmaSchedule.pvGuardGroup, "matrix", "none", 32}));
+  if (!cpsat.enabled() && (pvInterleave)) {
+    AddPass(frisk::createThreadInterleavePVPass(pvInterleave, mmaSchedule.pvGuardGroup));
     llvm::outs() << "\n---- after frisk-thread-interleave-pv -----\n";
     llvm::outs().flush(); src->dump();
   }
@@ -1403,31 +1417,31 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     // Required even when the optional standalone canonicalizer was disabled.
     AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
   }
-  if (kLDSPrefetch) {
+  if (!cpsat.enabled() && (kLDSPrefetch)) {
     AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kLDSPrefetch, "address"}));
     llvm::outs() << "\n---- after thread prefetchPairedLDS -----\n";
     llvm::outs().flush(); src->dump();
   }
   // Run after optional LDS dedup/pairing and before softmax schedules introduce
   // guards. QK respects existing pair/guard boundaries and never crosses DMA.
-  if (mmaSchedule.qkWidth) {
+  if (!cpsat.enabled() && (mmaSchedule.qkWidth)) {
     AddPass(frisk::createThreadInterleaveMMAChainsPass({mmaSchedule.qkWidth,
         mmaSchedule.qkGuardGroup, "lds", "bounded", mmaSchedule.qkPrefetchWords}));
     llvm::outs() << "\n---- after frisk-thread-interleave-qk -----\n";
     llvm::outs().flush(); src->dump();
   }
-  if (softmaxFragments != frisk::SoftmaxFragmentMode::Off) {
+  if (!cpsat.enabled() && (softmaxFragments != frisk::SoftmaxFragmentMode::Off)) {
     AddPass(frisk::createThreadScheduleSoftmaxFragmentsPass(softmaxFragments));
     llvm::outs() << "\n---- after thread scheduleSoftmaxFragments -----\n";
     llvm::outs().flush(); src->dump();
   }
-  if (kTailPrefetch) {
+  if (!cpsat.enabled() && (kTailPrefetch)) {
     AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kTailPrefetch, "reduction"}));
     llvm::outs() << "\n---- after thread prefetchPairedLDSTail -----\n";
     llvm::outs().flush(); src->dump();
   }
 
-  if (elideBackedgeBarrier) {
+  if (!cpsat.enabled() && (elideBackedgeBarrier)) {
     AddFuncPass(frisk::createThreadElideBackedgeBarrierPass());
     llvm::outs() << "\n---- after frisk-thread-elide-backedge-barrier -----\n";
     llvm::outs().flush(); src->dump();
@@ -1447,7 +1461,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
   // All register/LDS schedules and wave setup are fixed before introducing
   // the wave-uniform, register-only rescale region.
-  if (lazySoftmaxBase) {
+  if (!cpsat.enabled() && (lazySoftmaxBase)) {
     AddFuncPass(frisk::createThreadLazySoftmaxBasePass(lazyBaseThreshold));
     llvm::outs() << "\n---- after thread lazySoftmaxBase -----\n";
     llvm::outs().flush(); src->dump();
@@ -1465,7 +1479,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     AddFuncPass(frisk::createAnalyzeRegisterPressurePass("thread"));
   if (!frisk::firstLowering(mod, src->getContext()) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
-                            coalesceWaits, mathMode == "approx" || mathMode == "mmac-exp2"))
+                            coalesceWaits && !cpsat.enabled(), mathMode == "approx" || mathMode == "mmac-exp2"))
     return 1;
   llvm::outs() << "\n---- secondLowering done -----\n"; llvm::outs().flush();
   fillUnknownLocationsFromParents(mod.getOperation(), mod.getLoc());
@@ -1488,22 +1502,22 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "translateToLLVM");
   // Registered translation already supplies MMA and convert_pack anchor
   // contracts, including strict math and cleanup-disabled configurations.
-  if (mathMode != "strict" && (llvmCleanup == "both" || llvmCleanup == "early"))
+  if (!cpsat.enabled() && mathMode != "strict" && (llvmCleanup == "both" || llvmCleanup == "early"))
     frisk::cleanupLLVMInstructions(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "cleanupLLVMInstructions.early");
   // Local reductions and deferred lane sums are complete in thread IR.
-  if (prefetchPackets)
+  if (!cpsat.enabled() && prefetchPackets)
     frisk::prefetchGlobalPackets(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "prefetchGlobalPackets");
   // Cross-iteration control flow already exists. Protect denominator inputs
   // before LLVM lifetime optimization can sink their additions across it.
-  frisk::anchorNextKSums(*llvmModule);
+  if (!cpsat.enabled()) frisk::anchorNextKSums(*llvmModule);
   if (optimizeLifetimes)
-    frisk::optimizeRegisterLifetimes(*llvmModule);
+    frisk::optimizeRegisterLifetimes(*llvmModule, cpsat.enabled());
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterLifetimes");
-  if (ldsReuseWords)
+  if (!cpsat.enabled() && ldsReuseWords)
     frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
-  if (fragPrefetch)
+  if (!cpsat.enabled() && fragPrefetch)
     frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
 
   // LDS address canonicalization is complete in ThreadIR.
@@ -1521,9 +1535,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Automatically widened packets and explicit packed modes both preserve
   // complete wave64 packets. Narrow/partial-wave DMA remains unchanged.
   bool exported = printLLVM22CompatibleIR(*llvmModule, os,
-      dmaExport == "split32", asmSourceBytes, /*cleanupLate=*/mathMode != "strict" &&
+      dmaExport == "split32", asmSourceBytes, /*cleanupLate=*/!cpsat.enabled() && mathMode != "strict" &&
           (llvmCleanup == "both" || llvmCleanup == "late"), kLDSPrefetch != 0,
-      hoistLDSBases, dumpLLVMPasses, optimizeLLVM);
+      hoistLDSBases, dumpLLVMPasses, optimizeLLVM && !cpsat.enabled(), cpsat.enabled());
   os.close();
   if (os.has_error()) {
     llvm::errs() << "Failed to write LLVM IR output " << outputPath << "\n";

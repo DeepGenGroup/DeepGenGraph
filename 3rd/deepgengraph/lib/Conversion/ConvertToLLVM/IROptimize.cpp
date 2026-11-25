@@ -173,11 +173,12 @@ class VectorOpLoopUnrollPass
       // Recollect after every rewrite: unrolling invalidates nested op handles.
     }
     // 先把标量合并成小包，再多轮把小包翻倍合并，最宽到 128-bit，最后调度。
+    // Packing accesses within a scheduled compute window is a lowering step,
+    // not a replacement schedule. Disabling it scalarizes fragment LDS reads.
     coalesceUnrolledSharedScalars(kernel);
-    // Scalar packets can grow through several native widths, up to 128 bits.
     for (unsigned i = 0; i < 3; ++i)
       coalesceUnrolledSharedReads(kernel);
-    if (reorderAfterUnroll)
+    if (reorderAfterUnroll && !kernel->hasAttr("cpsat.preserve_schedule"))
       reorderUnrolledOperations(kernel);
   }
 };
@@ -372,6 +373,7 @@ static IssueNode classifyIssue(Operation *op) {
 // 循环执行 3 轮，可以 2x -> 4x -> 8x 逐级增长。
 // 只在没有写、barrier、控制流的窗口内进行。
 static void coalesceUnrolledSharedReads(func::FuncOp function) {
+  bool preserveSchedule = function->hasAttr("cpsat.preserve_schedule");
   function.walk([&](Block *block) {
     // pending：窗口内还没配对的 load，最多保留 64 条。
     SmallVector<vector::LoadOp> pending;
@@ -380,7 +382,8 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
       operations.push_back(&op);
     for (Operation *op : operations) {
       auto node = classifyIssue(op);
-      if (node.kind == IssueKind::Boundary || node.write) {
+      if (node.kind == IssueKind::Boundary || node.write ||
+          (preserveSchedule && node.kind == IssueKind::Compute)) {
         pending.clear();
         continue;
       }
@@ -434,6 +437,10 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
           if (!adjacent)
             continue;
         } else {
+          // CP-SAT's physical slot expressions can contain dynamic parity.
+          // Without a bounded proof, keep the original reads rather than run
+          // an expensive unbounded Presburger query during packet lowering.
+          if (preserveSchedule) continue;
           // Modulo lane coordinates have intrinsic bounds, e.g.
           // ((lane % 64) / 16 + 4) / 8 == 0. Algebraic simplification alone
           // misses these. Prove the delta for ALL integer operands, without
@@ -478,7 +485,8 @@ static void coalesceUnrolledSharedReads(func::FuncOp function) {
 // constant-folded sample only proposes a displacement; the two emptiness
 // checks prove it, including the intrinsic bounds of mod/floordiv expressions.
 // 证明 to - from 恒等于某个常量。在全 0 处求值只是提议一个候选值，真正的证明是两个空集检查。
-static std::optional<int64_t> sharedDisplacement(Value from, Value to) {
+static std::optional<int64_t> sharedDisplacement(Value from, Value to,
+                                                bool boundedProof = false) {
   auto *ctx = from.getContext();
   SmallVector<Value> operands{to, from};
   auto map = AffineMap::get(2, 0,
@@ -488,6 +496,24 @@ static std::optional<int64_t> sharedDisplacement(Value from, Value to) {
   map = simplifyAffineMap(map);
   if (auto constant = dyn_cast<AffineConstantExpr>(map.getResult(0)))
     return constant.getValue();
+  if (operands.size() == 1) {
+    if (auto id = operands[0].getDefiningOp<gpu::ThreadIdOp>()) {
+      if (auto range = frisk::getThreadIdRange(id, id.getDimension())) {
+        std::optional<int64_t> displacement;
+        for (int64_t tid = range->lower; tid < range->upper; ++tid) {
+          SmallVector<Attribute> folded;
+          auto attr = IntegerAttr::get(IndexType::get(ctx), tid);
+          if (failed(map.constantFold({attr}, folded)) || folded.size() != 1)
+            return std::nullopt;
+          int64_t current = cast<IntegerAttr>(folded.front()).getInt();
+          if (displacement && *displacement != current) return std::nullopt;
+          displacement = current;
+        }
+        return displacement;
+      }
+    }
+  }
+  if (boundedProof) return std::nullopt;
   SmallVector<Attribute> zero(operands.size(), IntegerAttr::get(IndexType::get(ctx), 0));
   SmallVector<Attribute> folded;
   if (failed(map.constantFold(zero, folded)))
@@ -520,6 +546,7 @@ static bool isScalarSharedBuffer(Value value) {
 //   writes  同一 buffer 上连续的标量 store，到边界时排序，按幂次宽度打包（最宽 128-bit）。
 //           打包写放在最后一条原 store 的位置，这时所有值都可用。
 static void coalesceUnrolledSharedScalars(func::FuncOp function) {
+  bool preserveSchedule = function->hasAttr("cpsat.preserve_schedule");
   function.walk([&](Block *block) {
     SmallVector<Operation *> operations;
     for (Operation &op : *block) operations.push_back(&op);
@@ -532,7 +559,7 @@ static void coalesceUnrolledSharedScalars(func::FuncOp function) {
       // are available. Duplicate/unknown addresses retain their original order.
       SmallVector<std::pair<int64_t, memref::StoreOp>> sorted;
       for (auto store : writes) {
-        auto delta = sharedDisplacement(writes.front().getIndices()[0], store.getIndices()[0]);
+        auto delta = sharedDisplacement(writes.front().getIndices()[0], store.getIndices()[0], preserveSchedule);
         if (!delta) { writes.clear(); return; }
         sorted.push_back({*delta, store});
       }
@@ -573,9 +600,11 @@ static void coalesceUnrolledSharedScalars(func::FuncOp function) {
         writes.push_back(store);
         continue;
       }
-      if (node.kind == IssueKind::Boundary || node.kind == IssueKind::Memory)
+      bool computeBoundary = preserveSchedule && node.kind == IssueKind::Compute;
+      if (node.kind == IssueKind::Boundary || node.kind == IssueKind::Memory ||
+          computeBoundary)
         flushWrites();
-      if (node.kind == IssueKind::Boundary || node.write) {
+      if (node.kind == IssueKind::Boundary || node.write || computeBoundary) {
         reads.clear();
         continue;
       }
@@ -583,7 +612,7 @@ static void coalesceUnrolledSharedScalars(func::FuncOp function) {
       bool merged = false;
       for (auto [i, first] : llvm::enumerate(reads)) {
         if (first.getMemRef() != load.getMemRef()) continue;
-        auto delta = sharedDisplacement(first.getIndices()[0], load.getIndices()[0]);
+        auto delta = sharedDisplacement(first.getIndices()[0], load.getIndices()[0], preserveSchedule);
         if (!delta || (*delta != 1 && *delta != -1)) continue;
         OpBuilder b(first);
         Value index = first.getIndices()[0];

@@ -485,6 +485,8 @@ class AddressRematerializer {
   llvm::DenseMap<llvm::Value *, llvm::Value *> local;
   llvm::SmallPtrSet<llvm::Value *, 8> retained;
   unsigned &clones;
+  bool boundedWindows;
+  unsigned materializationID = 0;
   // Bound code growth for arbitrary generated expressions. The limit applies
   // to newly cloned nodes, sharing expressions already rebuilt in this block.
   // 重建新增的节点不超过 96 个。已经重建或保留的值不计入。
@@ -519,9 +521,11 @@ class AddressRematerializer {
     if (!dependsOnThread(value)) return value;
     if (auto found = local.find(value); found != local.end()) return found->second;
     if (retained.contains(value))
-      return local[value] = materialize(value, before, "address.base");
+      return local[value] = materialize(value, before, "address.base",
+                                       boundedWindows ? ++materializationID : 0);
     if (isThreadID(value))
-      return local[value] = materialize(value, before, "address.thread");
+      return local[value] = materialize(value, before, "address.thread",
+                                       boundedWindows ? ++materializationID : 0);
     auto *copy = llvm::cast<llvm::Instruction>(value)->clone();
     for (llvm::Use &operand : copy->operands()) operand.set(rebuild(operand.get(), before));
     copy->insertBefore(before->getIterator());
@@ -530,7 +534,8 @@ class AddressRematerializer {
     return local[value] = copy;
   }
 public:
-  explicit AddressRematerializer(unsigned &clones) : clones(clones) {}
+  explicit AddressRematerializer(unsigned &clones, bool boundedWindows = false)
+      : clones(clones), boundedWindows(boundedWindows) {}
   // 选择保留的基址：入口块里被循环内地址用到的除法/取模。
   // savings[expr] 按循环深度加权：2^depth * 位宽。按收益排序，最多保留 8 个寄存器字。
   void chooseSharedBases(llvm::Function &function, llvm::LoopInfo &loops) {
@@ -609,7 +614,13 @@ public:
           accesses.push_back({&inst, 0});
       }
     }
+    unsigned windowAccesses = 0;
     for (auto [inst, operand] : accesses) {
+      // A fully unrolled CP-SAT block may contain hundreds of LDS accesses.
+      // Do not retain every reconstructed address until its final distant use.
+      // Anchors keep these bounded, pure expression windows local in LLVM.
+      if (boundedWindows && windowAccesses++ % 8 == 0)
+        local.clear();
       if (!affordable(inst->getOperand(operand))) continue;
       inst->setOperand(operand, rebuild(inst->getOperand(operand), inst));
     }
@@ -699,7 +710,7 @@ llvm::PreservedAnalyses OptimizeRegisterLifetimesPass::run(
   return preserved;
 }
 
-void optimizeRegisterLifetimes(llvm::Module &module) {
+void optimizeRegisterLifetimes(llvm::Module &module, bool preserveSchedule) {
   llvm::FunctionAnalysisManager analyses;
   llvm::ModuleAnalysisManager modules;
   llvm::LoopAnalysisManager loops;
@@ -718,9 +729,23 @@ void optimizeRegisterLifetimes(llvm::Module &module) {
     if (function.isDeclaration() ||
         function.hasFnAttribute(llvm::Attribute::StrictFP) ||
         function.hasFnAttribute(llvm::Attribute::OptimizeNone) || !isAMDGPU(function)) continue;
+    if (preserveSchedule && function.hasFnAttribute(marker)) continue;
     if (!function.hasFnAttribute(marker)) {
       unsigned simplified = simplifyThreadExpressions(function);
       llvm::errs() << "Compact thread indices: " << simplified << " proven replacements\n";
+      if (preserveSchedule) {
+        unsigned clones = 0;
+        AddressRematerializer addresses(clones, true);
+        addresses.chooseSharedBases(function, analyses.getResult<llvm::LoopAnalysis>(function));
+        addresses.run(function);
+        function.addFnAttr(marker, "1");
+        analyses.invalidate(function, llvm::PreservedAnalyses::none());
+        llvm::DCEPass().run(function, analyses);
+        llvm::errs() << "OptimizeRegisterLifetimes (preserve schedule): "
+                     << function.getName() << ": " << clones
+                     << " local address expressions, no math rescheduling\n";
+        continue;
+      }
       pipeline.run(function, analyses);
     }
     if (compactIntegerComparisons(function)) {

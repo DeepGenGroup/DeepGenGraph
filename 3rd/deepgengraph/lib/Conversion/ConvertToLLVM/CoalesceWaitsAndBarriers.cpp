@@ -3,6 +3,7 @@
 // must never be assumed to complete a different buffer B.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -47,6 +48,18 @@ struct CoalesceWaitsAndBarriers
         // operations and opaque target intrinsics may change synchronization
         // state even when their effects are not described.
         StringRef dialect = op.getName().getDialectNamespace();
+        // DMA lowering has already expanded descriptor/address arithmetic to
+        // LLVM here. Such pure setup must not hide a duplicate handoff barrier.
+        // Keep calls, target intrinsics, inline asm and memory/fences excluded.
+        if (isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::ZeroOp,
+                LLVM::AddOp, LLVM::SubOp, LLVM::MulOp, LLVM::ShlOp,
+                LLVM::LShrOp, LLVM::AShrOp, LLVM::AndOp, LLVM::OrOp,
+                LLVM::XOrOp, LLVM::ZExtOp, LLVM::SExtOp, LLVM::TruncOp,
+                LLVM::PtrToIntOp, LLVM::IntToPtrOp, LLVM::GEPOp,
+                LLVM::ICmpOp, LLVM::SelectOp, LLVM::ExtractValueOp,
+                LLVM::InsertValueOp, LLVM::UndefOp, LLVM::PoisonOp,
+                UnrealizedConversionCastOp>(op))
+          continue;
         if ((dialect == "arith" || dialect == "index" ||
              dialect == "affine" || dialect == "memref" ||
              dialect == "vector") &&
