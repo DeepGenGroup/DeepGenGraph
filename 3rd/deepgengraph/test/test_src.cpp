@@ -1394,7 +1394,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   }
 
   if (pvInterleave) {
-    AddPass(frisk::createThreadInterleavePVPass(pvInterleave, mmaSchedule.pvGuardGroup));
+    AddPass(frisk::createThreadInterleaveMMAChainsPass({pvInterleave, mmaSchedule.pvGuardGroup, "matrix", "none", 32}));
     llvm::outs() << "\n---- after frisk-thread-interleave-pv -----\n";
     llvm::outs().flush(); src->dump();
   }
@@ -1404,15 +1404,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
   }
   if (kLDSPrefetch) {
-    AddPass(frisk::createThreadPrefetchPairedLDSPass(kLDSPrefetch));
+    AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kLDSPrefetch, "address"}));
     llvm::outs() << "\n---- after thread prefetchPairedLDS -----\n";
     llvm::outs().flush(); src->dump();
   }
   // Run after optional LDS dedup/pairing and before softmax schedules introduce
   // guards. QK respects existing pair/guard boundaries and never crosses DMA.
   if (mmaSchedule.qkWidth) {
-    AddPass(frisk::createThreadInterleaveQKPass(mmaSchedule.qkWidth,
-        mmaSchedule.qkGuardGroup, mmaSchedule.qkPrefetchWords));
+    AddPass(frisk::createThreadInterleaveMMAChainsPass({mmaSchedule.qkWidth,
+        mmaSchedule.qkGuardGroup, "lds", "bounded", mmaSchedule.qkPrefetchWords}));
     llvm::outs() << "\n---- after frisk-thread-interleave-qk -----\n";
     llvm::outs().flush(); src->dump();
   }
@@ -1422,7 +1422,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
   if (kTailPrefetch) {
-    AddPass(frisk::createThreadPrefetchPairedLDSTailPass(kTailPrefetch));
+    AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kTailPrefetch, "reduction"}));
     llvm::outs() << "\n---- after thread prefetchPairedLDSTail -----\n";
     llvm::outs().flush(); src->dump();
   }

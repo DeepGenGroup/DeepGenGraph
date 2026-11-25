@@ -1,4 +1,27 @@
-# Paired K/B LDS prefetch
+# Generic paired LDS prefetch
+
+The canonical pass is `frisk-thread-prefetch-paired-lds`, with
+`distance=0..8 window=address|register|reduction`. The default register window
+accepts ordinary speculatable register ALU, including independent add/mul/select
+operations. It does not require an attention reduction or a loop-tail position.
+Supported aligned 64-bit reads may feed either MMA A or B operands.
+
+```sh
+build/test/ThreadTilingTest input.mlir \
+  '--frisk-thread-prefetch-paired-lds=distance=4 window=register'
+```
+
+`address` retains the conservative address/view/MMA window. `reduction`
+retains the older reduction-aware selection and is used by the legacy tail
+pipeline alias. MyTest maps its original two tuning flags to these semantic
+options at the original pipeline positions. No separate tail pass exists.
+
+New pairs use `frisk.lds_pair`, with unique identifiers across repeated runs.
+Function attributes `frisk.lds_prefetch.<window>` record distance and are
+preserved in LLVM passthrough attributes. Existing pairs and guards remain
+boundaries; another run may schedule newly introduced unprotected regions.
+Reapplying the same configuration without new opportunities is a no-op; a
+conflicting distance for an already recorded window is rejected.
 
 ## ThreadIR production pipeline
 
@@ -6,9 +29,9 @@ MyTest now performs all three schedules before async/GPU/LLVM lowering, after
 physical LDS address canonicalization, thread unrolling, local reductions,
 deferred lane sums and PV interleaving:
 
-1. `frisk-thread-prefetch-paired-lds` (`distance=0..8`).
+1. `frisk-thread-prefetch-paired-lds` (`distance=0..8 window=address`).
 2. `frisk-thread-schedule-softmax-fragments` (`mode=off|fragment|pv`).
-3. `frisk-thread-prefetch-paired-lds-tail` (`distance=0..8`).
+3. `frisk-thread-prefetch-paired-lds` (`distance=0..8 window=reduction`).
 
 The existing MyTest CLI options retain their meanings and defaults. The LDS
 passes compare explicit `frisk.lds_load` storage/anchor/byte offsets and
@@ -51,7 +74,8 @@ prefetch remains as `canonicalizeLLVMExport`: DMA lowering creates duplicate
 resource descriptors which must be folded before cross-iteration K0 analysis.
 It contains no pairing or scheduling logic.
 
-Tests: `python3 3rd/deepgengraph/test/check_thread_fragment_schedules.py`.
+Tests: `python3 test/unittest/check_thread_fragment_schedules.py` and
+`python3 test/unittest/check_generic_thread_scheduling.py` from this directory.
 Reproduction with the parameters of `thread_pv_interleave/noncausal/kernel.o3.ll`:
 `python3 generated_ir/thread_fragment_schedules/generate.py`. Output, full
 commands and verification records are in that directory's `noncausal/` folder.

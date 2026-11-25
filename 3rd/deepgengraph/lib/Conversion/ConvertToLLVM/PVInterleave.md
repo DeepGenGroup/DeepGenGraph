@@ -1,8 +1,31 @@
-# PV and QK accumulator interleaving in Thread IR
+# Generic MMA accumulator interleaving in Thread IR
+
+The canonical pass is `frisk-thread-interleave-mma-chains`. It recognizes
+independent accumulator SSA chains in ordinary GEMM as well as attention;
+chain discovery does not require a matrix-load producer.
+
+```sh
+build/test/ThreadTilingTest input.mlir \
+  '--frisk-thread-interleave-mma-chains=width=2 guard-group=2 operand-source=any load-motion=none'
+```
+
+`operand-source=any|register|lds|matrix` selects available register values or
+supported operand packets. `load-motion=none` requires memory packets before
+the candidate MMAs. `bounded` can move ordinary LDS packets only within a
+proven memory/synchronization-free window; matrix reads must remain available.
+`prefetch-words` bounds distinct B-packet footprint when bounded motion is
+requested. Packet size comes from its type; this is not a total VGPR limit.
+
+The old PV/QK CLI names are pipeline aliases that map to
+`operand-source=matrix load-motion=none` and
+`operand-source=lds load-motion=bounded`, respectively. MyTest retains its
+existing tuning flags and maps them to the same canonical options. All newly
+scheduled MMAs use `frisk.mma_interleave`; old markers are recognized on input.
+Both generic passes share a final local schedule-plan validation before motion.
 
 `MyTest --pv-interleave=N` runs `frisk-thread-interleave-pv` after thread
 unrolling, address canonicalization and lane-sum rewriting, before async/GPU
-lowering. `ThreadInterleavePV.cpp` owns matching, legality and scheduling.
+lowering. `ThreadInterleaveMMAChains.cpp` owns matching, legality and scheduling.
 The former LLVM `InterleavePVPass` and `interleavePVAccumulators` are removed;
 `LegacyLLVMExportTest` rejects this option and points callers to MyTest.
 
@@ -94,7 +117,7 @@ control flow, intermediate chain fanout and unresolved cross-chain dependencies
 reject the candidate. Only speculatable memory-free register operations may be
 pulled in as dependencies. Every accumulator's original K order is preserved.
 
-`frisk.pv_interleave` / `frisk.qk_interleave` mark scheduled MMACs, making replay idempotent. Apply
+`frisk.mma_interleave` marks scheduled MMACs, making replay idempotent. Apply
 alternative widths to the original input, not already transformed output.
 
 ## Scheduling guards and lowering

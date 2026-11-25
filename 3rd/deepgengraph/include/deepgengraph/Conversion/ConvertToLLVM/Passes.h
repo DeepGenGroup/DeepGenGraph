@@ -8,6 +8,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/ScheduleSoftmaxFragments.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ThreadLazySoftmaxBase.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadScheduling.h"
 
 namespace mlir::frisk {
 
@@ -35,7 +36,8 @@ std::unique_ptr<mlir::Pass> createThreadInterleaveQKPass(unsigned width = 0,
     int guardGroup = 2, unsigned prefetchWords = 32);
 // After physical LDS address canonicalization, unrolling and PV interleaving.
 // Keep this order: paired loads, softmax fragments, reduction-aware tail loads.
-std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSPass(unsigned distance = 0);
+// Compatibility C++ wrappers; canonical options are declared in ThreadScheduling.h.
+std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSPass(unsigned distance);
 std::unique_ptr<mlir::Pass> createThreadScheduleSoftmaxFragmentsPass(
     SoftmaxFragmentMode mode = SoftmaxFragmentMode::Off);
 std::unique_ptr<mlir::Pass> createThreadPrefetchPairedLDSTailPass(unsigned distance = 0);

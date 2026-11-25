@@ -2,9 +2,8 @@
 // and structured control flow are still explicit in Thread IR. No LLVM IR
 // chain reconstruction or instruction motion is needed at export.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/PVInterleaveOptions.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
-#include "ThreadScheduleUtils.h"
+#include "ThreadSchedulePlan.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -17,8 +16,7 @@
 
 namespace mlir::frisk {
 namespace {
-constexpr StringLiteral Marker = "frisk.pv_interleave";
-constexpr StringLiteral QKMarker = "frisk.qk_interleave";
+constexpr StringLiteral Marker = thread_schedule::MMAInterleaveMarker;
 constexpr StringLiteral Barrier = "llvm.amdgcn.sched.barrier";
 using Ops = SmallVector<Operation *, 32>;
 
@@ -26,44 +24,53 @@ bool isMMA(Operation *op) {
   return thread_schedule::mma(op, /*allowShapeAliases=*/true);
 }
 
-// Only transparent register views of one explicit B packet are accepted.
-// PV uses matrix packets; QK uses aligned ordinary LDS vector reads.
-// Unlike the LLVM matcher, indices need not have folded to low/high shuffles:
-// e.g. the high-half indices can still be affine expressions in thread_id.
-// Every extraction and its index SSA value is preserved, never reinterpreted.
-Operation *matrixPacket(Value value, bool qk, unsigned depth = 0) {
-  if (depth > 16) return nullptr;
+enum class OperandKind { Register, LDS, Matrix };
+struct OperandOrigin {
+  OperandKind kind;
+  Operation *packet = nullptr;
+};
+
+// Chain discovery depends on accumulator SSA. Operand origins only constrain
+// source selection and read motion; register operands need no memory packet.
+std::optional<OperandOrigin> operandOrigin(Value value, unsigned depth = 0) {
+  if (depth > 16) return {};
   auto *op = value.getDefiningOp();
-  if (!op) return nullptr;
-  if (qk) {
-    if (auto load = dyn_cast<LDSLoadOp>(op))
-      return load.getAlignment() >= 8 &&
-                     load.getResult().getType() ==
-                         VectorType::get({4}, Float16Type::get(op->getContext()))
-                 ? op : nullptr;
+  if (!op) return OperandOrigin{OperandKind::Register};
+  if (auto load = dyn_cast<LDSLoadOp>(op)) {
+    if (load.getAlignment() < 8 || load.getResult().getType() !=
+        VectorType::get({4}, Float16Type::get(op->getContext()))) return {};
+    return OperandOrigin{OperandKind::LDS, op};
   }
   if (auto read = dyn_cast<ReadMatrixFromShmOp>(op)) {
-    auto type = dyn_cast<VectorType>(read.getResult().getType());
-    return !qk && read.getIntrinsicName() == "llvm.hcu.ds.read.m32x16.b16" &&
-                   type == VectorType::get({4}, IntegerType::get(op->getContext(), 32))
-               ? op : nullptr;
+    if (read.getIntrinsicName() != "llvm.hcu.ds.read.m32x16.b16" ||
+        read.getResult().getType() != VectorType::get({4}, IntegerType::get(op->getContext(), 32)))
+      return {};
+    return OperandOrigin{OperandKind::Matrix, op};
   }
   if (auto cast = dyn_cast<vector::BitCastOp>(op))
-    return matrixPacket(cast.getSource(), qk, depth + 1);
+    return operandOrigin(cast.getSource(), depth + 1);
   if (auto cast = dyn_cast<vector::ShapeCastOp>(op))
-    return matrixPacket(cast.getSource(), qk, depth + 1);
+    return operandOrigin(cast.getSource(), depth + 1);
   if (auto extract = dyn_cast<vector::ExtractOp>(op))
-    return matrixPacket(extract.getSource(), qk, depth + 1);
+    return operandOrigin(extract.getSource(), depth + 1);
   if (isa<vector::FromElementsOp>(op)) {
-    Operation *packet = nullptr;
+    std::optional<OperandOrigin> origin;
     for (Value operand : op->getOperands()) {
-      auto *source = matrixPacket(operand, qk, depth + 1);
-      if (!source || (packet && packet != source)) return nullptr;
-      packet = source;
+      auto next = operandOrigin(operand, depth + 1);
+      if (!next || (origin && (origin->packet != next->packet || origin->kind != next->kind)))
+        return {};
+      origin = next;
     }
-    return packet;
+    return origin;
   }
-  return nullptr;
+  // Already-produced register SSA is available without moving its producer.
+  return OperandOrigin{OperandKind::Register};
+}
+
+bool matchesSource(OperandKind kind, StringRef source) {
+  return source == "any" || (source == "register" && kind == OperandKind::Register) ||
+         (source == "lds" && kind == OperandKind::LDS) ||
+         (source == "matrix" && kind == OperandKind::Matrix);
 }
 
 bool pure(Operation *op) {
@@ -82,15 +89,17 @@ struct Chain {
   Ops mmas, packets;
 };
 
-Chain getChain(Operation *root, bool qk) {
+Chain getChain(Operation *root, StringRef source) {
   Chain chain;
   for (Operation *mma = root; mma;) {
-    if (chain.mmas.size() == 32 || mma->hasAttr(Marker) || mma->hasAttr(QKMarker)) return {};
-    auto *packet = matrixPacket(mma->getOperand(1), qk);
-    if (!packet || packet->getBlock() != root->getBlock() ||
-        llvm::is_contained(chain.packets, packet)) return {};
+    if (chain.mmas.size() == 32 || mma->hasAttr(Marker) ||
+        mma->hasAttr("frisk.pv_interleave") || mma->hasAttr("frisk.qk_interleave")) return {};
+    auto origin = operandOrigin(mma->getOperand(1));
+    if (!origin || !matchesSource(origin->kind, source)) return {};
+    auto *packet = origin->packet;
+    if (packet && packet->getBlock() != root->getBlock()) return {};
     chain.mmas.push_back(mma);
-    chain.packets.push_back(packet);
+    if (packet) chain.packets.push_back(packet);
     Operation *next = nullptr;
     for (Operation *user : mma->getResult(0).getUsers()) {
       if (!isMMA(user) || user->getOperand(2) != mma->getResult(0)) continue;
@@ -103,22 +112,15 @@ Chain getChain(Operation *root, bool qk) {
   return chain;
 }
 
-LLVM::MemoryEffectsAttr guardEffects(MLIRContext *ctx) {
-  using E = LLVM::ModRefInfo;
-  return LLVM::MemoryEffectsAttr::get(ctx, {E::NoModRef, E::NoModRef,
-      E::ModRef, E::NoModRef, E::NoModRef, E::NoModRef});
-}
-
-// Plan and validate the entire window before changing any operation. Only
-// register computations may be pulled in as dependencies. QK additionally
-// preloads selected B packets inside a proven write/synchronization-free epoch.
+// Plan the complete window before changing IR. Bounded read motion only
+// moves supported ordinary LDS packets inside one memory/synchronization epoch.
 struct Stats {
   unsigned regions = 0, hoisted = 0, guards = 0;
   std::map<std::string, unsigned> rejected;
 };
 
 bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
-              bool qk, int guardGroup, unsigned prefetchWords, Stats &stats) {
+              bool moveReads, int guardGroup, unsigned prefetchWords, Stats &stats) {
   auto reject = [&](StringRef reason) {
     ++stats.rejected[reason.str()];
     return false;
@@ -143,13 +145,19 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
       if (!lastMMA || positions[mma] > positions[lastMMA]) lastMMA = mma;
     }
   }
-  if (!lastRead) return false;
-  if (!qk && positions[lastRead] >= firstMMA) return reject("late matrix packet");
-  if (!qk) first = lastRead->getNextNode();
+  for (Operation *packet : packets)
+    if ((!moveReads || isa<ReadMatrixFromShmOp>(packet)) && positions[packet] >= firstMMA)
+      return reject("late operand packet");
+  if (!moveReads && lastRead) first = lastRead->getNextNode();
   if (positions[lastMMA] - positions[first] > 2048) return reject("window limit");
   // Count every distinct B packet, including those already available. This
   // bounds the live operand footprint, not the kernel's total register usage.
-  if (qk && packets.size() * 2 > prefetchWords) return reject("B operand word budget");
+  uint64_t words = 0;
+  for (Operation *packet : packets) {
+    auto type = cast<VectorType>(packet->getResult(0).getType());
+    words += llvm::divideCeil(uint64_t(type.getNumElements()) * type.getElementTypeBitWidth(), uint64_t(32));
+  }
+  if (moveReads && words > prefetchWords) return reject("B operand word budget");
   Operation *end = lastMMA->getNextNode();
   Ops region;
   llvm::SmallPtrSet<Operation *, 32> members;
@@ -159,14 +167,14 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
     region.push_back(op);
     members.insert(op);
     if (mmas.contains(op)) ++ordinal;
-    else if (qk && packets.contains(op)) {
+    else if (moveReads && packets.contains(op)) {
       // Do not dismantle a paired-load schedule owned by another pass.
-      if (op->hasAttr("frisk.k_lds_pair") || op->hasAttr("frisk.k_tail_pair"))
+      if (thread_schedule::protectedLDSPair(op))
         return reject("protected LDS pair");
     } else if (!pure(op)) {
-      // Unlike PV (whose packets are already available), QK moves reads.
+      // Read motion needs a stronger proof than register-only interleaving.
       // An entire candidate must be in a single write/synchronization epoch.
-      if (qk || !fixed(op)) return reject("effect or synchronization boundary");
+      if (moveReads || !fixed(op)) return reject("effect or synchronization boundary");
       fixedSlots[ordinal].push_back(op);
     }
   }
@@ -188,7 +196,7 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
     return true;
   };
   unsigned hoisted = 0;
-  if (qk) {
+  if (moveReads) {
     // Preserve original load order. Only their pure address dependencies may
     // move with them; an address depending on an MMA rejects the whole plan.
     for (Operation *op : region)
@@ -204,60 +212,50 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
   for (Operation *op : region) if (!emit(op, false)) return false;
   if (plan.size() != region.size()) return false;
 
+  thread_schedule::LocalSchedulePlan orderPlan{region, plan};
+  if (!orderPlan.validate()) return reject("SSA order");
+  orderPlan.apply();
   OpBuilder builder(module.getContext());
-  auto function = module.lookupSymbol<LLVM::LLVMFuncOp>(Barrier);
-  if (guardGroup != 0 && !function) {
-    builder.setInsertionPointToStart(module.getBody());
-    auto type = LLVM::LLVMFunctionType::get(
-        LLVM::LLVMVoidType::get(module.getContext()), {builder.getI32Type()}, false);
-    function = builder.create<LLVM::LLVMFuncOp>(lastMMA->getLoc(), Barrier, type);
-    function.setMemoryEffectsAttr(guardEffects(module.getContext()));
-  }
-  for (Operation *op : plan) op->moveBefore(end);
   for (auto [index, mma] : llvm::enumerate(desired)) {
-    auto guard = [&]() {
-      Value zero = builder.create<LLVM::ConstantOp>(mma->getLoc(), builder.getI32Type(),
-                                                   builder.getI32IntegerAttr(0));
-      auto call = builder.create<LLVM::CallOp>(mma->getLoc(), function, ValueRange{zero});
-      call.setMemoryEffectsAttr(guardEffects(module.getContext()));
-      ++stats.guards;
-    };
     if (guardGroup < 0) {
-      builder.setInsertionPoint(mma);
-      guard();
+      thread_schedule::guard(mma, Marker);
+      ++stats.guards;
     }
     if (guardGroup < 0 || (guardGroup > 0 &&
         ((index + 1) % guardGroup == 0 || index + 1 == desired.size()))) {
-      builder.setInsertionPointAfter(mma);
-      guard();
+      thread_schedule::guard(mma->getNextNode(), Marker);
+      ++stats.guards;
     }
-    mma->setAttr(qk ? QKMarker : Marker, builder.getI32IntegerAttr(width));
+    mma->setAttr(Marker, builder.getI32IntegerAttr(width));
   }
   stats.hoisted += hoisted;
   ++stats.regions;
   return true;
 }
 
-template<bool QK>
-class ThreadInterleavePass
-    : public PassWrapper<ThreadInterleavePass<QK>, OperationPass<ModuleOp>> {
+class ThreadInterleaveMMAChainsPass
+    : public PassWrapper<ThreadInterleaveMMAChainsPass, OperationPass<ModuleOp>> {
 public:
-  using Base = PassWrapper<ThreadInterleavePass<QK>, OperationPass<ModuleOp>>;
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadInterleavePass)
-  ThreadInterleavePass() = default;
-  ThreadInterleavePass(const ThreadInterleavePass &other) : Base(other) {}
-  ThreadInterleavePass(unsigned value, int guards, unsigned words = 32) {
-    width = value; guardGroup = guards; prefetchWords = words;
+  using Base = PassWrapper<ThreadInterleaveMMAChainsPass, OperationPass<ModuleOp>>;
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadInterleaveMMAChainsPass)
+  ThreadInterleaveMMAChainsPass() = default;
+  ThreadInterleaveMMAChainsPass(const ThreadInterleaveMMAChainsPass &other) : Base(other) {}
+  explicit ThreadInterleaveMMAChainsPass(const MMAChainInterleaveOptions &options) {
+    width = options.width; guardGroup = options.guardGroup;
+    prefetchWords = options.prefetchWords; operandSource = options.operandSource;
+    loadMotion = options.loadMotion;
   }
   Pass::Option<unsigned> width{*this, "width", llvm::cl::init(0),
                          llvm::cl::desc("0 disables; 1 serial; 2/4 interleave independent MMA chains")};
-  Pass::Option<int> guardGroup{*this, "guard-group", llvm::cl::init(QK ? 2 : -1),
+  Pass::Option<int> guardGroup{*this, "guard-group", llvm::cl::init(2),
       llvm::cl::desc("-1: legacy before/after; 0: none; 1..32: one guard per N MMAs")};
   Pass::Option<unsigned> prefetchWords{*this, "prefetch-words", llvm::cl::init(32),
-      llvm::cl::desc("QK distinct B operand budget in 32-bit words per thread")};
-  StringRef getArgument() const final {
-    return QK ? "frisk-thread-interleave-qk" : "frisk-thread-interleave-pv";
-  }
+      llvm::cl::desc("Distinct B packet footprint budget in 32-bit words per thread")};
+  Pass::Option<std::string> operandSource{*this, "operand-source", llvm::cl::init("any"),
+      llvm::cl::desc("Select any, register, lds, or matrix operands")};
+  Pass::Option<std::string> loadMotion{*this, "load-motion", llvm::cl::init("none"),
+      llvm::cl::desc("none requires ready operands; bounded may preload ordinary LDS operands")};
+  StringRef getArgument() const final { return "frisk-thread-interleave-mma-chains"; }
   StringRef getDescription() const final { return "Interleave independent MMA accumulators in Thread IR"; }
   void getDependentDialects(DialectRegistry &registry) const final {
     registry.insert<FriskDialect, LLVM::LLVMDialect>();
@@ -271,30 +269,29 @@ public:
       this->getOperation().emitError("guard-group must be -1, 0 or 1..32");
       return this->signalPassFailure();
     }
+    if (operandSource != "any" && operandSource != "register" &&
+        operandSource != "lds" && operandSource != "matrix") {
+      this->getOperation().emitError("operand-source must be any, register, lds, or matrix");
+      return this->signalPassFailure();
+    }
+    if (loadMotion != "none" && loadMotion != "bounded") {
+      this->getOperation().emitError("load-motion must be none or bounded");
+      return this->signalPassFailure();
+    }
     if (!width) return;
     ModuleOp module = this->getOperation();
-    // Validate existing declarations before planning any region. A function
-    // pass must not create module symbols, hence the module-scoped driver.
-    if (Operation *symbol = module.lookupSymbol(Barrier)) {
-      auto function = dyn_cast<LLVM::LLVMFuncOp>(symbol);
-      auto type = LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(&this->getContext()),
-          {IntegerType::get(&this->getContext(), 32)}, false);
-      if (!function || !function.isExternal() || function.getFunctionType() != type) {
-        module.emitError("conflicting declaration for ") << Barrier;
-        return this->signalPassFailure();
-      }
-    }
+    if (failed(thread_schedule::checkGuard(module))) return this->signalPassFailure();
     module.walk([&](func::FuncOp function) {
       if (function.isExternal() || thread_schedule::protectedFunction(function)) return;
       Stats stats;
       auto attempt = [&](ArrayRef<Chain *> group) {
-        return schedule(group, width, module, QK, guardGroup, prefetchWords, stats);
+        return schedule(group, width, module, loadMotion == "bounded", guardGroup, prefetchWords, stats);
       };
       function.walk([&](Block *block) {
         SmallVector<Chain, 0> candidates;
         for (Operation &op : *block) {
           if (!isMMA(&op) || isMMA(op.getOperand(2).getDefiningOp())) continue;
-          Chain chain = getChain(&op, QK);
+          Chain chain = getChain(&op, operandSource);
           if (chain.mmas.size() >= 2) candidates.push_back(std::move(chain));
         }
         llvm::SmallPtrSet<Chain *, 16> visited;
@@ -305,7 +302,7 @@ public:
             // Output columns need not use the same V packets. Combining all
             // equal-depth independent chains avoids rejecting a region just
             // because other output columns occur between two row fragments.
-            // schedule() proves packet availability (or legal QK preloading)
+            // schedule() proves packet availability (or legal bounded preloading)
             // and checks the complete SSA/effect window before any movement.
             if (!visited.contains(&other) && seed.mmas.size() == other.mmas.size()) {
               group.push_back(&other);
@@ -314,23 +311,52 @@ public:
           if (attempt(group)) {
             continue;
           }
-          // A large group or an intervening memory effect may prevent the
-          // combined schedule. Preserve previously supported packet-local
-          // opportunities rather than letting an unrelated chain disable them.
-          llvm::SmallPtrSet<Chain *, 16> localVisited;
-          for (Chain *localSeed : group) {
-            if (!localVisited.insert(localSeed).second) continue;
-            SmallVector<Chain *> local{localSeed};
+          // Retry independently schedulable windows. Register-only chains
+          // have no packet key, so packet grouping alone cannot separate them
+          // when an unknown effect rejects a combined window.
+          llvm::SmallPtrSet<Operation *, 32> selectedReads;
+          for (Chain *chain : group)
+            selectedReads.insert(chain->packets.begin(), chain->packets.end());
+          DenseMap<Operation *, unsigned> epochs;
+          unsigned epoch = 0;
+          bool moveReads = loadMotion == "bounded";
+          for (Operation &op : *block) {
+            bool read = moveReads && selectedReads.contains(&op) &&
+                        isa<LDSLoadOp>(op) && !thread_schedule::protectedLDSPair(&op);
+            if (!isMMA(&op) && !pure(&op) && !read &&
+                (moveReads || !fixed(&op))) ++epoch;
+            epochs[&op] = epoch;
+          }
+          llvm::SmallPtrSet<Chain *, 16> epochVisited;
+          for (Chain *windowSeed : group) {
+            if (!epochVisited.insert(windowSeed).second) continue;
+            unsigned key = epochs[windowSeed->mmas.front()];
+            if (epochs[windowSeed->mmas.back()] != key) continue;
+            SmallVector<Chain *> window{windowSeed};
             for (Chain *other : group)
-              if (!localVisited.contains(other) && localSeed->packets == other->packets) {
-                local.push_back(other);
-                localVisited.insert(other);
+              if (!epochVisited.contains(other) && epochs[other->mmas.front()] == key &&
+                  epochs[other->mmas.back()] == key) {
+                window.push_back(other);
+                epochVisited.insert(other);
               }
-            if (local.size() != group.size()) attempt(local);
+            if (window.size() != group.size() && attempt(window)) continue;
+            // Different ready packet sets can still impose incompatible
+            // dependency windows; retain the previous packet-local fallback.
+            llvm::SmallPtrSet<Chain *, 16> localVisited;
+            for (Chain *localSeed : window) {
+              if (!localVisited.insert(localSeed).second) continue;
+              SmallVector<Chain *> local{localSeed};
+              for (Chain *other : window)
+                if (!localVisited.contains(other) && localSeed->packets == other->packets) {
+                  local.push_back(other);
+                  localVisited.insert(other);
+                }
+              if (local.size() != window.size()) attempt(local);
+            }
           }
         }
       });
-      llvm::errs() << (QK ? "Thread QK interleave: " : "Thread PV interleave: ")
+      llvm::errs() << "Thread MMA interleave: "
                    << stats.regions << " regions, width=" << width
                    << ", guard-group=" << guardGroup << ", guards=" << stats.guards
                    << ", hoisted-loads=" << stats.hoisted
@@ -342,44 +368,7 @@ public:
 };
 } // namespace
 
-bool parsePVInterleaveOption(llvm::StringRef argument, unsigned &width, bool &consumed) {
-  consumed = argument.starts_with("--pv-interleave");
-  if (!consumed) return true;
-  unsigned parsed;
-  if (!argument.consume_front("--pv-interleave=") || argument.getAsInteger(10, parsed) ||
-      (parsed != 0 && parsed != 1 && parsed != 2 && parsed != 4)) return false;
-  width = parsed;
-  return true;
-}
-
-bool parseMMAChainScheduleOption(llvm::StringRef argument,
-                                MMAChainScheduleOptions &options, bool &consumed) {
-  consumed = true;
-  if (argument.starts_with("--qk-interleave")) {
-    unsigned value;
-    if (!argument.consume_front("--qk-interleave=") || argument.getAsInteger(10, value) ||
-        (value != 0 && value != 1 && value != 2 && value != 4)) return false;
-    options.qkWidth = value;
-  } else if (argument.starts_with("--qk-prefetch-words")) {
-    unsigned value;
-    if (!argument.consume_front("--qk-prefetch-words=") || argument.getAsInteger(10, value))
-      return false;
-    options.qkPrefetchWords = value;
-  } else if (argument.starts_with("--pv-guard-group") || argument.starts_with("--qk-guard-group")) {
-    bool qk = argument.starts_with("--qk-");
-    int value;
-    if (!argument.consume_front(qk ? "--qk-guard-group=" : "--pv-guard-group=") ||
-        argument.getAsInteger(10, value) || value < -1 || value > 32) return false;
-    (qk ? options.qkGuardGroup : options.pvGuardGroup) = value;
-  } else consumed = false;
-  return true;
-}
-
-std::unique_ptr<Pass> createThreadInterleavePVPass(unsigned width, int guardGroup) {
-  return std::make_unique<ThreadInterleavePass<false>>(width, guardGroup);
-}
-std::unique_ptr<Pass> createThreadInterleaveQKPass(unsigned width, int guardGroup,
-                                              unsigned prefetchWords) {
-  return std::make_unique<ThreadInterleavePass<true>>(width, guardGroup, prefetchWords);
+std::unique_ptr<Pass> createThreadInterleaveMMAChainsPass(const MMAChainInterleaveOptions &options) {
+  return std::make_unique<ThreadInterleaveMMAChainsPass>(options);
 }
 } // namespace mlir::frisk

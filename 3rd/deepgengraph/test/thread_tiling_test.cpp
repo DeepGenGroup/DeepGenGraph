@@ -122,12 +122,11 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadSoftmaxCvtPackPass(); });
-  mlir::registerPass([] { return mlir::frisk::createThreadInterleavePVPass(); });
-  mlir::registerPass([] { return mlir::frisk::createThreadInterleaveQKPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadInterleaveMMAChainsPass(); });
+  mlir::frisk::registerLegacyThreadSchedulingPipelines();
   mlir::registerPass([] { return mlir::frisk::createThreadElideBackedgeBarrierPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadScheduleSoftmaxFragmentsPass(); });
-  mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSTailPass(); });
   mlir::registerPass([] { return mlir::frisk::createIRDeepOptimizePass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
   mlir::registerPass([] { return mlir::frisk::createLowerGPUShuffleToROCDLPass(); });

@@ -1,7 +1,7 @@
 // Pair and prefetch physical LDS operands after thread unrolling/address proofs.
 // No LLVM pointer reconstruction or exported-IR scheduling is needed.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
-#include "ThreadScheduleUtils.h"
+#include "ThreadSchedulePlan.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <functional>
 #include <limits>
@@ -9,23 +9,22 @@
 namespace mlir::frisk {
 namespace {
 using namespace thread_schedule;
-constexpr StringLiteral MainMarker = "frisk.k_lds_prefetch";
-constexpr StringLiteral TailMarker = "frisk.k_tail_prefetch";
-constexpr StringLiteral MainPair = "frisk.k_lds_pair";
-constexpr StringLiteral TailPair = "frisk.k_tail_pair";
 
 bool candidate(Operation *op) {
   auto load = dyn_cast<LDSLoadOp>(op);
-  if (!load || load.getAlignment() < 8 || load.getResult().use_empty() ||
-      load.getResult().getType() != VectorType::get({4}, Float16Type::get(op->getContext())))
-    return false;
+  if (!load || load.getAlignment() < 8 || load.getResult().use_empty()) return false;
+  auto type = dyn_cast<VectorType>(load.getResult().getType());
+  // The current target models paired 64-bit lane reads. Their element type
+  // and MMA operand role are independent of the pairing instruction.
+  if (!type || type.isScalable() ||
+      type.getNumElements() * type.getElementTypeBitWidth() != 64) return false;
   return llvm::all_of(load.getResult().getUses(), [&](OpOperand &use) {
-    return mma(use.getOwner()) && use.getOperandNumber() == 1 &&
+    return mma(use.getOwner()) && use.getOperandNumber() < 2 &&
            use.getOwner()->getBlock() == op->getBlock();
   });
 }
 bool protectedLoad(Operation *op) {
-  return op->hasAttr(MainPair) || op->hasAttr(TailPair);
+  return protectedLDSPair(op);
 }
 bool reduction(Operation *op) {
   return isa<arith::AddFOp, arith::MaxNumFOp, arith::MinNumFOp,
@@ -82,8 +81,8 @@ bool hoist(Ops &order, ArrayRef<Operation *> roots, Operation *before) {
   return true;
 }
 
-struct Stats { unsigned regions = 0, pairs = 0, moved = 0, anchors = 0, unpaired = 0; };
-void schedule(Ops region, unsigned distance, bool tail, Stats &stats) {
+struct Stats { unsigned regions = 0, pairs = 0, moved = 0, anchors = 0, unpaired = 0; uint64_t nextPair = 0; };
+void schedule(Ops region, unsigned distance, StringRef marker, Stats &stats) {
   if (region.empty()) return;
   Ops original = region, mmas;
   SmallVector<LDSLoadOp> loads;
@@ -97,7 +96,7 @@ void schedule(Ops region, unsigned distance, bool tail, Stats &stats) {
   for (auto load : loads) {
     first[load] = mmas.size();
     for (auto [n, op] : llvm::enumerate(mmas))
-      if (op->getOperand(1) == load.getResult()) { first[load] = n; break; }
+      if (op->getOperand(0) == load.getResult() || op->getOperand(1) == load.getResult()) { first[load] = n; break; }
   }
   struct Pair { Operation *a, *b; unsigned first; };
   SmallVector<Pair> pairs;
@@ -143,50 +142,51 @@ void schedule(Ops region, unsigned distance, bool tail, Stats &stats) {
   for (auto [n, op] : llvm::enumerate(region)) pos[op] = n;
   for (auto p : pairs) for (Operation *anchor : anchors)
     if (pos[p.a] < pos[anchor] && pos[anchor] < pos[p.b]) return;
-  for (Operation *op : region) for (Value value : op->getOperands())
-    if (Operation *def = value.getDefiningOp(); def && pos.contains(def) && pos[def] >= pos[op]) return;
+  LocalSchedulePlan plan{original, region};
+  if (!plan.validate()) return;
   Operation *end = original.back()->getNextNode();
-  if (!end) return;
-  for (Operation *op : region) op->moveBefore(end);
+  plan.apply();
   OpBuilder b(end);
-  unsigned id = stats.pairs;
   for (auto p : pairs) {
-    auto tag = b.getI64IntegerAttr(id++);
-    for (Operation *op : {p.a, p.b}) op->setAttr(tail ? TailPair : MainPair, tag);
+    auto tag = b.getI64IntegerAttr(stats.nextPair++);
+    for (Operation *op : {p.a, p.b}) op->setAttr(LDSPairMarker, tag);
   }
   // Iterate in original MMA order for deterministic guard insertion.
   for (Operation *op : mmas) if (anchors.contains(op)) {
-    guard(op, tail ? TailMarker : MainMarker);
-    guard(op->getNextNode(), tail ? TailMarker : MainMarker);
+    guard(op, marker);
+    guard(op->getNextNode(), marker);
   }
   ++stats.regions; stats.pairs += pairs.size(); stats.moved += moved;
   stats.anchors += anchors.size();
   stats.unpaired += loads.size() - 2 * pairs.size();
 }
 
-template<bool Tail>
-class ThreadPrefetchPairedPass
-    : public PassWrapper<ThreadPrefetchPairedPass<Tail>, OperationPass<ModuleOp>> {
+class ThreadPrefetchPairedLDSPass
+    : public PassWrapper<ThreadPrefetchPairedLDSPass, OperationPass<ModuleOp>> {
 public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadPrefetchPairedPass)
-  ThreadPrefetchPairedPass() = default;
-  ThreadPrefetchPairedPass(const ThreadPrefetchPairedPass &other)
-      : PassWrapper<ThreadPrefetchPairedPass<Tail>, OperationPass<ModuleOp>>(other) {}
-  explicit ThreadPrefetchPairedPass(unsigned value) { distance = value; }
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadPrefetchPairedLDSPass)
+  ThreadPrefetchPairedLDSPass() = default;
+  ThreadPrefetchPairedLDSPass(const ThreadPrefetchPairedLDSPass &other)
+      : PassWrapper<ThreadPrefetchPairedLDSPass, OperationPass<ModuleOp>>(other) {}
+  explicit ThreadPrefetchPairedLDSPass(const PairedLDSPrefetchOptions &o) { distance = o.distance; window = o.window; }
   Pass::Option<unsigned> distance{*this, "distance", llvm::cl::init(0)};
-  StringRef getArgument() const final {
-    return Tail ? "frisk-thread-prefetch-paired-lds-tail" : "frisk-thread-prefetch-paired-lds";
-  }
-  StringRef getDescription() const final { return "Prefetch paired MMAC B LDS loads in ThreadIR"; }
+  Pass::Option<std::string> window{*this, "window", llvm::cl::init("register"),
+      llvm::cl::desc("address: address/views only; register: ordinary register ALU; reduction: reduction windows")};
+  StringRef getArgument() const final { return "frisk-thread-prefetch-paired-lds"; }
+  StringRef getDescription() const final { return "Pair and prefetch LDS operands across proven ThreadIR register windows"; }
   void getDependentDialects(DialectRegistry &r) const final {
     r.insert<FriskDialect, LLVM::LLVMDialect>();
   }
   void runOnOperation() final {
     auto module = this->getOperation();
     if (distance > 8) { module.emitError("paired LDS distance must be 0..8"); return this->signalPassFailure(); }
+    if (window != "address" && window != "register" && window != "reduction") {
+      module.emitError("window must be address, register, or reduction");
+      return this->signalPassFailure();
+    }
     if (!distance) return;
     if (failed(checkGuard(module))) return this->signalPassFailure();
-    StringRef marker = Tail ? TailMarker : MainMarker;
+    std::string marker = "frisk.lds_prefetch." + window.getValue();
     bool conflict = false;
     module.walk([&](func::FuncOp f) {
       if (auto old = f->getAttrOfType<StringAttr>(marker))
@@ -196,9 +196,9 @@ public:
     });
     if (conflict) return this->signalPassFailure();
     module.walk([&](func::FuncOp f) {
-      if (f.isExternal() || protectedFunction(f) || f->hasAttr(marker)) return;
+      if (f.isExternal() || protectedFunction(f)) return;
       foldVectorViews(f);
-      if constexpr (!Tail) deduplicateLoads(f);
+      deduplicateLoads(f);
       SmallVector<Ops, 4> regions;
       unsigned reductionRegions = 0;
       f.walk([&](Block *block) {
@@ -206,35 +206,38 @@ public:
         bool hasReduction = false;
         auto flush = [&]() {
           if (hasReduction) ++reductionRegions;
-          if (!region.empty() && (!Tail || hasReduction)) regions.push_back(std::move(region));
+          if (!region.empty() && (window != "reduction" || hasReduction)) regions.push_back(std::move(region));
           region.clear(); hasReduction = false;
         };
         for (Operation &op : *block) {
-          bool local = Tail && reduction(&op);
-          if (address(&op) || wrapper(&op) || mma(&op) || local ||
-              (Tail && isa<arith::SelectOp>(&op)) || (candidate(&op) && !protectedLoad(&op))) {
+          bool local = reduction(&op);
+          bool computation = window == "register" ? pure(&op) :
+              window == "reduction" && (local || isa<arith::SelectOp>(&op));
+          if (address(&op) || wrapper(&op) || mma(&op) || computation ||
+              (candidate(&op) && !protectedLoad(&op))) {
             region.push_back(&op); hasReduction |= local;
           } else flush();
         }
         flush();
       });
       Stats stats;
-      for (Ops &region : regions) schedule(std::move(region), distance, Tail, stats);
+      f.walk([&](Operation *op) {
+        if (auto pair = op->getAttrOfType<IntegerAttr>(LDSPairMarker))
+          if (pair.getInt() >= 0) stats.nextPair = std::max(stats.nextPair, uint64_t(pair.getInt()) + 1);
+      });
+      for (Ops &region : regions) schedule(std::move(region), distance, marker, stats);
       if (stats.regions) markFunction(f, marker, std::to_string(distance));
-      llvm::errs() << (Tail ? "Thread K tail LDS prefetch: " : "Thread K LDS prefetch: ")
+      llvm::errs() << "Thread LDS prefetch: window=" << window << ", "
                    << "distance=" << distance << ", regions=" << stats.regions
                    << ", pairs=" << stats.pairs << ", moved=" << stats.moved
                    << ", anchors=" << stats.anchors << ", unpaired=" << stats.unpaired;
-      if constexpr (Tail) llvm::errs() << ", reduction-regions=" << reductionRegions;
+      if (window == "reduction") llvm::errs() << ", reduction-regions=" << reductionRegions;
       llvm::errs() << ", function=" << f.getName() << '\n';
     });
   }
 };
 } // namespace
-std::unique_ptr<Pass> createThreadPrefetchPairedLDSPass(unsigned distance) {
-  return std::make_unique<ThreadPrefetchPairedPass<false>>(distance);
-}
-std::unique_ptr<Pass> createThreadPrefetchPairedLDSTailPass(unsigned distance) {
-  return std::make_unique<ThreadPrefetchPairedPass<true>>(distance);
+std::unique_ptr<Pass> createThreadPrefetchPairedLDSPass(const PairedLDSPrefetchOptions &options) {
+  return std::make_unique<ThreadPrefetchPairedLDSPass>(options);
 }
 } // namespace mlir::frisk

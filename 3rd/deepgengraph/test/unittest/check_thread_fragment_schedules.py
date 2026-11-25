@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Thread paired LDS/softmax schedules: SSA DAG, boundaries, replay and lowering."""
+import argparse
 from collections import defaultdict
 import hashlib
 from pathlib import Path
 import re
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / 'build/test/ThreadTilingTest'
 LLVM = Path('/data2/xsl/install/bin')
 MAIN = '--frisk-thread-prefetch-paired-lds=distance='
@@ -98,7 +99,7 @@ def graph(text):
         match = re.match(r'\s*(%\w+) = (.*)', line)
         if match:
             name, body = match.groups()
-            body = re.sub(r',? frisk.k_(?:lds|tail)_pair = \d+ : i64', '', body)
+            body = re.sub(r',? frisk\.(?:k_(?:lds|tail)_pair|lds_pair) = \d+ : i64', '', body)
             body = re.sub(r'%\w+', resolve, body)
             values[name] = hashlib.sha256(body.encode()).hexdigest()
             if 'v_mmac_' in body: mmas.append(values[name])
@@ -117,6 +118,10 @@ def export(source):
 
 
 def main():
+    global TOOL
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--tool', type=Path, default=TOOL)
+    TOOL = parser.parse_args().tool
     cases = 0
     for tail, option in [(False, MAIN), (True, TAIL)]:
         for count in (4, 8, 12):
@@ -128,7 +133,7 @@ def main():
                     pairs = defaultdict(list)
                     lines = result.splitlines()
                     for n, line in enumerate(lines):
-                        if tag := re.search(r'frisk.k_(?:lds|tail)_pair = (\d+)', line):
+                        if tag := re.search(r'frisk\.(?:k_(?:lds|tail)_pair|lds_pair) = (\d+)', line):
                             pairs[tag[1]].append(n)
                     assert len(pairs) == count//2, result
                     for positions in pairs.values():
@@ -147,22 +152,22 @@ def main():
         for boundary in ('gpu.barrier', 'func.call @unknown() : () -> ()',
                          'vector.store %a, %sm[%i] : memref<65536xf16, 3>, vector<4xf16>'):
             source = paired(tail=tail, boundary=boundary)
-            assert 'frisk.k_' not in run(source, option+'4')
+            assert 'frisk.lds_pair' not in run(source, option+'4')
         for source in (paired(tail=tail, align=4), paired(tail=tail, spacing=0),
                        paired(tail=tail, spacing=3)):
-            assert 'frisk.k_' not in run(source, option+'4')
+            assert 'frisk.lds_pair' not in run(source, option+'4')
         protected = paired(tail=tail).replace('-> (vector<4xf32>, f32) {',
                                              '-> (vector<4xf32>, f32) attributes {strictfp} {')
         assert run(protected, option+'4') == run(protected)
         result = run(paired(tail=tail), option+'4')
         run(result, option+'2', ok=False)
-        assert 'frisk.k_' in run(paired(tail=tail, views=True), option+'4')
+        assert 'frisk.lds_pair' in run(paired(tail=tail, views=True), option+'4')
         ll = export(result)
-        assert '"frisk.k_' in ll and 'call void @llvm.amdgcn.sched.barrier' in ll
+        assert '"frisk.lds_prefetch.' in ll and 'call void @llvm.amdgcn.sched.barrier' in ll
     # Tail must not revisit main pairs and must require a local reduction.
     source = run(paired(), MAIN+'4')
     assert run(source, TAIL+'4') == source
-    assert 'frisk.k_tail_pair' not in run(paired(), TAIL+'4')
+    assert 'frisk.lds_pair' not in run(paired(), TAIL+'4')
 
     for mode in ('fragment', 'pv'):
         for count in (2, 4, 8):

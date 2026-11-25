@@ -1,5 +1,5 @@
 # =============================================================================
-# Attention 优化手段说明（2026-11-20 更新，主线为 non-causal，另列 causal 扩展）
+# Attention 优化手段说明（2026-11-25 更新，主线为 non-causal，另列 causal 扩展）
 # =============================================================================
 #
 # 这是用 Python 语法写的“说明书”，不是可执行的 kernel。
@@ -27,6 +27,8 @@
 # 第 34/35 项仍在 ThreadIR；转换两端的生命周期锚点由 ROCm lowering 生成。
 # 删除旧 tensor 循环优化后保留第 2~41 项，共 40 个不同编号；编号不是执行序号。
 # 第 36 项在表中出现两次，表示同一 Pass 的两个执行位置。
+# 26/41 已合为通用 MMA 链交错；29/31 已合为通用 LDS 配对预取。
+# 表中编号保留，分别描述通用 Pass 的不同来源/窗口配置；旧命令行参数作为兼容映射。
 # 表中 32 / 4 / 8 / rtz 等是说明用调优值；各开关默认值在第 4 部分另列。
 #
 # 证据程度：第 5 部分的 before / after 是对 IR 改动的概括，来自 Pass 说明和源码；
@@ -206,11 +208,11 @@ PIPELINE = [
     (20, "ThreadMaskAddBypass",              "thread",   "--mask-add-bypass=approx（本 case 无 mask）", "-"),
     (21, "ThreadLocalReduction",             "thread",   "--local-reduce=approx",         "历史 causal: 1.0347x（含 20、22）"),
     (22, "ThreadDeferLaneSum",               "thread",   "--defer-lane-sum=approx",       "同上"),
-    (26, "ThreadInterleavePV",               "thread",   "--pv-interleave=4 --pv-guard-group=-1", "历史: 1.0043x（接近噪声）"),
+    (26, "ThreadInterleaveMMAChains（matrix）",               "thread",   "--pv-interleave=4 --pv-guard-group=-1", "历史: 1.0043x（接近噪声）"),
     (29, "ThreadPrefetchPairedLDS",           "thread",   "--k-lds-prefetch=8",            "历史 MyTest 路径: 1.0272x"),
-    (41, "ThreadInterleaveQK",               "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32", "CPU 验证；无 GPU 计时"),
+    (41, "ThreadInterleaveMMAChains（lds）",               "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32", "CPU 验证；无 GPU 计时"),
     (30, "ThreadScheduleSoftmaxFragments",    "thread",   "--softmax-fragments=pv",        "历史: 1.0162x"),
-    (31, "ThreadPrefetchPairedLDSTail",       "thread",   "--k-tail-prefetch=4",           "历史: 1.0098x"),
+    (31, "ThreadPrefetchPairedLDS（reduction 窗口）",       "thread",   "--k-tail-prefetch=4",           "历史: 1.0098x"),
     (33, "ThreadElideBackedgeBarrier",        "thread",   "--elide-backedge-barrier=1",    "历史组合实测；当前无迁移单项计时"),
     (18, "HoistWaveInvariants",              "thread + ROCDL/LLVM dialect", "--hoist-lds-bases=1 --hoist-lane-shuffles=1", "组合实测"),
     (34, "ThreadLazySoftmaxBase",             "thread",   "--lazy-softmax-base=8",        "实验版 1.0582x；见 34"),
@@ -803,7 +805,7 @@ def pv_interleave_after(a, b, c, d):
 # 包含不足 N 条的末组，不加首部 guard。这是编译器调度提示，不是 GPU 同步 barrier。
 # 内存/同步原序、SSA 依赖和矩阵 packet 必须可证明；任意 asm / 未知效果不参与。
 # 后续按 29 → 41（可选）→ 30 → 31 → 33 调度，再 lower async/GPU；旧 LLVM Pass 已删除。
-# 代码：ConvertToLLVM/ThreadInterleavePV.cpp；说明：ConvertToLLVM/PVInterleave.md。
+# 代码：ConvertToLLVM/ThreadInterleaveMMAChains.cpp；说明：ConvertToLLVM/PVInterleave.md。
 
 
 # ---- 27. SharedMemoryPlan.execution：V 双缓冲（第 15 项内部）-------------------
@@ -952,7 +954,7 @@ def tail_prefetch_after():
 # 实测：距离 2/4/8 为 1.693/1.691/1.693 ms，差异很小，说明能藏的延迟有限。
 # 与第 29 项共用 Thread LDS 地址契约；只处理含局部归约且尚未保护的读对，
 # 不重排归约 DAG，不跨已有 pair guard 或内存/同步边界。名称来自 QK tail，匹配不限定循环位置。
-# 代码：ConvertToLLVM/ThreadPrefetchPairedLDS.cpp 中的 tail 入口。
+# 代码：ConvertToLLVM/ThreadPrefetchPairedLDS.cpp 的 window=reduction 配置。
 
 
 # ---- 32. SharedMemoryPlan.execution：跨轮首 DMA 预取 + LLVM 分母锚定 ------------
@@ -1269,7 +1271,8 @@ def causal_mask_finite_after(score, row, col, diagonal=1):
 
 
 # ---- 41. ThreadInterleaveQK：QK 独立累加链交错与受预算约束的 K 预读 ----------
-# 与第 26 项共用匹配、合法性和拓扑调度实现，入口为 frisk-thread-interleave-qk。
+# 与第 26 项共用通用入口 frisk-thread-interleave-mma-chains；
+# 本项使用 operand-source=lds load-motion=bounded；旧 qk 名称仅为兼容别名。
 # 默认关闭；--qk-interleave=0|1|2|4，guard 默认 2，prefetch-words 默认 32。
 # 位置：29 之后、30 之前；单独开启也会先执行 LDS 地址规范化。
 
@@ -1306,7 +1309,7 @@ def qk_interleave_after(a, b):
 # guard=0 只是去掉本 Pass 的提示，不保证后端仍保持交错，也不删除其他 Pass 的 guard。
 # 保留 FP 属性，不要求 math=approx；strictfp/optnone 函数仍跳过。
 # 计划成功后才修改 IR；frisk.qk_interleave 标记保证幂等，比较参数时应从原输入重新生成。
-# 代码：ConvertToLLVM/ThreadInterleavePV.cpp；回归：test/check_mma_interleave.py。
+# 代码：ConvertToLLVM/ThreadInterleaveMMAChains.cpp；回归：test/check_mma_interleave.py。
 
 
 # =============================================================================
