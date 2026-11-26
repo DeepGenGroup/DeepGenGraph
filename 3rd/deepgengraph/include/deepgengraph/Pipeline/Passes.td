@@ -37,8 +37,17 @@ def AutoPipeline : Pass<"frisk-auto-pipeline", "::mlir::func::FuncOp"> {
     independent of loop-carried computations and external writes. Allocate N
     slots, guard N-1 prologue loads, then wait for tile i, issue tile i+N-1 and
     compute tile i. Unproven loops remain unchanged with a diagnostic remark.
+
+    With double-buffer, also plan straight-line shared-copy/GEMM streams at
+    block level. Record stage order, alternating slots and issue-after readiness
+    in frisk.shared_pipeline_plan. Physical execution planning validates DMA,
+    readers and the LDS budget before materializing this provisional schedule.
   }];
   let constructor = "mlir::pipeline::createAutoPipelinePass()";
+  let options = [
+    Option<"doubleBuffer", "double-buffer", "bool", "false",
+           "Plan two-slot overlap for straight-line matrix-copy streams">
+  ];
   let dependentDialects = [
     "::mlir::frisk::FriskDialect", "::mlir::affine::AffineDialect",
     "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect",

@@ -1,15 +1,20 @@
 // Opt-in block-tile prefetching. Keep the consumer recurrence in its original
 // loop; only invariant-address global reads advance by num_stages - 1 tiles.
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
+#include "deepgengraph/Pipeline/SharedPipelinePlan.h"
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
+#include "deepgengraph/Analysis/ScheduleAttrs.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/DenseSet.h"
+#include <functional>
 #include <limits>
 
 namespace mlir::pipeline {
@@ -448,6 +453,112 @@ void PrefetchLoop::build() {
   loop.erase();
 }
 
+// Logical scheduling belongs here, before matrix/fragment lowering. Keep each
+// slice's independent allocation and serial stream order as a fallback until
+// SharedMemoryPlan has proved the physical packet, reader and storage contract.
+// The first issue has no stream anchor and retains ordinary safe DMA hoisting
+// across preceding compute; later issues are anchored to earlier readiness.
+static void planSharedCopyStream(func::FuncOp kernel, Block &block) {
+  using namespace frisk;
+  using pipeline::sharedPipelinePlanAttr;
+  if (!isInBlockUniformControlFlow(block.getTerminator())) return;
+  for (Operation *p = block.getParentOp(); p; p = p->getParentOp())
+    if (hasAnyScheduleAttr(p)) return;
+  struct Stage {
+    AsyncCopyGmToShmOp issue;
+    WaitBufferReadyOp ready;
+    SmallVector<Operation *> readers;
+  };
+  SmallVector<Stage> stages;
+  Value resource;
+  MemRefType shape;
+  auto origin = [](Value value) {
+    for (unsigned depth = 0; depth < 32; ++depth) {
+      Operation *def = value.getDefiningOp();
+      if (auto view = dyn_cast_or_null<BufferViewOp>(def)) value = view.getSource();
+      else if (auto view = dyn_cast_or_null<ViewLikeOpInterface>(def)) value = view.getViewSource();
+      else if (auto cast = dyn_cast_or_null<memref::CastOp>(def)) value = cast.getSource();
+      else return value;
+    }
+    return Value{};
+  };
+  for (Operation &op : block) {
+    auto copy = dyn_cast<AsyncCopyGmToShmOp>(op);
+    if (!copy) continue;
+    // A committed or existing provisional schedule must never be rediscovered.
+    if (copy->hasAttr(sharedPipelinePlanAttr) || hasAnyScheduleAttr(copy)) return;
+    auto alloc = copy.getDst().getDefiningOp<AllocBufferOp>();
+    auto src = dyn_cast<MemRefType>(copy.getSrc().getType());
+    auto dst = dyn_cast<MemRefType>(copy.getDst().getType());
+    if (!alloc || alloc->getBlock() != &block || !src || !dst ||
+        src.getMemorySpaceAsInt() != 1 || dst.getMemorySpaceAsInt() != 3 ||
+        !dst.hasStaticShape() || src.getShape() != dst.getShape() ||
+        src.getElementType() != dst.getElementType()) continue;
+    if (!copy.getToken().hasOneUse()) return;
+    auto ready = dyn_cast<WaitBufferReadyOp>(*copy.getToken().getUsers().begin());
+    if (!ready || ready->getBlock() != &block || !copy->isBeforeInBlock(ready)) return;
+    bool matrixB = llvm::any_of(copy.getDst().getUses(), [](OpOperand &use) {
+      return isa<GemmOp>(use.getOwner()) && use.getOperandNumber() == 1;
+    });
+    if (!matrixB) continue;
+    Stage stage{copy, ready, {}};
+    for (OpOperand &use : copy.getDst().getUses()) {
+      Operation *user = use.getOwner();
+      if (user == copy) continue;
+      // Only direct matrix B readers establish this stream. Aliases, mutation,
+      // extra readers and nested consumers need a richer logical contract.
+      auto gemm = dyn_cast<GemmOp>(user);
+      if (!gemm || use.getOperandNumber() != 1 || user->getBlock() != &block ||
+          !ready->isBeforeInBlock(user) || hasAnyScheduleAttr(user)) return;
+      stage.readers.push_back(user);
+    }
+    if (stage.readers.empty()) continue;
+    Value root = origin(copy.getSrc());
+    if (!root) return;
+    if (stages.empty()) { resource = root; shape = dst; }
+    if (root != resource || dst != shape) return;
+    if (!stages.empty())
+      for (Operation *reader : stages.back().readers)
+        if (!reader->isBeforeInBlock(copy)) return;
+    stages.push_back(std::move(stage));
+  }
+  if (stages.size() < 2 || stages.size() > 32) return;
+  DenseSet<Operation *> allowed;
+  for (auto &stage : stages) {
+    allowed.insert(stage.issue);
+    allowed.insert(stage.ready);
+    allowed.insert(stage.issue.getDst().getDefiningOp());
+    for (Operation *reader : stage.readers) allowed.insert(reader);
+  }
+  Operation *last = stages.back().ready;
+  for (Operation *reader : stages.back().readers)
+    if (last->isBeforeInBlock(reader)) last = reader;
+  for (Operation *op = stages.front().ready; ; op = op->getNextNode()) {
+    if (hasAnyScheduleAttr(op) || op->getNumRegions() ||
+        (!allowed.contains(op) && !isPure(op))) return;
+    if (op == last) break;
+  }
+  DominanceInfo dominance(kernel);
+  for (unsigned i = 1; i < stages.size(); ++i) {
+    DenseSet<Operation *> visited;
+    std::function<bool(Value)> available = [&](Value value) {
+      if (dominance.dominates(value, stages[i - 1].ready)) return true;
+      Operation *def = value.getDefiningOp();
+      if (!def || def->getBlock() != &block || def->getNumRegions() || !isPure(def)) return false;
+      if (!visited.insert(def).second) return true;
+      return llvm::all_of(def->getOperands(), available);
+    };
+    if (!available(stages[i].issue.getSrc())) return;
+  }
+  OpBuilder b(kernel.getContext());
+  for (auto [i, stage] : llvm::enumerate(stages))
+    stage.issue->setAttr(sharedPipelinePlanAttr, b.getDenseI64ArrayAttr(
+        {int64_t(i), int64_t(stages.size()), int64_t(i % 2), int64_t(i) - 1}));
+  llvm::errs() << "AutoPipeline shared-copy plan: stages=" << stages.size()
+               << ", slots=2, issue=after-previous-ready, function="
+               << kernel.getSymName() << '\n';
+}
+
 struct AutoPipelinePass : pipeline::impl::AutoPipelineBase<AutoPipelinePass> {
   void runOnOperation() override {
     SmallVector<std::pair<Operation *, int64_t>> hints;
@@ -489,6 +600,15 @@ struct AutoPipelinePass : pipeline::impl::AutoPipelineBase<AutoPipelinePass> {
         continue;
       }
       plan.build();
+    }
+    if (doubleBuffer && !getOperation().isExternal()) {
+      // Match the execution planner's supported scope: the function body or
+      // one outer compute loop. Hinted nested pipelines retain their owner.
+      Block &entry = getOperation().getBody().front();
+      planSharedCopyStream(getOperation(), entry);
+      for (Operation &op : entry)
+        if (isa<affine::AffineForOp, scf::ForOp>(op))
+          planSharedCopyStream(getOperation(), op.getRegion(0).front());
     }
   }
 };

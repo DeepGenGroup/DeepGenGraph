@@ -36,7 +36,8 @@ def fixture(threads=64, stages=3, rounds=1, reserve=True):
         lines += [f'%slot{i} = memref.alloc() alignment = 16 : {ty}',
                   f'%src{i} = memref.subview %gm[{i}, 0] [1, {elements}] [1, 1] : {gm} to {source}',
                   f'%task{i} = frisk.async_copy_gm_to_shm %src{i} to %slot{i} '
-                  f'{{alignment = 16 : i64, frisk.dma_bytes = 16 : i64}} : {source}, {ty} -> !frisk.async_task',
+                      f'{{alignment = 16 : i64, frisk.dma_bytes = 16 : i64, '
+                      f'frisk.shared_pipeline_plan = array<i64: {i}, {stages}, {i % 2}, {i - 1}>}} : {source}, {ty} -> !frisk.async_task',
                   f'frisk.wait_buffer_ready %task{i} : !frisk.async_task',
                   f'%read{i} = frisk.read_matrix_from_shm %slot{i}[%idx] '
                   f'{{m = 32 : i64, n = 16 : i64, element_bit_width = 16 : i64}} : {ty} -> vector<4xi32>']
@@ -95,7 +96,7 @@ def simulate(text, stages, size):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--optimizer', type=Path, default=Path(__file__).resolve().parents[1]/'build/test/ThreadTilingTest')
+    parser.add_argument('--optimizer', type=Path, default=Path(__file__).resolve().parents[2]/'build/test/ThreadTilingTest')
     args = parser.parse_args()
     count = 0
     with tempfile.TemporaryDirectory(prefix='shared-execution-') as tmp:
@@ -133,6 +134,11 @@ def main():
             check(base.replace('frisk.dma_bytes = 16', f'frisk.dma_bytes = {width}'))
         check(fixture(reserve=False), False)
         check(fixture(stages=1), False)
+        check(re.sub(r', frisk.shared_pipeline_plan = array<i64: [^>]*>', '', base), False)
+        check(base.replace('array<i64: 1, 3, 1, 0>', 'array<i64: 1, 3, 0, 0>'), False)
+        check(base.replace('array<i64: 2, 3, 0, 1>', 'array<i64: 2, 3, 0, 0>'), False)
+        check(base.replace('array<i64: 1, 3, 1, 0>', 'array<i64: 1, 4, 1, 0>'), False)
+        check(base.replace(', frisk.shared_pipeline_plan = array<i64: 1, 3, 1, 0>', ''), False)
         check(base.replace('d0 * 8', 'd0 * 8 + 512'), False)
         check(base.replace('frisk.dma_bytes = 16', 'frisk.dma_bytes = 3'), False)
         check(base.replace('alignment = 16 : i64', 'alignment = 4 : i64'), False)

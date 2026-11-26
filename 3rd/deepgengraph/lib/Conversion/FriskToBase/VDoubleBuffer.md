@@ -1,7 +1,8 @@
 # Shared-memory execution planning
 
-`MyTest --v-double-buffer=1` enables the execution phase of `SharedMemoryPlan`
-through `lower-frisk-fragments=double-buffer=true`. The independent
+`MyTest --v-double-buffer=1` enables logical stream planning in
+`frisk-auto-pipeline=double-buffer=true`, followed by physical validation and
+materialization in `lower-frisk-fragments=double-buffer=true`. The independent
 `frisk-thread-double-buffer-v` pass has been removed. LLVM does not choose
 buffer slots or copy issue times.
 
@@ -12,10 +13,26 @@ participants and source/destination maps. The execution phase runs after these
 maps are materialized and bounded fragment loops are exposed, **before** the
 logical allocations become views of an LDS pool.
 
-`SharedMemoryPlan::execution` owns:
+`AutoPipeline` identifies straight-line full-tile global-to-shared copies with
+direct GEMM B consumers, common source storage and matching tile shapes. It
+records `frisk.shared_pipeline_plan = array<i64: stage, count, slot, issueAfter>`
+on each copy. Stage IDs are block-local, slots alternate 0/1, and `issueAfter`
+names the preceding stage's exact task readiness (`-1` for the first issue,
+which retains ordinary alias-checked hoisting across preceding compute).
+This is a provisional logical schedule: serial stream order and
+independent logical allocations remain intact until physical validation. Thus
+budget or packet rejection retains a valid serial fallback. Generic DMA/wait
+scheduling preserves interior copies and every exact readiness operation. It
+may hoist the unanchored first copy, with its pure address dependencies, across
+independent compute; it still cannot cross another DMA, wait, barrier, unknown
+effect or aliasing mutation. Freezing this first launch until immediately before
+its wait would lose the QK/softmax overlap window even with valid V ping-pong.
+
+`SharedMemoryPlan::execution` consumes that schedule and owns:
 
 - Matrix-copy stages, their exact completion tasks and all matrix readers.
-- Logical buffer identities, alternating slot IDs and earlier issue anchors.
+- Validation of the declared stage order, logical slot IDs and issue anchors;
+  it never discovers or schedules an unmarked V stream.
 - Pure source-address dependencies needed at each issue anchor.
 - Lifetimes projected onto the proposed issue order.
 - Physical pool offsets and collective storage-handoff barriers.
@@ -64,17 +81,22 @@ An enabled option does not by itself establish that a pipeline was selected.
 ```sh
 cmake --build 3rd/deepgengraph/build \
   --target MyTest ThreadTilingTest SharedExecutionPlanTest -j4
-python3 3rd/deepgengraph/test/check_v_double_buffer.py
-python3 3rd/deepgengraph/test/check_shm_liveness.py
+python3 3rd/deepgengraph/test/unittest/check_v_double_buffer.py
+python3 3rd/deepgengraph/test/unittest/check_shm_liveness.py
 python3 generated_ir/shared_memory_plan_pipeline/generate.py
 ```
 
+The early planner regression is
+`python3 3rd/deepgengraph/test/unittest/check_auto_pipeline_v_stream.py`.
 The execution regression includes a read-only/stale-plan C++ test and an async
 ownership model over the emitted pool offsets, task tokens, waits and readers.
 The model repeats the stream across a loop backedge and distinguishes source
 slice contents. It does not simulate the GPU ISA, concurrent wave timing or
 throughput. Full attention LLVM verification/address comparisons and target
 GPU numerical/performance measurements remain separate checks.
+
+Physical fixtures explicitly supply the early-plan contract; missing, malformed,
+incomplete, reordered or incompatible contracts reject the entire candidate.
 
 The integration artifacts are in `generated_ir/shared_memory_plan_pipeline/`.
 For both causal and noncausal attention, O3 LLVM is identical to
@@ -135,12 +157,12 @@ through lowering, and runs the cyclic DMA ownership model on affine/scf loops
 with zero, one, multiple and dynamic trips:
 
 ```sh
-python3 3rd/deepgengraph/test/check_thread_backedge_barrier.py
+python3 3rd/deepgengraph/test/unittest/check_thread_backedge_barrier.py
 ```
 
 Additional validation:
 
 ```sh
-python3 3rd/deepgengraph/test/check_shared_cross_iteration.py
-python3 3rd/deepgengraph/test/check_cross_bn_k0.py
+python3 3rd/deepgengraph/test/unittest/check_shared_cross_iteration.py
+python3 3rd/deepgengraph/test/unittest/check_cross_bn_k0.py
 ```

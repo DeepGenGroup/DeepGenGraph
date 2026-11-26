@@ -4,6 +4,7 @@
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Analysis/ScheduleAttrs.h"
+#include "deepgengraph/Pipeline/SharedPipelinePlan.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -201,9 +202,9 @@ static bool direct(AsyncCopyGmToShmOp issue, memref::AllocOp pool,
          selectAsyncDMATransferBytes(issue, bytes) == bytes;
 }
 
-// A stream is discovered by task completion and matrix readers, never by an
-// argument number or a Q/K/V name. Each stage still owns an independent logical
-// allocation; the common allocator will assign the alternating physical slots.
+// Consume AutoPipeline's logical schedule. This phase may reject the entire
+// candidate, but must not discover a new stage order, slot or issue anchor.
+// Each stage still owns an independent allocation until physical validation.
 static bool collectPipeline(func::FuncOp f, Block &block,
                             const ShmLivenessResult &live, unsigned threads,
                             SharedBufferingPlan &pipeline, std::string &reason) {
@@ -217,32 +218,49 @@ static bool collectPipeline(func::FuncOp f, Block &block,
   DenseMap<Value, unsigned> buffers;
   for (auto [i, info] : llvm::enumerate(live.buffers))
     if (info.reusable) buffers[info.allocation->getResult(0)] = i;
-  WaitBufferReadyOp ready;
+  using pipeline::sharedPipelinePlanAttr;
   for (Operation &op : block) {
-    if (auto wait = dyn_cast<WaitBufferReadyOp>(op)) ready = wait;
-    bool bad = false;
-    op.walk([&](ReadMatrixFromShmOp read) {
-      if (read->hasAttr(marker) || !ready) { bad = true; return; }
-      if (pipeline.stages.empty() || pipeline.stages.back().ready != ready) {
-        auto issue = ready.getToken().getDefiningOp<AsyncCopyGmToShmOp>();
-        if (!issue || issue->getBlock() != &block || !issue->isBeforeInBlock(ready) ||
-            !issue.getToken().hasOneUse() || !buffers.count(issue.getDst())) {
-          bad = true; return;
-        }
-        SharedPipelineStage stage;
-        stage.issue = issue;
-        stage.ready = ready;
-        stage.bufferIndex = buffers.lookup(issue.getDst());
-        stage.slot = pipeline.stages.size() % 2;
-        if (!pipeline.stages.empty()) stage.issueAfter = pipeline.stages.back().ready;
-        pipeline.stages.push_back(std::move(stage));
+    if (!op.hasAttr(sharedPipelinePlanAttr)) continue;
+    auto logical = op.getAttrOfType<DenseI64ArrayAttr>(sharedPipelinePlanAttr);
+    auto issue = dyn_cast<AsyncCopyGmToShmOp>(op);
+    unsigned index = pipeline.stages.size();
+    if (!logical || logical.size() != 4 || logical[0] != index ||
+        logical[1] < 2 || logical[1] > 32 || logical[2] != int64_t(index % 2) ||
+        logical[3] != int64_t(index) - 1)
+      return fail("invalid AutoPipeline stage/slot/issue-after contract");
+    if (!issue || issue->hasAttr(marker) || !issue.getToken().hasOneUse() ||
+        !buffers.count(issue.getDst()))
+      return fail("already planned, incomplete task or unsupported logical allocation");
+    auto ready = dyn_cast<WaitBufferReadyOp>(*issue.getToken().getUsers().begin());
+    if (!ready || ready->getBlock() != &block || !issue->isBeforeInBlock(ready))
+      return fail("AutoPipeline task lost its local readiness");
+    SharedPipelineStage stage;
+    stage.issue = issue;
+    stage.ready = ready;
+    stage.bufferIndex = buffers.lookup(issue.getDst());
+    stage.slot = logical[2];
+    if (logical[3] >= 0) stage.issueAfter = pipeline.stages[logical[3]].ready;
+    // Reader footprints are available only after physical lowering. Recover
+    // them from this declared buffer's uses, never from the nearest wait.
+    for (Operation *access : live.buffers[stage.bufferIndex].accesses)
+      if (auto read = dyn_cast<ReadMatrixFromShmOp>(access)) {
+        Operation *top = topIn(read, &block);
+        if (read->hasAttr(marker) || !top || !ready->isBeforeInBlock(top))
+          return fail("AutoPipeline reader precedes readiness or is already scheduled");
+        stage.reads.push_back(read);
       }
-      pipeline.stages.back().reads.push_back(read);
+    if (stage.reads.empty()) return fail("AutoPipeline stage has no physical matrix readers");
+    llvm::sort(stage.reads, [&](ReadMatrixFromShmOp a, ReadMatrixFromShmOp b) {
+      Operation *x = topIn(a, &block), *y = topIn(b, &block);
+      return x != y && x->isBeforeInBlock(y);
     });
-    if (bad) return fail("already planned, incomplete task or unsupported logical allocation");
+    pipeline.stages.push_back(std::move(stage));
   }
-  if (pipeline.stages.size() < 2 || pipeline.stages.size() > 32)
-    return fail("requires 2..32 matrix-copy stages");
+  if (pipeline.stages.empty()) return fail("no AutoPipeline shared-copy plan");
+  for (auto &stage : pipeline.stages)
+    if (stage.issue->getAttrOfType<DenseI64ArrayAttr>(sharedPipelinePlanAttr)[1] !=
+        int64_t(pipeline.stages.size()))
+      return fail("incomplete AutoPipeline shared-copy plan");
   Value resource = origin(pipeline.stages.front().issue.getSrc());
   if (!resource) return fail("unknown DMA source");
   llvm::SmallPtrSet<Operation *, 32> allowed;

@@ -26,6 +26,7 @@
 // “有界证明”而不是启发式。求值不出来或超预算就放弃优化。
 // ===========================================================================
 #include "deepgengraph/Analysis/SharedMemoryPlan.h"
+#include "deepgengraph/Pipeline/SharedPipelinePlan.h"
 #include "deepgengraph/Conversion/AffineLoopEval.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
 #include "ScheduleAttrs.h"
@@ -638,6 +639,7 @@ public:
   bool canCross(WaitBufferReadyOp wait, AsyncCopyGmToShmOp issue,
                 AsyncCopyGmToShmOp next) {
     if (!isDirect(issue) || !isDirect(next) ||
+        next->hasAttr(pipeline::sharedPipelinePlanAttr) ||
         scheduled(wait) || scheduled(issue) || scheduled(next) ||
         !isInBlockUniformControlFlow(wait) ||
         !disjoint(issue.getDst(), next.getDst()) ||
@@ -771,10 +773,28 @@ private:
   AliasAnalysis &aliases;
 };
 
-// op 或其祖先带手动流水标注。注意它不包含 frisk.pipelined，比 DirectDMAWaitMotion::scheduled 宽松。
+// Stage zero has no preceding stream readiness: AutoPipeline deliberately
+// leaves its issue anchor to ordinary, alias-checked DMA hoisting. Freezing it
+// at the source copy would lose the overlap with preceding compute (the final
+// QK tile and softmax in attention). Interior launches and ALL readiness events
+// remain fixed until physical validation commits the two-slot schedule.
+static bool hasUnanchoredSharedIssue(Operation *op) {
+  auto plan = op->getAttrOfType<DenseI64ArrayAttr>(pipeline::sharedPipelinePlanAttr);
+  return isa<AsyncCopyGmToShmOp>(op) && plan && plan.size() == 4 &&
+         plan[0] == 0 && plan[1] >= 2 && plan[1] <= 32 &&
+         plan[2] == 0 && plan[3] == -1;
+}
+
+// Preserve both explicit schedules and AutoPipeline's provisional stream.
+// This intentionally does not include frisk.pipelined.
 static bool hasExplicitSchedule(Operation *op) {
   for (; op; op = op->getParentOp())
-    if (hasPipelineScheduleAttr(op))
+    if (hasPipelineScheduleAttr(op) ||
+        (op->hasAttr(pipeline::sharedPipelinePlanAttr) && !hasUnanchoredSharedIssue(op)) ||
+        (isa<WaitBufferReadyOp>(op) &&
+         cast<WaitBufferReadyOp>(op).getToken().getDefiningOp() &&
+         cast<WaitBufferReadyOp>(op).getToken().getDefiningOp()->hasAttr(
+             pipeline::sharedPipelinePlanAttr)))
       return true;
   return false;
 }

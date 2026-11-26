@@ -104,8 +104,10 @@ struct SharedPlanningOptions {
 };
 
 // The execution phase runs after physical access maps have been materialized,
-// but before allocations become views of a shared pool. It owns all scheduling
-// and placement decisions; lowering must not choose another slot or issue time.
+// but before allocations become views of a shared pool. It validates and
+// materializes AutoPipeline's provisional stage/slot/issue-after schedule, and
+// owns physical placement and cross-iteration scheduling. Lowering must not
+// choose another slot or issue time.
 struct SharedPipelineStage {
   AsyncCopyGmToShmOp issue;
   WaitBufferReadyOp ready;
@@ -162,7 +164,8 @@ SharedMemoryPlan planSharedMemory(func::FuncOp kernel, LowerInfoMap &layouts,
     HWSpecification &hw, const SharedPlanningOptions &options = {});
 
 // Read-only scheduling and allocation against one immutable IR snapshot.
-// Double buffering initially preserves the unbuffered plan's LDS budget.
+// Double buffering consumes frisk.shared_pipeline_plan from AutoPipeline and
+// preserves the unbuffered plan's LDS budget. No unmarked stream is scheduled.
 SharedMemoryPlan planSharedMemoryExecution(func::FuncOp kernel,
                                           bool doubleBuffer = false,
                                           bool crossIteration = false);

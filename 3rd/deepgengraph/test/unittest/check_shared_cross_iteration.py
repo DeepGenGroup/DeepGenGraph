@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from check_v_double_buffer import fixture as pipeline_fixture
 
-TOOLS = Path(__file__).resolve().parents[1] / 'build/test'
+TOOLS = Path(__file__).resolve().parents[2] / 'build/test'
 
 
 def fixture(trips=4, step=1, loop='affine', dynamic=False, stages=4, lower=0):

@@ -1183,7 +1183,12 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // A hint is the opt-in switch, independently of the older manual schedule.
   if (!cpsat.enabled()) {
     PassManager pipelinePM(ctx.get());
-    pipelinePM.addNestedPass<func::FuncOp>(mlir::pipeline::createAutoPipelinePass());
+    auto autoPipeline = mlir::pipeline::createAutoPipelinePass();
+    if (failed(autoPipeline->initializeOptions(
+            std::string("double-buffer=") + (vDoubleBuffer ? "true" : "false"),
+            [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
+      return 1;
+    pipelinePM.addNestedPass<func::FuncOp>(std::move(autoPipeline));
     if (failed(pipelinePM.run(*src)))
       return 1;
   }
