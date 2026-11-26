@@ -15,7 +15,7 @@ struct MMAChainInterleaveOptions {
 };
 struct PairedLDSPrefetchOptions {
   unsigned distance = 0;             // Maximum number of intervening MMAs.
-  std::string window = "register";   // address, register, reduction
+  std::string window = "register";   // address, register, reduction; fragment finalizes an earlier plan
 };
 std::unique_ptr<Pass> createThreadInterleaveMMAChainsPass(
     const MMAChainInterleaveOptions &options = {});

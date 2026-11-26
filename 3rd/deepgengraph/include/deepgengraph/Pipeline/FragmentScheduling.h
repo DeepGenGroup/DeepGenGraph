@@ -12,11 +12,14 @@ struct FragmentSchedulingOptions {
   bool simplifyLoopControl = true;
   // Retained 32-bit words per thread; 0 disables retention.
   unsigned retainFragmentWords = 0;
+  unsigned ldsPrefetchDistance = 0;
+  unsigned ldsReductionPrefetchDistance = 0;
 };
 
 // Module pipeline, after accumulator fusion and before fragment lowering (or
 // CP-SAT export). Keep cleanup/specialization/retention between fragment loop
-// scheduling and DMA motion: they change the reads used to place waits.
+// scheduling and DMA motion: they change the reads used to place waits. Optional
+// LDS read-ahead follows retention and precedes DMA motion/storage planning.
 void buildFragmentSchedulingPipeline(
     OpPassManager &pm, const FragmentSchedulingOptions &options);
 void registerFragmentSchedulingPipeline();

@@ -1,5 +1,92 @@
 # Generic paired LDS prefetch
 
+## FragmentIR read-ahead in the heuristic MyTest pipeline
+
+MyTest now interprets `--k-lds-prefetch=N` and `--k-tail-prefetch=M` as
+FragmentIR read-ahead distances. `frisk-prefetch-fragment-lds` runs after
+invariant fragment retention and before async-copy scheduling. It exposes
+small static MMA fragment loops, folds coordinates and deduplicates reads,
+then advances shared `load_frag` operations before independent `gemm_frag`
+operations. Distance counts MMAs before the first consumer, not block tiles.
+Startup is bounded separately for a fresh accumulation: only the next MMA's
+operands are additionally issued before MMA 0. Reads for consumers 2 and later
+start no earlier than MMA 1. A carried accumulator, traced through ordinary
+register dataflow to a preceding MMA in the same block, retains the full
+window across memory epochs. A wait does not reset this accumulation state.
+The two bootstrap reads can still form a physical pair in ThreadIR. Existing
+earlier reads are not sunk.
+The second distance permits lane-local reductions. It also caps the window
+of an epoch whose MMA results feed a fragment reduction at its boundary,
+before the wide sweep moves any reads. The reduction's lane-local work is
+not exposed until later lowering, and a second sweep cannot undo an earlier
+wide hoist. Unrelated reductions do not cap the window. Wave reductions remain
+motion boundaries. All MMA and FP computation order stays unchanged. Writes, DMA,
+waits, barriers, unknown operations, nested regions and authored schedules
+bound motion. Address dependencies must be available or independently
+speculatable integer/descriptor computations. Zero distances disable this
+additional pass and its early unrolling. The pre-existing fragment-loop
+lookahead is independent.
+
+The pipeline options are `lds-prefetch-distance` and
+`lds-reduction-prefetch-distance`. The standalone pass uses `distance` and
+`reduction-distance` (both 0..8). Loop expansion has a 16384 added-operation
+budget and a 256-iteration limit. Distances bound read-ahead, but are not a
+physical VGPR budget; register allocation and performance require target
+validation.
+
+FragmentIR records MMA anchors using `frisk.lds_prefetch_anchor`. Fragment
+lowering and MMA legalization preserve those anchors. After physical LDS
+address canonicalization, MyTest runs
+`frisk-thread-prefetch-paired-lds window=fragment distance=0` before the
+remaining ThreadIR compute schedules. This mode closes encodable b64 pairs
+inside the FragmentIR issue window and then inserts compiler guards around
+the planned anchors. With a FragmentIR plan, a later read can join an earlier
+outstanding read across independent MMAs, but never across the earlier read's
+first consumer, DMA, waits, writes, regions or existing guards. Only the later
+read and proven integer address dependencies move; no new prefetch anchor or
+distance is selected. Without a FragmentIR plan, closure stays between MMAs.
+Logical issue slots emptied by pair closure no longer need a guard; other
+anchors, including those for unsupported reads, remain protected.
+For register inline-asm anchors, ThreadIR also records `frisk.scheduled_mma`.
+LLVM translation preserves their sideeffect bit and gives them an artificial
+inaccessible-memory effect matching the compiler guards. Export-contract
+completion preserves that annotation. Ordinary unanchored register MMAs keep
+their pure contract. This prevents LLVM O3 from sinking a scheduled MMA out of
+its guard bracket; bracket placement in MLIR alone is insufficient. No LDS
+memory effect, assembly memory clobber or hardware synchronization is added.
+Unpairable reads retain their planned overlap and guards.
+Pairing is an opportunity for backend read2 selection,
+not a promise that read2 will be selected. MyTest no longer runs the legacy
+address/reduction prefetch schedules after PV/softmax scheduling.
+
+The initial single-MMA-gap restriction was too narrow: swizzled reads placed
+on opposite sides of successive anchors could never pair. In the full-D BK32
+noncausal case it produced 16 physical pairs and 32 single reads. Closing
+outstanding pairs before materializing guards recovers 32 pairs and removes
+16 empty anchors. The supplied gfx936 assembly showed the main QK loop going
+from 32 paired instructions to 16 paired plus 32 single instructions, with
+wait instructions increasing from 40 to 56; target performance must still be
+measured after the correction.
+
+The subsequent gfx936 run recovered all 32 QK pairs and reduced QK waits from
+56 to 40, but its speedup was 1.046 versus the reference's 1.054. Its first QK
+MMA followed five read2 instructions and both swizzled address bases; the
+reference began with one read2 and put later address setup after MMA 0.
+The first startup correction applied at every epoch and regressed to 1.043:
+all four QK epochs started with one read2 followed by lgkmcnt(0), whereas the
+reference used that startup only once and filled the middle epochs eagerly.
+The dataflow distinction above limits startup protection to fresh accumulation.
+The reduction-tail cap also prevents distance 8 from preempting distance 4
+before the reduction is expanded. These changes require another target run;
+matching issue structure alone is not a measured guarantee of restored speed.
+
+CP-SAT remains separate and disables this heuristic path. Legacy standalone
+ThreadIR `address`, `register` and `reduction` modes remain available.
+
+Regression: `python3 test/unittest/check_fragment_lds_prefetch.py`.
+
+## Standalone ThreadIR scheduling modes
+
 The canonical pass is `frisk-thread-prefetch-paired-lds`, with
 `distance=0..8 window=address|register|reduction`. The default register window
 accepts ordinary speculatable register ALU, including independent add/mul/select
@@ -13,8 +100,8 @@ build/test/ThreadTilingTest input.mlir \
 
 `address` retains the conservative address/view/MMA window. `reduction`
 retains the older reduction-aware selection and is used by the legacy tail
-pipeline alias. MyTest maps its original two tuning flags to these semantic
-options at the original pipeline positions. No separate tail pass exists.
+pipeline alias. These modes remain standalone compatibility entry points;
+MyTest uses the FragmentIR path described above. No separate tail pass exists.
 
 New pairs use `frisk.lds_pair`, with unique identifiers across repeated runs.
 Function attributes `frisk.lds_prefetch.<window>` record distance and are
@@ -23,9 +110,9 @@ boundaries; another run may schedule newly introduced unprotected regions.
 Reapplying the same configuration without new opportunities is a no-op; a
 conflicting distance for an already recorded window is rejected.
 
-## ThreadIR production pipeline
+## Previous ThreadIR production pipeline
 
-MyTest now performs all three schedules before async/GPU/LLVM lowering, after
+Before FragmentIR read-ahead, MyTest performed all three schedules before async/GPU/LLVM lowering, after
 physical LDS address canonicalization, thread unrolling, local reductions,
 deferred lane sums and PV interleaving:
 

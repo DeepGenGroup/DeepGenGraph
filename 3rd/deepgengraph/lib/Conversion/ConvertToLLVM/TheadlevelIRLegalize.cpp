@@ -15,6 +15,7 @@
 #include "deepgengraph/Analysis/LowerInfo.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/FragmentLDSPrefetch.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskAttributes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskEnums.h"
@@ -234,6 +235,8 @@ static LogicalResult lowerHCUMMAC(frisk::WarpMmaRROp op,
   call.setConvergent(true);
   call.setWillReturn(true);
   call.setMemoryEffectsAttr(noMemory);
+  if (auto anchor = op->getAttr(frisk::FragmentLDSAnchor))
+    call->setAttr(frisk::FragmentLDSAnchor, anchor);
   Value result = call.getResult();
   if (result.getType() != op.getResult().getType())
     result = rewriter.create<vector::ShapeCastOp>(
@@ -335,6 +338,8 @@ struct FriskWarpMMAOpConversion : public OpConversionPattern<frisk::WarpMmaRROp>
         newC.getType() == VectorType::get({4}, rewriter.getF32Type()) &&
         newRetTy == newC.getType())
       asmOp->setAttr("frisk.register_mma", rewriter.getUnitAttr());
+    if (auto anchor = op->getAttr(frisk::FragmentLDSAnchor))
+      asmOp->setAttr(frisk::FragmentLDSAnchor, anchor);
     auto ret = asmOp.getResult(0);
 
     if(isConverted){

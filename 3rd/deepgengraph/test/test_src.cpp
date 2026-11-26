@@ -1249,6 +1249,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   fragmentScheduling.heuristicScheduling = !cpsat.enabled();
   fragmentScheduling.simplifyLoopControl = simplifyLoopControl;
   fragmentScheduling.retainFragmentWords = retainFragmentWords;
+  fragmentScheduling.ldsPrefetchDistance = kLDSPrefetch;
+  fragmentScheduling.ldsReductionPrefetchDistance = kTailPrefetch;
   PassManager fragmentPM(ctx.get());
   frisk::buildFragmentSchedulingPipeline(fragmentPM, fragmentScheduling);
   if (failed(fragmentPM.run(src->getOperation()))) return 1;
@@ -1395,20 +1397,24 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // FragmentIR owns LDS read-ahead. Finish the physical pairs and protect its
+  // MMA anchors before later ThreadIR compute schedules can rearrange them.
+  if (!cpsat.enabled() && (kLDSPrefetch || kTailPrefetch)) {
+    AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+    AddPass(frisk::createThreadPrefetchPairedLDSPass(
+        frisk::PairedLDSPrefetchOptions{0, "fragment"}));
+    llvm::outs() << "\n---- after thread finalizeFragmentLDSPrefetch -----\n";
+    llvm::outs().flush(); src->dump();
+  }
   if (!cpsat.enabled() && (pvInterleave)) {
     AddPass(frisk::createThreadInterleavePVPass(pvInterleave, mmaSchedule.pvGuardGroup));
     llvm::outs() << "\n---- after frisk-thread-interleave-pv -----\n";
     llvm::outs().flush(); src->dump();
   }
 
-  if (kLDSPrefetch || kTailPrefetch || mmaSchedule.qkWidth) {
+  if (mmaSchedule.qkWidth) {
     // Required even when the optional standalone canonicalizer was disabled.
     AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
-  }
-  if (!cpsat.enabled() && (kLDSPrefetch)) {
-    AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kLDSPrefetch, "address"}));
-    llvm::outs() << "\n---- after thread prefetchPairedLDS -----\n";
-    llvm::outs().flush(); src->dump();
   }
   // Run after optional LDS dedup/pairing and before softmax schedules introduce
   // guards. QK respects existing pair/guard boundaries and never crosses DMA.
@@ -1421,11 +1427,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (!cpsat.enabled() && (softmaxFragments != frisk::SoftmaxFragmentMode::Off)) {
     AddPass(frisk::createThreadScheduleSoftmaxFragmentsPass(softmaxFragments));
     llvm::outs() << "\n---- after thread scheduleSoftmaxFragments -----\n";
-    llvm::outs().flush(); src->dump();
-  }
-  if (!cpsat.enabled() && (kTailPrefetch)) {
-    AddPass(frisk::createThreadPrefetchPairedLDSPass(frisk::PairedLDSPrefetchOptions{kTailPrefetch, "reduction"}));
-    llvm::outs() << "\n---- after thread prefetchPairedLDSTail -----\n";
     llvm::outs().flush(); src->dump();
   }
 

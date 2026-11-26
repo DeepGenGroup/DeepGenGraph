@@ -103,6 +103,7 @@ struct TestShmReusePass
 } // namespace
 
 int main(int argc, char **argv) {
+  mlir::registerPass([] { return mlir::frisk::createPrefetchFragmentLDSPass(); });
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<mlir::frisk::FriskDialect,

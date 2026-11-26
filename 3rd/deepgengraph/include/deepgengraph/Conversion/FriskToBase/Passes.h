@@ -17,6 +17,8 @@ std::unique_ptr<mlir::Pass> createConvertFriskBaseToFragmentIRPass();
 std::unique_ptr<mlir::Pass> createConvertFragmentToThreadIRPass();
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
+std::unique_ptr<mlir::Pass> createPrefetchFragmentLDSPass(unsigned distance = 0,
+                                                       unsigned reductionDistance = 0);
 std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass();
 std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass(unsigned maxWords);
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();

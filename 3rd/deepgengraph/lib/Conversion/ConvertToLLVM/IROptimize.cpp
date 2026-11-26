@@ -15,6 +15,7 @@
 // 文件结构：Pass 1 的主体 -> barrier 内存范围判定（调度也复用）-> 调度节点定义 -> LDS 合并 -> 调度器 -> Pass 2。
 // ===========================================================================
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
+#include "deepgengraph/Conversion/FragmentLDSPrefetch.h"
 #include "deepgengraph/Analysis/ThreadBounds.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
@@ -319,12 +320,19 @@ static bool isSchedulableRegisterMMA(Operation *op) {
 }
 
 // 把 op 分类成调度节点。LDS 合并和调度都用这里的分类。
-static IssueNode classifyIssue(Operation *op) {
+static IssueNode classifyIssue(Operation *op,
+                               bool preserveFragmentSchedule = false) {
   IssueNode node{op, IssueKind::Boundary, {}};
-  if (op->getNumRegions() || op->getNumSuccessors() ||
+  node.mma = isSchedulableRegisterMMA(op);
+  // Keep the logical read-ahead boundary while scalar LDS accesses are being
+  // packed. During register scheduling, a validated MMA anchor instead joins
+  // the fixed memory/MMA order: independent FP consumers may cross it without
+  // changing which reads have been issued before any MMA.
+  if ((op->hasAttr(FragmentLDSAnchor) &&
+       !(preserveFragmentSchedule && node.mma)) ||
+      op->getNumRegions() || op->getNumSuccessors() ||
       op->hasTrait<OpTrait::IsTerminator>())
     return node;
-  node.mma = isSchedulableRegisterMMA(op);
   if (node.mma) {
     node.kind = IssueKind::Compute;
     return node;
@@ -664,15 +672,22 @@ static uint64_t registerDataBits(Type type) {
 }
 
 // 对一个直线窗口做 list scheduling。这是 IR 层的发射顺序启发式，不是周期模型，后端还会再调度。
-// 窗口里只有内存或只有计算时没有交错空间，直接返回。
+// 已有 Fragment LDS 计划时固定内存/MMA 顺序，仍允许独立归约与 MMA 交错。
 // 步骤：建依赖图 -> 算 feeds -> 划分读包 -> 贪心选择 -> 按结果移动 op。
-static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
-  bool hasMemory = false, hasCompute = false;
+static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes,
+                                bool preserveFragmentSchedule) {
+  bool hasMemory = false, hasCompute = false, hasMMA = false,
+       hasOtherCompute = false;
   for (const auto &node : nodes) {
     hasMemory |= node.kind == IssueKind::Memory;
     hasCompute |= node.kind == IssueKind::Compute;
+    hasMMA |= node.mma;
+    hasOtherCompute |= node.kind == IssueKind::Compute && !node.mma;
   }
-  if (!hasMemory || !hasCompute)
+  // Prefetched operands may all precede the final anchor. A register-only
+  // tail still has useful MMA/reduction overlap even with no remaining load.
+  if (!hasCompute || (!hasMemory &&
+      !(preserveFragmentSchedule && hasMMA && hasOtherCompute)))
     return;
   llvm::DenseMap<Operation *, unsigned> indices;
   for (auto [index, node] : llvm::enumerate(nodes))
@@ -683,10 +698,10 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
     ++nodes[to].pending;
   };
   // accesses：已出现的内存节点。
-  // previousMMA：上一条 MMA，用于串行化所有 MMA。
+  // previousFixed：上一条 MMA；有 Fragment 计划时也包含内存操作。
   // pairs：依赖检查次数，超过预算就放弃调度，此时还没有移动任何 IR。
   SmallVector<unsigned> accesses;
-  std::optional<unsigned> previousMMA;
+  std::optional<unsigned> previousFixed;
   uint64_t pairs = 0;
   for (auto [index, node] : llvm::enumerate(nodes)) {
     llvm::SmallDenseSet<unsigned, 8> definitions;
@@ -697,10 +712,13 @@ static void scheduleIssueWindow(SmallVectorImpl<IssueNode> &nodes) {
     }
     for (unsigned from : definitions)
       edge(from, index);
-    if (node.mma) {
-      if (previousMMA)
-        edge(*previousMMA, index);
-      previousMMA = index;
+    // The fragment pass already chose the LDS issue slots. Preserve the whole
+    // memory/MMA subsequence, not just MMA order, while scheduling ready scalar
+    // consumers around it. Coalescing still treats anchors as hard boundaries.
+    if (node.mma || (preserveFragmentSchedule && node.kind == IssueKind::Memory)) {
+      if (previousFixed)
+        edge(*previousFixed, index);
+      previousFixed = index;
     }
     if (!node.buffer)
       continue;
@@ -861,10 +879,11 @@ static void reorderUnrolledOperations(func::FuncOp function) {
   // Hard window limits bound both graph construction and list scheduling.
   // Partitioning a long basic block preserves all inter-window dependencies.
   constexpr unsigned maxWindow = 4096;
+  bool preserveFragmentSchedule = function->hasAttr(FragmentLDSSchedule);
   function.walk([&](Block *block) {
     SmallVector<IssueNode> window;
     auto flush = [&] {
-      scheduleIssueWindow(window);
+      scheduleIssueWindow(window, preserveFragmentSchedule);
       window.clear();
     };
     // Snapshot before moving operations, so iterator order cannot change.
@@ -872,7 +891,7 @@ static void reorderUnrolledOperations(func::FuncOp function) {
     for (Operation &op : *block)
       operations.push_back(&op);
     for (Operation *op : operations) {
-      IssueNode node = classifyIssue(op);
+      IssueNode node = classifyIssue(op, preserveFragmentSchedule);
       if (node.kind == IssueKind::Boundary) {
         flush();
         continue;

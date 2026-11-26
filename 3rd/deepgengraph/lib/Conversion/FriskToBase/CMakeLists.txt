@@ -9,6 +9,7 @@ add_deepgengraph_library(FriskToBase
   # FriskBaseToTheadlevelIR_selfTry.cpp
   FriskBaseToTheadlevelIR_plan2.cpp
   FriskFragIRReorder.cpp
+  PrefetchFragmentLDS.cpp
   RetainInvariantFragments.cpp
   PackSharedMemory.cpp
   PromoteGlobalToSharedAsync.cpp

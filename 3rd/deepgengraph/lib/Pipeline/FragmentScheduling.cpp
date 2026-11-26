@@ -19,6 +19,8 @@ struct FragmentSchedulingPipelineOptions
   Option<unsigned> retainFragmentWords{
       *this, "retain-fragment-words", llvm::cl::init(0),
       llvm::cl::desc("Retained 32-bit words per thread; 0 disables retention")};
+  Option<unsigned> ldsPrefetchDistance{*this, "lds-prefetch-distance", llvm::cl::init(0)};
+  Option<unsigned> ldsReductionPrefetchDistance{*this, "lds-reduction-prefetch-distance", llvm::cl::init(0)};
 };
 } // namespace
 
@@ -36,6 +38,10 @@ void buildFragmentSchedulingPipeline(
   if (options.retainFragmentWords)
     pm.addNestedPass<func::FuncOp>(
         createRetainInvariantFragmentsPass(options.retainFragmentWords));
+  if (options.heuristicScheduling &&
+      (options.ldsPrefetchDistance || options.ldsReductionPrefetchDistance))
+    pm.addNestedPass<func::FuncOp>(createPrefetchFragmentLDSPass(
+        options.ldsPrefetchDistance, options.ldsReductionPrefetchDistance));
   if (options.heuristicScheduling)
     pm.addNestedPass<func::FuncOp>(createScheduleAsyncCopiesPass());
 }
@@ -47,7 +53,9 @@ void registerFragmentSchedulingPipeline() {
       [](OpPassManager &pm, const FragmentSchedulingPipelineOptions &options) {
         buildFragmentSchedulingPipeline(pm, {options.heuristicScheduling,
                                              options.simplifyLoopControl,
-                                             options.retainFragmentWords});
+                                             options.retainFragmentWords,
+                                             options.ldsPrefetchDistance,
+                                             options.ldsReductionPrefetchDistance});
       });
   (void)registration;
 }

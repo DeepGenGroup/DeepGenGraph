@@ -15,6 +15,7 @@
 // marker：函数属性 frisk.register_lifetimes，防止重复运行。
 // ===========================================================================
 #include "deepgengraph/Conversion/ConvertToLLVM/OptimizeRegisterLifetimes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/AsyncDMA.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
 #include "LateIRPatterns.h"
 #include "llvm/ADT/DenseMap.h"
@@ -629,16 +630,44 @@ public:
   void run(llvm::Function &function) {
     // ThreadIR can introduce a pure optional rescale before address lowering.
     // A per-BB cache would recompute the same DMA/LDS address DAG at its join,
-    // including on the hot path that skips the rescale. Keep only values from
-    // the dominating header, never values defined on the optional path.
+    // including on the hot path that skips the rescale. The shared-memory
+    // planner also introduces a conditional next-K DMA before lifetime
+    // optimization. Its join must reuse the preceding PV address expressions:
+    // a DMA changes memory, not an already computed SSA address. Keep only
+    // values from the dominating header, never values from the optional path
+    // or loaded data. Memory accesses and convergent calls stay in place.
     llvm::DenseMap<llvm::BasicBlock *, llvm::BasicBlock *> joins;
     llvm::SmallPtrSet<llvm::BasicBlock *, 8> heads;
-    auto pureExit = [](llvm::BasicBlock *block) -> llvm::UncondBrInst * {
+    bool plannedK = function.hasFnAttribute("frisk.cross_bn_k0");
+    auto asyncIssue = [](llvm::CallBase *call) {
+      if (!call || call->hasOperandBundles() || !call->getType()->isVoidTy()) return false;
+      // The issue marker closes the group without waiting or changing EXEC.
+      if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(call))
+        if (intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_asyncmark)
+          return call->arg_empty();
+      if (call->arg_size() != 5) return false;
+      auto *callee = call->getCalledFunction();
+      if (!callee || !callee->isDeclaration()) return false;
+      bool known = callee->getName() == PlannedAsyncDMA;
+      if (auto *intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(call))
+        known |= intrinsic->getIntrinsicID() == llvm::Intrinsic::amdgcn_global_load_async_lds;
+      if (!known) return false;
+      auto *src = llvm::dyn_cast<llvm::PointerType>(call->getArgOperand(0)->getType());
+      auto *dst = llvm::dyn_cast<llvm::PointerType>(call->getArgOperand(1)->getType());
+      auto *bytes = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+      return src && dst && src->getAddressSpace() == 1 && dst->getAddressSpace() == 3 &&
+             bytes && bytes->getType()->isIntegerTy(32) &&
+             (bytes->equalsInt(4) || bytes->equalsInt(8) || bytes->equalsInt(16)) &&
+             call->getArgOperand(3)->getType()->isIntegerTy(32) &&
+             call->getArgOperand(4)->getType()->isIntegerTy(32);
+    };
+    auto pureExit = [&](llvm::BasicBlock *block, bool allowDMA = false) -> llvm::UncondBrInst * {
       auto *exit = llvm::dyn_cast<llvm::UncondBrInst>(block->getTerminator());
       if (!exit) return nullptr;
       for (auto &inst : *block) {
         if (&inst == exit) continue;
         auto *call = llvm::dyn_cast<llvm::CallBase>(&inst);
+        if (allowDMA && asyncIssue(call)) continue;
         if (inst.mayReadOrWriteMemory() || inst.mayHaveSideEffects() ||
             (call && call->isConvergent())) return nullptr;
       }
@@ -665,12 +694,12 @@ public:
         if (body == join || join == &head || body == &head ||
             body->getSinglePredecessor() != &head)
           continue;
-        auto *exit = pureExit(body);
+        auto *exit = pureExit(body, plannedK);
         if (!exit) continue;
         if (exit->getSuccessor() == join && llvm::pred_size(join) == 2) {
           remember(&head, join);
         } else if (join->getSinglePredecessor() == &head) {
-          auto *otherExit = pureExit(join);
+          auto *otherExit = pureExit(join, plannedK);
           auto *merge = exit->getSuccessor();
           if (otherExit && otherExit->getSuccessor() == merge &&
               merge != &head && llvm::pred_size(merge) == 2)

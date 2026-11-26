@@ -17,6 +17,9 @@ public:
       LLVM::ModuleTranslation &translation) const override {
     bool isAnchor = attribute.getName() == "frisk.register_anchor";
     if (!isAnchor && attribute.getName() != "frisk.register_mma") return success();
+    bool scheduled = !isAnchor && op->hasAttr("frisk.scheduled_mma");
+    if (scheduled && !isa<UnitAttr>(op->getAttr("frisk.scheduled_mma")))
+      return op->emitError("frisk.scheduled_mma requires a unit marker");
     auto assembly = dyn_cast<LLVM::InlineAsmOp>(op);
     if (!assembly || !isa<UnitAttr>(attribute.getValue()) ||
         op->getNumResults() != 1)
@@ -50,10 +53,16 @@ public:
           call->getArgOperand(2)->getType() != float4)
         return op->emitError("invalid frisk.register_mma contract");
       call->setCalledOperand(llvm::InlineAsm::get(code->getFunctionType(),
-          code->getAsmString(), code->getConstraintString(), false, false,
+          code->getAsmString(), code->getConstraintString(), scheduled, false,
           code->getDialect(), false));
+      if (scheduled)
+        call->setMetadata("frisk.scheduled_mma", llvm::MDNode::get(ctx, {}));
     }
-    call->setMemoryEffects(llvm::MemoryEffects::none());
+    // This artificial inaccessible-memory effect shares the sched.barrier
+    // ordering domain. It neither touches LDS nor adds a memory asm clobber.
+    call->setMemoryEffects(scheduled
+        ? llvm::MemoryEffects::inaccessibleMemOnly(llvm::ModRefInfo::ModRef)
+        : llvm::MemoryEffects::none());
     call->setDoesNotThrow();
     call->addFnAttr(llvm::Attribute::WillReturn);
     call->addFnAttr(llvm::Attribute::Convergent);

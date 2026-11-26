@@ -179,12 +179,15 @@ void prepareLLVMExportContracts(llvm::Module &module) {
         // accumulator constraints. NOP padding does not add an observable
         // effect. Match HCU's IntrConvergent/IntrNoMem/IntrWillReturn contract,
         // while keeping the hardware spacing inside the same asm expression.
-        if (assembly->hasSideEffects())
+        bool scheduled = call->getMetadata("frisk.scheduled_mma") != nullptr;
+        if (assembly->hasSideEffects() != scheduled)
           call->setCalledOperand(llvm::InlineAsm::get(
               assembly->getFunctionType(), assembly->getAsmString(),
-              assembly->getConstraintString(), /*hasSideEffects=*/false,
+              assembly->getConstraintString(), /*hasSideEffects=*/scheduled,
               /*isAlignStack=*/false, assembly->getDialect(), /*canThrow=*/false));
-        call->setMemoryEffects(llvm::MemoryEffects::none());
+        call->setMemoryEffects(scheduled
+            ? llvm::MemoryEffects::inaccessibleMemOnly(llvm::ModRefInfo::ModRef)
+            : llvm::MemoryEffects::none());
         call->setDoesNotThrow();
         call->addFnAttr(llvm::Attribute::WillReturn);
         // Preserve cross-lane convergence; do not add speculatable/nosync.

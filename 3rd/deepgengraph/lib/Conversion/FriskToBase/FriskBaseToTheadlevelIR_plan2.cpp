@@ -83,6 +83,7 @@
 #include "deepgengraph/Analysis/MatrixLoad.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/FriskToBase/Passes.h"
+#include "deepgengraph/Conversion/FragmentLDSPrefetch.h"
 #include "SharedBufferAliases.h"
 #include "WmmaLayoutConversion.h"
 #include "CausalMaskLowering.h"
@@ -5437,6 +5438,8 @@ public:
         auto mma = b.create<WarpMmaRROp>(loc, registers, op->getOperand(0), op->getOperand(1), op->getOperand(2));
         mma->setAttr("inst_name", gemm.getInstNameAttr());
         mma->setAttr("inst_constraints", gemm.getInstConstraintsAttr());
+        if (auto anchor = gemm->getAttr(FragmentLDSAnchor))
+          mma->setAttr(FragmentLDSAnchor, anchor);
         markTiled(mma, b);
         result = mma;
         ++gemms;
