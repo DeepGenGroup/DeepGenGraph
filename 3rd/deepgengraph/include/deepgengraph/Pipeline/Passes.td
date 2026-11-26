@@ -42,11 +42,17 @@ def AutoPipeline : Pass<"frisk-auto-pipeline", "::mlir::func::FuncOp"> {
     block level. Record stage order, alternating slots and issue-after readiness
     in frisk.shared_pipeline_plan. Physical execution planning validates DMA,
     readers and the LDS budget before materializing this provisional schedule.
+    Bounded inner loops marked frisk.loopUnrollFull are expanded first, unless
+    a hint or explicit schedule owns them. With cross-iteration, also declare
+    the opening induction-dependent DMA and final readiness overlap anchor;
+    physical execution validates circular lifetimes before committing it.
   }];
   let constructor = "mlir::pipeline::createAutoPipelinePass()";
   let options = [
     Option<"doubleBuffer", "double-buffer", "bool", "false",
-           "Plan two-slot overlap for straight-line matrix-copy streams">
+           "Plan two-slot overlap for straight-line matrix-copy streams">,
+    Option<"crossIteration", "cross-iteration", "bool", "false",
+           "Plan next-iteration opening DMA at the final matrix stream">
   ];
   let dependentDialects = [
     "::mlir::frisk::FriskDialect", "::mlir::affine::AffineDialect",

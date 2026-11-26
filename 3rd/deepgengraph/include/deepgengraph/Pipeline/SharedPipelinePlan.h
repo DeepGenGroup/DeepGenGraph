@@ -11,6 +11,14 @@ namespace mlir::pipeline {
 // SSA, not by proximity to an unrelated wait. Keep the serial IR until physical
 // validation succeeds, so rejecting a candidate needs no speculative rollback.
 inline constexpr StringLiteral sharedPipelinePlanAttr = "frisk.shared_pipeline_plan";
+// Provisional cross-iteration contract, scoped to one outer loop. The loop,
+// opening DMA and overlap-anchor DMA each carry one unit attribute. Readiness
+// is always recovered from the named DMA's task, never from wait proximity.
+// The next address substitutes IV + original step; the first issue substitutes
+// the original lower bound. Physical validation owns guards/task materialization.
+inline constexpr StringLiteral crossIterationPlanAttr = "frisk.cross_iteration_plan";
+inline constexpr StringLiteral crossIterationIssueAttr = "frisk.cross_iteration_issue";
+inline constexpr StringLiteral crossIterationAnchorAttr = "frisk.cross_iteration_anchor";
 } // namespace mlir::pipeline
 
 #endif

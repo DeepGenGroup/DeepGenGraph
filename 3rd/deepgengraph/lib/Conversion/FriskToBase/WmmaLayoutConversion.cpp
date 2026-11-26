@@ -45,7 +45,11 @@ void selectGemmAInputLayoutMethod(func::FuncOp kernel, StringRef method) {
           gemm->setAttr("frisk.b_permute", UnitAttr::get(kernel.getContext()));
         else if (method == "inner-inst-b-permute")
           gemm->setAttr("frisk.inner_inst_b_permute", UnitAttr::get(kernel.getContext()));
-        // Do not traverse through a GEMM into its A/B operands.
+        // An expanded reduction is a chain of GEMM accumulators. Its earlier
+        // partial sums need the same C coordinate permutation as the last
+        // result; otherwise the boundary before the last GEMM spills the full
+        // accumulator through LDS. Follow only C, never the A/B operands.
+        worklist.push_back(gemm.getAcc());
         continue;
       }
       if (auto loop = dyn_cast<affine::AffineForOp>(producer)) {

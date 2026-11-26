@@ -6,6 +6,8 @@
 #include "deepgengraph/Analysis/ScheduleAttrs.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
+#include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -458,7 +460,18 @@ void PrefetchLoop::build() {
 // SharedMemoryPlan has proved the physical packet, reader and storage contract.
 // The first issue has no stream anchor and retains ordinary safe DMA hoisting
 // across preceding compute; later issues are anchored to earlier readiness.
-static void planSharedCopyStream(func::FuncOp kernel, Block &block) {
+static Value sharedSource(Value value) {
+  for (unsigned depth = 0; depth < 32; ++depth) {
+    Operation *def = value.getDefiningOp();
+    if (auto view = dyn_cast_or_null<frisk::BufferViewOp>(def)) value = view.getSource();
+    else if (auto view = dyn_cast_or_null<ViewLikeOpInterface>(def)) value = view.getViewSource();
+    else if (auto cast = dyn_cast_or_null<memref::CastOp>(def)) value = cast.getSource();
+    else return value;
+  }
+  return {};
+}
+
+static void planSharedCopyStream(func::FuncOp kernel, Block &block, Value stream) {
   using namespace frisk;
   using pipeline::sharedPipelinePlanAttr;
   if (!isInBlockUniformControlFlow(block.getTerminator())) return;
@@ -485,6 +498,7 @@ static void planSharedCopyStream(func::FuncOp kernel, Block &block) {
   for (Operation &op : block) {
     auto copy = dyn_cast<AsyncCopyGmToShmOp>(op);
     if (!copy) continue;
+    if (sharedSource(copy.getSrc()) != stream) continue;
     // A committed or existing provisional schedule must never be rediscovered.
     if (copy->hasAttr(sharedPipelinePlanAttr) || hasAnyScheduleAttr(copy)) return;
     auto alloc = copy.getDst().getDefiningOp<AllocBufferOp>();
@@ -559,9 +573,222 @@ static void planSharedCopyStream(func::FuncOp kernel, Block &block) {
                << kernel.getSymName() << '\n';
 }
 
+static void planSharedCopyStreams(func::FuncOp kernel, Block &block) {
+  // Expanded QK and PV now share a block. Analyze source streams separately;
+  // effects between stages still prevent an unsafe partial/interleaved stream.
+  // The current physical two-slot contract owns one stream per block. Prefer
+  // the tail stream and leave other streams to ordinary dependency scheduling.
+  SmallVector<Value> sources;
+  for (Operation &op : block) {
+    if (op.hasAttr(pipeline::sharedPipelinePlanAttr)) return;
+    if (auto copy = dyn_cast<frisk::AsyncCopyGmToShmOp>(op)) {
+      Value source = sharedSource(copy.getSrc());
+      if (source && !llvm::is_contained(sources, source)) sources.push_back(source);
+    }
+  }
+  for (Value source : llvm::reverse(sources)) {
+    planSharedCopyStream(kernel, block, source);
+    if (llvm::any_of(block, [](Operation &op) {
+          return op.hasAttr(pipeline::sharedPipelinePlanAttr);
+        })) break;
+  }
+}
+
+static LogicalResult exposeMarkedInnerLoops(func::FuncOp kernel) {
+  SmallVector<affine::AffineForOp> loops;
+  kernel.walk<WalkOrder::PostOrder>([&](affine::AffineForOp loop) {
+    auto full = loop->getAttrOfType<BoolAttr>("frisk.loopUnrollFull");
+    if (!full || !full.getValue()) return;
+    bool inner = false;
+    for (Operation *p = loop; p && p != kernel; p = p->getParentOp()) {
+      if (p->hasAttr(hintName) || frisk::hasAnyScheduleAttr(p) ||
+          p->hasAttr(pipeline::crossIterationPlanAttr)) return;
+      if (p != loop && isa<affine::AffineForOp, scf::ForOp>(p)) inner = true;
+    }
+    if (inner) loops.push_back(loop);
+  });
+  uint64_t remaining = 65536;
+  bool expanded = false;
+  for (auto loop : loops) {
+    auto count = affine::getConstantTripCount(loop);
+    if (!count || !*count || *count > 64) continue;
+    uint64_t size = 0;
+    loop.getBody()->walk([&](Operation *) { ++size; });
+    uint64_t cost = size * (*count - 1);
+    if (cost > remaining) continue;
+    // Frisk Base's legacy vector copy mutates subsequent uses of an iter_arg.
+    // MLIR's generic unroller only understands SSA yields. Restore that SSA
+    // recurrence first, or all clones would write/read the initial carrier.
+    SmallVector<frisk::CopyOp> updates;
+    DenseSet<Value> destinations;
+    bool valid = true;
+    loop.walk([&](frisk::CopyOp copy) {
+      auto dst = dyn_cast<VectorType>(copy.getDst().getType());
+      if (!dst || copy.hasValueResult()) return;
+      auto arg = dyn_cast<BlockArgument>(copy.getDst());
+      auto src = dyn_cast<ShapedType>(copy.getSrc().getType());
+      auto map = copy.getOffsetMap();
+      auto rank = map.getNumResults() == 1
+                      ? dyn_cast<AffineConstantExpr>(map.getResult(0)) : AffineConstantExpr{};
+      if (copy->getBlock() != loop.getBody() || !arg || arg.getOwner() != loop.getBody() ||
+          arg.getArgNumber() == 0 || !src || src.getShape() != dst.getShape() ||
+          src.getElementType() != dst.getElementType() || map.getNumInputs() != 0 ||
+          !rank || rank.getValue() != dst.getRank() || !destinations.insert(arg).second) {
+        valid = false;
+        return;
+      }
+      for (Operation *user : arg.getUsers())
+        if (user->getBlock() != loop.getBody()) valid = false;
+      updates.push_back(copy);
+    });
+    if (!valid) continue;
+    for (auto copy : updates) {
+      OpBuilder b(copy);
+      Value next = b.create<frisk::CastOp>(copy.getLoc(), copy.getDst().getType(), copy.getSrc());
+      for (OpOperand &use : llvm::make_early_inc_range(copy.getDst().getUses()))
+        if (use.getOwner() != copy && copy->isBeforeInBlock(use.getOwner())) use.set(next);
+      copy.erase();
+    }
+    if (failed(affine::loopUnrollFull(loop))) return failure();
+    remaining -= cost;
+    expanded = true;
+  }
+  if (!expanded) return success();
+  // Unrolling makes the temporary vector carriers redundant. Keep the direct
+  // computed-tile edges visible to layout inference: otherwise an artificial
+  // memref/vector boundary can materialize the QK accumulator in shared memory.
+  SmallVector<frisk::CastOp> casts;
+  kernel.walk([&](frisk::CastOp cast) { casts.push_back(cast); });
+  for (auto outer : casts) {
+    auto inner = outer->getOperand(0).getDefiningOp<frisk::CastOp>();
+    if (!inner || !isa<VectorType>(inner->getResult(0).getType())) continue;
+    Value original = inner->getOperand(0);
+    if (original.getType() != outer->getResult(0).getType() ||
+        !isa_and_nonnull<frisk::GemmOp, frisk::ZeroOp>(original.getDefiningOp())) continue;
+    outer->getResult(0).replaceAllUsesWith(original);
+    outer.erase();
+    // Do not erase inner until after the traversal: it may be in casts too.
+  }
+  SmallVector<frisk::CastOp> dead;
+  kernel.walk([&](frisk::CastOp cast) {
+    if (cast->use_empty()) dead.push_back(cast);
+  });
+  for (auto cast : llvm::reverse(dead)) cast.erase();
+  return success();
+}
+
+static void planCrossIteration(func::FuncOp kernel, Operation *loop) {
+  using namespace frisk;
+  using namespace pipeline;
+  Block *body;
+  Value iv;
+  if (auto affine = dyn_cast<affine::AffineForOp>(loop)) {
+    body = affine.getBody(); iv = affine.getInductionVar();
+  } else if (auto scf = dyn_cast<scf::ForOp>(loop)) {
+    auto step = scf.getStep().getDefiningOp<arith::ConstantIndexOp>();
+    if (!step || step.value() <= 0 || !scf.getInductionVar().getType().isIndex()) return;
+    body = scf.getBody(); iv = scf.getInductionVar();
+  } else return;
+  if (loop->hasAttr(crossIterationPlanAttr) || loop->hasAttr(hintName) ||
+      hasAnyScheduleAttr(loop) || !isInBlockUniformControlFlow(body->getTerminator())) return;
+  DominanceInfo dominance(kernel);
+  auto address = [&](Value source, bool &varies) {
+    DenseSet<Operation *> visited;
+    std::function<bool(Value)> visit = [&](Value value) {
+      if (value == iv) { varies = true; return true; }
+      if (dominance.dominates(value, loop)) return true;
+      Operation *def = value.getDefiningOp();
+      if (!def || def->getBlock() != body || def->getNumRegions() || !isPure(def)) return false;
+      if (!visited.insert(def).second) return true;
+      return llvm::all_of(def->getOperands(), visit);
+    };
+    return visit(source);
+  };
+  auto localDestination = [&](Value value) {
+    if (isa<VectorType>(value.getType())) return true;
+    auto type = dyn_cast<MemRefType>(value.getType());
+    Operation *def = value.getDefiningOp();
+    return type && type.getMemorySpaceAsInt() != 1 && def &&
+           def->getBlock() == body &&
+           (isa<AllocBufferOp, ZeroOp>(def) || readsOperands(def));
+  };
+  AsyncCopyGmToShmOp opening, tail;
+  WaitBufferReadyOp openingReady, tailReady;
+  for (Operation &op : *body) {
+    if (hasAnyScheduleAttr(&op) || op.hasAttr(crossIterationIssueAttr) ||
+        op.hasAttr(crossIterationAnchorAttr) || op.getNumRegions()) return;
+    if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(op)) {
+      auto alloc = copy.getDst().getDefiningOp<AllocBufferOp>();
+      auto src = dyn_cast<MemRefType>(copy.getSrc().getType());
+      auto dst = dyn_cast<MemRefType>(copy.getDst().getType());
+      if (!alloc || alloc->getBlock() != body || !src || !dst ||
+          src.getMemorySpaceAsInt() != 1 || dst.getMemorySpaceAsInt() != 3 ||
+          !dst.hasStaticShape() || src.getShape() != dst.getShape() ||
+          src.getElementType() != dst.getElementType() || !copy.getToken().hasOneUse()) return;
+      auto ready = dyn_cast<WaitBufferReadyOp>(*copy.getToken().getUsers().begin());
+      if (!ready || ready->getBlock() != body || !copy->isBeforeInBlock(ready)) return;
+      bool varies = false;
+      if (!address(copy.getSrc(), varies)) return;
+      bool matrixB = llvm::any_of(copy.getDst().getUses(), [](OpOperand &use) {
+        return isa<GemmOp>(use.getOwner()) && use.getOperandNumber() == 1;
+      });
+      if (!opening && varies) {
+        if (!matrixB) return;
+        opening = copy; openingReady = ready;
+      }
+      tail = copy; tailReady = ready;
+      continue;
+    }
+    if (auto wait = dyn_cast<WaitBufferReadyOp>(op)) {
+      auto copy = wait.getToken().getDefiningOp<AsyncCopyGmToShmOp>();
+      if (!copy || copy->getBlock() != body || !copy.getToken().hasOneUse()) return;
+      continue;
+    }
+    if (isa<AllocBufferOp, ZeroOp>(op) || readsOperands(&op) ||
+        op.hasTrait<OpTrait::IsTerminator>()) continue;
+    if (auto copy = dyn_cast<CopyOp>(op)) {
+      if (!localDestination(copy.getDst())) return;
+      continue;
+    }
+    if (auto reduce = dyn_cast<ReduceOp>(op)) {
+      if (!localDestination(reduce->getOperand(1))) return;
+      continue;
+    }
+    if (!isPure(&op)) return;
+  }
+  if (!opening || opening == tail || !openingReady->isBeforeInBlock(tailReady)) return;
+  // The opening buffer must be dead before the anchor; the tail must still
+  // have matrix work afterwards. Physical readers/aliases are revalidated late.
+  for (OpOperand &use : opening.getDst().getUses()) {
+    Operation *user = use.getOwner();
+    if (user == opening) continue;
+    if (!isa<GemmOp>(user) || use.getOperandNumber() != 1 || user->getBlock() != body ||
+        !openingReady->isBeforeInBlock(user) || !user->isBeforeInBlock(tailReady)) return;
+  }
+  bool finalRead = false;
+  for (OpOperand &use : tail.getDst().getUses()) {
+    Operation *user = use.getOwner();
+    if (user == tail) continue;
+    if (!isa<GemmOp>(user) || use.getOperandNumber() != 1 || user->getBlock() != body ||
+        !tailReady->isBeforeInBlock(user)) return;
+    finalRead = true;
+  }
+  if (!finalRead) return;
+  OpBuilder b(kernel.getContext());
+  loop->setAttr(crossIterationPlanAttr, b.getUnitAttr());
+  opening->setAttr(crossIterationIssueAttr, b.getUnitAttr());
+  tail->setAttr(crossIterationAnchorAttr, b.getUnitAttr());
+  llvm::errs() << "AutoPipeline cross-iteration plan: opening DMA, issue-after=tail-ready, function="
+               << kernel.getSymName() << '\n';
+}
+
 struct AutoPipelinePass : pipeline::impl::AutoPipelineBase<AutoPipelinePass> {
   void runOnOperation() override {
     SmallVector<std::pair<Operation *, int64_t>> hints;
+    if ((doubleBuffer || crossIteration) && failed(exposeMarkedInnerLoops(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
     bool invalid = false;
     getOperation().walk<WalkOrder::PostOrder>([&](Operation *op) {
       auto hint = op->getAttr(hintName);
@@ -601,14 +828,16 @@ struct AutoPipelinePass : pipeline::impl::AutoPipelineBase<AutoPipelinePass> {
       }
       plan.build();
     }
-    if (doubleBuffer && !getOperation().isExternal()) {
+    if ((doubleBuffer || crossIteration) && !getOperation().isExternal()) {
       // Match the execution planner's supported scope: the function body or
       // one outer compute loop. Hinted nested pipelines retain their owner.
       Block &entry = getOperation().getBody().front();
-      planSharedCopyStream(getOperation(), entry);
-      for (Operation &op : entry)
-        if (isa<affine::AffineForOp, scf::ForOp>(op))
-          planSharedCopyStream(getOperation(), op.getRegion(0).front());
+      if (doubleBuffer) planSharedCopyStreams(getOperation(), entry);
+      for (Operation &op : entry) {
+        if (!isa<affine::AffineForOp, scf::ForOp>(op)) continue;
+        if (doubleBuffer) planSharedCopyStreams(getOperation(), op.getRegion(0).front());
+        if (crossIteration) planCrossIteration(getOperation(), &op);
+      }
     }
   }
 };

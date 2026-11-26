@@ -1,5 +1,23 @@
 # Pipeline 模块（FA3 风格软件流水）
 
+## AutoPipeline 的早期展开与跨轮计划
+
+`double-buffer=true` 或 `cross-iteration=true` 开启时，先展开标有
+`frisk.loopUnrollFull=true` 的内层 affine 循环，保留外层计算循环。
+上限为单循环 64 次、累计新增 65536 个操作；有 pipeline hint 或显式调度
+归属的循环不在这里展开。本例因此在 block 层直接暴露 Q0/K0～Q3/K3。
+后续 fragment/thread lowering 自身仍可能生成小循环。
+
+V 逻辑计划按源存储区分候选流，当前每个 block 选择一个合法的末尾双缓冲流。
+跨轮计划以 `frisk.cross_iteration_plan` 标记外层循环，分别用
+`frisk.cross_iteration_issue` / `frisk.cross_iteration_anchor` 标记首 DMA 和
+末片 DMA；等待点从各自 task 精确恢复。这里决定预取关系，保留串行 IR，
+SharedMemoryPlan.execution 再验证物理读者、循环生命周期和 LDS 预算并落实。
+MyTest 的 `--cross-bn-k0=1` 同时启用这两个阶段；仅启用后端开关不再发现候选。
+
+回归：`test/unittest/check_auto_pipeline_cross_iteration.py` 与
+`test/unittest/check_shared_cross_iteration.py`。
+
 ## 流水线清理 Pass 与共享内存复用
 
 两个清理 Pass 独立于 attention 的尺寸、函数名和 Q/K/V 命名：

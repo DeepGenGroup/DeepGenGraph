@@ -362,21 +362,33 @@ static bool collectCrossIteration(func::FuncOp kernel, Operation *loop,
     return fail("requires a block-uniform outer loop");
   if (hasAnyScheduleAttr(loop))
     return fail("existing pipeline schedule owns task/slot lifetimes; no second cross-iteration schedule");
+  if (!loop->getAttrOfType<UnitAttr>(pipeline::crossIterationPlanAttr))
+    return fail("no AutoPipeline cross-iteration plan");
   if (auto scf = dyn_cast<scf::ForOp>(loop)) {
     auto step = constant(scf.getStep());
     if (!step || *step <= 0 || !scf.getInductionVar().getType().isIndex())
       return fail("requires a positive constant index step");
   }
   plan.loop = loop;
+  AsyncCopyGmToShmOp anchor;
   for (Operation &op : *body) {
-    if (auto wait = dyn_cast<WaitBufferReadyOp>(op)) {
-      if (!plan.ready) plan.ready = wait;
-      plan.issueAfter = wait;
-    }
+    bool first = op.hasAttr(pipeline::crossIterationIssueAttr);
+    bool last = op.hasAttr(pipeline::crossIterationAnchorAttr);
+    if (!first && !last) continue;
+    auto copy = dyn_cast<AsyncCopyGmToShmOp>(op);
+    if (!copy || !copy.getToken().hasOneUse() ||
+        (first && (!op.getAttrOfType<UnitAttr>(pipeline::crossIterationIssueAttr) || plan.issue)) ||
+        (last && (!op.getAttrOfType<UnitAttr>(pipeline::crossIterationAnchorAttr) || anchor)))
+      return fail("invalid AutoPipeline cross-iteration DMA contract");
+    auto ready = dyn_cast<WaitBufferReadyOp>(*copy.getToken().getUsers().begin());
+    if (!ready || ready->getBlock() != body || !copy->isBeforeInBlock(ready))
+      return fail("AutoPipeline cross-iteration task lost local readiness");
+    if (first) { plan.issue = copy; plan.ready = ready; }
+    if (last) { anchor = copy; plan.issueAfter = ready; }
   }
-  if (!plan.ready || plan.ready == plan.issueAfter)
+  if (!plan.ready || !plan.issueAfter || plan.ready == plan.issueAfter ||
+      !plan.ready->isBeforeInBlock(plan.issueAfter))
     return fail("missing distinct initial and final readiness");
-  plan.issue = plan.ready.getToken().getDefiningOp<AsyncCopyGmToShmOp>();
   if (!plan.issue || plan.issue->getBlock() != body ||
       !plan.issue->isBeforeInBlock(plan.ready) || !plan.issue.getToken().hasOneUse() ||
       plan.issue->hasAttr(marker))

@@ -32,6 +32,13 @@ gpu.barrier
     text = text.replace(start, prefix + header + body)
     # Global writes in the loop would require an independent alias proof.
     text = re.sub(r'vector.store %read\d+,.*\n', '', text)
+    # Physical fixtures explicitly supply the provisional early contract.
+    # Candidate discovery belongs to AutoPipeline, not this consumer test.
+    text = text.replace('%ktask = frisk.async_copy_gm_to_shm %ksrc to %kbuf {',
+                        '%ktask = frisk.async_copy_gm_to_shm %ksrc to %kbuf {frisk.cross_iteration_issue, ')
+    text = re.sub(r'(%task' + str(stages - 1) + r' = frisk.async_copy_gm_to_shm [^\n]*?\{)',
+                  r'\1frisk.cross_iteration_anchor, ', text)
+    text = text.replace('}\nreturn', '} {frisk.cross_iteration_plan}\nreturn')
     return text
 
 
@@ -201,7 +208,8 @@ def main():
                     assert '!frisk.async_task' not in lowered and 'llvm.func' in lowered
                 count += 1
         out, _ = run(path, base)
-        scheduled = base.replace('}\nreturn', '} {pipeline.scheduled}\nreturn')
+        scheduled = base.replace('{frisk.cross_iteration_plan}',
+                                 '{frisk.cross_iteration_plan, pipeline.scheduled}')
         assert scheduled != base
         preserved, diagnostic = run(path, scheduled)
         baseline, _ = run(path, scheduled, False)
@@ -217,6 +225,10 @@ def main():
         else:
             raise AssertionError('ownership oracle missed a next-K/final-V slot collision')
         rejected = [
+            base.replace('frisk.cross_iteration_plan', 'test.no_cross_plan'),
+            base.replace('frisk.cross_iteration_issue', 'test.no_cross_issue'),
+            base.replace('frisk.cross_iteration_anchor', 'test.no_cross_anchor'),
+            base.replace('frisk.cross_iteration_issue,', 'frisk.cross_iteration_issue = 1 : i64,'),
             base.replace('affine.for %iv = 0 to 4 step 1', 'affine.for %iv = 0 to %tid'),
             base.replace('%gm[%iv, 0]', '%gm[%c0, 0]'),
             re.sub(r'(%read3 = [^\n]+)\n',

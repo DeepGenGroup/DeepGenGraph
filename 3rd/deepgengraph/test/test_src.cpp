@@ -1185,7 +1185,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     PassManager pipelinePM(ctx.get());
     auto autoPipeline = mlir::pipeline::createAutoPipelinePass();
     if (failed(autoPipeline->initializeOptions(
-            std::string("double-buffer=") + (vDoubleBuffer ? "true" : "false"),
+            std::string("double-buffer=") + (vDoubleBuffer ? "true" : "false") +
+                " cross-iteration=" + (crossBNK0 ? "true" : "false"),
             [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
       return 1;
     pipelinePM.addNestedPass<func::FuncOp>(std::move(autoPipeline));

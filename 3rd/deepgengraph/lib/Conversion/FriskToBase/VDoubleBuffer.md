@@ -8,6 +8,15 @@ buffer slots or copy issue times.
 
 ## Planning boundary
 
+When either buffering or cross-iteration planning is enabled, AutoPipeline
+first fully unrolls marked inner affine loops (at most 64 trips, cumulative
+65536 extra operations). Loops owned by a hint or explicit schedule are left
+to that owner. The outer compute loop remains rolled. This exposes the QK
+opening copy before planning, while preserving its accumulator recurrence.
+Copies from different source storage are analyzed separately; the current
+two-slot contract selects one eligible tail stream per block. Other copies
+remain subject to dependency/alias-checked scheduling, not a new global search.
+
 The early layout phase determines packing, XOR composition, DMA width,
 participants and source/destination maps. The execution phase runs after these
 maps are materialized and bounded fragment loops are exposed, **before** the
@@ -111,12 +120,21 @@ attention. This compares the before/after kernels in both run orders.
 
 ## Cross-iteration first-copy prefetch
 
-`MyTest --cross-bn-k0=1` now enables
-`lower-frisk-fragments="cross-iteration=true"`. The execution planner selects
-the first local DMA and its readiness in an outer affine/scf loop, and issues
-the next iteration's copy after the final matrix stage's readiness. This is
-planned together with V buffering and physical allocation. A rejected candidate
-retains the ordinary schedule; MyTest does not retry the transformation in LLVM.
+`MyTest --cross-bn-k0=1` enables `cross-iteration=true` in both AutoPipeline
+and lower-frisk-fragments. AutoPipeline selects the opening induction-dependent
+matrix-B copy and the final matrix stream's readiness in an outer affine/scf
+loop. It records unit attributes `frisk.cross_iteration_plan` on the loop,
+`frisk.cross_iteration_issue` on the opening DMA and
+`frisk.cross_iteration_anchor` on the tail DMA. These are provisional: the
+original task SSA and serial ordering remain valid until physical validation.
+The tail issue/readiness is protected during intervening scheduling.
+
+The execution planner consumes these identities, recovers readiness from each
+DMA's exact task, and validates circular lifetimes together with V buffering
+and physical allocation. It no longer discovers unmarked cross-iteration
+candidates. A rejected candidate retains the ordinary schedule; MyTest does
+not retry the transformation in LLVM. Physical fixtures must carry the early
+contract, just as V buffering fixtures do.
 
 The projected lifetime has two parts: the loop prefix through the current
 buffer's last reader, and the suffix from the proposed issue point through the

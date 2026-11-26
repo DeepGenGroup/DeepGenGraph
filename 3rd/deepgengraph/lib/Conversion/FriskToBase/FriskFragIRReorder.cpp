@@ -790,11 +790,14 @@ static bool hasUnanchoredSharedIssue(Operation *op) {
 static bool hasExplicitSchedule(Operation *op) {
   for (; op; op = op->getParentOp())
     if (hasPipelineScheduleAttr(op) ||
+        op->hasAttr(pipeline::crossIterationAnchorAttr) ||
         (op->hasAttr(pipeline::sharedPipelinePlanAttr) && !hasUnanchoredSharedIssue(op)) ||
         (isa<WaitBufferReadyOp>(op) &&
          cast<WaitBufferReadyOp>(op).getToken().getDefiningOp() &&
-         cast<WaitBufferReadyOp>(op).getToken().getDefiningOp()->hasAttr(
-             pipeline::sharedPipelinePlanAttr)))
+         (cast<WaitBufferReadyOp>(op).getToken().getDefiningOp()->hasAttr(
+              pipeline::sharedPipelinePlanAttr) ||
+          cast<WaitBufferReadyOp>(op).getToken().getDefiningOp()->hasAttr(
+              pipeline::crossIterationAnchorAttr))))
       return true;
   return false;
 }
