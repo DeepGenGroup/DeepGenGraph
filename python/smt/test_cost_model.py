@@ -19,7 +19,8 @@ class FragmentCostTests(unittest.TestCase):
                     read_bytes=0, write_bytes=0, compute_ops=0, reads=[], writes=[],
                     pipeline_anchor=True, opaque=False) for i in range(count)]
         return dict(schema='deepgengraph.cpsat.problem', version=1, fingerprint='c'*64,
-                    loop=dict(id='test:0', pipeline_eligible=True, pipeline_reason=''),
+                    loop=dict(id='test:0', pipeline_eligible=True, pipeline_reason='',
+                              lower=0, upper=5, step=1),
                     operations=ops, buffers=[], wait_semantics='wait_all',
                     limits=dict(max_stages=2, max_slots=2),
                     dependencies=[dict(src=i, dst=i+1, same_stage=True, kind='ssa')

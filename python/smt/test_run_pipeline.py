@@ -107,6 +107,16 @@ amdhsa.version: [1, 1]
                     self.assertEqual(len(self.commands), index + 1)
                     self.assertEqual(self.output.read_text(), "previous output")
 
+    def test_finite_objective_and_explicit_read_ahead_options_are_forwarded(self):
+        for option in ('--lds-read-ahead', '--no-lds-read-ahead'):
+            self.work = self.root / option[2:]
+            self.commands.clear()
+            self.assertEqual(self.invoke(extra=['--objective=makespan',
+                                                '--trip-count-upper-bound=32', option]), 0)
+            self.assertIn('--objective=makespan', self.commands[1])
+            self.assertIn('--trip-count-upper-bound=32', self.commands[1])
+            self.assertIn(option, self.commands[1])
+
     def test_existing_work_directory_is_rejected_without_using_stale_schedule(self):
         self.work.mkdir()
         (self.work / "schedule.json").write_text("old schedule")

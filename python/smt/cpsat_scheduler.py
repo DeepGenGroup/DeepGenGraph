@@ -56,6 +56,7 @@ from ortools.sat.python import cp_model
 
 try:
     from .cost_model import CostModel
+    from .makespan import add_makespan, resolve_trip_count
     from .register_liveness import add_register_constraint, analyze_registers
     from .register_hint import register_hint
     from .lds_overlap import lds_overlap_rules, check_lds_overlap
@@ -64,6 +65,7 @@ try:
     from .shm_liveness import add_shm_constraint, add_periodic_storage, analyze_shm, dma_transfers, interval_count, lifetime_specs
 except ImportError:
     from cost_model import CostModel
+    from makespan import add_makespan, resolve_trip_count
     from register_liveness import add_register_constraint, analyze_registers
     from register_hint import register_hint
     from lds_overlap import lds_overlap_rules, check_lds_overlap
@@ -197,8 +199,13 @@ def solve(problem: dict, *, mode: str = "intra", costs: CostModel | None = None,
           workers: int = SOLVER_WORKERS, seed: int = SOLVER_RANDOM_SEED,
           require_cross_iteration: bool = False,
           vgpr_budget: int | None = None, register_reserve: int = 32,
-          lds_read_ahead: bool = True) -> dict:
+          lds_read_ahead: bool = False, objective: str = 'makespan',
+          trip_count_upper_bound: int | None = None) -> dict:
     validate_problem(problem)
+    if objective not in ('makespan', 'ii'):
+        raise ValueError('objective must be makespan or ii')
+    trip_count, trip_count_source = resolve_trip_count(
+        problem, trip_count_upper_bound, required=objective == 'makespan')
     if VGPR_LIMIT_PER_THREAD is not None or SGPR_LIMIT_PER_WAVE is not None:
         raise ValueError("legacy VGPR/SGPR constants do not constrain physical allocation; "
                          "use vgpr_budget for the Fragment data-liveness model")
@@ -425,12 +432,40 @@ def solve(problem: dict, *, mode: str = "intra", costs: CostModel | None = None,
         return {'storage': dict(kind='periodic-offsets-v1', period=2, alignment=storage_alignment,
                                 pool_bytes=pool, budget_bytes=lds_budget, buffers=buffers)}
 
-    # Lexicographic solve: modeled period first, then extra LDS, then minimize
-    # changes to source order. Later objectives never trade away a proven period.
-    objectives = [ii, physical_pool if physical_storage else sum(extra_bytes), sum(inversion_terms)]
+    finite = (add_makespan(model, starts, ii, latency,
+              [i for i, cost in enumerate(issue_costs) if cost > 0],
+              trip_count=trip_count, horizon=horizon, stage_limit=stage_limit)
+              if trip_count is not None else {})
+    # Finite loop completion first; II remains a diagnostic and optional
+    # legacy objective. Later objectives never trade away a proven makespan.
+    primary = finite['makespan'] if objective == 'makespan' else ii
+    objectives = [(objective, primary),
+                  ('lds', physical_pool if physical_storage else sum(extra_bytes)),
+                  ('source_order', sum(inversion_terms))]
     hint = (pipeline_hint(problem, occupancy, latency, shm_specs, storage_alignment, lds_budget,
                           vgpr_budget, register_reserve, overlap_rules['edges'])
             if compact_order and physical_storage and stage_limit > 1 else None)
+    hint_policy = ('two_batch' if lds_read_ahead else 'unrestricted') if hint else None
+    if compact_order and physical_storage and stage_limit > 1 and not lds_read_ahead:
+        # Removing a search constraint must not discard a useful starting
+        # schedule. Try the old read-ahead order as a HINT ONLY; none of its
+        # policy edges are added to the optimization model above.
+        seed_rules = lds_overlap_rules(problem, enabled=True)
+        if seed_rules['edges']:
+            overlap_seed = pipeline_hint(problem, occupancy, latency, shm_specs, storage_alignment,
+                                         lds_budget, vgpr_budget, register_reserve, seed_rules['edges'])
+            def hint_score(candidate):
+                hs, hp, period, _ = candidate
+                active = [i for i, cost in enumerate(issue_costs) if cost]
+                if objective == 'ii':
+                    return period
+                if not active or not trip_count:
+                    return 0
+                begin = min(hs[i] * period + hp[i] for i in active)
+                end = max(hs[i] * period + hp[i] + latency[i] for i in active)
+                return (trip_count - 1) * period + end - begin
+            if overlap_seed and (hint is None or hint_score(overlap_seed) < hint_score(hint)):
+                hint, hint_policy = overlap_seed, 'two_batch_seed_only'
     if hint:
         hint_stages, hint_phases, hint_period, hint_offsets = hint
         for var, value in zip(stages + phases, hint_stages + hint_phases):
@@ -481,8 +516,8 @@ def solve(problem: dict, *, mode: str = "intra", costs: CostModel | None = None,
     proof = []
     rejected = 0
     failure_reason = "time budget exhausted without a feasible schedule"
-    for objective in objectives:
-        model.minimize(objective)
+    for objective_name, objective_expr in objectives:
+        model.minimize(objective_expr)
         candidate = None
         while True:
             remaining = deadline - time.monotonic()
@@ -525,13 +560,24 @@ def solve(problem: dict, *, mode: str = "intra", costs: CostModel | None = None,
                 if rejected >= SHM_MAX_POSTCHECK_REJECTIONS:
                     break
                 # Exclude this emitted schedule, not just its timing assignment.
-                # Keep optimizing the current objective; never freeze an invalid II.
+                # Keep optimizing the current objective; never freeze an invalid candidate.
                 model.add_forbidden_assignments(stages + ranks,
                     [stage_values + (phase_values if compact_order else orders)])
                 continue
             candidate = make_schedule(problem, stage_values, orders, mode=mode, status=name,
                              **storage_plan(solver),
-                             model={"period": solver.value(ii) / time_scale,
+                             model={"objective": objective,
+                                    "initial_hint_policy": hint_policy,
+                                    "trip_count": trip_count,
+                                    "trip_count_source": trip_count_source,
+                                    "finite_horizon": {
+                                        "contract": "finite-periodic-v1",
+                                        "scope": "scheduled_loop",
+                                        "formula": "(N-1)*II + max(real_start+latency)-min(real_start)",
+                                        "excludes": "unexported prologue/epilogue work, kernel setup/finish, GPU occupancy",
+                                        **{key + '_ticks': solver.value(var) for key, var in finite.items()}},
+                                    **{key: solver.value(var) / time_scale for key, var in finite.items()},
+                                    "period": solver.value(ii) / time_scale,
                                     "period_ticks": solver.value(ii), "time_scale": time_scale,
                                     "zero_issue_operations": sum(o.get('zero_issue', False) for o in ops),
                                     "storage_handoff_barriers": len(handoffs),
@@ -562,16 +608,16 @@ def solve(problem: dict, *, mode: str = "intra", costs: CostModel | None = None,
                                     "shm_cumulative_intervals": shm_intervals,
                                     "phase": phase_values,
                                     "latency": list(latency), "issue_occupancy": list(occupancy),
-                                    "note": "relative cost optimum, not measured GPU time"})
+                                    "note": "relative cost estimate, not measured GPU time"})
             break
         if candidate is None:
             break
         best = candidate
-        proof.append({"status": name, "objective": solver.objective_value,
+        proof.append({"name": objective_name, "status": name, "objective": solver.objective_value,
                       "bound": solver.best_objective_bound})
         if status != cp_model.OPTIMAL:
             break
-        model.add(objective == solver.value(objective))
+        model.add(objective_expr == solver.value(objective_expr))
     if best is None:
         raise RuntimeError(failure_reason + "; no schedule was written")
     best['model']['shm_postcheck_rejections'] = rejected
@@ -585,6 +631,10 @@ def main(argv=None) -> int:
     parser.add_argument("problem", type=Path)
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("intra", "pipeline"), default="intra")
+    parser.add_argument('--objective', choices=('makespan', 'ii'), default='makespan',
+                        help='primary objective: finite loop makespan (default) or legacy steady II')
+    parser.add_argument('--trip-count-upper-bound', type=int,
+                        help='safe maximum iteration count over all legal bid/tid when bounds are dynamic')
     parser.add_argument("--require-cross-iteration", action="store_true",
                         help="require a real cross-iteration DMA/buffer overlap in pipeline mode")
     parser.add_argument("--baseline", action="store_true", help="capture source order without solving")
@@ -606,8 +656,8 @@ def main(argv=None) -> int:
                         help='Fragment data words plus reserve; defaults to 250 for new exports')
     parser.add_argument('--register-reserve', type=int, default=32,
                         help='words reserved for addresses/backend temporaries (default: 32)')
-    parser.add_argument('--no-lds-read-ahead', action='store_true',
-                        help='disable bounded LDS/MMAC order constraints for comparison')
+    parser.add_argument('--lds-read-ahead', action=argparse.BooleanOptionalAction, default=False,
+                        help='opt in to the old two-batch LDS/MMAC order constraints (default: disabled)')
     args = parser.parse_args(argv)
     try:
         validate_lds_budget(args.lds_budget)
@@ -624,7 +674,8 @@ def main(argv=None) -> int:
             lds_budget=args.lds_budget, dma_capacity=args.dma_capacity, shm_check=args.shm_check,
             require_cross_iteration=args.require_cross_iteration,
             vgpr_budget=args.vgpr_budget, register_reserve=args.register_reserve,
-            lds_read_ahead=not args.no_lds_read_ahead)
+            lds_read_ahead=args.lds_read_ahead, objective=args.objective,
+            trip_count_upper_bound=args.trip_count_upper_bound)
         validate_schedule(problem, result)
         if args.baseline:
             memory = analyze_shm(problem, result, budget=args.lds_budget)

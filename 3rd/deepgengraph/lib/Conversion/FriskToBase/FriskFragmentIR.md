@@ -395,6 +395,38 @@ allocation；其用户只能是唯一 copy、唯一 wait 和 load_frag（或旧 
 验证入口：`test/check_invariant_fragment_retention.py`；完整 attention
 实验和复现脚本位于仓库根目录的 `generated_ir/invariant_fragment_pass/`。
 
+## FragmentScheduling 调度 pipeline
+
+统一入口：`mlir::frisk::buildFragmentSchedulingPipeline(pm, options)`，
+定义在 `Pipeline/FragmentScheduling.h`，传入 module 级别的 `OpPassManager`。
+`MyTest` 在 accumulator fusion 后通过此入口调度，`ThreadTilingTest` 注册了
+`frisk-fragment-scheduling`：
+
+```sh
+ThreadTilingTest input.mlir --verify-each \
+  '--pass-pipeline=builtin.module(frisk-fragment-scheduling{simplify-loop-control=true retain-fragment-words=32})'
+```
+
+内部顺序保持为：
+
+```text
+FriskFragIRReorder（fuseFragmentLoops → prefetchFragments）
+→ VectorSafeCanonicalizer / CSE
+→ SimplifyLoopControl / CSE（可选）
+→ RetainInvariantFragments（可选）
+→ ScheduleAsyncCopies（scheduleAsyncCopies）
+```
+
+`simplify-loop-control` 默认开启，`retain-fragment-words` 默认 0（关闭）。
+CP-SAT 路径设置 `heuristic-scheduling=false`，跳过循环融合、fragment 预取和
+DMA/wait 调度，仍在导出前执行规范化、可选循环简化和 invariant retention。
+原有独立 Pass 入口保留，便于测试各项变换。
+`LowerFriskFragments` 在物理布局落实后仍调用 `scheduleAsyncCopies`，再规划
+存储复用；该物理阶段调度不属于此 fragment pipeline。
+
+回归入口：`test/unittest/check_fragment_scheduling_pipeline.py`，覆盖选项组合、
+原顺序与统一入口的 IR 一致性，以及 CP-SAT 准备阶段的 retention/调度边界。
+
 ## 融合 Pass
 
 工厂函数：`mlir::frisk::createFriskFragIRReorderPass()`。
@@ -407,8 +439,7 @@ MyTest 在 `convert-fragment-to-thread` 前执行。
 convert-friskbase-to-fragment
 canonicalize  # 使用项目 VectorSafeCanonicalizer
 fuse-fragment-accumulator
-frisk-frag-ir-reorder     # typed 融合 + 下一片段预取
-# 可选 simplify-loop-control、retain-invariant-fragments
+frisk-fragment-scheduling # 融合/预取 → 清理 → 可选简化/retention → DMA/wait 调度
 convert-fragment-to-thread
 finalize-thread-tiling
 lower-frisk-fragments     # shared memory 复用、延后展开 K

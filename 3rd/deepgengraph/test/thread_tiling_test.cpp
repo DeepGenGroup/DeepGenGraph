@@ -4,6 +4,7 @@
 #include "deepgengraph/Analysis/RegisterPressure.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
+#include "deepgengraph/Pipeline/FragmentScheduling.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -124,6 +125,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadSoftmaxCvtPackPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadInterleaveMMAChainsPass(); });
   mlir::frisk::registerLegacyThreadSchedulingPipelines();
+  mlir::frisk::registerFragmentSchedulingPipeline();
   mlir::registerPass([] { return mlir::frisk::createThreadElideBackedgeBarrierPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadPrefetchPairedLDSPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadScheduleSoftmaxFragmentsPass(); });

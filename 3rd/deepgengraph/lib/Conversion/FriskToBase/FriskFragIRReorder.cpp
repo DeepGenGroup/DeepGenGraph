@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 // ===========================================================================
 // 本文件包含 4 个 Pass（文件末尾注册）：
+// FragmentScheduling pipeline 在保留规范化、循环简化和 invariant retention
+// 顺序的前提下，统一调用 fragment 循环调度与 DMA/wait 调度。
 //
 // FriskFragIRReorder（frisk-frag-ir-reorder）   优化汇总.py 第 8 项，fragment 阶段
 //   1. tryFuse：把相邻的同边界 fragment 循环融合成一个，直到不动点。
@@ -1117,37 +1119,47 @@ class LowerFriskFragments : public impl::LowerFriskFragmentsBase<LowerFriskFragm
   }
 };
 
+static LogicalResult fuseFragmentLoops(func::FuncOp kernel) {
+  if (failed(normalizeTypedFragmentIR(kernel))) return failure();
+  // Restart after each mutation: nested loop handles and alias caches may
+  // otherwise refer to erased operations. Each successful step removes a loop.
+  // 融合后 IR 变了，所以每次成功都中断遍历，从头重建 AliasAnalysis 再来。
+  // 每次成功都减少一个循环，因此必定终止。
+  bool changed;
+  do {
+    if (failed(normalizeTypedFragmentIR(kernel))) return failure();
+    changed = false;
+    AliasAnalysis aliases(kernel);
+    // a 往后找第一个循环 b，中间只能隔纯计算。
+    kernel.walk<WalkOrder::PreOrder>([&](Loop a) {
+      for (Operation *next = a->getNextNode(); next; next = next->getNextNode()) {
+        if (auto b = dyn_cast<Loop>(next)) {
+          changed = tryFuse(a, b, aliases);
+          break;
+        }
+        if (!isOrdinaryRegisterComputation(next))
+          break;
+      }
+      return changed ? WalkResult::interrupt() : WalkResult::advance();
+    });
+  } while (changed);
+  return success();
+}
+
+static LogicalResult prefetchFragments(func::FuncOp kernel) {
+  // 融合结束后再做一级 lookahead。
+  SmallVector<Loop> loops;
+  kernel.walk<WalkOrder::PostOrder>([&](Loop loop) { loops.push_back(loop); });
+  for (auto loop : loops)
+    pipelineFragments(loop);
+  return normalizeTypedFragmentIR(kernel);
+}
+
 class FriskFragIRReorder : public impl::FriskFragIRReorderBase<FriskFragIRReorder> {
   void runOnOperation() override {
-    if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
-    // Restart after each mutation: nested loop handles and alias caches may
-    // otherwise refer to erased operations. Each successful step removes a loop.
-    // 融合后 IR 变了，所以每次成功都中断遍历，从头重建 AliasAnalysis 再来。
-    // 每次成功都减少一个循环，因此必定终止。
-    bool changed;
-    do {
-      if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
-      changed = false;
-      AliasAnalysis aliases(getOperation());
-      // a 往后找第一个循环 b，中间只能隔纯计算。
-      getOperation().walk<WalkOrder::PreOrder>([&](Loop a) {
-        for (Operation *next = a->getNextNode(); next; next = next->getNextNode()) {
-          if (auto b = dyn_cast<Loop>(next)) {
-            changed = tryFuse(a, b, aliases);
-            break;
-          }
-          if (!isOrdinaryRegisterComputation(next))
-            break;
-        }
-        return changed ? WalkResult::interrupt() : WalkResult::advance();
-      });
-    } while (changed);
-    // 融合结束后再做一级 lookahead。
-    SmallVector<Loop> loops;
-    getOperation().walk<WalkOrder::PostOrder>([&](Loop loop) { loops.push_back(loop); });
-    for (auto loop : loops)
-      pipelineFragments(loop);
-    if (failed(normalizeTypedFragmentIR(getOperation()))) return signalPassFailure();
+    if (failed(fuseFragmentLoops(getOperation())) ||
+        failed(prefetchFragments(getOperation())))
+      signalPassFailure();
   }
 };
 } // namespace

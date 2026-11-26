@@ -22,7 +22,8 @@ def problem():
                 reads=[i - 2] if i >= 2 else [], writes=[i] if i < 2 else [],
                 pipeline_anchor=True, opaque=False) for i in range(4)]
     return dict(schema='deepgengraph.cpsat.problem', version=1, fingerprint='a' * 64,
-                loop=dict(id='test:0', pipeline_eligible=True, pipeline_reason=''),
+                loop=dict(id='test:0', pipeline_eligible=True, pipeline_reason='',
+                          lower=0, upper=5, step=1),
                 operations=ops, wait_semantics='wait_all', limits=dict(max_stages=2, max_slots=2),
                 dependencies=[dict(src=i, dst=i + 2, kind='raw', same_stage=True) for i in (0, 1)],
                 buffers=[dict(id=i, bytes=4, memory_space=3, type='memref<1xf32, 3>',

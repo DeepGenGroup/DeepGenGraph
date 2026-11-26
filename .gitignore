@@ -1,2 +1,4 @@
 *.pyc
 3rd/deepgengraph/.cache/
+generated_ir/
+

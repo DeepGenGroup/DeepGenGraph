@@ -17,6 +17,7 @@
 #include "deepgengraph/Dialect/Frisk/Transforms/Passes.h"
 #include "deepgengraph/Dialect/Frisk/Utils/Utils.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
+#include "deepgengraph/Pipeline/FragmentScheduling.h"
 #include "deepgengraph/Pipeline/ScheduleJSON.h"
 #include "deepgengraph/Dialect/TL/IR/TilelangDialect.h"
 #include "deepgengraph/Dialect/TL/Transforms/Passes.h"
@@ -1238,32 +1239,15 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddFuncPass(frisk::createFuseFragmentAccumulatorPass());
   llvm::outs() << "\n---- after fragment-level fuse-fragment-accumulator -----\n";
   llvm::outs().flush(); src->dump();
-  if (!cpsat.enabled()) AddFuncPass(frisk::createFriskFragIRReorderPass());
-  AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
-  AddPass(mlir::createCSEPass());
-  llvm::outs() << "\n---- after fragment-level frisk-frag-ir-reorder -----\n";
+  frisk::FragmentSchedulingOptions fragmentScheduling;
+  fragmentScheduling.heuristicScheduling = !cpsat.enabled();
+  fragmentScheduling.simplifyLoopControl = simplifyLoopControl;
+  fragmentScheduling.retainFragmentWords = retainFragmentWords;
+  PassManager fragmentPM(ctx.get());
+  frisk::buildFragmentSchedulingPipeline(fragmentPM, fragmentScheduling);
+  if (failed(fragmentPM.run(src->getOperation()))) return 1;
+  llvm::outs() << "\n---- after frisk-fragment-scheduling -----\n";
   llvm::outs().flush(); src->dump();
-  // Specialize typed carriers before retention; physical storage is still deferred.
-  if (simplifyLoopControl) {
-    AddFuncPass(mlir::pipeline::createSimplifyLoopControlPass());
-    AddPass(mlir::createCSEPass());
-    llvm::outs() << "\n---------- after frisk-simplify-loop-control ---------\n";
-    llvm::outs().flush(); src->dump();
-  }
-
-  // These transformations precede export/identity assignment. Invariant
-  // retention changes the work graph, not an already imported schedule; its
-  // persistent values are charged by the Fragment register-liveness model.
-  if (retainFragmentWords) {
-    auto retain = frisk::createRetainInvariantFragmentsPass();
-    if (failed(retain->initializeOptions(
-            "max-words=" + std::to_string(retainFragmentWords),
-            [](const llvm::Twine &message) { llvm::errs() << message << '\n'; return failure(); })))
-      return 1;
-    AddFuncPass(std::move(retain));
-    llvm::outs() << "\n---- after frisk-retain-invariant-fragments -----\n";
-    llvm::outs().flush(); src->dump();
-  }
 
   // Schedule against fragment SHM reads/writes and task completion before
   // lowering. Final packing/scheduling below recomputes physical lifetimes.
@@ -1279,8 +1263,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs() << "\n---------- after cpsat-fragment-schedule ---------\n";
     llvm::outs().flush(); src->dump();
     if (cpsatStopAfter) return 0;
-  } else {
-    AddFuncPass(frisk::createScheduleAsyncCopiesPass());
   }
   AddFuncPass(frisk::createAnalyzeShmLivenessPass());
   llvm::outs() << "\n---- after fragment-level optimization -----\n";

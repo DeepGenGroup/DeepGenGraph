@@ -214,9 +214,14 @@ class SchedulerTests(unittest.TestCase):
                 else:
                     self.assertTrue(p["loop"]["pipeline_eligible"], p["loop"])
                     schedule = solve(p, mode="pipeline", time_limit=5)
-                    self.assertTrue(any(b["slots"] == 2 for b in schedule["buffers"]))
+                    if trips == 1:
+                        # With a finite objective, a one-trip loop has no
+                        # steady-state benefit to offset extra buffering.
+                        self.assertTrue(all(b['slots'] == 1 for b in schedule['buffers']))
+                    else:
+                        self.assertTrue(any(b["slots"] == 2 for b in schedule["buffers"]))
                 after = self.apply(source, schedule)
-                if trips:
+                if trips > 1:
                     self.assertIn("pipeline.slots = 2", after)
                     self.assertEqual(after.count("frisk.alloc_buffer"), 3)
                 cpu.execute_cpu(after, self.work, f"numeric-{trips}")

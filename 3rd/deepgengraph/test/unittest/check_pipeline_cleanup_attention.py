@@ -53,8 +53,12 @@ def check(work, tool, llvm, existing):
         size = sum(int(n) * {"i8": 1, "half": 2, "float": 4}[ty] for n, ty in storages)
         assert size == (32768 if loop else 40960), (name, size)
         if loop:
-            specialized = module_after(
-                diagnostic, "---------- after frisk-simplify-loop-control ---------")
+            # New exports dump the unified pipeline; accept historical logs
+            # for --existing as well.
+            marker = "---- after frisk-fragment-scheduling -----"
+            if marker not in diagnostic:
+                marker = "---------- after frisk-simplify-loop-control ---------"
+            specialized = module_after(diagnostic, marker)
             assert "pipeline.scheduled" not in specialized
             assert "SimplifyLoopControl: 1 small loops specialized" in diagnostic
         subprocess.run([llvm / "llvm-as", out, "-o", work / (name + ".bc")], check=True)

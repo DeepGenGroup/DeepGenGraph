@@ -51,7 +51,7 @@ class LDSOverlapTests(unittest.TestCase):
         p['buffers'] = [dict(id=0, name='lds', memory_space=3, bytes=16,
                              rotatable=False, users=[0, 2, 4], readers=[0, 2, 4], writers=[])]
         s = solve(p, costs=CostModel(shm_reg=9), vgpr_budget=8,
-                  register_reserve=0, time_limit=5)
+                  register_reserve=0, time_limit=5, lds_read_ahead=True)
         self.assertTrue(s['model']['lds_read_ahead']['check']['within_rules'])
         self.assertLessEqual(s['model']['register_liveness']['estimated_peak_words'], 8)
         positions = {o['id']: o['order'] for o in s['operations']}
@@ -60,6 +60,24 @@ class LDSOverlapTests(unittest.TestCase):
 
     def test_explicit_disable_preserves_original_search_space(self):
         self.assertEqual(lds_overlap_rules(self.fixture(), enabled=False)['edges'], [])
+
+    def test_default_allows_three_reads_while_preserving_register_budget(self):
+        p = self.fixture()
+        p['loop']['upper'] = 1
+        p['buffers'] = [dict(id=0, memory_space=3, bytes=16, rotatable=False,
+                             users=[0, 2, 4], readers=[0, 2, 4], writers=[])]
+        options = dict(costs=CostModel(shm_reg=9), vgpr_budget=12,
+                       register_reserve=0, time_limit=5)
+        free = solve(p, **options)
+        bounded = solve(p, lds_read_ahead=True, **options)
+        self.assertFalse(free['model']['lds_read_ahead']['rules']['enabled'])
+        self.assertEqual(free['model']['lds_read_ahead']['rules']['edges'], [])
+        order = {o['id']: o['order'] for o in free['operations']}
+        self.assertLess(max(order[i] for i in (0, 2, 4)), min(order[i] for i in (1, 3, 5)))
+        self.assertLess(free['model']['makespan'], bounded['model']['makespan'])
+        self.assertLessEqual(free['model']['register_liveness']['estimated_peak_words'], 12)
+        limited = solve(p, **dict(options, vgpr_budget=8))
+        self.assertLessEqual(limited['model']['register_liveness']['estimated_peak_words'], 8)
 
 
 if __name__ == '__main__':

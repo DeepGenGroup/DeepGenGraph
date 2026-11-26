@@ -332,6 +332,10 @@ struct Candidate {
 
 class RetainInvariantFragments
     : public impl::RetainInvariantFragmentsBase<RetainInvariantFragments> {
+public:
+  using Base::Base;
+
+private:
   void runOnOperation() override {
     if (!maxWords || getOperation().isExternal() ||
         !getOperation()->hasAttr("thread_num")) return;
@@ -374,5 +378,10 @@ class RetainInvariantFragments
 } // namespace
 std::unique_ptr<Pass> createRetainInvariantFragmentsPass() {
   return std::make_unique<RetainInvariantFragments>();
+}
+std::unique_ptr<Pass> createRetainInvariantFragmentsPass(unsigned maxWords) {
+  RetainInvariantFragmentsOptions options;
+  options.maxWords = maxWords;
+  return std::make_unique<RetainInvariantFragments>(options);
 }
 } // namespace mlir::frisk

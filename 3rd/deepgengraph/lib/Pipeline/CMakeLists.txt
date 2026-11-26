@@ -3,6 +3,7 @@ add_deepgengraph_library(FriskPipeline
     ScheduleJSON.cpp
     AutoPipeline.cpp
     SimplifyLoopControl.cpp
+    FragmentScheduling.cpp
 
     DEPENDS PipelineIncGen
 
@@ -19,6 +20,7 @@ add_deepgengraph_library(FriskPipeline
     MLIRMemRefDialect
     FriskIR
     DeepgengraphAnalysis
+    FriskToBase
 )
 
 add_executable(FriskPipelineTest

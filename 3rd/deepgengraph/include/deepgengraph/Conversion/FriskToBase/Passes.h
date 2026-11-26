@@ -18,6 +18,7 @@ std::unique_ptr<mlir::Pass> createConvertFragmentToThreadIRPass();
 std::unique_ptr<mlir::Pass> createFinalizeThreadTilingPass();
 std::unique_ptr<mlir::Pass> createFriskFragIRReorderPass();
 std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass();
+std::unique_ptr<mlir::Pass> createRetainInvariantFragmentsPass(unsigned maxWords);
 std::unique_ptr<mlir::Pass> createLowerFriskFragmentsPass();
 bool parseVDoubleBufferOption(llvm::StringRef argument, bool &enabled, bool &consumed);
 std::unique_ptr<mlir::Pass> createPackSharedMemoryPass();

@@ -19,6 +19,7 @@ MyTest：重新验证方案 → 同迭代移动，或 PipelineSchedule 展开与
 | `run_pipeline.py` | 一键导出 → CP-SAT 求解 → MyTest 验证导入并完整 lowering |
 | `cpsat_scheduler.py` | CLI、`solve(problem, ...)`、整数规划与目标函数 |
 | `cost_model.py` | 可替换的相对耗时估计 |
+| `makespan.py` | 有限 N 的周期调度完成时间、常量次数推导与动态次数上界 |
 | `shm_liveness.py` | 按候选顺序计算 SHM 生命周期/峰值，生成 cumulative 约束 |
 | `schedule_schema.py` | JSON 读写、结构及调度合法性检查 |
 | `capture_baselines.py` | 保存最佳 causal/noncausal 配置的 Base 原始顺序，验证回放 |
@@ -80,19 +81,24 @@ LDS 硬上限默认 **16 KiB（16384 字节）**，用 `--lds-budget 32768` 等�
 
 ### Fragment 展开与调度所有权
 
-CP-SAT 的第一优化目标是相对成本模型中的稳态 II，随后依次优化 LDS 占用和对源顺序
-的改动；只有前一个目标已证明最优才进入下一个目标。`FEASIBLE` 不表示最优 II。
-这不是整个 kernel 的运行时间模型，不计完整 prologue/epilogue、实际 occupancy 或
-精确的目标 GPU 时延；必须用目标机器的数值和性能测试验收。
+CP-SAT 的第一优化目标默认是有限 N 的周期调度 makespan，随后依次优化 LDS 占用和对源顺序
+的改动；只有前一个目标已证明最优才进入下一个目标。`FEASIBLE` 不表示最优 makespan。
+`--objective ii` 保留旧稳态 II 目标用于对照。makespan 覆盖所选循环已导出的执行节点和结果完成延迟，
+包含 stage/phase 导致的填充与排空跨度；不计 lowering 额外插入但未导出的边界工作、循环外
+setup/finish、实际 occupancy 或精确的目标 GPU 时延，不能作为整个 kernel 的实测运行时间。
 
-对于有寄存器活跃期信息的 Fragment LDS→MMAC 链，默认启用有界 read-ahead 顺序约束：
+Fragment LDS→MMAC 链默认不再施加固定两批 read-ahead 顺序约束：读取可以在依赖、寄存器、
+LDS 和 DMA 资源约束允许的范围内提前。`--lds-read-ahead` 可显式启用旧策略做对照：
 下一批 LDS 读在当前批消费者前发出，当前批 MMAC 完成发射后才能打开第三批读取。
 小型 `load_frag` 两个一批，矩阵读一个一批；这是发射顺序约束，不会用虚拟 idle 或
 零成本 view 假装隐藏延迟。规则遇到数据/地址依赖环或不支持的消费者时跳过该组。
 所有方案仍须满足寄存器与 LDS 容量硬约束，预算不足时不会静默放宽上限。
 规则保存在 `schedule.json` 的 `model.lds_read_ahead` 中，并独立检查最终导出顺序。
-可使用 `--no-lds-read-ahead` 关闭规则做对照；求解器和 `run_pipeline.py` 均支持。
+`--no-lds-read-ahead` 仍兼容，等同于当前默认值；求解器和 `run_pipeline.py` 均支持两个选项。
 这些约束是可调的调度策略，会缩小搜索空间，不能保证在所有 GPU/形状上更快。
+关闭规则后，大图仍会比较无约束构造和旧预读顺序两种初始提示，按当前主目标选择较好者。
+后者只提供 `add_hint` 初值，不向优化模型添加两批策略边；最终顺序可以超出两批。
+`model.initial_hint_policy` 记录提示来源，`model.lds_read_ahead.rules.enabled/edges` 才表示实际策略约束。
 
 MyTest 的 CP-SAT 路径自动完整展开所选 mainloop 内所有静态 affine 循环，保留外层
 mainloop。不再使用 16 次或 2048 新增操作阈值；动态/不支持的内层循环明确报错。
@@ -176,7 +182,7 @@ python python/smt/run_pipeline.py /path/to/input.mlir \
 `base.mlir` 是兼容旧文件名的 **Fragment 调度前快照**，`scheduled.mlir` 是调度后快照。
 Fragment 图不再限制 256 个节点；大图使用 NoOverlap/phase 顺序编码，避免成对排序变量的
 平方增长。仍逐项检查 SSA、读写别名、DMA 完成和 LDS 生命周期；不会用估计时间代替真实 wait。
-大图的第三目标是相对源顺序时间位置的偏移，小图仍使用逆序对数；两者均在 period/存储大小之后。
+大图的第三目标是相对源顺序时间位置的偏移，小图仍使用逆序对数；两者均在主目标/存储大小之后。
 
 `pipeline` 仍允许全 stage 0。非零 stage 必须对应实际缓冲版本重叠，不再仅因分配操作被提前而展开流水。
 `--require-cross-iteration` 进一步排除全 stage 0，要求至少一个 buffer 使用多个槽；它只适用于
@@ -305,10 +311,40 @@ MLIR 重新分析当前 IR，验证 fingerprint、全部 ID、依赖、锚点及
 同步 op 占用串行 issue 流，DMA 在 issue 后异步持续；wait 的 stall 来自 completion 约束。
 模型包含周期边界上的 DMA 并发容量和后端 wait-all 行为。
 
-依次最小化：估计稳态 period → 物理池大小（旧保守路径为新增 SHM 字节数）→ 相对原始顺序的变化。
+默认依次最小化：有限 N 的 makespan → 物理池大小（旧保守路径为新增 SHM 字节数）→ 相对原始顺序的变化。
 每个目标证实最优后才固定它、继续下一目标；超时但已有可行解时返回 `FEASIBLE`。
-`model.lexicographic_solves` 保存各层目标的状态和 bound。
+`model.lexicographic_solves` 保存各层目标的 name、状态和 bound（时间目标使用整数 ticks）。
 这些相对权重足以探索方案，但 `OPTIMAL` 只代表该成本模型内的最优，不代表实际 GPU 最快。
+
+设真实执行节点的逻辑起点 `a[v] = stage[v] * II + phase[v]`，结果完成延迟为 `L[v]`：
+
+```text
+D = max(a[v] + L[v]) - min(a[v])
+T(N) = (N - 1) * II + D
+```
+
+max/min 只覆盖有真实 issue 成本的节点，不让零成本 alloc/view 等表示节点决定计时边界；
+异步任务的末尾结果完成延迟仍计入。N=0 或全为零成本节点时 T=0。
+这是有限次周期时刻表的完成时间，不是简单的 `N * II`，允许较大 II 换取更短的跨度 D。
+现有周期资源约束保持不变；尚未独立压缩物化后 prologue/epilogue 的执行时刻表。
+
+常量循环从 `loop.lower/upper/step` 自动推导 `N=max(0,ceil((upper-lower)/step))`。
+动态次数使用 `loop.trip_count_upper_bound` 或 `--trip-count-upper-bound N`，该值须覆盖
+所有合法 bid/tid；不能把非单调表达式直接代入最大的 ID。当前导出器只自动提供常量边界，
+动态 case 需调用者提供已知上界；缺少上界会报错，不会静默退回 II。若常量 N 已知则优先使用精确 N，
+并拒绝比它更小的上界。次数上界仅用于成本目标，不会放宽动态循环的跨迭代物化限制。
+
+输出记录 `model.objective/trip_count/trip_count_source/makespan/iteration_span`，
+`model.finite_horizon` 保存公式、适用范围及整数 ticks。`period` 仍保留为诊断值。
+已知 N 时选择 `--objective ii` 也会记录 makespan，便于在相同成本口径下对照。
+
+```bash
+python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
+  --mode pipeline --objective makespan --time-limit 120
+# 仅当循环次数动态、且已知合法 bid/tid 范围内的最大次数为 32 时：
+python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
+  --objective makespan --trip-count-upper-bound 32
+```
 
 `--lds-budget` 现在约束生命周期峰值。MLIR 导出“自有、单次完整写入、不逃逸”的证据，
 Python 在每个候选方案上重新计算 `begin = stage(writer)*N + order(writer)`，
@@ -351,7 +387,7 @@ python python/smt/run_pipeline.py input.mlir --provenance baseline/provenance.js
 python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
   --lds-budget 65536 --shm-check constraint
 
-# 大模型：先最小化 II，再检查内存；拒绝超限的 stage/order 组合后继续求解。
+# 大模型：先优化主目标，再检查内存；拒绝超限的 stage/order 组合后继续求解。
 python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
   --lds-budget 65536 --shm-check postcheck
 ```
@@ -361,7 +397,7 @@ python python/smt/cpsat_scheduler.py problem.json -o schedule.json \
 `sum` 保留旧版 `sum(bytes * slots)` 模型，方便对照。
 小图 post-check 使用 stage/order 的 no-good cut；大图使用 stage/phase，可能重试同一顺序的
 不同时间安排，因此大图优先使用 `constraint`；
-只有通过内存检查的候选才会固定 II 并进入次级目标。
+只有通过内存检查的候选才会固定主目标并进入次级目标。
 耗尽总时间或 `SHM_MAX_POSTCHECK_REJECTIONS` 时，返回已有合法方案；若一个也没有则非零退出，
 不会把超限方案作为可用解输出。达到重试限额不等于证明不存在合法解。
 

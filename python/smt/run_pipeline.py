@@ -69,6 +69,8 @@ def main(argv=None):
                         help="legacy Base compatibility; ignored by MyTest Fragment full unrolling")
     # None leaves the solver's defaults as the single source of truth.
     parser.add_argument("--mode", choices=("intra", "pipeline"))
+    parser.add_argument('--objective', choices=('makespan', 'ii'))
+    parser.add_argument('--trip-count-upper-bound', type=int)
     parser.add_argument("--require-cross-iteration", action="store_true",
                         help="require actual cross-iteration overlap; needs --mode=pipeline")
     parser.add_argument("--time-limit", type=float)
@@ -76,7 +78,7 @@ def main(argv=None):
     parser.add_argument("--scale-work", action="store_true")
     parser.add_argument('--vgpr-budget', type=int, default=250)
     parser.add_argument('--register-reserve', type=int, default=32)
-    parser.add_argument('--no-lds-read-ahead', action='store_true')
+    parser.add_argument('--lds-read-ahead', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--llc', type=Path,
                         help='optional target-compatible llc; compile and enforce physical resources before publishing IR')
     parser.add_argument('--mcpu', help='target GPU for --llc, e.g. gfx936')
@@ -90,6 +92,8 @@ def main(argv=None):
         validate_lds_budget(args.lds_budget)
         if args.vgpr_budget <= 0 or args.register_reserve < 0:
             raise ValueError('VGPR budget must be positive and register reserve nonnegative')
+        if args.trip_count_upper_bound is not None and args.trip_count_upper_bound < 0:
+            raise ValueError('trip count upper bound must be nonnegative')
         if bool(args.llc) != bool(args.mcpu):
             raise ValueError('--llc and --mcpu must be supplied together')
         source, mytest = args.input.resolve(), args.mytest.resolve()
@@ -111,7 +115,7 @@ def main(argv=None):
         solver_args = []
         for option in ("mode", "time-limit", "max-stages", "max-slots", "lds-budget",
                        "dma-capacity", "workers", "seed", "shm-check", "costs",
-                       "vgpr-budget", "register-reserve"):
+                       "vgpr-budget", "register-reserve", "objective", "trip-count-upper-bound"):
             value = getattr(args, option.replace("-", "_"))
             if value is not None:
                 if isinstance(value, Path):
@@ -119,8 +123,8 @@ def main(argv=None):
                 solver_args.append(f"--{option}={value}")
         if args.scale_work:
             solver_args.append("--scale-work")
-        if args.no_lds_read_ahead:
-            solver_args.append('--no-lds-read-ahead')
+        if args.lds_read_ahead is not None:
+            solver_args.append('--lds-read-ahead' if args.lds_read_ahead else '--no-lds-read-ahead')
         if args.require_cross_iteration:
             solver_args.append("--require-cross-iteration")
         if args.work_dir:
