@@ -1,5 +1,5 @@
 # =============================================================================
-# Attention 优化手段说明（2026-11-25 更新，主线为 non-causal，另列 causal 扩展）
+# Attention 优化手段说明（2026-11-27 更新，主线为 non-causal，另列 causal 扩展）
 # =============================================================================
 #
 # 这是用 Python 语法写的“说明书”，不是可执行的 kernel。
@@ -16,19 +16,13 @@
 #   输入 (B,H,S,D) = (1, 32, 4096, 128)，FP16，无 mask。
 #   BM = BN = 128，D = 128，BK = 32；256 线程，每个 workgroup 4 个 wave。
 #
-# 当前实现核对至 4829621c，并包含工作区新增的 QK 交错 / MMA guard 参数；
-# 入口为 3rd/deepgengraph/test/test_src.cpp。
+# 当前 pipeline 对应源码 0efeef4e，以 3rd/deepgengraph/test/test_src.cpp 的 MyTest 入口为准。
 # 历史实测数字来自 测试数据分析/1104.md、pmc_test.log 和对应实验目录。
 # “单步”= 上一版耗时 / 这一版耗时。组合实测不能拆成单个 Pass 的收益。
 # 历史计时不代表当前实现的单项收益；本次只更新说明，不重新做 GPU 测量。
-# 本次更新：第 36 项在分块前后各运行一次；第 33 项迁至 ThreadIR；
-# 第 26 项补充跨 packet 的 PV 链匹配及 guard 策略，新增第 41 项 QK 链交错；
-# 补充 causal 自动流水的出口等待、Q/KV LDS 复用和 MyTest 命名参数。
-# 第 34/35 项仍在 ThreadIR；转换两端的生命周期锚点由 ROCm lowering 生成。
-# 删除旧 tensor 循环优化后保留第 2~41 项，共 40 个不同编号；编号不是执行序号。
-# 第 36 项在表中出现两次，表示同一 Pass 的两个执行位置。
-# 26/41 已合为通用 MMA 链交错；29/31 已合为通用 LDS 配对预取。
-# 表中编号保留，分别描述通用 Pass 的不同来源/窗口配置；旧命令行参数作为兼容映射。
+# 第 4 部分按执行顺序排列，沿用历史优化编号。27/32 在 Frisk Base 规划 DMA，
+# 15 在 ThreadIR 验证并落实。29/31 在 FragmentIR 选择 LDS 预取窗口，
+# 42 在 ThreadIR 配对物理读取并保护 MMA 锚点。CP-SAT 分支的位置和开关见表下注释。
 # 表中 32 / 4 / 8 / rtz 等是说明用调优值；各开关默认值在第 4 部分另列。
 #
 # 证据程度：第 5 部分的 before / after 是对 IR 改动的概括，来自 Pass 说明和源码；
@@ -112,8 +106,8 @@ def attention_online_softmax(Q, K, V, query_tile):
 # 第 3 部分：当前调度主线的完整程序（未开启第 34/35/41 项）
 # =============================================================================
 # 方括号是优化名，对应第 5 部分的同名步骤。这里关注“一个 block 的执行顺序”。
-# LDS/DMA 布局在 block → fragment 时联合选择；槽位、发射时机和跨轮预取由
-# LowerFriskFragments 内的 SharedMemoryPlan.execution 决定，LLVM 负责发射已定方案。
+# AutoPipeline 在 Frisk Base 标出 V 的逻辑槽位及跨轮 K0 发射位置；
+# block → fragment 时选择 LDS/DMA 布局。LowerFriskFragments 验证生命周期和物理偏移后落实 DMA。
 # 下面写的是本配置规划成功的结果；不能把两个固定 8 KiB 槽当作所有输入的默认布局。
 # 开启第 34/35 项后的 softmax 算法见 lazy_base_after：保留这里的 DMA/LDS 调度，
 # 将 QK 初值和 softmax 状态更新换成滞后基准，并可把 P 转换换成 softmax_cvt_pack_after。
@@ -172,65 +166,84 @@ def final_program_one_block(bx, by):
 # =============================================================================
 # 第 4 部分：优化步骤总表（实际执行顺序，含 Pass 内部阶段）
 # =============================================================================
-# 位置依据 test_src.cpp、FriskBaseToTheadlevelIR_plan2.cpp 和 LowerPipe.cpp。
+# 入口见 test/test_src.cpp；fragment 子流水见 lib/Pipeline/FragmentScheduling.cpp；
+# 第 6 项内的顺序见 FriskBaseToTheadlevelIR_plan2.cpp；secondLowering 见 LowerPipe.cpp。
 # 字段：稳定编号, 当前 Pass / 内部步骤, 阶段 / 所属 Pass, 调优取值, 历史收益 / 说明。
-# 第 6 项下的 14/28/37 和第 15 项下的 27/32 是内部阶段，不再次独立运行。
+# 同一 Pass 内的步骤按实际位置列出。“启发式”指未启用 CP-SAT 的 MyTest 路径。
 
 PIPELINE = [
     # ---- tensor / block IR：算法结构 -------------------------------------
+    # DeepgenGraphSimplify / AddKernelargPermuteInfo 后，入口在同一 PassManager 追加 ConvertScfForOp
+    # 并再次运行，再清空并运行 MemspaceAnalyze。随后 ConvertKernelOpToFrisk → ConvertMemAndCalcOp
+    # → ReconcileUnrealizedCasts → FriskFuseBlockOps → ConvertFriskToBase。
     (36, "FriskOpFuse（分块前）",            "block",    "allow-reassociation=(math!=strict)", "先融合完整 PV 的 alpha*O 初值"),
     (40, "TileAttention",                    "block",    "QK=32，VO=32；math!=strict 可切 QK", "真实切加载/分配；无 GPU 单项计时"),
+    # --pipeline=1 在此标注手动 stage/order，第 5 项后才运行 PipelineSchedule。
     (36, "FriskOpFuse（分块后）",            "block",    "同上",                          "补充分块暴露的融合机会"),
     (2,  "ReorderWorkgroups",                "block",    "--workgroup-group-size=32",     "1.0645x"),
-    (3,  "NormalizeAttentionKLayout",        "block",    "默认",                          "-"),
-    (4,  "PromoteGlobalToSharedAsync",       "block",    "FRISK_GM_TO_SHM_MODE=async",    "-"),
+    (3,  "NormalizeAttentionKLayout",        "block",    "Attn_p2 缺失或无 frisk.arg_layouts", "显式布局保留输入 ABI"),
+    (4,  "PromoteGlobalToSharedAsync",       "block",    "FRISK_GM_TO_SHM_MODE 非 legacy", "-"),
+    # 启发式路径运行一次 AutoPipeline。27/32 任一开启时先尝试展开标记的内循环，
+    # 然后处理显式 pipeline_hint，再按开关生成下面两种 DMA 计划。
+    (27, "AutoPipeline（V 双缓冲）",         "block",    "--v-double-buffer=1",           "历史: 1.0306x"),
+    (32, "AutoPipeline（跨轮 K0 预取）",     "block",    "--cross-bn-k0=1",               "历史: 1.0168x（含 sum anchor）"),
     (5,  "PromoteGemmMatrixLoads",           "block",    "默认",                          "-"),
+    # CSE → PipelineSchedule（--pipeline=1）→ LowerFriskAsyncToSync（copy mode 为 sync）。
     (6,  "ConvertFriskBaseToFragmentIR",     "转 fragment", "--wmma-layout=b-permute --swizzle-k=8:6", "-"),
     (14, "sinkLoopLayoutConversions",        "block，第 6 项内部", "自动",                    "历史 causal: 1.1655x（含 25）"),
     (28, "SharedMemoryPlan.layout",          "block，第 6 项内部", "--shared-copy-constraints=1:8:9:3", "历史 K DMA/swizzle: 1.0149x"),
     (37, "SinkWaitBufferReady",              "block，第 6 项内部", "自动",                    "延迟 readiness；无单项计时"),
     # ---- fragment IR：计算还是语义操作，物理存储未定 ----------------------
+    # 转换后先做 VectorSafeCanonicalizer，再融合剩余的 fragment 累加。
     (7,  "FuseFragmentAccumulator",          "fragment", "默认",                          "-"),
-    (8,  "FriskFragIRReorder",               "fragment", "默认",                          "-"),
+    # frisk-fragment-scheduling 子流水从这里开始。
+    (8,  "FriskFragIRReorder",               "fragment", "启发式",                        "-"),
+    # VectorSafeCanonicalizer → CSE；第 9 项启用时其后再做一次 CSE。
     (9,  "SimplifyLoopControl",              "fragment", "--simplify-loop-control=1",     "-"),
     (10, "RetainInvariantFragments",         "fragment", "--retain-fragment-words=32",    "causal: 1.08~1.10x/档"),
-    (11, "ScheduleAsyncCopies",              "fragment", "默认",                          "-"),
+    (29, "PrefetchFragmentLDS（普通窗口）",  "fragment", "--k-lds-prefetch=8",            "历史 MyTest 路径: 1.0272x"),
+    (31, "PrefetchFragmentLDS（归约窗口）",  "fragment", "--k-tail-prefetch=4",           "历史: 1.0098x"),
+    # 29/31 合用一次启发式 Pass，任一距离非零即运行。
+    (11, "ScheduleAsyncCopies",              "fragment", "启发式；子流水末尾",            "-"),
+    # CP-SAT 在此调用 processScheduleJSON；--cpsat-stop-after=1 成功后直接返回。
     (12, "AnalyzeShmLiveness",               "fragment", "默认（只分析，不改 IR）",        "-"),
+    # --analyze-register-pressure=1 在此分析 fragment 寄存器压力。
     # ---- thread IR：reduce/布局变换展开为通信，确定物理 LDS ---------------
     (13, "ConvertFragmentToThreadIR",        "thread",   "默认",                          "-"),
-    (15, "LowerFriskFragments",              "thread",   "默认",                          "-"),
-    (27, "SharedMemoryPlan.execution（双缓冲）", "thread，第 15 项内部", "--v-double-buffer=1", "历史: 1.0306x"),
-    (32, "SharedMemoryPlan.execution（跨轮预取）", "thread，第 15 项内部", "--cross-bn-k0=1", "历史: 1.0168x（含 sum anchor）"),
-    (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=true",     "-"),
+    # FinalizeThreadTiling 移除 to/from_threadtile 桥接，随后 VectorSafeCanonicalizer → CSE。
+    (15, "LowerFriskFragments",              "thread",   "启发式路径验证 27/32；CP-SAT 保留调度", "落实物理 LDS 分配与同步"),
+    # 存储/循环外提与规范化 → ThreadLevelIRLegalize → LICM、buffer hoisting 等；
+    # 启发式路径额外做 affine loop fusion，随后 affine scalar replacement → 第 16 项。
+    (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=(reorder && 启发式)", "-"),
     (17, "SimplifyBoundedAffine",            "thread",   "--simplify-bounded-affine=1",   "组合实测，见表后说明"),
     (24, "CanonicalizeThreadLDSAddresses",    "thread",   "swizzle 自动开启；预取还会重跑", "历史 causal: 1.0233x"),
     (19, "ApproximateThreadMath",            "thread",   "math=approx 或 mmac-recip",    "倒数复用；native exp2 属于 lowering"),
     (20, "ThreadMaskAddBypass",              "thread",   "--mask-add-bypass=approx（本 case 无 mask）", "-"),
     (21, "ThreadLocalReduction",             "thread",   "--local-reduce=approx",         "历史 causal: 1.0347x（含 20、22）"),
     (22, "ThreadDeferLaneSum",               "thread",   "--defer-lane-sum=approx",       "同上"),
-    (26, "ThreadInterleaveMMAChains（matrix）",               "thread",   "--pv-interleave=4 --pv-guard-group=-1", "历史: 1.0043x（接近噪声）"),
-    (29, "ThreadPrefetchPairedLDS",           "thread",   "--k-lds-prefetch=8",            "历史 MyTest 路径: 1.0272x"),
-    (41, "ThreadInterleaveMMAChains（lds）",               "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32", "CPU 验证；无 GPU 计时"),
+    # 启发式路径且 29/31 任一距离非零时，先重跑 24，再进行物理配对。
+    (42, "ThreadPrefetchPairedLDS",          "thread",   "window=fragment distance=0",    "落实 29/31 的读对及调度锚点"),
+    (26, "ThreadInterleaveMMAChains（matrix）", "thread", "--pv-interleave=4 --pv-guard-group=-1", "历史: 1.0043x（接近噪声）"),
+    # qk-interleave 非零时单独重跑 24，为第 41 项提供物理地址证明。
+    (41, "ThreadInterleaveMMAChains（lds）", "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32", "CPU 验证；无 GPU 单项计时"),
     (30, "ThreadScheduleSoftmaxFragments",    "thread",   "--softmax-fragments=pv",        "历史: 1.0162x"),
-    (31, "ThreadPrefetchPairedLDS（reduction 窗口）",       "thread",   "--k-tail-prefetch=4",           "历史: 1.0098x"),
     (33, "ThreadElideBackedgeBarrier",        "thread",   "--elide-backedge-barrier=1",    "历史组合实测；当前无迁移单项计时"),
+    # LowerFriskAsyncCopy → LowerGPUShuffleToROCDL → VectorSafeCanonicalizer → CSE，随后外提 wave setup。
     (18, "HoistWaveInvariants",              "thread + ROCDL/LLVM dialect", "--hoist-lds-bases=1 --hoist-lane-shuffles=1", "组合实测"),
     (34, "ThreadLazySoftmaxBase",             "thread",   "--lazy-softmax-base=8",        "实验版 1.0582x；见 34"),
     (35, "ThreadSoftmaxCvtPack",              "thread",   "--softmax-cvt-pack=rtz",       "历史 LLVM 版 1.0439x；见 35"),
-    (38, "CoalesceWaitsAndBarriers",          "secondLowering", "--coalesce-waits=1",        "同 block 合并重复同步；无单项 GPU 计时"),
-    (39, "BarrierOptimize",                  "secondLowering", "默认，接在 38 之后",        "按跨线程内存依赖删 barrier"),
+    # 按需分析 thread 寄存器压力，接着依次执行 firstLowering 和 secondLowering。
+    (38, "CoalesceWaitsAndBarriers",          "secondLowering", "coalesce-waits 或 CP-SAT 保序", "同 block 合并重复同步；无单项 GPU 计时"),
+    (39, "BarrierOptimize",                  "secondLowering", "启发式",                   "按跨线程内存依赖删 barrier"),
     # ---- LLVM IR：寄存器处理与最终导出 ------------------------------------
-    (25, "cleanupRegisterMMA",               "LLVM",     "math!=strict；早期及 DMA 导出后", "仅保留清理；累加融合由 block Pass 完成"),
-    (23, "optimizeRegisterLifetimes",        "LLVM",     "--register-lifetimes=1（默认）", "32 的 sum anchor 在它之前"),
+    (25, "cleanupLLVMInstructions（早期）",   "LLVM",     "启发式，math!=strict，llvm-cleanup=both/early", "translateModuleToLLVMIR 后"),
+    # 启发式路径按需 prefetchGlobalPackets，再调用 anchorNextKSums。
+    (23, "optimizeRegisterLifetimes",        "LLVM",     "--register-lifetimes=1（默认）", "CP-SAT 走保序模式"),
+    # 启发式路径可选 reuseLDSFragments → prefetchMMACFragments，随后按 dma-export 模式导出 DMA。
+    (25, "cleanupLLVMInstructions（晚期）",   "LLVM",     "启发式，math!=strict，llvm-cleanup=both/late", "DMA 导出后，带 SimplifyCFG"),
 ]
-# 13 后仍运行 FinalizeThreadTiling：去掉 to/from_threadtile 桥接；第 14 项的
-# 布局转换外提在第 6 项内已经完成，不能再把它归给 FinalizeThreadTiling。
-# 29/31/41 任一开启时，26 之后、29 之前还会重跑 24，补足地址证明；已有锚点可复用。
-# 调度顺序为 26 → 24（按需）→ 29 → 41（可选）→ 30 → 31 → 33。
-# 33 之后先局部 lower async copy / GPU shuffle，再执行 18，使 wave setup 可见并保留结构化循环。
-# 25 在 translateToLLVM 后先尝试，在最终 DMA 导出后带 simplifyCFG=true 再尝试。
-# 23 后可选 prefetch/reuse 见下；DMA 发射后 canonicalizeLLVMExport 做通用 CSE/
-# InstCombine 清理，anchorNextKSums 再调用一次（幂等），最后默认 O3；LLVM 不再运行 33。
+# LLVM 导出末尾，启发式路径仅在 k-lds-prefetch 非零时执行 canonicalizeLLVMExport，
+# 随后再次调用 anchorNextKSums。验证模块后按 --llvm-opt 选择是否运行 default<O3>。
 # 第 34/35 项在 18 之后、first/secondLowering 之前依次执行，入口分别为
 # ThreadLazySoftmaxBasePass / ThreadSoftmaxCvtPackPass；各自可独立开启。
 # 第 35 项在 ThreadIR 选择转换边，ROCm lowering 落实指令和两端锚点；LLVM 不再匹配转换。
@@ -252,7 +265,7 @@ PIPELINE = [
 #   qk-interleave=0；pv-guard-group=-1；qk-guard-group=2；qk-prefetch-words=32。
 #   k-lds-prefetch=0；k-tail-prefetch=0；softmax-fragments=off；cross-bn-k0=0；
 #   mask-add-bypass=off；local-reduce=off；defer-lane-sum=off；causal-mask=off；
-#   lazy-softmax-base=off；softmax-cvt-pack=off；llvm-opt=3。
+#   lazy-softmax-base=off；softmax-cvt-pack=off；math=strict；llvm-cleanup=both；llvm-opt=3。
 #   simplify-loop-control / simplify-bounded-affine / hoist-lds-bases /
 #   hoist-lane-shuffles / coalesce-waits / elide-backedge-barrier 默认为 1。
 #   local-reduce、defer-lane-sum 支持 off|legal|approx；mask-add-bypass 仅 off|approx。
@@ -272,33 +285,34 @@ PIPELINE = [
 #   未指定 --threads 时保留输入线程属性；--qk-tile=0 / --vo-tile=0 各自选择自动值。
 #   命名参数本身不改变优化或默认值；完整例见 causal_kv_shm_reuse_20261119/command.sh。
 #
-# 可选流水 / 寄存器步骤（本说明用配置不启用，不与表中调度混作一条默认链）：
-#   AutoPipeline：在第 4 项之后、第 5 项之前读取 frisk.pipeline_hint=N，生成环形
-#     tile 预取；没有 hint 不改写。hint 自身是开关，与旧位置参数 pipeline=0|1 独立。
-#     允许内部全为无内存副作用操作的 causal MaskOp；有副作用/未知嵌套操作仍拒绝。
-#     退出时显式 wait 所有 FIFO task，闭合生命周期证明，使 Q 暂存可与后续 KV 复用。
-#     N 个未来/当前槽仍跨迭代互相冲突；不能仅凭 completed token 省略出口交接。
-#   ScheduleJSON / CP-SAT：--cpsat-export=graph.json / --cpsat-import=solution.json
-#     或 --cpsat-baseline=baseline.json，在第 5 项后处理 Frisk Base 调度图。
-#     求解器在外部生成 JSON，编译器校验后导入；启用时跳过 AutoPipeline。
-#   PipelineSchedule：--pipeline=1（也兼容旧位置参数）时，按 pipeline.stage/order 展开
-#     序言、稳态、收尾；在第 6 项之前，与 cpsat 启用模式互斥。
-#   prefetchGlobalPackets：LLVM 中、25 首次尝试之后、23 之前（--prefetch-packets=1）。
-#   reuseLDSFragments：LLVM 中、23 之后，由 --lds-reuse-words=N 或旧位置参数开启。
-#   prefetchMMACFragments：随后由 --frag-prefetch=1 / --frag-prefetch-words=N 开启。
-# 具体选项与约束以 test_src.cpp、lib/Pipeline/ScheduleJSON.cpp 为准。
+# MyTest 的三种流水入口：
+#   AutoPipeline（启发式路径，第 4/5 项之间）：frisk.pipeline_hint=N（N≥2，unit 取 2）
+#     在可分析的 affine.for 上生成环形预取，并在出口等待所有 FIFO task。另有独立的
+#     double-buffer / cross-iteration 开关；27/32 可在没有 hint 的循环上规划。
+#   手动 --pipeline=1：第 40 项后标注 stage/order，第 5 项及 CSE 后由 PipelineSchedule
+#     展开序言、稳态、收尾。AutoPipeline 尊重已有调度标记。
+#   CP-SAT（--pipeline=0）：--cpsat-export / --cpsat-baseline / --cpsat-import 任一启用，
+#     关闭 AutoPipeline。第 7 项后仍跑 fragment 子流水的规范化、可选 9/10；
+#     跳过 8、29/31、11。在第 12 项前设置 cpsat.preserve_schedule，调用 processScheduleJSON，
+#     展开所选外循环内的静态循环，在 FragmentIR 导出问题/基线或校验并应用外部解。
+#     --cpsat-stop-after=1 到此为止。继续 lowering 时，15 依据解里的存储偏移或实际
+#     生命周期落实 LDS 与交接同步；禁用 16 的展开后重排以及 ThreadIR 的 21/22/42/26/41/30/33/34。
+#     secondLowering 仍执行 38，跳过 39。LLVM 在开启 23 时走保序的索引简化和地址重算，
+#     跳过启发式预取、两次 25、分母锚定和最终 O3。
+# LLVM 可选预取参数：prefetchGlobalPackets 用 --prefetch-packets=1，reuseLDSFragments 用
+# --lds-reuse-words=N。--frag-prefetch=1 开启 prefetchMMACFragments，--frag-prefetch-words=N 设预算。
 
 # 已前移 / 合并关系（旧名字仅用于查历史，不是当前 MyTest 的执行入口）：
 #   optimizeApproximateRegisterMath → 19 + native exp2 lowering。
 #   bypassMaskAdds → 20；optimizeLocalReductions → 21；deferLaneSums → 22。
 #   canonicalizeLDSGEPs → 24；interleavePVAccumulators → 26。
-#   doubleBufferV → 27（独立 Thread V 双缓冲 Pass 也已删除）。
+#   doubleBufferV → 27 的逻辑计划 + 15 的物理落实。
 #   narrowKDMA → 28（已删除；--k-dma=64-swizzle 兼容翻译为 argument:8:9:3 约束）。
-#   prefetchPairedLDS / scheduleSoftmaxFragments / prefetchPairedLDSTail → 29/30/31。
-#   prefetchNextK → 32 的 execution plan；LLVM 只保留 anchorNextKSums 调度保护。
+#   prefetchPairedLDS / prefetchPairedLDSTail → 29/31 的逻辑窗口 + 42 的物理配对。
+#   scheduleSoftmaxFragments → 30。prefetchNextK → 32 规划、15 落实，LLVM 保留 anchorNextKSums。
 #   lazySoftmaxBase → 34；softmaxCvtPack → 35（ThreadIR 选择 + ROCm lowering）。
 #   elideBackedgeBarrier → 33（ThreadIR，最终 LDS 调度之后、async lowering 之前）。
-#   fuseMMACAccumulators → 36 的 block 融合；25 只保留 cleanupRegisterMMA 清理。
+#   fuseMMACAccumulators → 36 的 block 融合；MyTest 的第 25 项调用 cleanupLLVMInstructions。
 #   LegacyLLVMExportTest 仍保留部分历史转换用于回归，且拒绝已删除的调度选项；
 #   第 33/34/35 项也拒绝在旧 LLVM 入口重放，需使用 MyTest / ThreadTilingTest。
 #   不能把旧 .ll 重放入口等同于当前 MyTest 流水线。
@@ -470,7 +484,7 @@ def simplify_loop_before():
         ...                                 # 同一段循环体
 
 def simplify_loop_after():
-    # 展开成 4 段直线代码。Q 保留和“K0、K1、K2、K3 走不同路径”都需要这样才能处理
+    # 若该循环仍在 FragmentIR 且满足展开条件，会得到 4 段直线代码；27/32 也可在 Base 提前展开它。
     ...                                     # dk = 0
     ...                                     # dk = 32
     ...                                     # dk = 64
@@ -555,8 +569,8 @@ def layout_sink_after():
 
 
 # ---- 15. LowerFriskFragments：联合规划 LDS 槽位、生命周期与执行时序 -----------
-# 物理布局 / DMA 映射已由第 28 项确定；这里规划 pool offset、发射点及同步。
-# 第 27/32 项在这个 Pass 内参与规划，不在 LLVM 再改槽位或移动 DMA。
+# 布局 / DMA 映射来自第 28 项。启发式路径在物理读者可见后验证 AutoPipeline 的
+# 27/32 标记，按投影的生命周期确定 pool offset、交接同步，再落实已选的发射点。
 
 def lds_plan_before():
     # 12 个逻辑分配，每个独立的话共需 98304 字节，远超 16 KiB
@@ -577,8 +591,8 @@ def lds_plan_after():
 
 # 限制：双缓冲 / 跨轮计划须满足原 LDS 预算、所有别名读写及 collective handoff 证明。
 # 不能满足时保留普通调度；选项开启不等于实际命中。展开 fragment 循环后再做后续 Thread 调度。
-# 代码：lib/Analysis/SharedMemoryPlan.cpp、lib/Analysis/LivelinessAnalyze.cpp，
-#   以及 FriskBaseToTheadlevelIR_plan2.cpp 中的 LowerFriskFragments。
+# 代码：FriskToBase/FriskFragIRReorder.cpp 中的 LowerFriskFragments 调用
+#   lib/Analysis/SharedMemorySchedule.cpp 的 planSharedMemoryExecution / materializeExecution。
 
 
 # ---- 17. SimplifyBoundedAffine：用循环范围消掉除法【仅组合实测】---------------
@@ -700,7 +714,7 @@ def defer_sum_after():
 # 省了什么：跨 lane 通信。32 轮时分母通信从 128 次降到 4 次。
 # 限制：max 的跨 lane 通信不能延后，alpha 每轮都依赖完整的行最大值。
 # 当前在 affine/scf 循环和显式 gpu.shuffle XOR 仍保留时证明零初值递推、
-# 完整 lane sum 和 wave-uniform 缩放；在 26~31 引入调度 guard 之前执行。
+# 完整 lane sum 和 wave-uniform 缩放；在 42 落实预取 guard、26 交错 PV 之前执行。
 # MyTest 要求 wave-size=64；独立 Pass 可处理显式声明的 32/64，不能只由 shuffle width 猜 ABI。
 # legal 与 approx 保留不同数值许可；浮点分配律不是任意浮点输入的逐位等价证明。
 # 代码：ConvertToLLVM/ThreadDeferLaneSum.cpp。
@@ -723,7 +737,7 @@ def lifetimes_after():
 # 省了什么：寄存器压力。不 spill 才能让其他优化的提前量有空间。
 # 本项仍在 LLVM。若 Thread softmax 调度已有标记，则保留该顺序；
 # 第 35 项已经在 ThreadIR 选好转换，转换两端 identity 由 ROCm lowering 生成，
-# prepareRegisterMMAForLLVM 补齐无内存效果、convergent 和生命周期 metadata。
+# FriskLLVMTranslation 在翻译时为寄存器锚点写入生命周期 metadata，并保留已调度 MMA 的顺序约束。
 # 不再要求本项先生成 identity 才能匹配第 35 项；第 32 项的分母锚定仍须在本项之前完成。
 # lazy 慢路径引入纯计算分支后，地址重算器会在合法汇合点复用支配它的 header 地址缓存，
 # 避免快路径每轮重算公共 DMA/LDS 地址；内存/副作用/汇合约束不满足时不复用。
@@ -750,11 +764,11 @@ def lds_gep_after(lane):
 # Thread LDS load 的 alignment 与常量差，记录为 frisk.lds_load 的 storage/anchor/offset。
 # 使用符号 affine 差或完整线程范围的精确求值；未知地址不采样、不假定相邻。
 # LLVM lowering 机械生成带对齐的公共 GEP，后端仍决定是否选 ds_read2_b64。
-# 29/31 需要这些证明，开启预取时会强制重跑地址规范化，不依赖 swizzle 开关。
+# 29/31 开启时，第 42 项前会单独调用本 Pass 供物理配对使用。QK 交错也会单独调用。
 # 代码：ConvertToLLVM/CanonicalizeThreadLDSAddresses.cpp。
 
 
-# ---- 25. cleanupRegisterMMA：保留 LLVM 清理；旧累加融合已删除 ------------------
+# ---- 25. cleanupLLVMInstructions：翻译后和 DMA 导出后的通用指令清理 -----------
 # 下例展示已迁至第 36 项的累加重结合，不再由 LLVM 执行。
 
 def fuse_mmac_before(alpha, O_old):
@@ -769,11 +783,12 @@ def fuse_mmac_after(alpha, O_old):
         c = mmac(P[kn], V[kn], c)
     return c
 
-# 省了什么：一次加法和一个临时值。需要第 14 项先让 O 和 C 布局一致。
+# 这项历史融合省了一次加法和一个临时值，旧路径依赖第 14 项对齐 O 和 C 的布局。
 # 限制：改变浮点结合顺序（approx 约定）。
 # 当前优先由第 36 项在 block GEMM 上放入显式 acc；第 7 项处理剩余 fragment add。
 # LLVM 融合实现已删除；第 36 项在 attention tiling 前融合完整 PV，分块后保留显式 acc。
-# cleanupRegisterMMA 保留原时机的 MMA 属性准备、两次 InstCombine 和晚期可选 SimplifyCFG。
+# MyTest 通过 FriskLLVMTranslation 写入 MMA/锚点属性。第 25 项的每次调用执行两遍
+# InstCombine，晚期调用先做 SimplifyCFG。--llvm-cleanup=both|early|late|none 选择时机。
 
 
 # ---- 26. ThreadInterleavePV：PV 四链交错 ---------------------------------------
@@ -804,12 +819,15 @@ def pv_interleave_after(a, b, c, d):
 # guard=-1（默认）在每条 MMAC 前后加 sched.barrier(0)；0 不加；1..32 每 N 条后加一次，
 # 包含不足 N 条的末组，不加首部 guard。这是编译器调度提示，不是 GPU 同步 barrier。
 # 内存/同步原序、SSA 依赖和矩阵 packet 必须可证明；任意 asm / 未知效果不参与。
-# 后续按 29 → 41（可选）→ 30 → 31 → 33 调度，再 lower async/GPU；旧 LLVM Pass 已删除。
+# 第 42 项先完成 LDS 配对。本项之后按需执行 24 → 41、30、33，再 lower async/GPU。
 # 代码：ConvertToLLVM/ThreadInterleaveMMAChains.cpp；说明：ConvertToLLVM/PVInterleave.md。
 
 
-# ---- 27. SharedMemoryPlan.execution：V 双缓冲（第 15 项内部）-------------------
-# 历史实测：1.822 -> 1.768 ms；当前先规划双缓冲，再落实物理分配和发射点。
+# ---- 27. AutoPipeline：V 双缓冲的逻辑槽位与发射时机 -------------------------
+# 历史实测：1.822 -> 1.768 ms。--v-double-buffer=1 让 AutoPipeline 在 Frisk Base
+# 为选中的同源 DMA 流写入 frisk.shared_pipeline_plan，记录阶段号、总数、交替槽号和
+# 前驱阶段。流头保留常规安全前移机会，后续阶段在前驱 readiness 后发射；
+# 第 15 项用实际读者和 LDS 预算验证并落实。
 
 def v_double_buffer_before():
     # V0~V3 都放 slot0。下一片要覆盖当前片，所以必须等当前片读完
@@ -839,7 +857,7 @@ def v_double_buffer_after():
 # 地址须证明合法的 4/8/16 B wave transfer，控制流 uniform；在原 LDS 预算内选择两个槽。
 # 相邻阶段按更早发射时间形成干扰，隔两阶段可复用；还须检查与其他 Q/K 缓冲的冲突。
 # 无法规划时保留普通分配和调度，不在 LLVM 另找备用槽；落实前再次核验输入快照。
-# 代码：Analysis/SharedMemoryPlan.cpp；说明：FriskToBase/VDoubleBuffer.md。
+# 代码：Pipeline/AutoPipeline.cpp、Analysis/SharedMemorySchedule.cpp。说明见 FriskToBase/VDoubleBuffer.md。
 
 
 # ---- 28. SharedMemoryPlan.layout：联合选择 packing / DMA / swizzle ------------
@@ -875,7 +893,7 @@ def k_address_swizzle(a):
 # 记录：generated_ir/shared_memory_plan/README.txt。NarrowKDMA 已删除。
 
 
-# ---- 29. ThreadPrefetchPairedLDS：K/B 读对提前 ---------------------------------
+# ---- 29/42. PrefetchFragmentLDS 提前读取，ThreadPrefetchPairedLDS 落实物理读对 --
 
 def paired_prefetch_before():
     unrelated_mmac_1()
@@ -886,20 +904,25 @@ def paired_prefetch_before():
     mmac(a2, b1, c2)
 
 def paired_prefetch_after():
-    b0 = load_b64(base + 0)                          # 整对提前，最多越过 8 条独立 MMAC
-    b1 = load_b64(base + 8)                          # 两个 load 不拆开，才能合并成 read2_b64
-    sched_barrier_0()                                # 防止调度器把它们移回去
+    b0 = load_b64(base + 0)                          # 第 29 项已在 fragment 层提前了逻辑读取
+    b1 = load_b64(base + 8)                          # 第 42 项在合法窗口配对，供后端选择 read2_b64
+    sched_barrier_0()                                # 保护选定的 MMA 锚点
     unrelated_mmac_1()                               # load 在路上时 MMAC 照常执行
+    sched_barrier_0()
     unrelated_mmac_2()
     mmac(a, b0, c)                                   # 到这里数据已经到了
     mmac(a2, b1, c2)
 
 # 省了什么：等数据。MMAC 顺序不变。
 # 限制：不跨 DMA、wait、barrier、基本块。距离 8 是上限，不是预取 8 个 tile。
-# 当前匹配显式 frisk.lds_load 的 storage/anchor/offset/alignment 和 MMAC B 用途，
-# 不再从 LLVM 指针反推配对；完整读对及可校验的纯地址依赖一起移动。
-# Thread 发出的 sched.barrier(0) 经普通 lowering 保留；MMAC 顺序及访存边界不改。
-# 代码：ConvertToLLVM/ThreadPrefetchPairedLDS.cpp；说明：ConvertToLLVM/PairedLDS.md。
+# FragmentIR 可先展开小型静态 MMA 循环、折叠坐标并去重。共享 load_frag 的全部用途须为
+# 同块 gemm_frag 的 A/B 输入。按首个消费者和可移动的地址依赖选发射位置，记录
+# frisk.lds_prefetch_anchor。新累加链的 MMA 0 前最多额外预读下一条 MMA 的操作数；
+# 可追溯到前序 MMA 的累加器保留完整窗口。第 8 项的一级 lookahead 独立运行。
+# ThreadIR 在第 24 项证明物理地址后用 window=fragment distance=0 配对可编码的 b64 读，
+# 可以跨过独立 MMA 补齐读对，边界是较早读取的首个消费者。仍有读取的锚点保留 guard；
+# 后端决定是否生成 ds_read2_b64。第 42 项在 PV/QK 链交错之前完成。
+# 代码：FriskToBase/PrefetchFragmentLDS.cpp、ConvertToLLVM/ThreadPrefetchPairedLDS.cpp。
 
 
 # ---- 30. ThreadScheduleSoftmaxFragments：softmax 与 PV 交错 ---------------------
@@ -933,7 +956,7 @@ def softmax_fragments_after():
 # 代码：ConvertToLLVM/ThreadScheduleSoftmaxFragments.cpp。
 
 
-# ---- 31. ThreadPrefetchPairedLDSTail：跨局部归约补齐读对预取 ---------------------
+# ---- 31. PrefetchFragmentLDS：局部归约窗口 -------------------------------------
 
 def tail_prefetch_before():
     mmac_1()
@@ -946,20 +969,24 @@ def tail_prefetch_after():
     b0, b1 = load_pair()                             # 允许越过局部 max/sum，最多越过 4 条 MMAC
     sched_barrier_0()
     mmac_1()
+    sched_barrier_0()
     x = local_max(y)                                 # 归约自身不动
     z = local_sum(w)
     mmac_2(b0, b1)
 
 # 省了什么：等数据，补上第 29 项够不到的区域。
-# 实测：距离 2/4/8 为 1.693/1.691/1.693 ms，差异很小，说明能藏的延迟有限。
-# 与第 29 项共用 Thread LDS 地址契约；只处理含局部归约且尚未保护的读对，
-# 不重排归约 DAG，不跨已有 pair guard 或内存/同步边界。名称来自 QK tail，匹配不限定循环位置。
-# 代码：ConvertToLLVM/ThreadPrefetchPairedLDS.cpp 的 window=reduction 配置。
+# 历史实测：距离 2/4/8 为 1.693/1.691/1.693 ms。
+# 与第 29 项在同一次 FragmentIR Pass 中执行。若窗口末端的 reduce_frag 消费本窗口的 MMA
+# 结果，普通扫描先取两种距离的较小值；随后归约扫描允许跨 lane-local 归约。跨 lane 归约、
+# DMA、wait 和写入仍划分窗口。物理读对及 guard 与第 29 项一起交给第 42 项。
+# 代码：FriskToBase/PrefetchFragmentLDS.cpp 的 runWindow(distance, false) / runWindow(reductionDistance, true)。
 
 
-# ---- 32. SharedMemoryPlan.execution：跨轮首 DMA 预取 + LLVM 分母锚定 ------------
-# --cross-bn-k0=1 映射为 lower-frisk-fragments 的 cross-iteration=true。
-# 首次发射、跨轮生命周期、槽位和 handoff 与第 27 项一起规划；MyTest 不在 LLVM 重试预取。
+# ---- 32. AutoPipeline：跨轮首 DMA 预取与 LLVM 分母锚定 ------------------------
+# --cross-bn-k0=1 同时传给 AutoPipeline 和 LowerFriskFragments。前者在 Base 用
+# frisk.cross_iteration_plan 标记外循环，用 frisk.cross_iteration_issue 标记首个 K DMA，
+# 用 frisk.cross_iteration_anchor 标记尾 DMA，其 readiness 给出下一轮的发射位置。
+# 第 15 项验证物理别名与循环生命周期后生成首轮 guard、循环携带的 task 和出口 drain。
 
 def next_k_before():
     for n in tiles:
@@ -1000,11 +1027,11 @@ def sum_anchor_why():
 # 未知内存效果、全局写、非 uniform bound、不可用源地址或冲突布局都会保守回退。
 # LLVM 的 anchorNextKSums 只为 shared-plan-v1 标记的递推加法加锚，且在 23 前完成；
 # 分母锚定不选择槽位、不移动 DMA。LegacyLLVMExportTest 的旧 PrefetchNextKPass 仅保留作兼容。
-# 代码：Analysis/SharedMemoryPlan.cpp；ConvertToLLVM/PrefetchNextK.cpp（锚定 / 旧路径）。
+# 代码：Pipeline/AutoPipeline.cpp、Analysis/SharedMemorySchedule.cpp、ConvertToLLVM/PrefetchNextK.cpp。
 
 
 # ---- 33. ThreadElideBackedgeBarrier：删除循环尾 barrier【历史组合实测】--------
-# 位置：31 之后、async/GPU 局部 lowering 之前；LLVM 中的消除实现已删除。
+# 位置：第 30 项之后、async/GPU 局部 lowering 之前。
 
 def elide_barrier_before():
     k_task = issue_first_k()
@@ -1034,7 +1061,7 @@ def elide_barrier_after():
 # 两端仅可跨纯寄存器运算 / GPU shuffle，内存、调用、嵌套控制和其他同步都会阻断。
 # 只删尾部 reader barrier，保留循环头 readiness 及出口 drain；strictfp/optnone 跳过。
 # 代码：ConvertToLLVM/ThreadElideBackedgeBarrier.cpp；
-# 当前回归：3rd/deepgengraph/test/check_thread_backedge_barrier.py。
+# 当前回归：3rd/deepgengraph/test/unittest/check_thread_backedge_barrier.py。
 
 
 # ---- 34. ThreadLazySoftmaxBase：滞后更新 softmax 基准 --------------------------------
@@ -1140,7 +1167,7 @@ def softmax_cvt_pack_rocm_lowering(w):
 # 代码：3rd/deepgengraph/lib/Conversion/ConvertToLLVM/SoftmaxCvtPack.cpp。
 #   FriskOps.td / FriskOps.cpp 定义及验证 convert_pack；GPUToNvvmRocdl.cpp 实现 lowering；
 #   TranslateToLLVM.cpp 补齐锚点属性，LLVM 级 softmaxCvtPack 函数及导出钩子已移除。
-# 当前验证：3rd/deepgengraph/test/check_softmax_cvt_pack.py 覆盖匹配边界、幂等、
+# 当前验证：3rd/deepgengraph/test/unittest/check_softmax_cvt_pack.py 覆盖匹配边界、幂等、
 #   FP32 sum DAG、类型验证、元素打包顺序、生命周期锚点、LLVM/O3 及旧入口拒绝。
 # 历史验证：generated_ir/noncausal_cvt_pack_pass/{validation.json,integration_validation.json}。
 # 迁移产物：generated_ir/thread_softmax_cvt_pack_20261118/noncausal/generation.json
@@ -1215,7 +1242,7 @@ def coalesce_sync_after():
 
 
 # ---- 39. BarrierOptimize：按跨线程内存依赖删除不必要的 barrier ---------------
-# secondLowering 中接在第 38 项后，仍能分析结构化 loop、回边和 zero-trip 路径。
+# 启发式路径在 secondLowering 的局部同步清理之后运行，分析结构化 loop、回边和 zero-trip 路径。
 
 def barrier_dependency_before():
     a = read_shared(buffer_a)
@@ -1274,7 +1301,7 @@ def causal_mask_finite_after(score, row, col, diagonal=1):
 # 与第 26 项共用通用入口 frisk-thread-interleave-mma-chains；
 # 本项使用 operand-source=lds load-motion=bounded；旧 qk 名称仅为兼容别名。
 # 默认关闭；--qk-interleave=0|1|2|4，guard 默认 2，prefetch-words 默认 32。
-# 位置：29 之后、30 之前；单独开启也会先执行 LDS 地址规范化。
+# 位置：第 42、26 项之后、30 之前；单独开启也会先执行 LDS 地址规范化。
 
 def qk_interleave_before(a, b):
     # 示意两条等深链；实际从 SSA 的累加关系识别，不依赖 attention 的变量名。
@@ -1308,8 +1335,8 @@ def qk_interleave_after(a, b):
 # width=1 使用同样预读策略但串行排链，可与 width=2/4 对照；guard 规则与第 26 项相同。
 # guard=0 只是去掉本 Pass 的提示，不保证后端仍保持交错，也不删除其他 Pass 的 guard。
 # 保留 FP 属性，不要求 math=approx；strictfp/optnone 函数仍跳过。
-# 计划成功后才修改 IR；frisk.qk_interleave 标记保证幂等，比较参数时应从原输入重新生成。
-# 代码：ConvertToLLVM/ThreadInterleaveMMAChains.cpp；回归：test/check_mma_interleave.py。
+# 计划成功后才修改 IR；通用 Pass 用 frisk.mma_interleave 标记已调度的 MMA。
+# 代码：ConvertToLLVM/ThreadInterleaveMMAChains.cpp；回归：test/unittest/check_mma_interleave.py。
 
 
 # =============================================================================
@@ -1331,7 +1358,7 @@ def qk_interleave_after(a, b):
 #    LDS 降低不等于已证实提速，GPU 正确性/耗时仍未测。此配置不是第 3 部分的 16 KiB 布局。
 #    更早的 test_input -> KV 双缓冲实验同时改了 QK/VO=32 -> 128，不能作为单变量对照。
 #
-# 3. QK/PV 链调度（第 26/41 项，当前工作区新增选项）
+# 3. QK/PV 链调度（第 26/41 项的历史验证）
 #    generated_ir/causal_mma_chain_pass_20261119/validation_summary.json、pass_tests.json：
 #    BM128/D128，BN16 比较 QK width=2 的 guard=2/0，BN32 比较 PV width=4、guard=4。
 #    每个变体 4 个数值用例、16 个 wave 调度检查，均与各自同版本基线逐位一致；
@@ -1342,7 +1369,7 @@ def qk_interleave_after(a, b):
 # 4. 命名参数兼容
 #    generated_ir/causal_kv_shm_reuse_20261119/named_options_validation.json：
 #    相同配置下命名参数与旧位置参数生成的原始 LLVM IR 逐字节一致，并通过 llvm-as。
-#    当前回归入口：3rd/deepgengraph/test/check_mytest_named_options.py。
+#    当前回归入口：3rd/deepgengraph/test/unittest/check_mytest_named_options.py。
 
 
 # =============================================================================
@@ -1353,16 +1380,20 @@ def qk_interleave_after(a, b):
 #   C 的第 r 个 float：C[l % 16, l // 16 + 4 * r]
 #
 # 相关说明：
-#   3rd/deepgengraph/lib/Conversion/ConvertToLLVM/{PVInterleave,PairedLDS}.md（当前 Thread 调度）
+#   3rd/deepgengraph/lib/Conversion/ConvertToLLVM/{PVInterleave,PairedLDS}.md（MMA 调度与 LDS 配对）
 #   3rd/deepgengraph/lib/Conversion/FriskToBase/{VDoubleBuffer,SharedSwizzle}.md（联合规划）
 #   3rd/deepgengraph/lib/Conversion/FriskToBase/FriskFragmentIR.md
 #   3rd/deepgengraph/lib/Pipeline/README.md（自动流水和同步清理；执行位置以当前源码为准）
-#   3rd/deepgengraph/test/check_shared_cross_iteration.py（跨轮 token、guard、drain 回归）
-#   3rd/deepgengraph/test/check_thread_fragment_schedules.py（29/30/31 当前调度回归）
-#   3rd/deepgengraph/test/check_thread_lds_addresses.py（24 当前地址证明回归）
-#   3rd/deepgengraph/test/check_thread_backedge_barrier.py（33 ThreadIR 回归）
-#   3rd/deepgengraph/test/check_mma_interleave.py（26/41 调度、预算和 guard 回归）
-#   3rd/deepgengraph/test/check_auto_pipeline_shm_reuse.py（自动流水的出口等待和复用）
+#   3rd/deepgengraph/test/unittest/check_auto_pipeline_v_stream.py（27 的逻辑阶段和交替槽）
+#   3rd/deepgengraph/test/unittest/check_auto_pipeline_cross_iteration.py（32 的提前展开和跨轮标记）
+#   3rd/deepgengraph/test/unittest/check_shared_cross_iteration.py（跨轮 token、guard、drain）
+#   3rd/deepgengraph/test/unittest/check_fragment_scheduling_pipeline.py（子流水顺序与 CP-SAT 准备）
+#   3rd/deepgengraph/test/unittest/check_fragment_lds_prefetch.py（29/31 的窗口与 42 的物理配对）
+#   3rd/deepgengraph/test/unittest/check_thread_fragment_schedules.py（30 和独立 ThreadIR 调度模式）
+#   3rd/deepgengraph/test/unittest/check_thread_lds_addresses.py（24 的地址证明）
+#   3rd/deepgengraph/test/unittest/check_thread_backedge_barrier.py（33 的回边同步）
+#   3rd/deepgengraph/test/unittest/check_mma_interleave.py（26/41 的预算和 guard）
+#   3rd/deepgengraph/test/unittest/check_auto_pipeline_shm_reuse.py（自动流水的出口等待和复用）
 #   generated_ir/shared_memory_plan/README.txt（28 联合布局 / DMA 的历史验证记录）
 #   generated_ir/thread_approximate_math/README.md（19 前移验证记录）
 #   generated_ir/thread_mask_add_bypass/README.md（20 前移验证记录）
@@ -1371,7 +1402,7 @@ def qk_interleave_after(a, b):
 #   generated_ir/noncausal_lazy_base/README.txt（第 34 项历史实验）
 #   generated_ir/thread_lazy_softmax_base_20261118/noncausal/README.txt（第 34 项迁移验证）
 #   generated_ir/thread_lazy_softmax_base_fix_20261118/README.txt（第 23/34 项地址生命周期修复）
-#   3rd/deepgengraph/test/check_softmax_cvt_pack.py（第 35 项当前 ThreadIR 回归）
+#   3rd/deepgengraph/test/unittest/check_softmax_cvt_pack.py（第 35 项当前 ThreadIR 回归）
 #   generated_ir/thread_softmax_cvt_pack_20261118/assembly_audit/diagnosis.json（迁移产物审计）
 #   generated_ir/noncausal_cvt_pack_pass/README.txt（第 35 项历史 LLVM 版实测）
 #   generated_ir/causal_mask_lowering/README.txt（第 6/13 项新增能力）
