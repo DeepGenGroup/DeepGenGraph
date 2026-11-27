@@ -7,9 +7,13 @@ Fallback implementation: lib/Conversion/ConvertToLLVM/ThreadMaskAddBypass.cpp
 Pass: --frisk-bypass-mask-adds=mode=off|approx
 MyTest/TuneAttention: --mask-add-bypass=off|approx (default off)
 
-MyTest runs the FragmentIR pass after fragment retention/prefetch scheduling,
-before thread lowering. This keeps the new control-flow region and its cleanup
-from changing operand retention and read-ahead planning. For a fused mask_frag with uniform=true and a
+MyTest enables bypass at the entry of the unified Fragment scheduling pipeline,
+before fragment loop fusion, retention and prefetch. The standalone pipeline
+option is frisk-fragment-scheduling{bypass-mask-adds=true}; it permits the same
+approximate FP behavior. Cleanup stays after fragment loop scheduling, regardless
+of bypass: inserting extra canonicalize/CSE beforehand can share broadcast
+carriers and change retention costs and the shared-memory schedule.
+For a fused mask_frag with uniform=true and a
 recognized causal predicate whose clear value is +0, it uses the logical tile
 starts and shape to generate a guarded scf.if returning the existing score on
 the clear arm. The masked arm retains mask_frag with uniform=false, preserving
@@ -77,6 +81,7 @@ Build:
 Tests:
   python3 3rd/deepgengraph/test/unittest/check_mask_add_bypass.py 3rd/deepgengraph/build/test/ThreadTilingTest
   python3 3rd/deepgengraph/test/unittest/check_early_mask_add_bypass.py 3rd/deepgengraph/build/test/ThreadTilingTest
+  python3 3rd/deepgengraph/test/unittest/check_fragment_scheduling_pipeline.py 3rd/deepgengraph/build/test/ThreadTilingTest
   python3 -m unittest script.test_tune_attention
 
 The original mask_finite_pk_rtz preset keeps uniform-masks=false and already

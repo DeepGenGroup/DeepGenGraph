@@ -21,11 +21,19 @@ struct FragmentSchedulingPipelineOptions
       llvm::cl::desc("Retained 32-bit words per thread; 0 disables retention")};
   Option<unsigned> ldsPrefetchDistance{*this, "lds-prefetch-distance", llvm::cl::init(0)};
   Option<unsigned> ldsReductionPrefetchDistance{*this, "lds-reduction-prefetch-distance", llvm::cl::init(0)};
+  Option<bool> bypassMaskAdds{*this, "bypass-mask-adds", llvm::cl::init(false),
+      llvm::cl::desc("Permit approximate +0 mask-add bypass before fragment scheduling")};
 };
 } // namespace
 
 void buildFragmentSchedulingPipeline(
     OpPassManager &pm, const FragmentSchedulingOptions &options) {
+  // Specialize while tile coordinates and fragment SSA are available. Keep
+  // normalization/CSE at their existing scheduling boundary, independently of
+  // this option: early CSE can share broadcast carriers between operand tiles,
+  // changing the retention cut and the subsequent shared-memory schedule.
+  if (options.bypassMaskAdds)
+    pm.addNestedPass<func::FuncOp>(createFragmentMaskAddBypassPass());
   if (options.heuristicScheduling)
     pm.addNestedPass<func::FuncOp>(createFriskFragIRReorderPass());
   pm.addPass(createVectorSafeCanonicalizerPass());
@@ -55,7 +63,8 @@ void registerFragmentSchedulingPipeline() {
                                              options.simplifyLoopControl,
                                              options.retainFragmentWords,
                                              options.ldsPrefetchDistance,
-                                             options.ldsReductionPrefetchDistance});
+                                             options.ldsReductionPrefetchDistance,
+                                             options.bypassMaskAdds});
       });
   (void)registration;
 }
