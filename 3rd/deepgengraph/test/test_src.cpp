@@ -1407,6 +1407,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
+  // Ordinary global packets and exp2 are explicit after unrolling/reductions.
+  // Finish their local read-ahead before fixing LDS/MMA/softmax schedules.
+  if (!cpsat.enabled() && prefetchPackets) {
+    AddFuncPass(frisk::createThreadPrefetchGlobalPacketsPass());
+    llvm::outs() << "\n---- after thread prefetchGlobalPackets -----\n";
+    llvm::outs().flush(); src->dump();
+  }
+
   // FragmentIR owns LDS read-ahead. Finish the physical pairs and protect its
   // MMA anchors before later ThreadIR compute schedules can rearrange them.
   if (!cpsat.enabled() && (kLDSPrefetch || kTailPrefetch)) {
@@ -1510,10 +1518,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (!cpsat.enabled() && mathMode != "strict" && (llvmCleanup == "both" || llvmCleanup == "early"))
     frisk::cleanupLLVMInstructions(*llvmModule);
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "cleanupLLVMInstructions.early");
-  // Local reductions and deferred lane sums are complete in thread IR.
-  if (!cpsat.enabled() && prefetchPackets)
-    frisk::prefetchGlobalPackets(*llvmModule);
-  dumpLLVMPass(*llvmModule, dumpLLVMPasses, "prefetchGlobalPackets");
+  // Global packet prefetch is complete in ThreadIR; preserve that schedule.
   // Cross-iteration control flow already exists. Protect denominator inputs
   // before LLVM lifetime optimization can sink their additions across it.
   if (!cpsat.enabled()) frisk::anchorNextKSums(*llvmModule);

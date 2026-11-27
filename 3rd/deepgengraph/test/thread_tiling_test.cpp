@@ -127,6 +127,7 @@ int main(int argc, char **argv) {
   });
   mlir::registerPass([] { return mlir::frisk::createThreadLocalReductionPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
+  mlir::registerPass([] { return mlir::frisk::createThreadPrefetchGlobalPacketsPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadSoftmaxCvtPackPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadInterleaveMMAChainsPass(); });

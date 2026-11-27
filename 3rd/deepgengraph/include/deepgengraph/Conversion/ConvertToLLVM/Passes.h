@@ -51,6 +51,9 @@ std::unique_ptr<mlir::Pass> createThreadLocalReductionPass(
 // Run on structured thread SSA before lowering gpu.shuffle.
 std::unique_ptr<mlir::Pass> createThreadDeferLaneSumPass(
     DeferLaneSumOptions options = {});
+// After unrolling/reduction rewrites, before final LDS/MMA/softmax schedules.
+// Only ordinary global reads in the same block; budget counts payload words.
+std::unique_ptr<mlir::Pass> createThreadPrefetchGlobalPacketsPass(unsigned maxWords = 8);
 std::unique_ptr<mlir::Pass> createSimplifyBoundedAffinePass();
 // After physical shared storage and thread unrolling, before LLVM lowering.
 std::unique_ptr<mlir::Pass> createCanonicalizeThreadLDSAddressesPass();

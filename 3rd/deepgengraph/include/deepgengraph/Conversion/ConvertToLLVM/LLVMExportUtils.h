@@ -85,7 +85,8 @@ void canonicalizeLDSGEPs(llvm::Module &module);
 void optimizeApproximateRegisterMath(llvm::Module &module);
 /// Optional reciprocal approximation, including register MMA cleanup.
 void optimizeRegisterMath(llvm::Module &module, bool reciprocal);
-/// Hoist a bounded batch of global loads across pure exp2 work, before lifetime scheduling.
+/// Legacy LLVM-only entry point. The main pipeline schedules global packets in
+/// late ThreadIR via createThreadPrefetchGlobalPacketsPass.
 void prefetchGlobalPackets(llvm::Module &module, unsigned maxWords = 8);
 /// Reuse identical vector LDS reads within a synchronization-free block phase.
 /// Budget overlapping retained packets; do not move loads, calls or barriers.
