@@ -174,6 +174,23 @@ LogicalResult ReduceFragOp::verify() {
   return success();
 }
 
+LogicalResult LaneReduceFragOp::verify() {
+  if (!getSource().getType().getRegisterType().getElementType().isF32())
+    return emitOpError("lane sum requires f32 registers");
+  auto powerOfTwo = [](int64_t n) { return n > 0 && (n & (n - 1)) == 0; };
+  if (!powerOfTwo(getLaneExtent()) || !powerOfTwo(getLaneStride()) ||
+      (getWarpThreads() != 32 && getWarpThreads() != 64) ||
+      getLaneStride() > getWarpThreads() / getLaneExtent())
+    return emitOpError("invalid lane sum topology");
+  return success();
+}
+
+LogicalResult WaveAnyOp::verify() {
+  if (getWaveSize() != 64)
+    return emitOpError("wave_any currently requires wave-size=64");
+  return success();
+}
+
 static LogicalResult verifySemanticLayout(Operation *op, DictionaryAttr layout,
     ShapedType block, VectorType registers) {
   auto map = layout.getAs<AffineMapAttr>("tile_layout");

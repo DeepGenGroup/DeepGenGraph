@@ -1,14 +1,37 @@
-ThreadDeferLaneSumPass：threadIR 循环跨 lane 求和延迟
+FragmentDeferLaneSumPass：调度前的 fragment 计算图改写
 ====================================================
 
-主流水线入口（MyTest）
+MyTest 的 --defer-lane-sum=approx（要求 math=approx）在 FragmentScheduling
+入口、mask bypass 后和启发式 reorder / CP-SAT 导出前运行。
+循环内 reduce_frag 改为 lane_extent=1，出口插入 lane_reduce_frag；后者只做
+逐寄存器 XOR sum，不重复本地归约。两种调度路径均消费新图；后期不再重做 f32 deferral。
+ScheduleJSON 的归约成本包含每层 butterfly 的 shuffle 和 add。
+
+独立入口：ThreadTilingTest --frisk-fragment-defer-lane-sum='approximate=true wave-size=64'
+组合入口：frisk-fragment-scheduling{defer-lane-sum=true wave-size=64}
+默认关闭；支持 f32、显式 wave32/64、完整 wave 的一维 thread_num ABI。
+必须证明零初值、组内一致缩放、wave-uniform 控制和无逃逸递推。
+完整 vector/fragment 状态最多 128 元素；纯 affine fragment 组装循环在分析副本
+中展开（最多 64 轮，65536 op 预算），原图保持原循环结构。
+动态/不支持的索引、未知调用/控制流、不一致缩放或非零初值保守跳过。
+当前 reduce_frag 仅支持浮点，MyTest 的 legal 继续调用下方 thread i32 兼容入口。
+DeferLaneSum: 统计格式保持不变；统计的是受影响的标量状态及每轮移出的 shuffle 数。
+
+代码：lib/Conversion/FriskToBase/FragmentDeferLaneSum.cpp
+回归：python3 3rd/deepgengraph/test/unittest/check_fragment_defer_lane_sum.py
+数值回归执行实际 lowering 后的 LLVM；GPU 数值与性能仍需目标设备验证。
+
+ThreadDeferLaneSumPass：threadIR 兼容入口
+====================================================
+
+旧 threadIR 独立入口（MyTest 仅保留 legal/i32 路径）
   include/deepgengraph/Conversion/ConvertToLLVM/Passes.h
   lib/Conversion/ConvertToLLVM/ThreadDeferLaneSum.cpp
   C++：createThreadDeferLaneSumPass(DeferLaneSumOptions)
   独立 MLIR：ThreadTilingTest --frisk-thread-defer-lane-sum='approximate=true wave-size=64'
 
   MyTest 的 --defer-lane-sum=off|legal|approx 开关保持不变，默认 off。
-  approx 仍要求 math=approx；legal 仅对 i32 执行变换。
+  approx 已前移到上方 fragment Pass；legal 仅对 i32 执行变换。
   Pass 在 thread local reduction 之后、early wave lowering 之前运行。
   dump 阶段：after frisk-thread-defer-lane-sum。
   主流水线不再调用 LLVM deferLaneSums；DeferLaneSum: 统计格式保持不变，

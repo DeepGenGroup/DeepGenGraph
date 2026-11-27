@@ -40,8 +40,6 @@ static void replaceLegacyExp2(llvm::Module &module) {
 }
 
 int main(int argc, char **argv) {
-  bool fragPrefetch = false;
-  unsigned fragPrefetchWords = 8;
   bool crossBNK0 = false, crossBNK0Specified = false;
   bool softmaxCvtPack = false;
   llvm::StringRef localReduce;
@@ -102,20 +100,6 @@ int main(int argc, char **argv) {
     if (option.starts_with("--mask-add-bypass")) {
       llvm::errs() << "mask-add-bypass moved to ThreadIR; use MyTest --mask-add-bypass=off|approx or ThreadTilingTest --frisk-bypass-mask-adds\n";
       return 1;
-    } else if (option.consume_front("--frag-prefetch=")) {
-      if (option != "0" && option != "1") {
-        llvm::errs() << "frag-prefetch must be 0 or 1\n";
-        return 1;
-      }
-      fragPrefetch = option == "1";
-    } else if (option.consume_front("--frag-prefetch-words=")) {
-      if (option.getAsInteger(10, fragPrefetchWords) || !fragPrefetchWords) {
-        llvm::errs() << "frag-prefetch-words must be a positive integer\n";
-        return 1;
-      }
-    } else if (option.starts_with("--frag-prefetch")) {
-      llvm::errs() << "use --frag-prefetch=0|1 and --frag-prefetch-words=N\n";
-      return 1;
     } else {
       positional.push_back(argv[i]);
     }
@@ -129,7 +113,7 @@ int main(int argc, char **argv) {
   // Exact standalone A/B path: do not prepare MMA attributes, change LDS
   // descriptors or run unrelated optimizations on an already-exported IR.
   if (!localReduce.empty() || !deferLaneSum.empty() || crossBNK0Specified) {
-    if (argc != 2 || fragPrefetch) {
+    if (argc != 2) {
       llvm::errs() << "usage: LegacyLLVMExportTest [--local-reduce=off|legal|approx] [--defer-lane-sum=off|legal|approx] [--defer-lane-sum-wave-size=0|32|64] [--cross-bn-k0=0|1] <input.ll>\n";
       return 1;
     }
@@ -182,7 +166,7 @@ int main(int argc, char **argv) {
   bool splitDMA = argc == 3 && llvm::StringRef(argv[1]) == "--split-full-wave-dma";
   bool asmDMA = argc == 3 && llvm::StringRef(argv[1]) == "--buffer-asm-dma";
   if (argc != 2 && !contractsOnly && !cleanupOnly && !ldsGeps && !ldsGepsOnly && !approximate && !cleanupMMA && !lifetimes && !nativeExp2 && !reciprocal && !prefetch && !ldsReuse && !guardDMA && !hcuDMA && !splitDMA && !asmDMA) {
-    llvm::errs() << "usage: LegacyLLVMExportTest [--export-contracts-only|--cleanup-llvm-only|--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--cleanup-register-mma|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--cross-bn-k0=0|1] <input.ll or ->\n";
+    llvm::errs() << "usage: LegacyLLVMExportTest [--export-contracts-only|--cleanup-llvm-only|--canonicalize-lds-geps|--canonicalize-lds-geps-only|--legalize-text|--approx-register-math|--cleanup-register-mma|--optimize-register-lifetimes|--native-exp2|--reciprocal|--prefetch-global-packets|--reuse-lds-fragments|--guard-dma-addresses|--hcu-wide-dma] [--cross-bn-k0=0|1] <input.ll or ->\n";
     return 1;
   }
   llvm::LLVMContext context;
@@ -202,10 +186,6 @@ int main(int argc, char **argv) {
   // A standalone A/B entry point: do not alter MMAC attributes, shared-memory
   // constants or fragment scheduling as part of an LDS address experiment.
   if (ldsGepsOnly) {
-    if (fragPrefetch) {
-      llvm::errs() << "--canonicalize-lds-geps-only cannot enable fragment prefetch\n";
-      return 1;
-    }
     mlir::frisk::canonicalizeLDSGEPs(*module);
     if (llvm::verifyModule(*module, &llvm::errs())) return 1;
     module->print(llvm::outs(), nullptr);
@@ -238,8 +218,6 @@ int main(int argc, char **argv) {
     mlir::frisk::protectAsyncDMASourceAddresses(*module);
     mlir::frisk::lowerWideAsyncDMAToHCU(*module);
   }
-  if (fragPrefetch)
-    mlir::frisk::prefetchMMACFragments(*module, fragPrefetchWords);
   mlir::frisk::prepareSharedMemoryForLegacyLLVM(*module);
   if (llvm::verifyModule(*module, &llvm::errs()))
     return 1;

@@ -81,7 +81,7 @@ class AttentionRunnerTests(unittest.TestCase):
         argv = commands[0]
         self.assertEqual(argv[10:13], ["approx", "256", "4,1"])
         required = ["--pv-interleave=4", "--v-double-buffer=1", "--k-dma=64-swizzle",
-                    "--retain-fragment-words=32", "--frag-prefetch=0",
+                    "--retain-fragment-words=32",
                     "--k-lds-prefetch=8", "--softmax-fragments=pv",
                     "--k-tail-prefetch=4", "--cross-bn-k0=1",
                     "--lazy-softmax-base=8", "--softmax-cvt-pack=rtz",

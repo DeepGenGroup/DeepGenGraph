@@ -38,7 +38,6 @@ def check(work, tool, llvm, existing):
         command = [str(tool), str(HERE / "test_input_shared_d.mlir"), "0", str(out),
                    "1", "1", "3.3", "approx", "256", "4,1",
                    "1", "1", "1", "0", "0", "useKPack", "asm128", "32", "32",
-                   "--frag-prefetch=1", "--frag-prefetch-words=4",
                    f"--simplify-loop-control={loop}", f"--coalesce-waits={waits}"]
         if not existing:
             with log.open("w") as stream:

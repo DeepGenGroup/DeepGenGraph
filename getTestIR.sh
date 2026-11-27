@@ -5,7 +5,7 @@ env FRISK_GM_TO_SHM_MODE=async FRISK_GM_TO_SHM_ALIGNMENT=16 \
   --threads=256 --block-warps=4,1 --register-lifetimes=1 --uniform-masks=1 \
   --prefetch-packets=1 --fuse-mask-add=0 --lds-reuse-words=0 \
   --dma-pack=useKPack --dma-export=asm128 --qk-tile=32 --vo-tile=32 \
-  --frag-prefetch=0 --frag-prefetch-words=4 --retain-fragment-words=32 \
+  --retain-fragment-words=32 \
   --pv-interleave=4 --v-double-buffer=1 --k-dma=64-swizzle --k-dma-arg=1 \
   --k-lds-prefetch=8 --simplify-loop-control=1 --coalesce-waits=0 \
   --mask-add-bypass=approx --defer-lane-sum=approx --local-reduce=approx \

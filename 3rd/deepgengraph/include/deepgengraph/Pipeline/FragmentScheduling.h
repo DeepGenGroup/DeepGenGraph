@@ -16,6 +16,11 @@ struct FragmentSchedulingOptions {
   unsigned ldsReductionPrefetchDistance = 0;
   // Approximate +0 mask-add bypass, before any scheduling transformations.
   bool bypassMaskAdds = false;
+  // Graph rewrite, also enabled before CP-SAT export. f32 requires approx.
+  bool deferLaneSum = false;
+  unsigned waveSize = 0;
+  // Legacy heuristic path only. Zero disables lazy online-softmax rebasing.
+  float lazySoftmaxBaseThreshold = 0;
 };
 
 // Module pipeline, after accumulator fusion and before fragment lowering (or
@@ -24,6 +29,8 @@ struct FragmentSchedulingOptions {
 // LDS read-ahead follows retention and precedes DMA motion/storage planning.
 // Mask specialization precedes loop scheduling without an extra cleanup pass:
 // cleaning up first can merge broadcast carriers and change retention costs.
+// Lane-sum deferral follows mask specialization and precedes all scheduling;
+// its analysis-only normalization does not unfold loops in the scheduled IR.
 void buildFragmentSchedulingPipeline(
     OpPassManager &pm, const FragmentSchedulingOptions &options);
 void registerFragmentSchedulingPipeline();

@@ -22,6 +22,7 @@ add_deepgengraph_library(DeepgengraphAnalysis
   MLIRFunctionInterfaces
   MLIRLoopLikeInterface
   MLIRLLVMDialect
+  MLIRROCDLDialect
   MLIRIR
   MLIRAffineDialect
   MLIRArithDialect

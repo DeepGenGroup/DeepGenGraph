@@ -184,6 +184,30 @@ def main():
                               text=True, capture_output=True)
         assert unit.returncode == 0, unit.stdout + unit.stderr
         print(unit.stdout.strip())
+        # Early lazy-softmax introduces a register-only branch before storage
+        # planning. It must not block DMA motion across pure computations.
+        registers = '''
+%choose = arith.cmpi eq, %iv, %idx : index
+%selected = scf.if %choose -> i32 {
+  %yes = arith.constant 1 : i32
+  scf.yield %yes : i32
+} else {
+  %no = arith.constant 2 : i32
+  scf.yield %no : i32
+}
+'''
+        with_registers = base.replace('%task0 =', registers + '\n%task0 =')
+        path.write_text(with_registers)
+        unit = subprocess.run([str(TOOLS/'SharedExecutionPlanTest'), str(path), 'cross-iteration'],
+                              text=True, capture_output=True)
+        assert unit.returncode == 0, unit.stdout + unit.stderr
+        _, diagnostic = run(path, with_registers)
+        assert 'Cross BN K0 plan: buffer=' in diagnostic, diagnostic
+        with_vote = with_registers.replace('%selected =',
+            '%vote = rocdl.ballot %choose : i64\n%selected =')
+        _, diagnostic = run(path, with_vote)
+        assert 'Cross BN K0 plan: buffer=' in diagnostic, diagnostic
+        count += 1
         for loop in ('affine', 'scf'):
             for trips, step, dynamic, lower in ((0,1,False,0), (1,1,False,0), (4,1,False,0),
                                                (4,2,False,0), (4,3,False,0), (4,1,True,0),
@@ -225,6 +249,10 @@ def main():
         else:
             raise AssertionError('ownership oracle missed a next-K/final-V slot collision')
         rejected = [
+            with_registers.replace('%yes =', '%vote = rocdl.ballot %choose : i64\n%yes ='),
+            with_registers.replace('%yes =', 'gpu.barrier\n%yes ='),
+            with_registers.replace('%yes =',
+                '%conditional_read = memref.load %kbuf[%idx] : memref<512xf16, 3>\n%yes ='),
             base.replace('frisk.cross_iteration_plan', 'test.no_cross_plan'),
             base.replace('frisk.cross_iteration_issue', 'test.no_cross_issue'),
             base.replace('frisk.cross_iteration_anchor', 'test.no_cross_anchor'),

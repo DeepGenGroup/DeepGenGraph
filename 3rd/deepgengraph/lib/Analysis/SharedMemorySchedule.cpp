@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -34,6 +35,27 @@ static bool barrier(Operation *op) {
 static Operation *topIn(Operation *op, Block *block) {
   while (op && op->getBlock() != block) op = op->getParentOp();
   return op;
+}
+// A conditional register rescale has no DMA/aliasing effects. Prove the whole
+// region instead of trusting a marker: collectives, accesses, calls and unknown
+// regions remain disallowed. This does not move the conditional or its contents.
+static bool registerConditional(Operation *op) {
+  if (!isa<scf::IfOp>(op)) return false;
+  auto registers = [](Type type) {
+    return isa<VectorType, FragmentType>(type) || type.isIntOrIndexOrFloat();
+  };
+  if (!llvm::all_of(op->getResultTypes(), registers)) return false;
+  bool safe = true;
+  op->walk([&](Operation *nested) {
+    if (nested == op || isa<scf::YieldOp, affine::AffineYieldOp>(nested)) return;
+    if (auto loop = dyn_cast<Loop>(nested)) {
+      if (!loop.hasConstantBounds()) safe = false;
+      return;
+    }
+    if (!isOrdinaryRegisterComputation(nested) ||
+        !llvm::all_of(nested->getResultTypes(), registers)) safe = false;
+  });
+  return safe;
 }
 static bool shared(Value v) {
   auto t = dyn_cast<MemRefType>(v.getType());
@@ -417,14 +439,22 @@ static bool collectCrossIteration(func::FuncOp kernel, Operation *loop,
     accesses.insert(info.accesses.begin(), info.accesses.end());
   }
   bool finalRead = false, unsafe = false;
+  llvm::SmallPtrSet<Operation *, 8> registerRegions;
+  for (Operation &op : *body)
+    if (registerConditional(&op)) registerRegions.insert(&op);
   loop->walk([&](Operation *op) {
     if (op == loop || unsafe) return;
+    if (registerRegions.contains(topIn(op, body))) return;
     if (auto nested = dyn_cast<Loop>(op)) {
       if (!nested.hasConstantBounds() || !isInBlockUniformControlFlow(nested.getBody()->getTerminator())) unsafe = true;
       return;
     }
     if (op->hasTrait<OpTrait::IsTerminator>()) return;
     if (op->getNumRegions()) { unsafe = true; return; }
+    // ROCDL ballot lacks MemoryEffectsOpInterface in this MLIR version. It
+    // touches no memory; DMA may cross it without moving the vote itself or
+    // changing its participating lanes. Conditional collectives stay rejected.
+    if (isa<ROCDL::BallotOp>(op) && op->getBlock() == body) return;
     if (barrier(op)) return;
     if (auto copy = dyn_cast<AsyncCopyGmToShmOp>(op)) {
       auto *allocation = origin(copy.getDst()).getDefiningOp();

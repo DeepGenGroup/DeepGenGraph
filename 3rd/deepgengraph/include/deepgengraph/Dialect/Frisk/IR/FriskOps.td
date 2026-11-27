@@ -1398,6 +1398,25 @@ def Frisk_ReduceFragOp : Frisk_Op<"reduce_frag", [MemoryEffects<[]>]> {
   let assemblyFormat = "$kind $source attr-dict `:` type($source) `->` type($result)";
   let hasVerifier = 1;
 }
+// A wave-uniform vote stays explicit before scheduling. Materialize the target
+// ballot only when lowering fragments; this collective is not speculatable.
+def Frisk_WaveAnyOp : Frisk_Op<"wave_any", [MemoryEffects<[]>]> {
+  let arguments = (ins I1:$predicate, I64Attr:$wave_size);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$predicate attr-dict";
+  let hasVerifier = 1;
+}
+
+// Elementwise XOR all-reduce of already accumulated lane-local values. Unlike
+// reduce_frag, this performs no register-axis reduction or identity addition.
+def Frisk_LaneReduceFragOp : Frisk_Op<"lane_reduce_frag", [MemoryEffects<[]>,
+    AllTypesMatch<["source", "result"]>]> {
+  let arguments = (ins Frisk_FragmentType:$source, I64Attr:$lane_extent,
+      I64Attr:$lane_stride, I64Attr:$warp_threads);
+  let results = (outs Frisk_FragmentType:$result);
+  let assemblyFormat = "$source attr-dict `:` type($source)";
+  let hasVerifier = 1;
+}
 // A layout conversion may require workgroup-wide scratch and barriers. Keep
 // conservative effects even when the selected implementation uses shuffles.
 def Frisk_ConvertLayoutFragOp : Frisk_Op<"convert_layout_frag",

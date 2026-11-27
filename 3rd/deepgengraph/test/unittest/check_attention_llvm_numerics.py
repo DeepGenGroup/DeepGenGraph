@@ -194,6 +194,14 @@ class LLVMWorkgroupModel:
             return out
         name, args = re.search('@([\\w.]+)\\((.*)\\)', body).groups()
         args = [self.typed(x) for x in split_args(args)] if args else []
+        # O3 vectorizes address arithmetic and uniform branch predicates.
+        # Preserve integer wraparound when executing those exported modules.
+        integer_reduce = re.fullmatch(r'llvm\.vector\.reduce\.(add|or)\.v\d+i(8|16|32|64)', name)
+        if integer_reduce:
+            kind, bits = integer_reduce[1], int(integer_reduce[2])
+            result = (np.sum(args[0], axis=1, dtype=np.int64) if kind == 'add'
+                      else np.bitwise_or.reduce(args[0], axis=1))
+            return result % (1 << bits) if bits < 64 else result
         if name.startswith('llvm.maxnum.'):
             return np.fmax(args[0], args[1])
         if name.startswith('llvm.smin.'):

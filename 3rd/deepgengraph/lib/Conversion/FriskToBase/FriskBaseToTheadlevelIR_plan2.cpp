@@ -62,6 +62,7 @@
 // 这里只是在 alloc 和 DMA 上打属性，真正改写地址的是 PackSharedMemory.cpp（第 15 项）。
 // ===========================================================================
 #include "CheckedGlobalIO.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -5303,7 +5304,8 @@ public:
   StringRef getDescription() const final { return "Materialize typed fragment operations as thread register IR"; }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<FriskDialect, affine::AffineDialect, arith::ArithDialect,
-        vector::VectorDialect, math::MathDialect, memref::MemRefDialect, gpu::GPUDialect>();
+        vector::VectorDialect, math::MathDialect, memref::MemRefDialect, gpu::GPUDialect,
+        ROCDL::ROCDLDialect>();
   }
   void runOnOperation() override {
     llvm::SaveAndRestore<bool> mode(emitTypedFragments, false);
@@ -5327,7 +5329,7 @@ public:
     bool unsupported = false;
     kernel.walk([&](Operation *op) {
       if (isa<LoadFragOp, ExtractFragOp, PackFragOp, GemmFragOp, ElementwiseFragOp,
-              BroadcastFragOp, ReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
+              BroadcastFragOp, ReduceFragOp, LaneReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
         work.push_back({op, cast<FragmentType>(op->getResult(0).getType())});
       else if (isa<StoreFragOp, InsertFragOp, UnpackFragOp>(op))
         work.push_back({op, cast<FragmentType>(op->getOperand(0).getType())});
@@ -5340,6 +5342,16 @@ public:
       }
     });
     if (unsupported) return signalPassFailure();
+    SmallVector<WaveAnyOp> votes;
+    kernel.walk([&](WaveAnyOp op) { votes.push_back(op); });
+    for (auto vote : votes) {
+      OpBuilder b(vote);
+      Value bits = b.create<ROCDL::BallotOp>(vote.getLoc(), b.getI64Type(), vote.getPredicate());
+      Value zero = b.create<arith::ConstantIntOp>(vote.getLoc(), 0, 64);
+      Value any = b.create<arith::CmpIOp>(vote.getLoc(), arith::CmpIPredicate::ne, bits, zero);
+      vote.replaceAllUsesWith(any);
+      vote.erase();
+    }
     if (work.empty()) return;
     // Fragments are internal SSA values, including affine/scf loop carriers.
     // Change their representation together, then materialize operations. No
@@ -5449,6 +5461,25 @@ public:
           Value initial = b.create<arith::ConstantOp>(loc, registers, b.getZeroAttr(registers));
           BroadcastTileElement element{b, loc, cast<VectorType>(source.getType()), source};
           result = FragmentTileLoopNest(b, loc, registers.getShape()).emit(initial, element);
+        }
+      } else if (auto lane = dyn_cast<LaneReduceFragOp>(op)) {
+        Value source = op->getOperand(0);
+        result = source;
+        for (int64_t flat = 0; flat < registers.getNumElements(); ++flat) {
+          SmallVector<int64_t> position(registers.getRank());
+          int64_t index = flat;
+          for (int64_t d = registers.getRank() - 1; d >= 0; --d) {
+            position[d] = index % registers.getDimSize(d);
+            index /= registers.getDimSize(d);
+          }
+          Value sum = b.create<vector::ExtractOp>(loc, source, position);
+          for (int64_t offset = 1; offset < lane.getLaneExtent(); offset <<= 1) {
+            auto peer = b.create<gpu::ShuffleOp>(loc, sum,
+                int32_t(offset * lane.getLaneStride()), int32_t(lane.getWarpThreads()),
+                gpu::ShuffleMode::XOR);
+            sum = b.create<arith::AddFOp>(loc, sum, peer.getShuffleResult());
+          }
+          result = b.create<vector::InsertOp>(loc, sum, result, position);
         }
       } else if (auto reduce = dyn_cast<ReduceFragOp>(op)) {
         auto reduced = lowerFragmentReduction(b, loc, op->getOperand(0), registers,

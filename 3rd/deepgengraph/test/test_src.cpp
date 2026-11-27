@@ -522,7 +522,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Named tuning options do not shift the historical positional interface.
   std::string swizzleOptions, workgroupOptions;
   bool canonicalizeLDS = false;
-  bool fragPrefetch = false;
   frisk::SoftmaxFragmentMode softmaxFragments = frisk::SoftmaxFragmentMode::Off;
   unsigned pvInterleave = 0;
   frisk::MMAChainScheduleOptions mmaSchedule;
@@ -552,7 +551,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   frisk::LocalReductionOptions localReductionOptions;
   llvm::StringRef deferLaneSum = "off";
   frisk::DeferLaneSumOptions deferLaneSumOptions;
-  unsigned fragPrefetchWords = 8;
   unsigned retainFragmentWords = 0;
   // Named aliases share the legacy validation/defaults without filling omitted
   // arguments: absence of --threads must still preserve input thread attributes.
@@ -759,20 +757,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
         return 1;
       }
       dumpLLVMPasses = option == "1";
-    } else if (option.consume_front("--frag-prefetch=")) {
-      if (option != "0" && option != "1") {
-        llvm::errs() << "frag-prefetch must be 0 or 1\n";
-        return 1;
-      }
-      fragPrefetch = option == "1";
-    } else if (option.consume_front("--frag-prefetch-words=")) {
-      if (option.getAsInteger(10, fragPrefetchWords) || !fragPrefetchWords) {
-        llvm::errs() << "frag-prefetch-words must be a positive integer\n";
-        return 1;
-      }
-    } else if (option.starts_with("--frag-prefetch")) {
-      llvm::errs() << "use --frag-prefetch=0|1 and --frag-prefetch-words=N\n";
-      return 1;
     } else if (option.starts_with("--")) {
       llvm::errs() << "unknown option: " << option << "\n";
       return 1;
@@ -1252,6 +1236,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   fragmentScheduling.ldsPrefetchDistance = kLDSPrefetch;
   fragmentScheduling.ldsReductionPrefetchDistance = kTailPrefetch;
   fragmentScheduling.bypassMaskAdds = maskAddBypass == "approx";
+  fragmentScheduling.deferLaneSum = deferLaneSum == "approx";
+  fragmentScheduling.waveSize = deferLaneSumOptions.waveSize;
+  fragmentScheduling.lazySoftmaxBaseThreshold = lazySoftmaxBase ? lazyBaseThreshold : 0;
   PassManager fragmentPM(ctx.get());
   frisk::buildFragmentSchedulingPipeline(fragmentPM, fragmentScheduling);
   if (failed(fragmentPM.run(src->getOperation()))) return 1;
@@ -1392,12 +1379,13 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
-  // Reassociate tagged local chains before analyzing structured lane sums.
-  if (!cpsat.enabled() && (localReduce != "off" || deferLaneSum != "off")) {
+  // f32 lane-sum deferral already changed the fragment graph before scheduling.
+  // Keep the thread legal (i32) adapter for compatibility with integer inputs.
+  if (!cpsat.enabled() && (localReduce != "off" || deferLaneSum == "legal")) {
     AddFuncPass(frisk::createThreadReductionsPass(
         localReduce != "off" ? std::optional{localReductionOptions} : std::nullopt,
-        deferLaneSum != "off" ? std::optional{deferLaneSumOptions} : std::nullopt));
-    if (deferLaneSum != "off") {
+        deferLaneSum == "legal" ? std::optional{deferLaneSumOptions} : std::nullopt));
+    if (deferLaneSum == "legal") {
       AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
       AddPass(mlir::createCSEPass());
       llvm::outs() << "\n---- after frisk-thread-defer-lane-sum -----\n";
@@ -1469,14 +1457,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
       return 1;
     llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
   }
-  // All register/LDS schedules and wave setup are fixed before introducing
-  // the wave-uniform, register-only rescale region.
-  const bool applyLazySoftmaxBase = !cpsat.enabled() && lazySoftmaxBase;
-  if (applyLazySoftmaxBase) {
-    AddFuncPass(frisk::createThreadLazySoftmaxBasePass(lazyBaseThreshold));
-    llvm::outs() << "\n---- after thread lazySoftmaxBase -----\n";
-    llvm::outs().flush(); src->dump();
-  }
+  // Lazy rebasing already changed the fragment graph before scheduling.
   // Select the RTZ narrowing edge after every ThreadIR schedule and rebase.
   // Target lowering materializes convert_pack and its lifetime boundaries.
   if (softmaxCvtPack) {
@@ -1489,7 +1470,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   if (analyzeRegisterPressure)
     AddFuncPass(frisk::createAnalyzeRegisterPressurePass("thread"));
   // Erasing a dead user can make its producer dead for the next CSE sweep.
-  const bool runInitialCSE = waveCSEChanged || applyLazySoftmaxBase || softmaxCvtPack;
+  const bool runInitialCSE = waveCSEChanged || softmaxCvtPack;
   if (!frisk::firstLowering(mod, src->getContext(), runInitialCSE) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
                             coalesceWaits && !cpsat.enabled(), mathMode == "approx" || mathMode == "mmac-exp2"))
@@ -1527,8 +1508,6 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   dumpLLVMPass(*llvmModule, dumpLLVMPasses, "optimizeRegisterLifetimes");
   if (!cpsat.enabled() && ldsReuseWords)
     frisk::reuseLDSFragments(*llvmModule, ldsReuseWords);
-  if (!cpsat.enabled() && fragPrefetch)
-    frisk::prefetchMMACFragments(*llvmModule, fragPrefetchWords);
 
   // LDS address canonicalization is complete in ThreadIR.
 
@@ -1840,7 +1819,7 @@ int main(int argc, char** argv) {
                  << "--pv-guard-group=-1|0..32 (default -1), "
                  << "--qk-guard-group=-1|0..32 (default 2), "
                  << "--qk-prefetch-words=N (default 32 words/thread)\n";
-    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--llvm-cleanup=both|early|late|none (default:both; strict skips cleanup)] [--frag-prefetch=0|1] [--frag-prefetch-words=8] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
+    llvm::errs() << "usage: " << argv[0] << " <input.mlir> [pipeline:0|1] [output.ll] [reorder:0|1] [pack-shared:0|1] [wmma-layout:3.1|3.2|3.3|3.4] [math:strict|mmac|mmac-exp2|mmac-recip|approx] [threads:128] [block-warps:M,N] [register-lifetimes:1] [uniform-masks:0] [prefetch-packets:0] [fuse-mask-add:1] [lds-reuse-words:0] [dma-pack:legacy|useKPack|noKPack] [dma-export:split32|hcu128|asm128] [qk-tile:0=auto] [vo-tile:0=auto] [--llvm-opt=0|3 (default:3)] [--llvm-cleanup=both|early|late|none (default:both; strict skips cleanup)] [--pv-interleave=0|1|2|4] [--v-double-buffer=0|1] [--shared-copy-constraints=arg:bytes[:src:dst],...] [--k-dma=128|64|64-swizzle] [--k-dma-arg=1] [--k-lds-prefetch=0..8] [--k-tail-prefetch=0..8] [--cross-bn-k0=0|1] [--causal-mask=off|i32|finite] [--simplify-bounded-affine=1] [--hoist-lds-bases=1] [--hoist-lane-shuffles=1] [--elide-backedge-barrier=1] [--retain-fragment-words=0] [--simplify-loop-control=1] [--coalesce-waits=1] [--swizzle-q/k/v=off|on|src:dst] [--swizzle-q/k/v-arg=N] [--workgroup-group-size=0] [--workgroup-reverse=false] [--workgroup-query-axis=y] [--workgroup-head-axis=x]\n";
     llvm::errs() << "Named aliases (use --name=value; legacy positional arguments remain supported):\n  --input=VALUE\n  --pipeline=VALUE\n  --output=VALUE\n  --reorder=VALUE\n  --pack-shared=VALUE\n  --wmma-layout=VALUE\n  --math=VALUE\n  --threads=VALUE\n  --block-warps=VALUE\n  --register-lifetimes=VALUE\n  --uniform-masks=VALUE\n  --prefetch-packets=VALUE\n  --fuse-mask-add=VALUE\n  --lds-reuse-words=VALUE\n  --dma-pack=VALUE\n  --dma-export=VALUE\n  --qk-tile=VALUE\n  --vo-tile=VALUE\nNamed and positional values for the same argument cannot be combined.\n";
     return help ? 0 : 1;
   }

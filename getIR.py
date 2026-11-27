@@ -77,9 +77,6 @@ COMMAND = [
                             # 不沿输出 D 做规约。本次两个 tile 参数均保持 32。
 
     # 0/1：提前 MMAC fragment 的 LDS 读取和地址计算。本次保持基线关闭。
-    "--frag-prefetch=0",
-    # 正 uint32，额外活跃值预算，words/thread；frag-prefetch=0 时不生效。
-    "--frag-prefetch-words=4",
     # uint32，跨循环保留不变 operand 的预算，words/thread；0=关闭。
     # 本例 32 保留完整 Q fragments；不是所有情况下都能用满预算。
     "--retain-fragment-words=32",

@@ -12,6 +12,8 @@ add_deepgengraph_library(FriskToBase
   PrefetchFragmentLDS.cpp
   RetainInvariantFragments.cpp
   FragmentMaskAddBypass.cpp
+  FragmentDeferLaneSum.cpp
+  FragmentLazySoftmaxBase.cpp
   PackSharedMemory.cpp
   PromoteGlobalToSharedAsync.cpp
   SinkWaitBufferReady.cpp

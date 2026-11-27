@@ -122,6 +122,8 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createApproximateThreadMathPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadMaskAddBypassPass(); });
   mlir::registerPass([] { return mlir::frisk::createFragmentMaskAddBypassPass(); });
+  mlir::registerPass([] { return mlir::frisk::createFragmentDeferLaneSumPass(); });
+  mlir::registerPass([] { return mlir::frisk::createFragmentLazySoftmaxBasePass(); });
   mlir::registerPass([] {
     return mlir::frisk::createThreadReductionsPass(std::nullopt, std::nullopt);
   });

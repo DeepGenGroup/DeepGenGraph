@@ -149,7 +149,7 @@ void classify(Node &node) {
     node.kind = "copy";
     access(node, store.getDestination(), true);
     node.writeBytes = bytes(cast<frisk::FragmentType>(store.getValue().getType()).getRegisterType());
-  } else if (isa<frisk::GemmFragOp, frisk::ReduceFragOp>(op)) {
+  } else if (isa<frisk::GemmFragOp, frisk::ReduceFragOp, frisk::LaneReduceFragOp>(op)) {
     node.kind = isa<frisk::GemmFragOp>(op) ? "wmma" : "reduce";
     node.compute = 1; // Register SSA dependencies are collected independently.
   } else if (auto layout = dyn_cast<frisk::ConvertLayoutFragOp>(op);
@@ -823,6 +823,13 @@ JObject serialize(Problem &p) {
       auto src = cast<frisk::FragmentType>(reduce.getSource().getType()).getRegisterType();
       auto dst = cast<frisk::FragmentType>(reduce.getType()).getRegisterType();
       issueUnits = std::max<int64_t>(1, src.getNumElements() - dst.getNumElements());
+      // Each butterfly level issues a shuffle and a combine per output word.
+      for (int64_t lanes = reduce.getLaneExtent(); lanes > 1; lanes >>= 1)
+        issueUnits += 2 * dst.getNumElements();
+    } else if (auto lane = dyn_cast<frisk::LaneReduceFragOp>(n.op)) {
+      issueUnits = 0;
+      for (int64_t lanes = lane.getLaneExtent(); lanes > 1; lanes >>= 1)
+        issueUnits += 2 * lane.getType().getRegisterType().getNumElements();
     }
     ops.push_back(JObject{{"id", int64_t(i)}, {"name", n.op->getName().getStringRef()},
         {"kind", n.kind}, {"read_bytes", n.readBytes}, {"write_bytes", n.writeBytes},

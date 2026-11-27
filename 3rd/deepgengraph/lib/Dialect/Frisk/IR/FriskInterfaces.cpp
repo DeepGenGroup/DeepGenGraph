@@ -19,6 +19,8 @@ ExecutionSemantics inferExecutionSemantics(Operation *op) {
     return {S::Thread, K::SchedBarrier, false, false, true};
   if (isa<WarpMmaRROp, GemmFragOp>(op))
     return {S::Warp, K::MMA, true, true, true};
+  if (isa<WaveAnyOp>(op))
+    return {S::Warp, K::Compute, true, true, true};
   if (isa<GemmOp>(op))
     return {S::Workgroup, K::MMA, registerValues(op), true, true};
   if (auto reduce = dyn_cast<ReduceFragOp>(op)) {

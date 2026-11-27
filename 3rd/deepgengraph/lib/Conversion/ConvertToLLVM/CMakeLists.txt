@@ -24,7 +24,6 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   ApproximateThreadMath.cpp
   PrefetchGlobalPackets.cpp
   ThreadPrefetchGlobalPackets.cpp
-  PrefetchMMACFragments.cpp
   ScheduleSoftmaxFragments.cpp
   ThreadInterleaveMMAChains.cpp
   ThreadSchedulingCompatibility.cpp

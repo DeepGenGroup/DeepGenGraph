@@ -289,7 +289,7 @@ static bool collectAccesses(Loop loop, SmallVectorImpl<Access> &accesses) {
     ValueRange indices;
     AffineMap map;
     bool fragment = false;
-    if (isa<ReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
+    if (isa<ReduceFragOp, LaneReduceFragOp, ConvertLayoutFragOp, MaskFragOp>(op))
       return WalkResult::interrupt();
     if (auto load = dyn_cast<LoadFragOp>(op)) {
       buffer = load.getSource(); fragment = true;
@@ -516,7 +516,7 @@ static bool pipelineFragments(Loop loop) {
     if (isa<LoadFragOp, affine::AffineLoadOp, memref::LoadOp, vector::LoadOp>(op))
       continue;
     if (op.getNumRegions() || !isMemoryEffectFree(&op) ||
-        isa<gpu::ShuffleOp, ReduceFragOp, ConvertLayoutFragOp, ToThreadTileOp, FromThreadTileOp>(op))
+        isa<gpu::ShuffleOp, ReduceFragOp, LaneReduceFragOp, ConvertLayoutFragOp, ToThreadTileOp, FromThreadTileOp>(op))
       return false;
   }
 
