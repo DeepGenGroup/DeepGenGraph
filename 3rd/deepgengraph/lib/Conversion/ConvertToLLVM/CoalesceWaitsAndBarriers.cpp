@@ -2,6 +2,7 @@
 // become target wait-all operations. A wait on buffer A at Frisk Base level
 // must never be assumed to complete a different buffer B.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "SynchronizationCleanup.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -13,13 +14,33 @@ namespace {
 struct CoalesceWaitsAndBarriers
     : PassWrapper<CoalesceWaitsAndBarriers, OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CoalesceWaitsAndBarriers)
+  CoalesceWaitsAndBarriers(bool coalesce, bool analyze) {
+    coalesceWaits = coalesce;
+    analyzeDependencies = analyze;
+  }
+  CoalesceWaitsAndBarriers(const CoalesceWaitsAndBarriers &other)
+      : PassWrapper(other) {}
+
   StringRef getArgument() const final {
     return "frisk-coalesce-waits-and-barriers";
   }
   StringRef getDescription() const final {
-    return "Coalesce local wait-all/barrier sequences without crossing memory or control flow";
+    return "Coalesce local wait-all/barrier sequences and optionally remove dependency-free barriers";
   }
   void runOnOperation() final {
+    if (coalesceWaits)
+      coalesceInBlocks();
+    if (analyzeDependencies)
+      frisk::removeRedundantWorkgroupBarriers(getOperation());
+  }
+
+private:
+  Option<bool> coalesceWaits{*this, "coalesce-waits", llvm::cl::init(true),
+      llvm::cl::desc("Coalesce repeated wait-all and publication in each block")};
+  Option<bool> analyzeDependencies{*this, "analyze-dependencies", llvm::cl::init(false),
+      llvm::cl::desc("Remove barriers without cross-thread memory dependencies")};
+
+  void coalesceInBlocks() {
     // State is local to a block. In particular it never crosses a branch,
     // a loop backedge, an async launch, a call, a fence or a memory access.
     getOperation().walk([&](Block *block) {
@@ -75,5 +96,11 @@ struct CoalesceWaitsAndBarriers
 } // namespace
 
 std::unique_ptr<Pass> mlir::frisk::createCoalesceWaitsAndBarriersPass() {
-  return std::make_unique<CoalesceWaitsAndBarriers>();
+  return createSynchronizationCleanupPass(/*coalesceWaits=*/true,
+                                          /*analyzeDependencies=*/false);
+}
+
+std::unique_ptr<Pass> mlir::frisk::createSynchronizationCleanupPass(
+    bool coalesceWaits, bool analyzeDependencies) {
+  return std::make_unique<CoalesceWaitsAndBarriers>(coalesceWaits, analyzeDependencies);
 }

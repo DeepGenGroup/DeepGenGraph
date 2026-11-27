@@ -1044,8 +1044,8 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   #if 1
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createDeepgenGraphSimplifyPass());
   pm.addPass(frisk::createAddKernelargPermuteInfoPass());
-  pm.run(src->getOperation());
-
+  if (failed(pm.run(src->getOperation()))) return 1;
+  pm.clear();
 
   llvm::outs() << "\n---------- after simplifyPass ---------\n"; llvm::outs().flush();src->dump();
   pm.addNestedPass<deepgengraph::KernelOp>(frisk::createConvertScfForOpPass());
@@ -1363,7 +1363,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   // Register vectors and repeated denominators are exposed after unrolling.
   // Perform approximate division here, before any LLVM dialect conversion.
   if (mathMode == "approx" || mathMode == "mmac-recip") {
-    AddPass(mlir::createCSEPass());
+    // Both optional canonicalization stages above already finish with CSE.
+    if (!simplifyBoundedAffine && !canonicalizeLDS)
+      AddPass(mlir::createCSEPass());
     AddFuncPass(frisk::createApproximateThreadMathPass());
     AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
     AddPass(mlir::createCSEPass());

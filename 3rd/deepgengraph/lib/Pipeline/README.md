@@ -37,8 +37,11 @@ MyTest 的 `--cross-bn-k0=1` 同时启用这两个阶段；仅启用后端开关
   不跨越任何内存读写、调用、不透明 asm、新 async group、未知 target op、
   partial wait、region 或 CFG 边界。不同任务 token 的 `frisk.wait_buffer_ready`
   **不会**在 Base 层被视为等价。单独的 `barrier; wait-all; barrier` 也不会
-  错删后一个 publication barrier。它与已有基于依赖分析的
-  `barrier-optimize` 是不同 Pass，先合并冗余序列，再做原有依赖分析。
+  错删后一个 publication barrier。MyTest 的 secondLowering 在同一次 Pass 调用中
+  先合并重复同步，再按跨线程内存依赖删除 barrier。启发式路径设置
+  `--coalesce-waits=0` 后只做依赖分析，CP-SAT 保序路径始终只合并重复同步。
+  独立命令 `frisk-coalesce-waits-and-barriers` 默认只合并重复同步，
+  `barrier-optimize` 仍可单独执行依赖分析。
 
 MyTest 默认开启，命名参数不改变原有位置参数：
 
@@ -56,6 +59,7 @@ MyTest 默认开启，命名参数不改变原有位置参数：
 build/test/ThreadTilingTest input.mlir \
   --frisk-simplify-loop-control='only-marked=true max-trip-count=8 max-expanded-ops=2048'
 build/test/ThreadTilingTest lowered.mlir --frisk-coalesce-waits-and-barriers
+build/test/ThreadTilingTest lowered.mlir --frisk-coalesce-waits-and-barriers='analyze-dependencies=true'
 python3 test/check_pipeline_cleanup.py build/test/ThreadTilingTest
 python3 test/check_pipeline_cleanup_attention.py --mytest build/test/MyTest
 ```

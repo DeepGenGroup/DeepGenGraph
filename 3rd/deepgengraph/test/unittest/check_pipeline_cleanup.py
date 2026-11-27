@@ -79,6 +79,35 @@ def sync_checks():
           wait("tail0") + barrier("tail1"), ["w0", "b0", "tail0", "tail1"])
 
 
+def sync_phase_checks():
+    source = '''module {
+      func.func @waits() {
+        rocdl.wait.asyncmark 0 {test.id = "w0"}
+        rocdl.wait.asyncmark 0 {test.id = "w1"}
+        return
+      }
+      func.func @handoff(%a: memref<16xi32, 3>, %i: index, %x: i32) -> i32
+          attributes {thread_num = 64 : i32} {
+        memref.store %x, %a[%i] : memref<16xi32, 3>
+        gpu.barrier {test.id = "first"}
+        gpu.barrier {test.id = "second"}
+        %v = memref.load %a[%i] : memref<16xi32, 3>
+        gpu.barrier {test.id = "tail"}
+        return %v : i32
+      }
+    }'''
+    for options, expected in [
+        ("", ["w0", "first", "tail"]),  # Legacy standalone / CP-SAT.
+        ("=coalesce-waits=false analyze-dependencies=true", ["w0", "w1", "second"]),
+        ("=analyze-dependencies=true", ["w0", "first"]),
+        ("=coalesce-waits=false", ["w0", "w1", "first", "second", "tail"]),
+    ]:
+        output = run(source, SYNC + options)
+        assert re.findall(r'test.id = "([^"]+)"', output) == expected, output
+        assert run(output, SYNC + options) == output
+    print("PASS sync: phase selection and order preserve the required handoff")
+
+
 def loop_fixture(kind, lb=2, ub=13, step=3, marker=True, name="probe"):
     header = (f"affine.for %i = {lb} to {ub} step {step}" if kind == "affine"
               else "scf.for %i = %lb to %ub step %step")
@@ -182,4 +211,5 @@ def loop_checks():
 
 if __name__ == "__main__":
     sync_checks()
+    sync_phase_checks()
     loop_checks()

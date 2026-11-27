@@ -1,6 +1,7 @@
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "SynchronizationCleanup.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
@@ -302,13 +303,10 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  // CP-SAT slot handoffs may add an already satisfied wait/barrier. This
-  // block-local pass removes duplicates only across effect-free operations.
-  if (coalesceWaits || preserveSchedule)
-    pm.addNestedPass<mlir::func::FuncOp>(
-        mlir::frisk::createCoalesceWaitsAndBarriersPass());
-  if (!preserveSchedule)
-    pm.addNestedPass<mlir::func::FuncOp>(mlir::frisk::createBarrierOptimizePass());
+  // CP-SAT permits local duplicate cleanup but owns the remaining barriers.
+  pm.addNestedPass<mlir::func::FuncOp>(createSynchronizationCleanupPass(
+      /*coalesceWaits=*/coalesceWaits || preserveSchedule,
+      /*analyzeDependencies=*/!preserveSchedule));
   pm.addPass(mlir::createSCFToControlFlowPass()); // scf -> cf
 
   // 2. 基础控制流、MemRef、Func 降级到 LLVM

@@ -9,8 +9,8 @@
 //     3. 调度：在直线代码窗口内做 list scheduling，让内存操作和计算交错（reorderUnrolledOperations）。
 //   选项 reorderAfterUnroll 控制是否执行第 3 步。
 //
-// BarrierOptimize（barrier-optimize，实现类 BarrierOptimizePass）
-//   删除前后没有跨线程内存依赖的 gpu.barrier。不在优化汇总.py 的 PIPELINE 表中。
+// BarrierAnalysis（优化汇总.py 第 39 项）
+//   在同步清理 Pass 内按跨线程内存依赖删除 gpu.barrier，也供独立入口 barrier-optimize 调用。
 //
 // 文件结构：Pass 1 的主体 -> barrier 内存范围判定（调度也复用）-> 调度节点定义 -> LDS 合并 -> 调度器 -> Pass 2。
 // ===========================================================================
@@ -20,6 +20,7 @@
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "ThreadScheduleUtils.h"
+#include "SynchronizationCleanup.h"
 #include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -1114,9 +1115,13 @@ public:
   StringRef getDescription() const override {
     return "Remove workgroup barriers without cross-thread memory dependencies";
   }
-  void runOnOperation() override { BarrierAnalysis(getOperation()).run(); }
+  void runOnOperation() override { removeRedundantWorkgroupBarriers(getOperation()); }
 };
 } // namespace
+
+void removeRedundantWorkgroupBarriers(func::FuncOp function) {
+  BarrierAnalysis(function).run();
+}
 
 std::unique_ptr<Pass> createIRDeepOptimizePass() {
   return std::make_unique<VectorOpLoopUnrollPass>();

@@ -18,10 +18,10 @@
 #   BM = BN = 128，D = 128，BK = 32；256 线程，每个 workgroup 4 个 wave。
 #
 # 原优化记录核对至 de99ebb7；本次按当前工作区源码补齐 Frisk 全流程和调度分支；
-# 入口为 3rd/deepgengraph/test/test_src.cpp。
+# 入口为 3rd/deepgengraph/test/test_src.cpp，后端同步清理的调用位置见 LowerPipe.cpp。
 # 历史实测数字来自 测试数据分析/1104.md、pmc_test.log 和对应实验目录。
 # “单步”= 上一版耗时 / 这一版耗时。组合实测不能拆成单个 Pass 的收益。
-# 历史计时不代表当前实现的单项收益；本次只更新说明，不重新做 GPU 测量。
+# 历史计时不代表当前实现的单项收益。
 # 本次更新：PIPELINE 补齐 Frisk 入口、LowerInfo 布局分析、AutoPipeline、
 # Fragment CP-SAT 调度、线程合法化和 LLVM 导出，并在第 4 部分补充白话说明。
 # 补充 V 双缓冲逻辑规划前移至 AutoPipeline、V0 首次 DMA 提前发射的回退修复；
@@ -186,6 +186,7 @@ def final_program_one_block(bx, by):
 # 范围：MyTest 中从进入 Frisk 前的准备，到 LLVM 导出的全部 Frisk 相关环节。
 # 表中既有优化 Pass，也有转换、分析、驱动函数；它们不全是“让代码更快”的优化。
 # 标为“内部”的行展开上一层 Pass 的工作；通用清理按阶段合并列出，避免淹没主线。
+# 同一行中的多个编号表示这些步骤由同一次 Pass 调用处理。
 # 默认介绍非 CP-SAT 路径；“可选”只在相应开关/标注存在时生效，不是全部串行叠加。
 # 第 6 项下的 52/55/14/28/37 和第 15 项下的 78/11/27/32 都是内部阶段。
 # 第 27 项分两段：第 51 项内部做逻辑规划，第 15 项内部做物理校验与落实。
@@ -207,8 +208,8 @@ PIPELINE = [
     (50, "ConvertFriskToBase",               "转 block", "默认",                          "展开 kernel/parallel/block 等外壳，形成 func 和显式循环"),
     # 至此已全部接入 frisk
     # ---- tensor / block IR：算法结构 -------------------------------------
-    # DeepgenGraphSimplify / AddKernelargPermuteInfo 后，入口在同一 PassManager 追加 ConvertScfForOp
-    # 并再次运行，再清空并运行 MemspaceAnalyze。随后 ConvertKernelOpToFrisk → ConvertMemAndCalcOp
+    # DeepgenGraphSimplify / AddKernelargPermuteInfo 各运行一次，随后运行 ConvertScfForOp、
+    # MemspaceAnalyze，再接 ConvertKernelOpToFrisk → ConvertMemAndCalcOp
     # → ReconcileUnrealizedCasts → FriskFuseBlockOps → ConvertFriskToBase。
     (36, "FriskOpFuse（分块前）",            "block",    "allow-reassociation=(math!=strict)", "先融合完整 PV 的 alpha*O 初值"),
     (40, "TileAttention",                    "block",    "QK=32，VO=32；math!=strict 可切 QK", "真实切加载/分配；无 GPU 单项计时"),
@@ -221,8 +222,8 @@ PIPELINE = [
     # 启发式路径调用一次 AutoPipeline；27/32 任一开启时先尝试展开标记的内循环，
     # 然后处理显式 pipeline_hint，再按开关生成下面两种 DMA 计划。
     (51, "AutoPipeline",                     "block", "非 CP-SAT 时调用；hint / 27 / 32 按需生效", "有界内层展开、N 槽循环预取、V 流及跨轮逻辑规划"),
-    (27, "V 双缓冲逻辑计划",                  "block，第 51 项内部", "--v-double-buffer=1", "记录 stage / slot / issue-after，待后端校验"),
-    (32, "跨 bn K0 逻辑计划",                 "block，第 51 项内部", "--cross-bn-k0=1", "指定首 DMA、末片 readiness 与跨轮关系"),
+    ((27, 32), "V 双缓冲与跨 bn K0 逻辑计划", "block，第 51 项内部", "--v-double-buffer=1 / --cross-bn-k0=1，各自可选",
+     "27 记录 stage / slot / issue-after；32 指定首 DMA、末片 readiness 与跨轮关系，均待后端校验"),
     (5,  "PromoteGemmMatrixLoads",           "block",    "默认",                          "-"),
     # CSE → PipelineSchedule（--pipeline=1）→ LowerFriskAsyncToSync（copy mode 为 sync）。
     (52, "LowerInfoAnalysis（矩阵读选型）",    "block，第 5 项内部", "有未分配线程的 GEMM 时运行", "先推断各线程拿哪些元素，才能选择矩阵读"),
@@ -245,9 +246,9 @@ PIPELINE = [
     (9,  "SimplifyLoopControl",              "fragment，第 80 项内部", "--simplify-loop-control=1", "-"),
     # 不变 fragment 保留会改变工作图；启发式和 CP-SAT 路径都在导出调度前执行。
     (10, "RetainInvariantFragments",         "fragment，第 80 项内部", "--retain-fragment-words=32", "causal: 1.08~1.10x/档"),
-    (29, "PrefetchFragmentLDS（普通窗口）",  "fragment，第 80 项内部", "--k-lds-prefetch=8；非 CP-SAT", "历史 MyTest 路径: 1.0272x（迁移前）"),
-    (31, "PrefetchFragmentLDS（归约窗口）",  "fragment，第 80 项内部", "--k-tail-prefetch=4；非 CP-SAT", "历史: 1.0098x（迁移前）"),
-    # 29/31 合用一次启发式 Pass，任一距离非零即运行。
+    # 非 CP-SAT 路径上任一距离非零即运行。
+    ((29, 31), "PrefetchFragmentLDS",        "fragment，第 80 项内部", "--k-lds-prefetch=8 / --k-tail-prefetch=4，各自可选",
+     "迁移前：普通窗口 1.0272x（MyTest 路径）；归约窗口 1.0098x"),
     (11, "ScheduleAsyncCopies",              "fragment，第 80 项内部", "启发式；子流水末尾", "-"),
     # CP-SAT 在此调用 processScheduleJSON；--cpsat-stop-after=1 成功后直接返回。
     (56, "ScheduleJSON / CP-SAT",             "fragment，可选驱动步骤", "--cpsat-export/import/baseline", "第 10 项后导出/导入调度；替代第 11 项"),
@@ -304,8 +305,8 @@ PIPELINE = [
     (64, "secondLowering",                   "MLIR lowering 驱动", "默认；以下 65/60/38/39/66~69/79 为其内部阶段", "先 LICM，再把控制流、内存和 GPU 操作译成 LLVM dialect"),
     (65, "AmendAllocaOpAddrSpace",            "第 64 项内部", "ROCm private 地址空间为 5",      "为线程私有分配填写正确地址空间"),
     (60, "通用结构清理",                     "第 64 项内部", "默认",                         "展开 memref 步长信息、vector 循环，再清理"),
-    (38, "CoalesceWaitsAndBarriers",          "第 64 项内部", "--coalesce-waits=1 或 CP-SAT 保序模式", "同 block 合并重复同步；无单项 GPU 计时"),
-    (39, "BarrierOptimize",                  "第 64 项内部", "非 CP-SAT，接在可选的 38 之后", "按跨线程内存依赖删 barrier"),
+    ((38, 39), "CoalesceWaitsAndBarriers",   "第 64 项内部", "38：--coalesce-waits=1 或 CP-SAT 保序；39：非 CP-SAT",
+     "先合并同 block 重复同步，再按跨线程内存依赖删 barrier；无单项 GPU 计时"),
     (66, "控制流/内存/函数转 LLVM",           "第 64 项内部，标准 Pass", "默认",              "把循环分支、内存访问和函数接口变成低层表示"),
     (79, "LowerFriskSchedBarrier",           "第 64 项内部", "默认，函数转 LLVM 后",       "将 Frisk 调度边界转换为目标调度屏障"),
     (67, "LLVMFuncOpAddGPUAttr",              "第 64 项内部", "默认",                         "标明 GPU kernel、workgroup 大小及目标信息"),
@@ -1755,8 +1756,9 @@ def coalesce_sync_after():
 # 代码：ConvertToLLVM/CoalesceWaitsAndBarriers.cpp；说明：lib/Pipeline/README.md。
 
 
-# ---- 39. BarrierOptimize：按跨线程内存依赖删除不必要的 barrier ---------------
-# 启发式路径在 secondLowering 的局部同步清理之后运行，分析结构化 loop、回边和 zero-trip 路径。
+# ---- 39. CoalesceWaitsAndBarriers 的依赖分析阶段 -------------------------------
+# 启发式路径在同一次 Pass 调用中分析结构化 loop、回边和 zero-trip 路径。
+# --coalesce-waits=0 时只做此阶段。CP-SAT 保序时只做第 38 项。
 
 def barrier_dependency_before():
     a = read_shared(buffer_a)
@@ -1774,7 +1776,7 @@ def barrier_dependency_after():
 # 33 的 ThreadIR 回边特例分别匹配不同证据，不是三个位置无条件重复删同一个 barrier。
 # 限制：只有能证明两侧读写范围不冲突才删，不能用不同 lane 的索引直接证明无跨线程别名。
 # 未知效果 / 条件 barrier 保守保留；每删一个 barrier 就更新图，避免同时删掉唯一保护。
-# 代码：ConvertToLLVM/IROptimize.cpp 中的 BarrierAnalysis / BarrierOptimizePass。
+# 代码：ConvertToLLVM/IROptimize.cpp 中的 BarrierAnalysis。独立命令 barrier-optimize 仍只执行此阶段。
 
 
 # ---- 6/13 补充. causal mask lowering：窄化比较并融合 mask 加法 -----------------
@@ -1854,7 +1856,7 @@ def qk_interleave_after(a, b):
 
 
 # =============================================================================
-# 第 6 部分：近期验证记录（本次仅核对已有记录，未重新测量 GPU）
+# 第 6 部分：近期验证记录
 # =============================================================================
 # 1. 分块前融合完整 PV（第 36 项）
 #    generated_ir/best_noncausal_early_wave_upstream_pv_fusion_20261119/README.txt：
@@ -1976,6 +1978,12 @@ def qk_interleave_after(a, b):
 #    总计 256 MMAC、13 VM wait、14 block barrier、16 个 x4 和 20 个 x2 DMA 包。
 #    llvm-diff 对上条 V0 修复版未报告差异；这是职责迁移及生成一致性检查，不是 GPU 计时。
 #    102 项聚焦回归通过，另有循环流水、task/liveness、布局数值检查及 MLIR/LLVM 验证。
+#
+# 12. 第 38/39 项合并与 MyTest 重复调用清理
+#    原合并提交 76a1f719 以 e2ae5ef0 为对照，用相同工具链和输入导出六组 --llvm-opt=0 的 LLVM IR：
+#    causal 的 coalesce-waits=1/0、CP-SAT 保序、strict，以及 non-causal 的
+#    K swizzle 和关闭两项地址/索引规范化的 mmac-recip。六组逐字节一致，
+#    且各自通过 opt -passes='default<O3>,verify'。本次未测 GPU 耗时。
 
 
 # =============================================================================
