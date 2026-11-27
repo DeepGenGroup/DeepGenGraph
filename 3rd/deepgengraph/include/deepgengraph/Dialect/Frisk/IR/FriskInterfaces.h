@@ -5,9 +5,17 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace mlir::frisk {
+// Compiler-private scheduling state, unrelated to program memory or hardware
+// synchronization. The LLVM counterpart is inaccessiblemem: readwrite.
+struct ScheduleResource : SideEffects::Resource::Base<ScheduleResource> {
+  StringRef getName() const final { return "frisk.schedule"; }
+  bool isAddressable() const override { return false; }
+};
+
 enum class ExecutionScope { Unknown, Thread, Warp, Workgroup };
 enum class ScheduleKind {
-  Unknown, Compute, MMA, Load, Store, Copy, Layout, AsyncIssue, Wait, Barrier, Region
+  Unknown, Compute, MMA, Load, Store, Copy, Layout, AsyncIssue, Wait, Barrier,
+  SchedBarrier, Region
 };
 struct ExecutionSemantics {
   ExecutionScope scope = ExecutionScope::Unknown;

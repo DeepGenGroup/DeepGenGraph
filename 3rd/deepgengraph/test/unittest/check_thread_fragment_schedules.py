@@ -138,7 +138,7 @@ def main():
                     assert len(pairs) == count//2, result
                     for positions in pairs.values():
                         assert len(positions) == 2
-                        assert not any('@llvm.amdgcn.sched.barrier' in line for line in lines[min(positions):max(positions)])
+                        assert not any('frisk.sched_barrier' in line for line in lines[min(positions):max(positions)])
                         names = [re.search(r'(%\w+) =', lines[p])[1] for p in positions]
                         use = min(n for n, line in enumerate(lines) if 'v_mmac_' in line and
                                   any(re.search(re.escape(name)+r'[, ]', line) for name in names))
@@ -174,7 +174,7 @@ def main():
             source = run(softmax(count))
             result = run(source, SOFT+mode)
             assert graph(result) == graph(source)
-            assert result.count('llvm.call @llvm.amdgcn.sched.barrier') == count
+            assert result.count('frisk.sched_barrier') == count
             assert run(result, SOFT+mode) == result
             if mode == 'pv':
                 events = re.findall(r'math.exp2|v_mmac_f32', result)
@@ -207,7 +207,7 @@ def main():
             source = run(softmax(wrapped_sum=True, score=score))
             result = run(source, SOFT+mode)
             assert graph(result) == graph(source), score
-            assert result.count('llvm.call @llvm.amdgcn.sched.barrier') == 4
+            assert result.count('frisk.sched_barrier') == 4
             if mode == 'pv':
                 assert re.findall(r'math.exp2|v_mmac_f32', result) == ['math.exp2', 'v_mmac_f32'] * 4
             assert run(result, SOFT+mode) == result

@@ -15,6 +15,8 @@ bool registerValues(Operation *op) {
 ExecutionSemantics inferExecutionSemantics(Operation *op) {
   using S = ExecutionScope;
   using K = ScheduleKind;
+  if (isa<SchedBarrierOp>(op))
+    return {S::Thread, K::SchedBarrier, false, false, true};
   if (isa<WarpMmaRROp, GemmFragOp>(op))
     return {S::Warp, K::MMA, true, true, true};
   if (isa<GemmOp>(op))

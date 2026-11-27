@@ -91,7 +91,7 @@ def main():
         assert events(result) != events(source)
         assert result.count('frisk.lds_prefetch_anchor') > 0
         assert run(result, PASS + f'distance={distance}') == result
-        assert 'llvm.amdgcn.sched.barrier' not in result
+        assert 'frisk.sched_barrier' not in result
         # Bootstrap just the next MMA's operand before MMA 0; remaining reads
         # start after MMA 0 so their address setup cannot delay startup.
         read = mma = 0
@@ -239,7 +239,7 @@ def main():
     assert optimized.split('llvm.inline_asm', 1)[0].count('memref.load') == 8
     finalized = run(lowered, FINALIZE)
     assert 'frisk.lds_prefetch_anchor' not in finalized
-    assert 'llvm.amdgcn.sched.barrier' in finalized
+    assert 'frisk.sched_barrier' in finalized
     assert run(finalized, FINALIZE) == finalized
 
     from check_thread_fragment_schedules import paired, graph as thread_graph
@@ -288,7 +288,7 @@ def main():
         result = run(source, FINALIZE)
         assert thread_graph(without_anchors(source)) == thread_graph(without_anchors(result))
         assert result.count('frisk.lds_pair') == 8
-        assert result.count('llvm.call @llvm.amdgcn.sched.barrier') == 6
+        assert result.count('frisk.sched_barrier') == 6
         assert 'frisk.lds_prefetch_anchor' not in result
         assert run(result, FINALIZE) == result
         lines = result.splitlines()
@@ -296,7 +296,7 @@ def main():
             positions = [n for n, line in enumerate(lines)
                          if f'frisk.lds_pair = {tag} :' in line]
             assert len(positions) == 2
-            assert not any('sched.barrier' in line or 'v_mmac_' in line
+            assert not any('frisk.sched_barrier' in line or 'v_mmac_' in line
                            for line in lines[positions[0]:positions[1]])
         # Use the production translation extension, then the legacy contract
         # completion entry point, and O3. The scheduled MMA must remain inside

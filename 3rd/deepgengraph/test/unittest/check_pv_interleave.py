@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 LLVM = Path('/data2/xsl/install/bin')
 
 
@@ -96,14 +96,14 @@ def main():
                 expected = [f'{c}:{k}' for group in range(0, 4, w)
                             for k in range(3) for c in range(group, group+w)]
                 assert ids(out) == expected, ids(out)
-                assert out.count('llvm.call @llvm.amdgcn.sched.barrier') == (24 if width else 0)
+                assert out.count('frisk.sched_barrier') == (24 if width else 0)
                 # Real barriers retain their original MMAC ordinal.
                 assert len(ids(out.split('gpu.barrier')[0])) == 1
                 assert transform(out, width) == out, 'not idempotent'
                 # Canonicalization / CSE must retain guards and MMAC order.
                 cleaned = run(out, '--canonicalize', '--cse')
                 assert ids(cleaned) == expected
-                assert cleaned.count('llvm.call @llvm.amdgcn.sched.barrier') == (24 if width else 0)
+                assert cleaned.count('frisk.sched_barrier') == (24 if width else 0)
                 cases += 1
 
     for chains in (4, 8, 16):

@@ -70,12 +70,12 @@ def main():
                                 for k in range(8) for c in range(g, g+w)]
                     assert ids(out) == expected
                     count = 0 if not width or not guards else 32 if guards == -1 else (16+guards-1)//guards
-                    assert out.count('llvm.call @llvm.amdgcn.sched.barrier') == count
+                    assert out.count('frisk.sched_barrier') == count
                     if width:
                         first = out.index('test.id')
                         assert 'frisk.lds_load' not in out[first:], 'late K packet'
                         if guards > 0:
-                            chunks = out.split('llvm.call @llvm.amdgcn.sched.barrier')
+                            chunks = out.split('frisk.sched_barrier')
                             assert [len(ids(x)) for x in chunks[:-1]] == [
                                 min(guards, 16-i) for i in range(0, 16, guards)]
                     assert out.count('gpu.barrier') == 2
@@ -84,7 +84,7 @@ def main():
                     assert transform(out, width, guards) == out, 'replay changed schedule'
                     cleaned = run(out, '--canonicalize', '--cse')
                     assert ids(cleaned) == expected
-                    assert cleaned.count('llvm.call @llvm.amdgcn.sched.barrier') == count
+                    assert cleaned.count('frisk.sched_barrier') == count
                     cases += 1
 
     # More than one pair, different packet sets, full vs partial guard groups.
@@ -96,7 +96,7 @@ def main():
                 assert result_graph(out) == result_graph(run(source))
                 assert ids(out) == [f'{c}:{k}' for g in range(0, 4, width)
                                     for k in range(3) for c in range(g, g+width)]
-                assert out.count('llvm.call @llvm.amdgcn.sched.barrier') == (0 if not guards else (12+guards-1)//guards)
+                assert out.count('frisk.sched_barrier') == (0 if not guards else (12+guards-1)//guards)
                 assert transform(out, width, guards, mode=mode) == out
                 cases += 1
 
@@ -171,7 +171,7 @@ def main():
                                 str(tmp/'kernel.ll'), '-o', str(tmp/'kernel.o3.ll')], capture_output=True, text=True)
             assert p.returncode == 0, p.stderr
             optimized = (tmp/'kernel.o3.ll').read_text()
-            assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 0)') == out.count('llvm.call @llvm.amdgcn.sched.barrier')
+            assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 0)') == out.count('frisk.sched_barrier')
             if guards:
                 assert 'memory(inaccessiblemem: readwrite)' in optimized
             cases += 1

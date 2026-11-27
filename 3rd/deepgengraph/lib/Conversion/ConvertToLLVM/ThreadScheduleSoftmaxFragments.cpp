@@ -52,12 +52,11 @@ bool knownFixed(Operation *op) {
   if (crossIterationIssue(op)) return true;
   if (op->getNumRegions()) return false;
   if (pure(op) || mma(op)) return true;
+  if (isScheduleBarrier(op)) return true;
   if (isa<LDSLoadOp, ReadMatrixFromShmOp, gpu::BarrierOp,
           SyncThreadsInBlockOp, gpu::ShuffleOp>(op)) return true;
   StringRef name = op->getName().getStringRef();
   if (name == "frisk.async_copy_gm_to_shm" || name == "frisk.wait_buffer_ready") return true;
-  if (auto call = dyn_cast<LLVM::CallOp>(op))
-    return call.getCallee() && *call.getCallee() == Barrier;
   return false;
 }
 
@@ -141,6 +140,7 @@ unsigned schedule(Block &block, SoftmaxFragmentMode mode) {
     order.push_back(op); emitted.insert(op);
   }
   if (order.size() != original.size() || order == original) return 0;
+  if (!preservesScheduleBarriers(original, order)) return 0;
   DenseMap<Operation *, unsigned> proposed;
   for (auto [n, op] : llvm::enumerate(order)) proposed[op] = n;
   for (Operation *op : order) for (Value value : op->getOperands())

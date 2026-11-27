@@ -39,7 +39,7 @@ struct LocalSchedulePlan {
           if (position->second >= positions[op]) return false;
         } else if (!def->isBeforeInBlock(original.front())) return false;
       }
-    return true;
+    return preservesScheduleBarriers(original, order);
   }
   void apply() const {
     Operation *end = original.back()->getNextNode();

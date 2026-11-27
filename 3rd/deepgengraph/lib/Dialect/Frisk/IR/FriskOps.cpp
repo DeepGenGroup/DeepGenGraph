@@ -43,6 +43,12 @@ namespace frisk {
 namespace mlir {
 namespace frisk {
 
+LogicalResult SchedBarrierOp::verify() {
+  if (getMaskAttr().getValue().getZExtValue() & ~uint64_t(0x0fff))
+    return emitOpError("mask must contain only supported bits (0x0000..0x0fff)");
+  return success();
+}
+
 LogicalResult ConvertPackOp::verify() {
   if (getInput().getType() != VectorType::get({4}, Float32Type::get(getContext())) ||
       getResult().getType() != VectorType::get({4}, Float16Type::get(getContext())))

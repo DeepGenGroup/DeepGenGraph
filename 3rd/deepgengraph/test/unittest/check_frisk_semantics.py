@@ -5,7 +5,7 @@ import subprocess
 
 from check_pv_interleave import fixture, ids
 
-BIN = Path(__file__).resolve().parents[1] / 'build/test'
+BIN = Path(__file__).resolve().parents[2] / 'build/test'
 
 
 def run(tool, source, *args, ok=True):
@@ -43,6 +43,7 @@ func.func @semantics(%a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>,
     : memref<4xf32, 1>, memref<4xf32, 3> -> !frisk.async_task
   frisk.wait_buffer_ready %task {test.id = "wait"} : !frisk.async_task
   frisk.sync_threads_in_block {test.id = "barrier"}
+  frisk.sched_barrier {mask = 6 : i32, test.id = "sched_barrier"}
   return
 }}
 '''
@@ -61,6 +62,8 @@ func.func @semantics(%a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>,
     assert 'boundary=1' in rows['wave_reduce'] and 'speculatable=0' in rows['wave_reduce']
     assert 'registers=0' in rows['unknown'] and 'boundary=1' in rows['unknown']
     assert 'read@0' in rows['load'] and 'write@1' in rows['store']
+    for contract in ('scope=1', 'collective=0', 'boundary=1', 'memory_free=0', 'speculatable=0'):
+        assert contract in rows['sched_barrier']
 
     # A write to the operand buffer invalidates reuse of the computed read.
     cse = '''module { func.func @reuse(%v: vector<4xf32>, %sm: memref<4xf32, 3>, %x: f32, %i: index)
@@ -83,7 +86,7 @@ func.func @semantics(%a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>,
         out = run('ThreadTilingTest', src, '--frisk-thread-interleave-pv=width=4', '--verify-each')
         assert ids(out) == [f'{c}:{k}' for k in range(3) for c in range(4)]
         assert len(ids(out.split('gpu.barrier')[0])) == 1
-        assert out.count('llvm.call @llvm.amdgcn.sched.barrier') == 24
+        assert out.count('frisk.sched_barrier') == 24
     shaped = fixture(warp=True).replace('vector<4xf32>', 'vector<1x4xf32>')
     shaped_out = run('ThreadTilingTest', shaped, '--frisk-thread-interleave-pv=width=4')
     assert ids(shaped_out) == [f'{c}:{k}' for k in range(3) for c in range(4)]

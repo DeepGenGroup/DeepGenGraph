@@ -5,6 +5,7 @@ add_deepgengraph_library(ConvertThreadToLLVMIR
   FriskLLVMTranslation.cpp
   LowerPipe.cpp
   LowerFriskAsyncCopy.cpp
+  LowerFriskSchedBarrier.cpp
   CoalesceWaitsAndBarriers.cpp
   SimplifyBoundedAffine.cpp
   HoistWaveInvariants.cpp

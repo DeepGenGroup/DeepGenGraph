@@ -122,14 +122,34 @@ alternative widths to the original input, not already transformed output.
 
 ## Scheduling guards and lowering
 
-The module pass emits typed LLVM-dialect calls to
-`llvm.amdgcn.sched.barrier(0)` at the configured group boundaries (by default,
-before/after each PV MMAC), with explicit
-`memory(inaccessiblemem: readwrite)` effects. A compatible declaration is
-created only when a region is actually transformed; a conflicting symbol is
-an error. The calls survive standard MLIR/LLVM lowering directly, so export
-requires no extra matcher, scheduling pass or metadata reconstruction.
-These are compiler scheduling hints, not additional GPU synchronization.
+The module pass emits `frisk.sched_barrier` with mask 0 at the configured group
+boundaries (by default, before/after each PV MMAC). LDS prefetch and softmax
+scheduling use the same operation. Its compiler-private `frisk.schedule`
+read/write effect retains it through MLIR CSE/DCE without claiming a program
+memory access. Thread schedulers conservatively respect every mask as a boundary.
+
+`frisk-lower-sched-barrier`, also included in production `secondLowering`, emits
+`llvm.amdgcn.sched.barrier(mask)` calls with explicit
+`memory(inaccessiblemem: readwrite)` effects and preserves origin markers.
+It reuses a compatible declaration, rejects conflicting symbols and unsupported
+targets, and creates the declaration only when there are barriers to lower.
+Existing `frisk.scheduled_mma` anchors retain their LLVM ordering contract.
+LLVM-only export optimizations continue to emit the target intrinsic directly.
+
+```mlir
+frisk.sched_barrier                      // mask 0: no instruction class crosses
+frisk.sched_barrier {mask = 6 : i32}      // allow VALU and SALU to cross
+frisk.sched_barrier {mask = 1026 : i32}   // 0x402: allow TRANS and VALU
+```
+
+The mask is an **allow** mask, not a blocked-class mask. Supported bits are
+0x001 (ALU), 0x002 (VALU), 0x004 (SALU), 0x008 (MFMA/WMMA), 0x010 (VMEM),
+0x020 (VMEM read), 0x040 (VMEM write), 0x080 (DS), 0x100 (DS read),
+0x200 (DS write), 0x400 (TRANS), and 0x800 (LDSDMA). Bits may be combined;
+unknown bits are rejected. The backend interprets classes after instruction
+selection; a high-level op or inline asm need not map to a single class.
+The mask does not itself pin arbitrary pure computations through LLVM O3.
+These are compiler scheduling hints, not additional GPU synchronization or waits.
 Backend wait insertion, register allocation and physical execution still need
 hardware validation.
 

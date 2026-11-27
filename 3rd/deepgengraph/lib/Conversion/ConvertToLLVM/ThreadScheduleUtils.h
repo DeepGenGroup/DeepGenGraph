@@ -126,22 +126,36 @@ inline LogicalResult checkGuard(ModuleOp module) {
   }
   return success();
 }
-inline void guard(Operation *before, StringRef marker) {
-  auto module = before->getParentOfType<ModuleOp>();
-  OpBuilder b(module.getContext());
-  auto f = module.lookupSymbol<LLVM::LLVMFuncOp>(Barrier);
-  if (!f) {
-    b.setInsertionPointToStart(module.getBody());
-    auto type = LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(module.getContext()),
-                                          {b.getI32Type()}, false);
-    f = b.create<LLVM::LLVMFuncOp>(before->getLoc(), Barrier, type);
-    f.setMemoryEffectsAttr(guardEffects(module.getContext()));
+inline void guard(Operation *before, StringRef marker, uint32_t mask = 0) {
+  OpBuilder b(before);
+  auto barrier = b.create<SchedBarrierOp>(before->getLoc(), b.getI32IntegerAttr(mask));
+  barrier->setAttr(marker, b.getUnitAttr());
+}
+
+inline bool isScheduleBarrier(Operation *op) {
+  if (isa<SchedBarrierOp>(op)) return true;
+  auto call = dyn_cast<LLVM::CallOp>(op);
+  return call && call.getCallee() && *call.getCallee() == Barrier;
+}
+
+// A class mask describes machine instructions, not arbitrary Frisk operations.
+// Until selection, conservatively reject movement across either representation.
+inline bool preservesScheduleBarriers(ArrayRef<Operation *> original,
+                                      ArrayRef<Operation *> order) {
+  DenseMap<Operation *, unsigned> regions;
+  unsigned region = 0;
+  for (Operation *op : original) {
+    if (isScheduleBarrier(op)) ++region;
+    regions[op] = region;
+    if (isScheduleBarrier(op)) ++region;
   }
-  b.setInsertionPoint(before);
-  auto zero = b.create<LLVM::ConstantOp>(before->getLoc(), b.getI32Type(), b.getI32IntegerAttr(0));
-  auto call = b.create<LLVM::CallOp>(before->getLoc(), f, ValueRange{zero});
-  call.setMemoryEffectsAttr(guardEffects(module.getContext()));
-  call->setAttr(marker, b.getUnitAttr());
+  region = 0;
+  for (Operation *op : order) {
+    if (isScheduleBarrier(op)) ++region;
+    if (regions.lookup(op) != region) return false;
+    if (isScheduleBarrier(op)) ++region;
+  }
+  return true;
 }
 
 // A passthrough attribute survives Func-to-LLVM and LLVM IR translation. Late

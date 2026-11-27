@@ -22,6 +22,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createBarrierOptimizePass(); });
   registry.insert<mlir::frisk::FriskDialect>();
   mlir::registerPass([] { return mlir::frisk::createLowerFriskAsyncCopyPass(); });
+  mlir::registerPass([] { return mlir::frisk::createLowerFriskSchedBarrierPass(); });
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Fragment optimization tests\n", registry));
 }

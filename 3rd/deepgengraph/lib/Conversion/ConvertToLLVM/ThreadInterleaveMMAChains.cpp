@@ -17,7 +17,6 @@
 namespace mlir::frisk {
 namespace {
 constexpr StringLiteral Marker = thread_schedule::MMAInterleaveMarker;
-constexpr StringLiteral Barrier = "llvm.amdgcn.sched.barrier";
 using Ops = SmallVector<Operation *, 32>;
 
 bool isMMA(Operation *op) {

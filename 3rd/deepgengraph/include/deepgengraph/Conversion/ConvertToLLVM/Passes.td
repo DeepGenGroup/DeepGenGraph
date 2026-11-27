@@ -39,6 +39,12 @@ def LowerFriskAsyncCopy: Pass<"frisk-lower-async-copy", "::mlir::ModuleOp"> {
   let constructor = "mlir::frisk::createLowerFriskAsyncCopyPass()";
 }
 
+def LowerFriskSchedBarrier: Pass<"frisk-lower-sched-barrier", "::mlir::ModuleOp"> {
+  let summary = "Lower Frisk scheduling boundaries to AMDGPU scheduler intrinsics";
+  let constructor = "mlir::frisk::createLowerFriskSchedBarrierPass()";
+  let dependentDialects = ["mlir::frisk::FriskDialect", "mlir::LLVM::LLVMDialect"];
+}
+
 def FuseFragmentAccumulator: Pass<"fuse-fragment-accumulator", "func::FuncOp"> {
   let summary = "Fuse a full-tile add into independent MMA fragment updates";
   let constructor = "mlir::frisk::createFuseFragmentAccumulatorPass()";

@@ -27,6 +27,39 @@ class Frisk_Op<string mnemonic, list<Trait> traits = []> :
 
 def ImplicitFriskTerminator : SingleBlockImplicitTerminator<"EndOp">;
 
+def Frisk_ScheduleResource : Resource<"::mlir::frisk::ScheduleResource">;
+
+def Frisk_SchedBarrierOp : Frisk_Op<"sched_barrier", [
+    MemoryEffects<[MemRead<Frisk_ScheduleResource>,
+                   MemWrite<Frisk_ScheduleResource>]>]> {
+  let summary = "Compiler scheduling boundary with an instruction allow mask";
+  let description = [{
+    Lowers to llvm.amdgcn.sched.barrier(mask). Set bits ALLOW instruction
+    classes to cross the boundary during backend scheduling; zero allows none.
+    This is not a thread barrier, memory fence, or asynchronous completion wait.
+
+    Mask bits (combinable, valid range 0x0000..0x0fff):
+      0x001 ALU (all non-memory, non-side-effecting instructions)
+      0x002 VALU, 0x004 SALU, 0x008 MFMA/WMMA
+      0x010 VMEM, 0x020 VMEM read, 0x040 VMEM write
+      0x080 DS, 0x100 DS read, 0x200 DS write
+      0x400 transcendental (e.g. exp2), 0x800 LDSDMA.
+    Thus 0x006 allows VALU/SALU and 0x402 allows TRANS/VALU. SSA register
+    references have no separate mask; reductions and layout conversions may
+    lower to several instruction classes, depending on the implementation.
+
+    Frisk schedulers conservatively treat this as a boundary for every mask:
+    high-level operations and inline assembly need not map to one instruction
+    class. The mask is interpreted by the target backend after lowering.
+    The private scheduling effect retains this op through CSE/DCE but does not
+    by itself prevent motion of arbitrary pure computations. Scheduling passes
+    must respect the boundary and preserve required LLVM anchor contracts.
+  }];
+  let arguments = (ins DefaultValuedAttr<I32Attr, "0">:$mask);
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
 // Fresh logical values; see FriskTraits.h for the storage/aliasing contract.
 def Frisk_ComputedTile : NativeOpTrait<"ComputedTile"> {
   let cppNamespace = "::mlir::frisk";

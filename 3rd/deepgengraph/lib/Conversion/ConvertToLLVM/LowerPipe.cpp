@@ -326,6 +326,7 @@ bool secondLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context,
   pm.addPass(mlir::createConvertFuncToLLVMPass(funcOptions));
 
   // 3. GPU / ROCDL / NVVM 降级
+  pm.addPass(createLowerFriskSchedBarrierPass(target));
   pm.addPass(mlir::frisk::createLLVMFuncOpAddGPUAttrPass(target));
   pm.addPass(mlir::frisk::createGPUToROCDLOrNVVMPass(target, kLLVMIndexBitwidth,
                                                  nativeExp2));

@@ -24,6 +24,8 @@ std::unique_ptr<mlir::Pass> createIRDeepOptimizePass();
 std::unique_ptr<mlir::Pass> createBarrierOptimizePass();
 std::unique_ptr<mlir::Pass> createCoalesceWaitsAndBarriersPass();
 std::unique_ptr<mlir::Pass> createLowerFriskAsyncCopyPass(bool useAsyncCopy = true);
+// Keep scheduling boundaries explicit until the final target lowering.
+std::unique_ptr<mlir::Pass> createLowerFriskSchedBarrierPass(Target target = Target::ROCm);
 std::unique_ptr<mlir::Pass> createFuseFragmentAccumulatorPass();
 std::unique_ptr<mlir::Pass> createApproximateThreadMathPass();
 std::unique_ptr<mlir::Pass> createThreadMaskAddBypassPass();
