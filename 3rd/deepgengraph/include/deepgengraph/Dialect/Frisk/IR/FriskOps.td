@@ -51,6 +51,12 @@ def Frisk_SchedBarrierOp : Frisk_Op<"sched_barrier", [
     Frisk schedulers conservatively treat this as a boundary for every mask:
     high-level operations and inline assembly need not map to one instruction
     class. The mask is interpreted by the target backend after lowering.
+    Planner-generated boundaries may carry the unit attribute
+    frisk.memory_mma_guard: a register-only scheduler may refine that plan if
+    all other operations (including guards, memory, MMA and synchronization)
+    keep their exact relative order and explicit boundaries remain respected.
+    This permission applies only to zero-mask Frisk ops before lowering; it
+    does not relax the final backend barrier or LLVM call representation.
     The private scheduling effect retains this op through CSE/DCE but does not
     by itself prevent motion of arbitrary pure computations. Scheduling passes
     must respect the boundary and preserve required LLVM anchor contracts.

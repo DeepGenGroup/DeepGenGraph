@@ -217,12 +217,12 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
   OpBuilder builder(module.getContext());
   for (auto [index, mma] : llvm::enumerate(desired)) {
     if (guardGroup < 0) {
-      thread_schedule::guard(mma, Marker);
+      thread_schedule::guardMemoryAndMMA(mma, Marker);
       ++stats.guards;
     }
     if (guardGroup < 0 || (guardGroup > 0 &&
         ((index + 1) % guardGroup == 0 || index + 1 == desired.size()))) {
-      thread_schedule::guard(mma->getNextNode(), Marker);
+      thread_schedule::guardMemoryAndMMA(mma->getNextNode(), Marker);
       ++stats.guards;
     }
     mma->setAttr(Marker, builder.getI32IntegerAttr(width));

@@ -126,10 +126,22 @@ inline LogicalResult checkGuard(ModuleOp module) {
   }
   return success();
 }
-inline void guard(Operation *before, StringRef marker, uint32_t mask = 0) {
+inline SchedBarrierOp guard(Operation *before, StringRef marker, uint32_t mask = 0) {
   OpBuilder b(before);
   auto barrier = b.create<SchedBarrierOp>(before->getLoc(), b.getI32IntegerAttr(mask));
   barrier->setAttr(marker, b.getUnitAttr());
+  return barrier;
+}
+
+// These planner-owned boundaries fix the memory/MMA schedule. A later register
+// scheduler may refine it only if it proves that every other operation,
+// including these guards, remains in the same order. Explicit guards and the
+// final softmax guards do not grant this permission. The backend still sees a
+// full barrier after all ThreadIR schedules have been composed.
+inline constexpr StringLiteral MemoryMMAGuard = "frisk.memory_mma_guard";
+inline void guardMemoryAndMMA(Operation *before, StringRef marker) {
+  auto barrier = guard(before, marker);
+  barrier->setAttr(MemoryMMAGuard, UnitAttr::get(before->getContext()));
 }
 
 inline bool isScheduleBarrier(Operation *op) {

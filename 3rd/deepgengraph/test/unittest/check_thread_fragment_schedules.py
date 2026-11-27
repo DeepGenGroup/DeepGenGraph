@@ -223,6 +223,44 @@ def main():
     assert result.count('math.exp2') == 3
     assert run(result, SOFT+'pv') == result
     export(result)
+
+    # Compose the real MMA scheduler with softmax scheduling. Its generated
+    # guards protect the fixed MMA/memory order, not an unfinished exp2 schedule.
+    # Previously those guards made the entire softmax pass silently do nothing.
+    for guards in (-1, 1, 2):
+        source = softmax(wrapped_sum=True, boundary='gpu.barrier\n'
+            '%i = arith.constant 0 : index\n'
+            '%b = frisk.lds_load %sm[%i] {alignment = 8 : i64, byte_offset = 16 : i64} '
+            ': memref<64xf16, 3> -> vector<4xf16>').replace(
+            '%b: vector<4xf16>', '%sm: memref<64xf16, 3>').replace(
+            '%p2, %b, %m1', '%p2, %b, %seed')
+        interleaved = run(source,
+            f'--frisk-thread-interleave-mma-chains=width=2 guard-group={guards}')
+        assert re.findall(r'test.id = "(\d+)"', interleaved) == ['0', '2', '1', '3']
+        assert 'frisk.memory_mma_guard' in interleaved
+        result = run(interleaved, SOFT+'pv')
+        assert graph(result) == graph(interleaved)
+        assert re.findall(r'math.exp2|v_mmac_f32', result) == ['math.exp2', 'v_mmac_f32'] * 4
+        assert result.count('frisk.memory_mma_guard') == interleaved.count('frisk.memory_mma_guard')
+        assert result.index('gpu.barrier') < result.index('math.exp2')
+        assert result.index('frisk.lds_load') < result.index('math.exp2')
+        assert run(result, SOFT+'pv') == result
+        export(result)
+        # Removing the producer's explicit permission restores hard boundaries.
+        opaque = interleaved.replace('frisk.memory_mma_guard, ', '')
+        assert run(opaque, SOFT+'pv') == run(opaque)
+        cases += 1
+
+    for boundary in ('frisk.sched_barrier',
+                     'frisk.sched_barrier {frisk.mma_interleave}',
+                     'frisk.sched_barrier {frisk.memory_mma_guard, mask = 1026 : i32}',
+                     'frisk.sched_barrier {frisk.memory_mma_guard = false}'):
+        source = softmax(boundary=boundary)
+        assert run(source, SOFT+'pv') == run(source)
+    # Refinement still cannot cross unknown effects, even with scoped guards.
+    source = softmax(boundary='frisk.sched_barrier {frisk.memory_mma_guard}\n'
+                             'func.call @unknown() : () -> ()')
+    assert run(source, SOFT+'pv') == run(source)
     legacy = ROOT / 'build/test/LegacyLLVMExportTest'
     for option in ('--k-lds-prefetch=8', '--k-tail-prefetch=4', '--softmax-fragments=pv',
                    '--k-lds-prefetch=0', '--k-tail-prefetch=0', '--softmax-fragments=off'):

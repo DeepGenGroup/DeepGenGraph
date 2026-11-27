@@ -60,6 +60,29 @@ bool knownFixed(Operation *op) {
   return false;
 }
 
+bool preservesFixedSchedule(ArrayRef<Operation *> original,
+                            ArrayRef<Operation *> order,
+                            const llvm::SmallPtrSetImpl<Operation *> &moving) {
+  // Refining an LDS/MMA plan must not move a read, MMA, DMA, wait, collective,
+  // control-flow operation or guard. Only the proven pure softmax/sum DAG can
+  // cross the boundaries whose producer explicitly permits this composition.
+  if (!llvm::all_of(moving, [](Operation *op) { return pure(op); })) return false;
+  Ops oldFixed, newFixed, oldBoundaries, newBoundaries;
+  auto collect = [&](ArrayRef<Operation *> ops, Ops &fixed, Ops &boundaries) {
+    for (Operation *op : ops) {
+      if (!moving.contains(op)) fixed.push_back(op);
+      auto barrier = dyn_cast<SchedBarrierOp>(op);
+      if (!barrier || barrier.getMask() != 0 ||
+          !op->hasAttrOfType<UnitAttr>(MemoryMMAGuard))
+        boundaries.push_back(op);
+    }
+  };
+  collect(original, oldFixed, oldBoundaries);
+  collect(order, newFixed, newBoundaries);
+  return oldFixed == newFixed &&
+         preservesScheduleBarriers(oldBoundaries, newBoundaries);
+}
+
 unsigned schedule(Block &block, SoftmaxFragmentMode mode) {
   SmallVector<Packet, 4> packets;
   Ops original;
@@ -140,7 +163,7 @@ unsigned schedule(Block &block, SoftmaxFragmentMode mode) {
     order.push_back(op); emitted.insert(op);
   }
   if (order.size() != original.size() || order == original) return 0;
-  if (!preservesScheduleBarriers(original, order)) return 0;
+  if (!preservesFixedSchedule(original, order, moving)) return 0;
   DenseMap<Operation *, unsigned> proposed;
   for (auto [n, op] : llvm::enumerate(order)) proposed[op] = n;
   for (Operation *op : order) for (Value value : op->getOperands())

@@ -183,8 +183,8 @@ void finalizeFragmentSchedule(func::FuncOp f, Stats &stats) {
       op->setAttr("frisk.register_mma", UnitAttr::get(op->getContext()));
       op->setAttr("frisk.scheduled_mma", UnitAttr::get(op->getContext()));
     }
-    guard(op, "frisk.lds_prefetch.fragment");
-    guard(op->getNextNode(), "frisk.lds_prefetch.fragment");
+    guardMemoryAndMMA(op, "frisk.lds_prefetch.fragment");
+    guardMemoryAndMMA(op->getNextNode(), "frisk.lds_prefetch.fragment");
     op->removeAttr(FragmentLDSAnchor);
     ++stats.anchors;
   }
@@ -261,8 +261,8 @@ void schedule(Ops region, unsigned distance, StringRef marker, Stats &stats) {
   }
   // Iterate in original MMA order for deterministic guard insertion.
   for (Operation *op : mmas) if (anchors.contains(op)) {
-    guard(op, marker);
-    guard(op->getNextNode(), marker);
+    guardMemoryAndMMA(op, marker);
+    guardMemoryAndMMA(op->getNextNode(), marker);
   }
   ++stats.regions; stats.pairs += pairs.size(); stats.moved += moved;
   stats.anchors += anchors.size();
