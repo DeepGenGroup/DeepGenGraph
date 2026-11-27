@@ -57,7 +57,10 @@ std::unique_ptr<mlir::Pass> createCanonicalizeThreadLDSAddressesPass();
 std::unique_ptr<mlir::Pass> createHoistWaveInvariantsPass(bool ldsBases = true, bool laneShuffles = true);
 
 // -------- Lower Pipeline ----------
-bool firstLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context) ;
+// Report whether the sweep changed IR so an unchanged module can skip a repeat.
+LogicalResult runCSE(ModuleOp mod, bool &changed);
+bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context);
+bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context, bool runInitialCSE);
 bool secondLowering(mlir::ModuleOp& mod, mlir::MLIRContext* context, Target target,
                     bool coalesceWaits = true, bool nativeExp2 = false);
 std::string translate(mlir::ModuleOp& mod, mlir::frisk::Target target) ;

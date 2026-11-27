@@ -270,24 +270,25 @@ PIPELINE = [
     # CP-SAT 有 pool_bytes 时使用其槽位计划，否则只做保序分配；两者均补必要同步。
     (60, "通用循环/存储清理（前段）",         "thread，多个标准 Pass", "默认；CP-SAT 跳过循环融合", "外提不变分配和计算，规范循环、消除冗余读写"),
     (59, "ThreadLevelIRLegalize",             "thread，穿插在第 60 项中", "默认",              "整理 kernel 属性、内存分配和目标矩阵指令"),
+    # 第 16 项前保留两轮 CSE → VectorSafeCanonicalizer：第一轮折叠地址或算术后，
+    # 第二轮 CSE 仍可合并新出现的相同表达式，随后规范化还能继续折叠其使用者。
     (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=(reorder && 非 CP-SAT)", "-"),
     (60, "通用循环/存储清理（后段）",         "thread，多个标准 Pass", "默认",              "规范循环，用 SSA 值替代可消除的临时内存"),
     # 算术优化。简化affine的ub indice计算
     (17, "SimplifyBoundedAffine",            "thread",   "--simplify-bounded-affine=1",   "组合实测，见表后说明"),
-    (24, "CanonicalizeThreadLDSAddresses",    "thread",   "swizzle 自动开启；预取还会重跑", "历史 causal: 1.0233x"),
+    (24, "CanonicalizeThreadLDSAddresses",    "thread",   "swizzle 自动开启", "历史 causal: 1.0233x"),
     # 算术优化
     (19, "ApproximateThreadMath",            "thread",   "math=approx 或 mmac-recip",    "倒数复用；native exp2 属于 lowering"),
     # 计算图变化。暂时视为数学算法优化
     (20, "ThreadMaskAddBypass",              "thread",   "--mask-add-bypass=approx（本 case 无 mask）", "-"),
     # 计算图变化。暂时视为数学算法优化
-    (21, "ThreadLocalReduction",             "thread",   "--local-reduce=approx；非 CP-SAT", "历史 causal: 1.0347x（含 20、22）"),
-    # 计算图变化。暂时视为数学算法优化
-    (22, "ThreadDeferLaneSum",               "thread",   "--defer-lane-sum=approx；非 CP-SAT", "同上"),
+    ((21, 22), "ThreadReductions",            "thread",   "--local-reduce 和 --defer-lane-sum 各选 off|legal|approx；非 CP-SAT",
+     "先拆局部归约链，再延后跨 lane 求和；历史 causal: 1.0347x（20、21、22 合计）"),
     # LDS 提前读取由 fragment 第 29/31 项安排；这里仅落实物理读对和锚点。
-    (24, "CanonicalizeThreadLDSAddresses（预取落实前）", "thread", "29/31 任一距离非零；非 CP-SAT", "补足物理地址证明"),
+    (24, "CanonicalizeThreadLDSAddresses（预取落实前）", "thread", "29/31 任一距离非零；非 CP-SAT", "首次执行，或仍有普通 LDS load 时补证"),
     (29, "ThreadPrefetchPairedLDS（落实 29/31）", "thread", "29/31 任一距离非零；非 CP-SAT；{0, fragment}", "完成物理读对和 MMA 锚点，不重新选择预取距离"),
     (26, "ThreadInterleaveMMAChains（matrix）", "thread", "--pv-interleave=4 --pv-guard-group=-1；非 CP-SAT", "历史: 1.0043x（接近噪声）"),
-    (24, "CanonicalizeThreadLDSAddresses（QK 交错前）", "thread", "qk-interleave!=0 时运行", "保留已有读对/guard 边界，补足地址证明"),
+    (24, "CanonicalizeThreadLDSAddresses（QK 交错前）", "thread", "qk-interleave!=0（包括 CP-SAT）", "首次执行，或仍有普通 LDS load 时补证"),
     (41, "ThreadInterleaveMMAChains（lds）", "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32；非 CP-SAT", "CPU 验证；无 GPU 计时"),
     (30, "ThreadScheduleSoftmaxFragments",    "thread",   "--softmax-fragments=pv；非 CP-SAT", "历史: 1.0162x"),
     (33, "ThreadElideBackedgeBarrier",        "thread",   "--elide-backedge-barrier=1；非 CP-SAT", "历史组合实测；当前无迁移单项计时"),
@@ -301,7 +302,7 @@ PIPELINE = [
     (35, "ThreadSoftmaxCvtPack",              "thread",   "--softmax-cvt-pack=rtz",       "历史 LLVM 版 1.0439x；见 35"),
     (57, "AnalyzeRegisterPressure（thread）",  "thread，可选分析", "--analyze-register-pressure=1", "观察展开和调度后寄存器压力如何变化"),
     # ---- MLIR 后端：first/secondLowering 是组合流程，不是单个 Pass ---------
-    (63, "firstLowering",                    "MLIR lowering 驱动", "默认",                  "affine 循环降级，并清理重复计算和无用符号"),
+    (63, "firstLowering",                    "MLIR lowering 驱动", "默认",                  "降低 affine 循环，清理重复计算和无用符号；仅跳过已确认重复的入口 CSE"),
     (64, "secondLowering",                   "MLIR lowering 驱动", "默认；以下 65/60/38/39/66~69/79 为其内部阶段", "先 LICM，再把控制流、内存和 GPU 操作译成 LLVM dialect"),
     (65, "AmendAllocaOpAddrSpace",            "第 64 项内部", "ROCm private 地址空间为 5",      "为线程私有分配填写正确地址空间"),
     (60, "通用结构清理",                     "第 64 项内部", "默认",                         "展开 memref 步长信息、vector 循环，再清理"),
@@ -331,9 +332,11 @@ PIPELINE = [
 # 布局转换外提在第 6 项内已经完成，不能再把它归给 FinalizeThreadTiling。
 # 启发式 fragment 子流水先由 29/31 合用一次 Pass 规划预取，再执行 11。
 # thread 调度顺序为 24 → 29（落实 fragment 的 29/31）→ 26 → 24 → 41 → 30 → 33，
-# 各项按开关执行；两次额外的 24 分别服务预取落实和 QK 交错，已有锚点可复用。
+# 各项按开关执行；预取落实和 QK 交错沿用第 24 项已证明的地址，仅在仍有候选时重跑。
 # 31 不再是 30 之后独立运行的 thread Pass；CP-SAT 跳过这些启发式调度。
 # 33 之后先局部 lower async copy / GPU shuffle，再执行 18，使 wave setup 可见并保留结构化循环。
+# wave lowering 和可选的 18 都以 CSE 收尾。若最后一次 CSE 未改动 IR，且之后未执行
+# 34/35，MyTest 跳过 firstLowering 入口 CSE；独立调用 firstLowering 默认仍执行入口 CSE。
 # translateToLLVM 已完成 MMA/锚点契约；25 的 early 在其后、23 之前执行，
 # late 在最终 DMA 导出后带 simplifyCFG=true 执行，两轮由 --llvm-cleanup 独立选择。
 # 23 后可选 prefetch/reuse 见下；DMA 导出及 late 之后，k-lds-prefetch!=0 时
@@ -1175,7 +1178,7 @@ def mask_bypass_after(S):
 # 动态索引、逃逸消费者、内存/同步边界、不能证明 clear lane 为 +0 时不改写。
 # 代码：ConvertToLLVM/ThreadMaskAddBypass.cpp；记录：generated_ir/thread_mask_add_bypass/README.md。
 
-# ---- 21. ThreadLocalReduction：局部四链归约 ------------------------------------
+# ---- 21. ThreadReductions 第一阶段：局部四链归约 -------------------------------
 
 def local_sum_before(x):                             # x 是本线程的 32 个值
     total = x[0]
@@ -1194,10 +1197,14 @@ def local_sum_after(x):
 # 当前在 Thread 展开后匹配带 frisk.try_multichain 的同块标量链，不任意重排所有算术。
 # 支持 add/mul/minnum/maxnum，默认 chains=4、min-inputs=16；上限和保护函数按源码检查。
 # legal 模式需原节点提供相应 fast-math 许可；approx 模式需显式开启 math=approx。
+# 21/22 共用一个函数 Pass，两个开关独立。MyTest 在两者均关闭或 CP-SAT 时跳过；
+# 开启 22 时，在 Pass 之后运行 VectorSafeCanonicalizer 和 CSE。两个旧独立入口仍可用。
+# ThreadTilingTest 可用 --frisk-thread-reductions='local-reduce=legal defer-lane-sum=approx wave-size=64'。
+# 两阶段都开启时，MyTest 只在第二阶段清理后输出一次归约 IR，仍分别打印两个阶段的统计。
 # 代码：ConvertToLLVM/ThreadLocalReduction.cpp。
 
 
-# ---- 22. ThreadDeferLaneSum：分母的跨 lane 求和延后 ----------------------------
+# ---- 22. ThreadReductions 第二阶段：分母的跨 lane 求和延后 ---------------------
 
 def defer_sum_before():
     for n in tiles:
@@ -1266,7 +1273,8 @@ def lds_gep_after(lane):
 # Thread LDS load 的 alignment 与常量差，记录为 frisk.lds_load 的 storage/anchor/offset。
 # 使用符号 affine 差或完整线程范围的精确求值；未知地址不采样、不假定相邻。
 # LLVM lowering 机械生成带对齐的公共 GEP，后端仍决定是否选 ds_read2_b64。
-# 29/31 开启时，第 42 项前会单独调用本 Pass 供物理配对使用。QK 交错也会单独调用。
+# 预取配对和 QK 交错需要这些地址。首次请求执行完整证明，以后的请求检查当前 IR：
+# 若仍存在地址空间 3 的 memref.load、vector.load 或 affine.load，则重新运行完整 Pass。
 # 代码：ConvertToLLVM/CanonicalizeThreadLDSAddresses.cpp。
 
 

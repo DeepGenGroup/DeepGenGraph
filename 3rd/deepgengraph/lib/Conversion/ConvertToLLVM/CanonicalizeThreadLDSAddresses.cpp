@@ -3,6 +3,7 @@
 // the launch contract additionally proves nonlinear thread layouts. Unknown
 // inputs are never sampled or assigned a guessed value.
 #include "deepgengraph/Analysis/ThreadBounds.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/CanonicalizeThreadLDSAddresses.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
 #include "deepgengraph/Dialect/Frisk/IR/FriskDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -245,6 +246,15 @@ struct Access {
   bool nontemporal = false;
 };
 
+Value getThreadLDSLoadBuffer(Operation *op) {
+  if (!isa<memref::LoadOp, vector::LoadOp, affine::AffineLoadOp>(op))
+    return {};
+  // Each of these ops takes the memref first, followed by its index/map operands.
+  Value buffer = op->getOperand(0);
+  auto space = dyn_cast_or_null<IntegerAttr>(cast<MemRefType>(buffer.getType()).getMemorySpace());
+  return space && space.getInt() == 3 ? buffer : Value();
+}
+
 struct CanonicalizeThreadLDSAddressesPass
     : PassWrapper<CanonicalizeThreadLDSAddressesPass, OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CanonicalizeThreadLDSAddressesPass)
@@ -258,26 +268,21 @@ struct CanonicalizeThreadLDSAddressesPass
     DominanceInfo dominance(getOperation());
     SmallVector<Access> accesses;
     getOperation().walk([&](Operation *op) {
-      Access access{op, {}, {}, {}, {}};
-      if (auto load = dyn_cast<memref::LoadOp>(op)) {
-        access.buffer = load.getMemref();
-        access.indices.assign(load.getIndices().begin(), load.getIndices().end());
-      } else if (auto load = dyn_cast<vector::LoadOp>(op)) {
+      Value buffer = getThreadLDSLoadBuffer(op);
+      if (!buffer) return;
+      auto operands = op->getOperands().drop_front();
+      Access access{op, buffer, {operands.begin(), operands.end()}, {}, {}};
+      if (auto load = dyn_cast<vector::LoadOp>(op)) {
         if (load.getVectorType().getRank() != 1 || load.getVectorType().isScalable()) return;
-        access.buffer = load.getBase();
-        access.indices.assign(load.getIndices().begin(), load.getIndices().end());
       } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-        access.buffer = load.getMemRef();
-        access.indices.assign(load.getMapOperands().begin(), load.getMapOperands().end());
         access.map = load.getAffineMap();
-      } else return; // Includes atomics, matrix reads and already-canonical loads.
+      }
       // Do not discard a caller's unrecognized memory contract.
       for (NamedAttribute attr : op->getAttrs())
         if (attr.getName() != "alignment" && attr.getName() != "nontemporal" &&
             attr.getName() != "map") return;
       auto type = cast<MemRefType>(access.buffer.getType());
-      auto space = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
-      if (!space || space.getInt() != 3 || !type.getElementType().isIntOrFloat()) return;
+      if (!type.getElementType().isIntOrFloat()) return;
       unsigned bits = type.getElementTypeBitWidth();
       // For these element widths the physical allocation stride equals the
       // byte width. Do not guess DataLayout padding for e.g. i24 or f80.
@@ -359,6 +364,12 @@ struct CanonicalizeThreadLDSAddressesPass
   }
 };
 } // namespace
+
+bool mlir::frisk::hasThreadLDSAddressCandidates(Operation *root) {
+  return root->walk([](Operation *op) {
+    return getThreadLDSLoadBuffer(op) ? WalkResult::interrupt() : WalkResult::advance();
+  }).wasInterrupted();
+}
 
 std::unique_ptr<Pass> mlir::frisk::createCanonicalizeThreadLDSAddressesPass() {
   return std::make_unique<CanonicalizeThreadLDSAddressesPass>();

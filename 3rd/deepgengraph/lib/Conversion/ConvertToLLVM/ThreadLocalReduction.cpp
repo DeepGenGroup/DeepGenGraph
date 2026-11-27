@@ -1,8 +1,11 @@
 // Split explicitly opted-in local reductions before LLVM lowering. Keep the
 // matcher deliberately limited to the scalar FP ops emitted by Reduce lowering.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadReductions.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -141,18 +144,68 @@ unsigned rewrite(Operation *root, const LocalReductionOptions &options,
   return leaves.size();
 }
 
+void splitLocalReductions(func::FuncOp function, const LocalReductionOptions &options) {
+  if (isProtected(function)) return;
+  SmallVector<Operation *> work;
+  llvm::DenseSet<Operation *> live;
+  function.walk([&](Operation *op) {
+    if (classify(op, options)) {
+      work.push_back(op);
+      live.insert(op);
+    }
+  });
+  unsigned groups = 0, inputs = 0;
+  for (Operation *op : llvm::reverse(work)) {
+    // Rewrites erase earlier nodes: never dereference stale worklist entries.
+    if (!live.erase(op)) continue;
+    if (unsigned count = rewrite(op, options, live)) {
+      ++groups;
+      inputs += count;
+    }
+  }
+  // Preserve the existing tuning report format.
+  llvm::errs() << "LocalReduction: " << function.getSymName() << ": "
+               << groups << " groups, " << inputs << " inputs, " << options.chains
+               << " chains (" << (options.approximate ? "approx" : "legal") << ")\n";
+}
+
+// Both pass arguments accept the same local chain settings. MLIR clones the
+// CLI options; the C++ operation mask supplies the default when ops is omitted.
+struct LocalChainSettings {
+  explicit LocalChainSettings(Pass &pass, LocalReductionOptions options = {})
+      : chains(pass, "chains", llvm::cl::init(options.chains)),
+        minInputs(pass, "min-inputs", llvm::cl::init(options.minInputs)),
+        operations(pass, "ops", llvm::cl::init("")),
+        operationMask(options.operations) {}
+
+  LogicalResult apply(func::FuncOp function, bool approximate) const {
+    LocalReductionOptions options{approximate, chains, minInputs, operationMask};
+    StringRef mode;
+    bool consumed;
+    if ((!operations.empty() && !parseLocalReductionOption(
+             "--local-reduce-ops=" + operations.getValue(), mode, options, consumed)) ||
+        !options.valid())
+      return function.emitError("invalid thread local reduction options");
+    splitLocalReductions(function, options);
+    return success();
+  }
+
+  Pass::Option<unsigned> chains;
+  Pass::Option<unsigned> minInputs;
+  Pass::Option<std::string> operations;
+  unsigned operationMask;
+};
+
 class ThreadLocalReductionPass
     : public PassWrapper<ThreadLocalReductionPass, OperationPass<func::FuncOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadLocalReductionPass)
-  ThreadLocalReductionPass(LocalReductionOptions options = {}) {
+  ThreadLocalReductionPass(LocalReductionOptions options = {}) : settings(*this, options) {
     approximate = options.approximate;
-    chains = options.chains;
-    minInputs = options.minInputs;
-    operationMask = options.operations;
   }
-  ThreadLocalReductionPass(const ThreadLocalReductionPass &other)
-      : PassWrapper(other), operationMask(other.operationMask) {}
+  ThreadLocalReductionPass(const ThreadLocalReductionPass &other) : PassWrapper(other) {
+    settings.operationMask = other.settings.operationMask;
+  }
   StringRef getArgument() const final { return "frisk-thread-local-reduction"; }
   StringRef getDescription() const final {
     return "Split tagged scalar thread reductions into fixed-count chains";
@@ -163,52 +216,78 @@ public:
 
 private:
   Option<bool> approximate{*this, "approximate", llvm::cl::init(false)};
-  Option<unsigned> chains{*this, "chains", llvm::cl::init(4)};
-  Option<unsigned> minInputs{*this, "min-inputs", llvm::cl::init(16)};
-  Option<std::string> operations{*this, "ops", llvm::cl::init("")};
-  unsigned operationMask = LocalReductionOptions::All;
+  LocalChainSettings settings{*this};
 
   void runOnOperation() override {
-    LocalReductionOptions options;
-    options.approximate = approximate;
-    options.chains = chains;
-    options.minInputs = minInputs;
-    options.operations = operationMask;
-    StringRef mode;
-    bool consumed;
-    if ((!operations.empty() && !parseLocalReductionOption(
-             "--local-reduce-ops=" + operations.getValue(), mode, options, consumed)) ||
-        !options.valid()) {
-      getOperation().emitError("invalid thread local reduction options");
+    if (failed(settings.apply(getOperation(), approximate)))
+      signalPassFailure();
+  }
+};
+
+enum class Mode { Off, Legal, Approximate };
+
+auto modeValues() {
+  return llvm::cl::values(clEnumValN(Mode::Off, "off", "Skip this stage"),
+                          clEnumValN(Mode::Legal, "legal", "Require legal rewrites"),
+                          clEnumValN(Mode::Approximate, "approx", "Allow approximate FP rewrites"));
+}
+
+template <typename Options>
+Mode modeFor(const std::optional<Options> &options) {
+  if (!options) return Mode::Off;
+  return options->approximate ? Mode::Approximate : Mode::Legal;
+}
+
+class ThreadReductionsPass
+    : public PassWrapper<ThreadReductionsPass, OperationPass<func::FuncOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ThreadReductionsPass)
+  ThreadReductionsPass(std::optional<LocalReductionOptions> local,
+                       std::optional<DeferLaneSumOptions> lane)
+      : settings(*this, local.value_or(LocalReductionOptions{})) {
+    localMode = modeFor(local);
+    laneMode = modeFor(lane);
+    if (lane) waveSize = lane->waveSize;
+  }
+  ThreadReductionsPass(const ThreadReductionsPass &other) : PassWrapper(other) {
+    settings.operationMask = other.settings.operationMask;
+  }
+  StringRef getArgument() const final { return "frisk-thread-reductions"; }
+  StringRef getDescription() const final {
+    return "Split local reduction chains and defer loop-carried lane sums";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect, gpu::GPUDialect, vector::VectorDialect>();
+  }
+
+private:
+  Option<Mode> localMode{*this, "local-reduce", modeValues(), llvm::cl::init(Mode::Off)};
+  Option<Mode> laneMode{*this, "defer-lane-sum", modeValues(), llvm::cl::init(Mode::Off)};
+  LocalChainSettings settings{*this};
+  Option<unsigned> waveSize{*this, "wave-size", llvm::cl::init(0)};
+
+  void runOnOperation() override {
+    func::FuncOp function = getOperation();
+    DeferLaneSumOptions lane{laneMode == Mode::Approximate, waveSize};
+    if (laneMode != Mode::Off && !lane.valid()) {
+      function.emitError("wave-size must be 0, 32 or 64");
       return signalPassFailure();
     }
-    if (isProtected(getOperation())) return;
-    SmallVector<Operation *> work;
-    llvm::DenseSet<Operation *> live;
-    getOperation().walk([&](Operation *op) {
-      if (classify(op, options)) {
-        work.push_back(op);
-        live.insert(op);
-      }
-    });
-    unsigned groups = 0, inputs = 0;
-    for (Operation *op : llvm::reverse(work)) {
-      // Rewrites erase earlier nodes: never dereference stale worklist entries.
-      if (!live.erase(op)) continue;
-      if (unsigned count = rewrite(op, options, live)) {
-        ++groups;
-        inputs += count;
-      }
-    }
-    // Preserve the existing tuning report format.
-    llvm::errs() << "LocalReduction: " << getOperation().getSymName() << ": "
-                 << groups << " groups, " << inputs << " inputs, " << options.chains
-                 << " chains (" << (options.approximate ? "approx" : "legal") << ")\n";
+    if (localMode != Mode::Off && failed(settings.apply(function, localMode == Mode::Approximate)))
+      return signalPassFailure();
+    if (laneMode != Mode::Off)
+      deferThreadLaneSums(function, lane);
   }
 };
 } // namespace
 
 std::unique_ptr<Pass> createThreadLocalReductionPass(LocalReductionOptions options) {
   return std::make_unique<ThreadLocalReductionPass>(options);
+}
+
+std::unique_ptr<Pass> createThreadReductionsPass(
+    std::optional<LocalReductionOptions> local,
+    std::optional<DeferLaneSumOptions> lane) {
+  return std::make_unique<ThreadReductionsPass>(local, lane);
 }
 } // namespace mlir::frisk

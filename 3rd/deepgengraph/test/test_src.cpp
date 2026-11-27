@@ -1,5 +1,6 @@
 // Include LLVM codegen headers before LowerInfo.h's legacy TID macro.
 #include "llvm/Passes/PassBuilder.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/CanonicalizeThreadLDSAddresses.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/ThreadLazySoftmaxBase.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/SoftmaxCvtPack.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PrefetchNextK.h"
@@ -8,8 +9,7 @@
 #include "deepgengraph/Conversion/VectorCanonicalization.h"
 #include "deepgengraph/Common.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/LLVMExportUtils.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/LocalReduction.h"
-#include "deepgengraph/Conversion/ConvertToLLVM/DeferLaneSum.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadReductions.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/PVInterleaveOptions.h"
 #include "deepgengraph/Dialect/Deepgengraph/IR/DeepgengraphDialect.h"
 #include "deepgengraph/Dialect/DeepgengraphTriton/IR/DeepgengraphTritonDialect.h"
@@ -1352,8 +1352,17 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   // Physical storage, slots and unrolling are final. Keep proven address anchors
   // and alignment in ThreadIR until their mechanical LLVM conversion.
-  if (canonicalizeLDS) {
+  bool ranLDSAddressProof = false;
+  auto canonicalizeLDSAddresses = [&] {
+    // A bounded anchor search or intervening cleanup can leave work for a
+    // later sweep. Inspect the current IR at each consumer before skipping it.
+    if (ranLDSAddressProof && !frisk::hasThreadLDSAddressCandidates(src->getOperation()))
+      return;
     AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+    ranLDSAddressProof = true;
+  };
+  if (canonicalizeLDS) {
+    canonicalizeLDSAddresses();
     AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
     AddPass(mlir::createCSEPass());
     llvm::outs() << "\n---- after frisk-canonicalize-lds-addresses -----\n";
@@ -1383,27 +1392,25 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
   }
 
-  // Local scalar chains are exposed after unrolling. Only reductions tagged
-  // by lowering (or explicitly by the caller) may be reassociated here.
-  if (!cpsat.enabled() && (localReduce != "off")) {
-    AddFuncPass(frisk::createThreadLocalReductionPass(localReductionOptions));
-    llvm::outs() << "\n---- after frisk-thread-local-reduction -----\n";
-    llvm::outs().flush(); src->dump();
-  }
-
-  // Preserve structured recurrences and explicit XOR collectives for analysis.
-  if (!cpsat.enabled() && (deferLaneSum != "off")) {
-    AddFuncPass(frisk::createThreadDeferLaneSumPass(deferLaneSumOptions));
-    AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
-    AddPass(mlir::createCSEPass());
-    llvm::outs() << "\n---- after frisk-thread-defer-lane-sum -----\n";
+  // Reassociate tagged local chains before analyzing structured lane sums.
+  if (!cpsat.enabled() && (localReduce != "off" || deferLaneSum != "off")) {
+    AddFuncPass(frisk::createThreadReductionsPass(
+        localReduce != "off" ? std::optional{localReductionOptions} : std::nullopt,
+        deferLaneSum != "off" ? std::optional{deferLaneSumOptions} : std::nullopt));
+    if (deferLaneSum != "off") {
+      AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
+      AddPass(mlir::createCSEPass());
+      llvm::outs() << "\n---- after frisk-thread-defer-lane-sum -----\n";
+    } else {
+      llvm::outs() << "\n---- after frisk-thread-local-reduction -----\n";
+    }
     llvm::outs().flush(); src->dump();
   }
 
   // FragmentIR owns LDS read-ahead. Finish the physical pairs and protect its
   // MMA anchors before later ThreadIR compute schedules can rearrange them.
   if (!cpsat.enabled() && (kLDSPrefetch || kTailPrefetch)) {
-    AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+    canonicalizeLDSAddresses();
     AddPass(frisk::createThreadPrefetchPairedLDSPass(
         frisk::PairedLDSPrefetchOptions{0, "fragment"}));
     llvm::outs() << "\n---- after thread finalizeFragmentLDSPrefetch -----\n";
@@ -1417,7 +1424,7 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
 
   if (mmaSchedule.qkWidth) {
     // Required even when the optional standalone canonicalizer was disabled.
-    AddFuncPass(frisk::createCanonicalizeThreadLDSAddressesPass());
+    canonicalizeLDSAddresses();
   }
   // Run after optional LDS dedup/pairing and before softmax schedules introduce
   // guards. QK respects existing pair/guard boundaries and never crosses DMA.
@@ -1444,16 +1451,20 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   AddPass(frisk::createLowerFriskAsyncCopyPass(copyMode != "sync"));
   AddPass(frisk::createLowerGPUShuffleToROCDLPass());
   AddPass(mlir::frisk::createVectorSafeCanonicalizerPass());
-  AddPass(mlir::createCSEPass());
+  bool waveCSEChanged;
+  if (failed(frisk::runCSE(*src, waveCSEChanged)))
+    return 1;
   llvm::outs() << "\n---- after early wave lowering -----\n"; llvm::outs().flush(); src->dump();
   if (hoistLDSBases || hoistLaneShuffles) {
     AddPass(frisk::createHoistWaveInvariantsPass(hoistLDSBases, hoistLaneShuffles));
-    AddPass(mlir::createCSEPass());
+    if (failed(frisk::runCSE(*src, waveCSEChanged)))
+      return 1;
     llvm::outs() << "\n---- after frisk-hoist-wave-invariants -----\n"; llvm::outs().flush(); src->dump();
   }
   // All register/LDS schedules and wave setup are fixed before introducing
   // the wave-uniform, register-only rescale region.
-  if (!cpsat.enabled() && (lazySoftmaxBase)) {
+  const bool applyLazySoftmaxBase = !cpsat.enabled() && lazySoftmaxBase;
+  if (applyLazySoftmaxBase) {
     AddFuncPass(frisk::createThreadLazySoftmaxBasePass(lazyBaseThreshold));
     llvm::outs() << "\n---- after thread lazySoftmaxBase -----\n";
     llvm::outs().flush(); src->dump();
@@ -1469,7 +1480,9 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
   mlir::ModuleOp mod = *src;
   if (analyzeRegisterPressure)
     AddFuncPass(frisk::createAnalyzeRegisterPressurePass("thread"));
-  if (!frisk::firstLowering(mod, src->getContext()) ||
+  // Erasing a dead user can make its producer dead for the next CSE sweep.
+  const bool runInitialCSE = waveCSEChanged || applyLazySoftmaxBase || softmaxCvtPack;
+  if (!frisk::firstLowering(mod, src->getContext(), runInitialCSE) ||
       !frisk::secondLowering(mod, src->getContext(), frisk::Target::ROCm,
                             coalesceWaits && !cpsat.enabled(), mathMode == "approx" || mathMode == "mmac-exp2"))
     return 1;

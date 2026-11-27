@@ -7,6 +7,9 @@
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include <memory>
@@ -270,9 +273,21 @@ std::unique_ptr<Pass> createVectorToLLVMPass(int indexBitwidth) {
   return std::make_unique<VectorToLLVMPass>(indexBitwidth);
 }
 
+LogicalResult runCSE(ModuleOp mod, bool &changed) {
+  IRRewriter rewriter(mod.getContext());
+  DominanceInfo dominance(mod);
+  eliminateCommonSubExpressions(rewriter, dominance, mod, &changed);
+  return changed ? verify(mod) : success();
+}
+
 bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context) {
+  return firstLowering(mod, context, /*runInitialCSE=*/true);
+}
+
+bool firstLowering(mlir::ModuleOp &mod, mlir::MLIRContext *context, bool runInitialCSE) {
   mlir::PassManager pm(context);
-  pm.addPass(mlir::createCSEPass());
+  if (runInitialCSE)
+    pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createLowerAffinePass());                     // affine -> scf/vector
   // pm.addPass(mlir::createParallelLoopToGpuPass());               // scf.parallelOp -> gpu...
   pm.addPass(mlir::frisk::createVectorSafeCanonicalizerPass());

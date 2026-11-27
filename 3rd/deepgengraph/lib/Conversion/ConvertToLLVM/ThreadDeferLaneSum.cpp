@@ -2,6 +2,7 @@
 // become target instructions. No kernel names, tensor layouts or SSA names
 // participate in matching.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadReductions.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/RegisterMMAUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -429,56 +430,62 @@ private:
   Option<bool> approximate{*this, "approximate", llvm::cl::init(false)};
   Option<unsigned> waveSize{*this, "wave-size", llvm::cl::init(0)};
   void runOnOperation() override {
-    if (waveSize != 0 && waveSize != 32 && waveSize != 64) {
+    DeferLaneSumOptions options{approximate, waveSize};
+    if (!options.valid()) {
       getOperation().emitError("wave-size must be 0, 32 or 64");
       return signalPassFailure();
     }
-    auto function = getOperation();
-    auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
-    // thread_num is the existing one-dimensional launch contract. An explicit
-    // wave size is required; gpu.shuffle width alone is not a hardware ABI.
-    if (!waveSize || !threads || threads.getInt() <= 0 ||
-        threads.getInt() % waveSize || function.empty() || !safeFunction(function)) return;
-    // Reject explicit target-feature conflicts with the caller's launch ABI.
-    auto conflicts = [&](StringRef features) {
-      SmallVector<StringRef> tokens;
-      features.split(tokens, ',');
-      return llvm::is_contained(tokens, "+wavefrontsize" + std::to_string(waveSize == 64 ? 32 : 64)) ||
-             llvm::is_contained(tokens, "-wavefrontsize" + std::to_string(waveSize));
-    };
-    for (StringRef key : {"target-features", "llvm.target_features"})
-      if (auto attr = function->getAttrOfType<StringAttr>(key))
-        if (conflicts(attr.getValue())) return;
-    for (StringRef key : {"passthrough", "llvm.passthrough"})
-      if (auto attrs = function->getAttrOfType<ArrayAttr>(key))
-        for (Attribute attr : attrs)
-          if (auto pair = dyn_cast<ArrayAttr>(attr); pair && pair.size() == 2)
-            if (auto name = dyn_cast<StringAttr>(pair[0]); name && name.getValue() == "target-features")
-              if (auto features = dyn_cast<StringAttr>(pair[1]))
-                if (conflicts(features.getValue())) return;
-    Proof proof(function, waveSize, threads.getInt());
-    SmallVector<Operation *> loops;
-    function.walk([&](Operation *op) { if (Loop::get(op)) loops.push_back(op); });
-    unsigned states = 0, shuffles = 0;
-    for (Operation *op : loops) {
-      auto loop = *Loop::get(op);
-      bool nested = false;
-      op->walk([&](Operation *child) { if (child != op && Loop::get(child)) nested = true; });
-      if (nested || !proof.control(loop)) continue;
-      for (unsigned i = 0; i < loop.args.size(); ++i) {
-        int64_t n = count(loop.args[i].getType());
-        if (n > 128) continue;
-        for (int64_t j = 0; j < n; ++j)
-          states += rewrite(loop, i, isa<VectorType>(loop.args[i].getType()) ? j : -1,
-                            proof, waveSize, approximate, shuffles);
-      }
-    }
-    llvm::errs() << "DeferLaneSum: " << function.getSymName() << ": " << states
-                 << " states, " << shuffles << " loop shuffles deferred ("
-                 << (approximate ? "approx" : "legal") << ")\n";
+    deferThreadLaneSums(getOperation(), options);
   }
 };
 } // namespace
+
+void deferThreadLaneSums(func::FuncOp function, DeferLaneSumOptions options) {
+  unsigned waveSize = options.waveSize;
+  auto threads = function->getAttrOfType<IntegerAttr>("thread_num");
+  // thread_num is the existing one-dimensional launch contract. An explicit
+  // wave size is required; gpu.shuffle width alone is not a hardware ABI.
+  if (!waveSize || !threads || threads.getInt() <= 0 ||
+      threads.getInt() % waveSize || function.empty() || !safeFunction(function)) return;
+  // Reject explicit target-feature conflicts with the caller's launch ABI.
+  auto conflicts = [&](StringRef features) {
+    SmallVector<StringRef> tokens;
+    features.split(tokens, ',');
+    return llvm::is_contained(tokens, "+wavefrontsize" + std::to_string(waveSize == 64 ? 32 : 64)) ||
+           llvm::is_contained(tokens, "-wavefrontsize" + std::to_string(waveSize));
+  };
+  for (StringRef key : {"target-features", "llvm.target_features"})
+    if (auto attr = function->getAttrOfType<StringAttr>(key))
+      if (conflicts(attr.getValue())) return;
+  for (StringRef key : {"passthrough", "llvm.passthrough"})
+    if (auto attrs = function->getAttrOfType<ArrayAttr>(key))
+      for (Attribute attr : attrs)
+        if (auto pair = dyn_cast<ArrayAttr>(attr); pair && pair.size() == 2)
+          if (auto name = dyn_cast<StringAttr>(pair[0]); name && name.getValue() == "target-features")
+            if (auto features = dyn_cast<StringAttr>(pair[1]))
+              if (conflicts(features.getValue())) return;
+  Proof proof(function, waveSize, threads.getInt());
+  SmallVector<Operation *> loops;
+  function.walk([&](Operation *op) { if (Loop::get(op)) loops.push_back(op); });
+  unsigned states = 0, shuffles = 0;
+  for (Operation *op : loops) {
+    auto loop = *Loop::get(op);
+    bool nested = false;
+    op->walk([&](Operation *child) { if (child != op && Loop::get(child)) nested = true; });
+    if (nested || !proof.control(loop)) continue;
+    for (unsigned i = 0; i < loop.args.size(); ++i) {
+      int64_t n = count(loop.args[i].getType());
+      if (n > 128) continue;
+      for (int64_t j = 0; j < n; ++j)
+        states += rewrite(loop, i, isa<VectorType>(loop.args[i].getType()) ? j : -1,
+                          proof, waveSize, options.approximate, shuffles);
+    }
+  }
+  llvm::errs() << "DeferLaneSum: " << function.getSymName() << ": " << states
+               << " states, " << shuffles << " loop shuffles deferred ("
+               << (options.approximate ? "approx" : "legal") << ")\n";
+}
+
 std::unique_ptr<Pass> createThreadDeferLaneSumPass(DeferLaneSumOptions options) {
   return std::make_unique<ThreadDeferLaneSumPass>(options);
 }

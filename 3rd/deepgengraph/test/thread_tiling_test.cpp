@@ -3,6 +3,7 @@
 #include "deepgengraph/Analysis/LivelinessAnalyze.h"
 #include "deepgengraph/Analysis/RegisterPressure.h"
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/ConvertToLLVM/ThreadReductions.h"
 #include "deepgengraph/Pipeline/PipelineSchedule.h"
 #include "deepgengraph/Pipeline/FragmentScheduling.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
@@ -121,6 +122,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createApproximateThreadMathPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadMaskAddBypassPass(); });
   mlir::registerPass([] { return mlir::frisk::createFragmentMaskAddBypassPass(); });
+  mlir::registerPass([] {
+    return mlir::frisk::createThreadReductionsPass(std::nullopt, std::nullopt);
+  });
   mlir::registerPass([] { return mlir::frisk::createThreadLocalReductionPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });
