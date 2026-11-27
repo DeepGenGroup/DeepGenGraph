@@ -1,6 +1,7 @@
-// Zero-mask bypass belongs to thread SSA: retain structured branches and
-// vector lanes instead of recovering them from LLVM aggregate PHIs.
+// Fallback for zero-mask bypass patterns exposed by thread scalarization.
+// Whole-tile causal bypass is handled earlier in FragmentIR.
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h"
+#include "deepgengraph/Conversion/MaskAddBypass.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -20,25 +21,6 @@ namespace {
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
 #define GEN_PASS_DEF_THREADMASKADDBYPASS
 #include "deepgengraph/Conversion/ConvertToLLVM/Passes.h.inc"
-
-static bool isProtected(func::FuncOp function) {
-  for (StringRef name : {"strictfp", "llvm.strictfp", "optnone", "llvm.optnone",
-                         "optimize_none", "llvm.optimize_none",
-                         "denormal-fp-math", "denormal-fp-math-f32",
-                         "llvm.denormal_fp_math", "llvm.denormal_fp_math_f32"})
-    if (function->hasAttr(name)) return true;
-  for (StringRef key : {"passthrough", "llvm.passthrough"})
-    if (auto attrs = function->getAttrOfType<ArrayAttr>(key))
-      for (Attribute attr : attrs) {
-        if (auto pair = dyn_cast<ArrayAttr>(attr))
-          if (!pair.empty()) attr = pair[0];
-        if (auto name = dyn_cast<StringAttr>(attr))
-          if (name.getValue() == "strictfp" || name.getValue() == "optnone" ||
-              name.getValue() == "denormal-fp-math" ||
-              name.getValue() == "denormal-fp-math-f32") return true;
-      }
-  return false;
-}
 
 static bool isPositiveZero(Attribute attr) {
   if (auto scalar = dyn_cast_or_null<FloatAttr>(attr))
@@ -299,7 +281,7 @@ class ThreadMaskAddBypassPass : public impl::ThreadMaskAddBypassBase<ThreadMaskA
       function.emitError("mask-add-bypass must be off or approx; legal mode has been removed");
       return signalPassFailure();
     }
-    if (mode == "off" || isProtected(function)) return;
+    if (mode == "off" || mask_add_bypass::isProtected(function)) return;
     unsigned groups = 0, additions = 0;
     // MaskOpTiling can already fuse score additions into the uniform branch.
     // After unrolling, eliminate only its clear-arm +0 operations. Neither

@@ -7,8 +7,8 @@ import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-TOOL = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else HERE.parent/'build/test/ThreadTilingTest'
-SOURCE = (HERE/'test_friskBase.mlir').read_text()
+TOOL = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else HERE.parents[1]/'build/test/ThreadTilingTest'
+SOURCE = (HERE.parent/'test_friskBase.mlir').read_text()
 SOURCE = re.sub(r'%25 = scf.if %24 -> \(f32\) \{.*?\} else \{.*?\n        \}',
                 '%25 = arith.select %24, %cst_0, %cst : f32',SOURCE,flags=re.S)
 

@@ -2475,38 +2475,15 @@ static Value lowerFragmentMask(OpBuilder &rewriter, Location loc, MemRefType res
             .emit(resultVector, element);
     };
     Value complete, unmasked;
-    if (uniformMasks && resultTy.getRank() == 2 && resultTy.hasStaticShape() &&
-        resultTy.getDimSize(0) > 0 && resultTy.getDimSize(1) > 0) {
-      // Recognize select(row + nonnegative diagonal <= col, masked, clear).
-      // All other regions retain the general per-element implementation.
-      auto select = yieldOp->getOperand(0).getDefiningOp<arith::SelectOp>();
-      auto compare = select ? select.getCondition().getDefiningOp<arith::CmpIOp>() : arith::CmpIOp{};
-      auto add = compare ? compare.getLhs().getDefiningOp<arith::AddIOp>() : arith::AddIOp{};
-      auto offset = add ? add.getRhs().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
-      auto clear = select ? select.getFalseValue().getDefiningOp<arith::ConstantOp>() : arith::ConstantOp{};
-      bool pure = llvm::all_of(body->without_terminator(), [](Operation &inst) {
-        return isa<arith::ConstantOp, arith::AddIOp, arith::CmpIOp, arith::SelectOp>(inst);
-      });
-      if (pure && compare && compare.getPredicate() == arith::CmpIPredicate::ule &&
-          add && add.getLhs() == body->getArgument(0) && offset && offset.value() >= 0 &&
-          compare.getRhs() == body->getArgument(1) && clear) {
-        auto plus = [&](Value start, int64_t delta) -> Value {
-          return rewriter.create<arith::AddIOp>(loc, start, createIndexConstant(rewriter, loc, delta));
-        };
-        auto uge = [&](Value a, Value b) -> Value {
-          return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, a, b);
-        };
-        Value row = starts[0], col = starts[1];
-        Value rowEnd = plus(row, resultTy.getDimSize(0) - 1);
-        Value colEnd = plus(col, resultTy.getDimSize(1) - 1);
-        Value first = plus(row, offset.value()), last = plus(rowEnd, offset.value());
-        // Unsigned comparisons also guard index wraparound. A wrapping span
-        // must always use the original elementwise predicate.
-        Value safeRow = rewriter.create<arith::AndIOp>(loc, uge(rowEnd, row), uge(last, rowEnd));
-        Value safe = rewriter.create<arith::AndIOp>(loc, safeRow, uge(colEnd, col));
-        Value past = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, first, colEnd);
-        complete = rewriter.create<arith::AndIOp>(loc, safe, past);
-        unmasked = rewriter.create<arith::ConstantOp>(loc, clear.getValue());
+    if (uniformMasks) {
+      auto triangle = causal_mask::match(body);
+      auto clear = triangle ? triangle->clear.getDefiningOp<arith::ConstantOp>()
+                            : arith::ConstantOp{};
+      if (clear) {
+        complete = causal_mask::buildClearTileCondition(
+            rewriter, loc, resultTy, starts, triangle->diagonal);
+        if (complete)
+          unmasked = rewriter.create<arith::ConstantOp>(loc, clear.getValue());
       }
     }
     if (complete) {
@@ -2585,8 +2562,10 @@ public:
       // The score addition may carry the downstream reduction's shared-memory
       // annotation. It still denotes a register tile here; preserve its type
       // on the replacement bridge and derive coordinates from its LowerInfo.
+      // This is ordinary fusion, independent of the finite-score contract:
+      // the fused operation retains the addition and its operand order.
       bool compatibleResult = candidateTy == resultTy ||
-          (finiteFusion && candidateTy && candidateTy.getShape() == resultTy.getShape() &&
+          (candidateTy && candidateTy.getShape() == resultTy.getShape() &&
            candidateTy.getElementType() == resultTy.getElementType() &&
            candidateTy.getLayout() == resultTy.getLayout());
       if (candidate && op->getNextNode() == candidate.getOperation() && !isTiled(candidate) &&

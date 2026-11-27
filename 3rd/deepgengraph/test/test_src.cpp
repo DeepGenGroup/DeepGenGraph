@@ -1272,6 +1272,14 @@ int readDeepgenGraphIRAndConvertToFriskPipeline(int argc, char ** argv) {
     llvm::outs().flush(); src->dump();
     if (cpsatStopAfter) return 0;
   }
+  // Specialize the mask in FragmentIR after retention/read-ahead planning.
+  // Keep the bypass region and its cleanup from changing the retained operand
+  // cut and, consequently, the shared-memory pipeline selected downstream.
+  if (maskAddBypass == "approx") {
+    AddFuncPass(frisk::createFragmentMaskAddBypassPass());
+    llvm::outs() << "\n---- after frisk-bypass-fragment-mask-adds -----\n";
+    llvm::outs().flush(); src->dump();
+  }
   AddFuncPass(frisk::createAnalyzeShmLivenessPass());
   llvm::outs() << "\n---- after fragment-level optimization -----\n";
   llvm::outs().flush(); src->dump();

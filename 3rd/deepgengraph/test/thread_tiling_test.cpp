@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::frisk::createThreadLevelIRLegalizePass(); });
   mlir::registerPass([] { return mlir::frisk::createApproximateThreadMathPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadMaskAddBypassPass(); });
+  mlir::registerPass([] { return mlir::frisk::createFragmentMaskAddBypassPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLocalReductionPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadDeferLaneSumPass(); });
   mlir::registerPass([] { return mlir::frisk::createThreadLazySoftmaxBasePass(); });

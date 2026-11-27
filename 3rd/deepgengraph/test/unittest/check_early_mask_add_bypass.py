@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Early mask bypass: both lowering paths, serialization, FP and fusion guards."""
+"""Fragment bypass and thread fallback: serialization, FP and fusion guards."""
 import re
 import subprocess
 import sys
@@ -7,9 +7,9 @@ import tempfile
 from pathlib import Path
 
 TOOL = Path(sys.argv[1]).resolve()
-SOURCE = Path(__file__).with_name('test_friskBase.mlir').read_text()
+RAW_SOURCE = (Path(__file__).resolve().parents[1] / 'test_friskBase.mlir').read_text()
 SOURCE = re.sub(r'%25 = scf.if %24 -> \(f32\) \{.*?\} else \{.*?\n        \}',
-                '%25 = arith.select %24, %cst_0, %cst : f32', SOURCE, flags=re.S)
+                '%25 = arith.select %24, %cst_0, %cst : f32', RAW_SOURCE, flags=re.S)
 CONSUMER = '%16 = frisk.add %qk, %maskTIle'
 
 
@@ -24,8 +24,10 @@ def region(text, start):
 
 
 def uniform_branches(text):
-    for match in re.finditer(r'scf.if[^\n{]*\{', text):
-        clear, end = region(text, match.end() - 1)
+    # Fragment result types contain a layout dictionary ({}). The region
+    # opener is the final brace on the line, not the first one in the type.
+    for match in re.finditer(r'scf.if[^\n]*\{\n', text):
+        clear, end = region(text, match.end() - 2)
         if not text[end:].startswith(' else {'):
             continue
         masked, end = region(text, end + len(' else '))
@@ -92,8 +94,24 @@ def main():
                 passes = ['--convert-friskbase-to-' + ('fragment' if typed else 'thread') + '=' + options]
                 text, log = run(source, passes)
                 if typed:
+                    text, log = run(text, ['--frisk-bypass-fragment-mask-adds=mode=' + mode])
+                    early = reason == 'bypassed'
+                    assert ('frisk.mask_add_bypass' in text) == early, (name, log)
+                    if early:
+                        branches = list(uniform_branches(text))
+                        assert len(branches) == 1, (name, len(branches))
+                        clear, masked, attrs = branches[0]
+                        assert clear.strip().startswith('scf.yield'), clear
+                        assert '!frisk.fragment' in clear, clear
+                        assert 'frisk.mask_frag' in masked and 'uniform = false' in masked
+                        assert 'arith.addf' not in clear
+                        assert 'MaskAddBypassFragment:' in log
+                        parsed, _ = run(text, [])
+                        again, _ = run(text, ['--frisk-bypass-fragment-mask-adds'])
+                        assert parsed == again, 'fragment bypass is not idempotent'
                     text, log = run(text, ['--convert-fragment-to-thread'])
-                assert 'frisk.mask_add_bypass' not in text, 'bypass must wait for ThreadIR pass'
+                else:
+                    assert 'frisk.mask_add_bypass' not in text
                 text, log = run(text, ['--finalize-thread-tiling', '--lower-frisk-fragments', '--ir-deep-optimize',
                     '--canonicalize', '--cse',
                     '--frisk-bypass-mask-adds=mode=' + mode, '--canonicalize', '--cse'])
@@ -125,6 +143,45 @@ def main():
                 _, error = run('module { func.func @f() { return } }',
                     ['--frisk-bypass-mask-adds=mode=' + invalid], ok=False)
                 assert 'mask-add-bypass must be off or approx' in error
+                _, error = run('module { func.func @f() { return } }',
+                    ['--frisk-bypass-fragment-mask-adds=mode=' + invalid], ok=False)
+                assert 'mask-add-bypass must be off or approx' in error
+
+        # Constant starts exercise both the triangle boundary and unsigned
+        # wraparound guards. A proven clear tile removes mask_frag entirely;
+        # mixed, masked and wrapping tiles must retain elementwise masking.
+        for row, col, clear in [(64, 32, True), (64, 33, True), (64, 34, False),
+                                (64, 128, False), (0, 0, False),
+                                (-1, 0, False), (0, -1, False),
+                                (-64, 0, False)]:
+            source = SOURCE.replace('%maskTIle = frisk.mask',
+                f'%testRow = arith.constant {row} : index\n'
+                f'      %testCol = arith.constant {col} : index\n'
+                '      %maskTIle = frisk.mask').replace(
+                    'starts = [%0, %loopK]', 'starts = [%testRow, %testCol]')
+            text, _ = run(source, ['--convert-friskbase-to-fragment=uniform-masks=true fuse-mask-add=true',
+                                  '--frisk-bypass-fragment-mask-adds', '--canonicalize'])
+            assert ('frisk.mask_frag' not in text) == clear, (row, col)
+            print('PASS tile boundary', row, col, clear, flush=True)
+
+        # Production online softmax marks the score-add result as shared for
+        # the following reduction, and initially spells the mask as scf.if.
+        # Fusion must preserve that annotation without requiring finite scores.
+        for source in (SOURCE, RAW_SOURCE):
+            shared = source.replace(
+                '%16 = frisk.add %qk, %maskTIle : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32>',
+                '%16 = frisk.add %qk, %maskTIle : memref<64x32xf32>, memref<64x32xf32> -> memref<64x32xf32, 3>')
+            shared = shared.replace('%qkme = frisk.exp2 %16 : memref<64x32xf32>',
+                                    '%qkme = frisk.exp2 %16 : memref<64x32xf32, 3>')
+            text, log = run(shared, ['--convert-friskbase-to-fragment=uniform-masks=true fuse-mask-add=true',
+                                    '--canonicalize', '--frisk-bypass-fragment-mask-adds'])
+            branches = list(uniform_branches(text))
+            assert len(branches) == 1, log
+            assert branches[0][0].strip().startswith('scf.yield')
+            assert 'frisk.mask_frag' in branches[0][1]
+            # Check the serialized result through the normal thread lowering.
+            run(text, ['--convert-fragment-to-thread', '--finalize-thread-tiling'])
+            print('PASS shared score annotation', 'scf.if' if source == RAW_SOURCE else 'select', flush=True)
 
 
 

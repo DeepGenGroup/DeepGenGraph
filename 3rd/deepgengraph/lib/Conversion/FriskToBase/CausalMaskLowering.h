@@ -134,6 +134,32 @@ inline Bounds indexRange(Value v, unsigned depth) {
 }
 
 struct Triangle { int64_t diagonal; Value masked, clear; };
+// Prove the entire logical tile takes the clear arm. This needs only block
+// coordinates, not thread ownership or unrolled register indices. Unsigned
+// wraparound must fall back to the original elementwise predicate.
+inline Value buildClearTileCondition(OpBuilder &b, Location loc,
+                                     MemRefType tile, ValueRange starts,
+                                     int64_t diagonal) {
+  if (tile.getRank() != 2 || !tile.hasStaticShape() || starts.size() != 2 ||
+      tile.getDimSize(0) <= 0 || tile.getDimSize(1) <= 0 || diagonal < 0)
+    return {};
+  auto plus = [&](Value start, int64_t delta) -> Value {
+    Value offset = b.create<arith::ConstantIndexOp>(loc, delta);
+    return b.create<arith::AddIOp>(loc, start, offset);
+  };
+  auto uge = [&](Value a, Value c) -> Value {
+    return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, a, c);
+  };
+  Value row = starts[0], col = starts[1];
+  Value rowEnd = plus(row, tile.getDimSize(0) - 1);
+  Value colEnd = plus(col, tile.getDimSize(1) - 1);
+  Value first = plus(row, diagonal), last = plus(rowEnd, diagonal);
+  Value safeRow = b.create<arith::AndIOp>(loc, uge(rowEnd, row), uge(last, rowEnd));
+  Value safe = b.create<arith::AndIOp>(loc, safeRow, uge(colEnd, col));
+  Value past = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, first, colEnd);
+  return b.create<arith::AndIOp>(loc, safe, past);
+}
+
 inline std::optional<Triangle> match(Block *body) {
   if (body->getNumArguments()!=2 || body->getTerminator()->getNumOperands()!=1) return {};
   // No side effects or nontrivial control flow may be dropped by specialization.

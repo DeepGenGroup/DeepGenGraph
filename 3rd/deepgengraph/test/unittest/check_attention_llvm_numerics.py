@@ -337,7 +337,7 @@ class LLVMWorkgroupModel:
             ty, _ = self.parse_type(a)
             a, b = (self.typed(a), self.value(b, ty))
             if pred[0] == 'u':
-                bits = int(ty[1:])
+                bits = int(re.search(r'i(\d+)', ty)[1])
                 a, b = a.astype(np.uint64), b.astype(np.uint64)
                 if bits < 64:
                     a, b = a % (1 << bits), b % (1 << bits)

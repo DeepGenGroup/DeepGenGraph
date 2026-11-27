@@ -23,6 +23,15 @@ def main():
     np.testing.assert_array_equal(model.operation('fcmp ogt float %peak, 8.0'),
                                   np.tile([False,False,True,False],16))
     print('PASS ordered lazy-softmax threshold comparison')
+    # O3 vectorizes the causal mask comparisons; retain the element width
+    # when interpreting unsigned vectors, including negative bit patterns.
+    model.values['%coords'] = np.tile(np.array([-1, 0, 31, 32], np.int64), (64, 1))
+    model.values['%limit'] = np.full((64, 4), 31, np.int64)
+    for bits in (32, 64):
+        np.testing.assert_array_equal(
+            model.operation(f'icmp ugt <4 x i{bits}> %coords, %limit'),
+            np.tile([True, False, False, True], (64, 1)))
+    print('PASS unsigned vector causal-mask comparisons')
     model.values['%pred'] = np.arange(64)==63
     ballot = model.call('i64 @llvm.amdgcn.ballot.i64(i1 %pred)')
     np.testing.assert_array_equal(ballot,np.full(64,np.iinfo(np.int64).min))
