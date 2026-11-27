@@ -217,14 +217,10 @@ PIPELINE = [
     (2,  "ReorderWorkgroups",                "block",    "--workgroup-group-size=32",     "1.0645x"),
     (3,  "NormalizeAttentionKLayout",        "block",    "Attn_p2 缺失或无 frisk.arg_layouts", "显式布局保留输入 ABI"),
     (4,  "PromoteGlobalToSharedAsync",       "block",    "FRISK_GM_TO_SHM_MODE 非 legacy", "-"),
-    # 启发式路径运行一次 AutoPipeline。27/32 任一开启时先尝试展开标记的内循环，
-    # 然后处理显式 pipeline_hint，再按开关生成下面两种 DMA 计划。
-    (27, "AutoPipeline（V 双缓冲）",         "block",    "--v-double-buffer=1",           "历史: 1.0306x"),
-    (32, "AutoPipeline（跨轮 K0 预取）",     "block",    "--cross-bn-k0=1",               "历史: 1.0168x（含 sum anchor）"),
-    (3,  "NormalizeAttentionKLayout",        "block",    "输入未提供 frisk.arg_layouts 时", "统一旧 attention 的 K 存储接口"),
     # ---- 至此，attention 算法结构确定；下面开始规划数据搬运
-    (4,  "PromoteGlobalToSharedAsync",       "block",    "FRISK_GM_TO_SHM_MODE=async",    "-"),
-    (51, "AutoPipeline",                     "block，可选", "循环 hint / --v-double-buffer / --cross-bn-k0；非 CP-SAT", "有界内层展开、V 流及跨轮逻辑规划"),
+    # 启发式路径调用一次 AutoPipeline；27/32 任一开启时先尝试展开标记的内循环，
+    # 然后处理显式 pipeline_hint，再按开关生成下面两种 DMA 计划。
+    (51, "AutoPipeline",                     "block", "非 CP-SAT 时调用；hint / 27 / 32 按需生效", "有界内层展开、N 槽循环预取、V 流及跨轮逻辑规划"),
     (27, "V 双缓冲逻辑计划",                  "block，第 51 项内部", "--v-double-buffer=1", "记录 stage / slot / issue-after，待后端校验"),
     (32, "跨 bn K0 逻辑计划",                 "block，第 51 项内部", "--cross-bn-k0=1", "指定首 DMA、末片 readiness 与跨轮关系"),
     (5,  "PromoteGemmMatrixLoads",           "block",    "默认",                          "-"),
@@ -236,23 +232,24 @@ PIPELINE = [
     # ---- asynccopy / 矩阵读语义已明确；开始完整的计算布局与存储布局规划
     (6,  "ConvertFriskBaseToFragmentIR",     "转 fragment", "--wmma-layout=b-permute --swizzle-k=8:6", "-"),
     (52, "LowerInfoAnalysis（完整线程布局）",  "block，第 6 项内部", "需要布局的计算运行；重新分析当前 IR", "从 GEMM 向前后传播，得到元素到线程/寄存器的映射"),
-    (55, "布局衔接 / PlanWmmaLayoutConversions",               "block，第 6 项内部", "wmma-layout；自动处理布局差异", "插入必要的 convert_layout，折叠可抵消的转换"),
+    (55, "布局衔接 / PlanWmmaLayoutConversions", "block，第 6 项内部", "wmma-layout；跨 52/14 前后调用", "推断前选布局，推断后插入/折叠转换，14 后补 shuffle 计划"),
     (14, "sinkLoopLayoutConversions",        "block，第 6 项内部", "自动",                    "历史 causal: 1.1655x（含 25）"),
     (28, "SharedMemoryPlan.layout",          "block，第 6 项内部", "--shared-copy-constraints=1:8:9:3", "历史 K DMA/swizzle: 1.0149x"),
     (37, "SinkWaitBufferReady",              "block，第 6 项内部", "自动",                    "延迟 readiness；无单项计时"),
     # ---- fragment IR：计算还是语义操作，物理存储未定 ----------------------
     # 转换后先做 VectorSafeCanonicalizer，再融合剩余的 fragment 累加。
     (7,  "FuseFragmentAccumulator",          "fragment", "默认",                          "-"),
-    (8,  "FriskFragIRReorder",               "fragment", "非 CP-SAT 路径",                          "-"),
-    (9,  "SimplifyLoopControl",              "fragment", "--simplify-loop-control=1",     "-"),
-    #  RetainInvariantFragments 本质是计算图结构的变化？—— 不是。大结构没变，只是内存层次的优化（blockIR层面，没有reg这个内存层次）
-    (10, "RetainInvariantFragments",         "fragment", "--retain-fragment-words=32",    "causal: 1.08~1.10x/档"),
-    (29, "PrefetchFragmentLDS（普通窗口）",  "fragment", "--k-lds-prefetch=8",            "历史 MyTest 路径: 1.0272x"),
-    (31, "PrefetchFragmentLDS（归约窗口）",  "fragment", "--k-tail-prefetch=4",           "历史: 1.0098x"),
+    (80, "FragmentScheduling（frisk-fragment-scheduling）", "fragment，组合流水", "默认；CP-SAT 关闭 heuristic-scheduling", "统一入口 buildFragmentSchedulingPipeline；包含下列 8/9/10/29/31/11"),
+    # 统一入口已收拢为 FragmentScheduling；FriskFragIRReorder 仍是内部 Pass 的源码名。
+    (8,  "FriskFragIRReorder",               "fragment，第 80 项内部", "非 CP-SAT 路径",       "循环融合 + fragment 一级 lookahead"),
+    (9,  "SimplifyLoopControl",              "fragment，第 80 项内部", "--simplify-loop-control=1", "-"),
+    # 不变 fragment 保留会改变工作图；启发式和 CP-SAT 路径都在导出调度前执行。
+    (10, "RetainInvariantFragments",         "fragment，第 80 项内部", "--retain-fragment-words=32", "causal: 1.08~1.10x/档"),
+    (29, "PrefetchFragmentLDS（普通窗口）",  "fragment，第 80 项内部", "--k-lds-prefetch=8；非 CP-SAT", "历史 MyTest 路径: 1.0272x（迁移前）"),
+    (31, "PrefetchFragmentLDS（归约窗口）",  "fragment，第 80 项内部", "--k-tail-prefetch=4；非 CP-SAT", "历史: 1.0098x（迁移前）"),
     # 29/31 合用一次启发式 Pass，任一距离非零即运行。
-    (11, "ScheduleAsyncCopies",              "fragment", "启发式；子流水末尾",            "-"),
+    (11, "ScheduleAsyncCopies",              "fragment，第 80 项内部", "启发式；子流水末尾", "-"),
     # CP-SAT 在此调用 processScheduleJSON；--cpsat-stop-after=1 成功后直接返回。
-    (11, "ScheduleAsyncCopies",              "fragment", "非 CP-SAT 路径",                          "-"),
     (56, "ScheduleJSON / CP-SAT",             "fragment，可选驱动步骤", "--cpsat-export/import/baseline", "第 10 项后导出/导入调度；替代第 11 项"),
     # shm liveliness 分析
     (12, "AnalyzeShmLiveness",               "fragment", "默认（只分析，不改 IR）",        "-"),
@@ -260,20 +257,19 @@ PIPELINE = [
     # ---- thread IR：reduce/布局变换展开为通信，确定物理 LDS ---------------
     (13, "ConvertFragmentToThreadIR",        "thread",   "默认",                          "-"),
     # FinalizeThreadTiling 移除 to/from_threadtile 桥接，随后 VectorSafeCanonicalizer → CSE。
-    (15, "LowerFriskFragments",              "thread",   "启发式路径验证 27/32；CP-SAT 保留调度", "落实物理 LDS 分配与同步"),
-    # 存储/循环外提与规范化 → ThreadLevelIRLegalize → LICM、buffer hoisting 等；
-    # 启发式路径额外做 affine loop fusion，随后 affine scalar replacement → 第 16 项。
-    (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=(reorder && 启发式)", "-"),
     (58, "FinalizeThreadTiling",              "thread", "默认",                            "清除 to/from_threadtile 桥接，落实线程数据形状"),
-    (15, "LowerFriskFragments",              "thread",   "默认",                          "-"),
+    (15, "LowerFriskFragments",              "thread",   "默认；启发式验证 27/32，CP-SAT 保留调度", "落实物理 LDS 分配、同步及有标记循环的有界展开"),
     (78, "PackSharedMemory",                 "thread，第 15 项内部", "使用第 28 项发布的布局",       "将打包/swizzle 方案落实到分配和所有访问地址"),
     # ScheduleAsyncCopies（物理访问可见后）
     (11, "ScheduleAsyncCopies（物理访问可见后）", "thread，第 15 项内部", "非 CP-SAT 路径",        "重查搬运/等待顺序，再按最终生命周期分配槽位"),
-    (27, "SharedMemoryPlan.execution（V 物理落实）", "thread，第 15 项内部", "--v-double-buffer=1；消费早期计划", "历史: 1.0306x"),
-    (32, "SharedMemoryPlan.execution（跨轮物理落实）", "thread，第 15 项内部", "--cross-bn-k0=1；消费早期计划", "历史: 1.0168x（含 sum anchor）"),
+    (27, "SharedMemoryPlan.execution（V 物理落实）", "thread，第 15 项内部", "--v-double-buffer=1；非 CP-SAT；消费早期计划", "历史: 1.0306x"),
+    (32, "SharedMemoryPlan.execution（跨轮物理落实）", "thread，第 15 项内部", "--cross-bn-k0=1；非 CP-SAT；消费早期计划", "历史: 1.0168x（含 sum anchor）"),
+    # 第 15 项始终落实共享存储：启发式路径在重排前后补循环回边同步，按最终生命周期分配。
+    # 27/32 开启时先有界展开再物理落实；均关闭时先落实再展开。
+    # CP-SAT 有 pool_bytes 时使用其槽位计划，否则只做保序分配；两者均补必要同步。
     (60, "通用循环/存储清理（前段）",         "thread，多个标准 Pass", "默认；CP-SAT 跳过循环融合", "外提不变分配和计算，规范循环、消除冗余读写"),
     (59, "ThreadLevelIRLegalize",             "thread，穿插在第 60 项中", "默认",              "整理 kernel 属性、内存分配和目标矩阵指令"),
-    (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=true",     "-"),
+    (16, "IRDeepOptimize",                   "thread",   "reorder-after-unroll=(reorder && 非 CP-SAT)", "-"),
     (60, "通用循环/存储清理（后段）",         "thread，多个标准 Pass", "默认",              "规范循环，用 SSA 值替代可消除的临时内存"),
     # 算术优化。简化affine的ub indice计算
     (17, "SimplifyBoundedAffine",            "thread",   "--simplify-bounded-affine=1",   "组合实测，见表后说明"),
@@ -283,63 +279,59 @@ PIPELINE = [
     # 计算图变化。暂时视为数学算法优化
     (20, "ThreadMaskAddBypass",              "thread",   "--mask-add-bypass=approx（本 case 无 mask）", "-"),
     # 计算图变化。暂时视为数学算法优化
-    (21, "ThreadLocalReduction",             "thread",   "--local-reduce=approx",         "历史 causal: 1.0347x（含 20、22）"),
+    (21, "ThreadLocalReduction",             "thread",   "--local-reduce=approx；非 CP-SAT", "历史 causal: 1.0347x（含 20、22）"),
     # 计算图变化。暂时视为数学算法优化
-    (22, "ThreadDeferLaneSum",               "thread",   "--defer-lane-sum=approx",       "同上"),
-    # 计算图变化。暂时视为数学算法优化
-    (26, "ThreadInterleaveMMAChains（matrix）",               "thread",   "--pv-interleave=4 --pv-guard-group=-1", "历史: 1.0043x（接近噪声）"),
-    (29, "ThreadPrefetchPairedLDS",           "thread",   "--k-lds-prefetch=8",            "历史 MyTest 路径: 1.0272x"),
-    (41, "ThreadInterleaveMMAChains（lds）",               "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32", "CPU 验证；无 GPU 计时"),
-    # frag级别的调度优化。尝试将规划前置
-    (30, "ThreadScheduleSoftmaxFragments",    "thread",   "--softmax-fragments=pv",        "历史: 1.0162x"),
-    (33, "ThreadElideBackedgeBarrier",        "thread",   "--elide-backedge-barrier=1",    "历史组合实测；当前无迁移单项计时"),
+    (22, "ThreadDeferLaneSum",               "thread",   "--defer-lane-sum=approx；非 CP-SAT", "同上"),
+    # LDS 提前读取由 fragment 第 29/31 项安排；这里仅落实物理读对和锚点。
+    (24, "CanonicalizeThreadLDSAddresses（预取落实前）", "thread", "29/31 任一距离非零；非 CP-SAT", "补足物理地址证明"),
+    (29, "ThreadPrefetchPairedLDS（落实 29/31）", "thread", "29/31 任一距离非零；非 CP-SAT；{0, fragment}", "完成物理读对和 MMA 锚点，不重新选择预取距离"),
+    (26, "ThreadInterleaveMMAChains（matrix）", "thread", "--pv-interleave=4 --pv-guard-group=-1；非 CP-SAT", "历史: 1.0043x（接近噪声）"),
+    (24, "CanonicalizeThreadLDSAddresses（QK 交错前）", "thread", "qk-interleave!=0 时运行", "保留已有读对/guard 边界，补足地址证明"),
+    (41, "ThreadInterleaveMMAChains（lds）", "thread，可选", "--qk-interleave=2 --qk-guard-group=2 --qk-prefetch-words=32；非 CP-SAT", "CPU 验证；无 GPU 计时"),
+    (30, "ThreadScheduleSoftmaxFragments",    "thread",   "--softmax-fragments=pv；非 CP-SAT", "历史: 1.0162x"),
+    (33, "ThreadElideBackedgeBarrier",        "thread",   "--elide-backedge-barrier=1；非 CP-SAT", "历史组合实测；当前无迁移单项计时"),
     # LowerFriskAsyncCopy → LowerGPUShuffleToROCDL → VectorSafeCanonicalizer → CSE，随后外提 wave setup。
     (61, "LowerFriskAsyncCopy",               "thread → 目标操作", "默认；sync 模式禁用异步发射", "落实 DMA、task、wait 和跨 wave 可见性"),
     (62, "LowerGPUShuffleToROCDL",            "thread → ROCDL", "默认",                     "把 lane 间交换数据变成目标 GPU 操作"),
     (18, "HoistWaveInvariants",              "thread + ROCDL/LLVM dialect", "--hoist-lds-bases=1 --hoist-lane-shuffles=1", "组合实测"),
     # 计算图变化。暂时视为数学算法优化
-    (34, "ThreadLazySoftmaxBase",             "thread",   "--lazy-softmax-base=8",        "实验版 1.0582x；见 34"),
+    (34, "ThreadLazySoftmaxBase",             "thread",   "--lazy-softmax-base=8；非 CP-SAT", "实验版 1.0582x；见 34"),
     # 指令优化
     (35, "ThreadSoftmaxCvtPack",              "thread",   "--softmax-cvt-pack=rtz",       "历史 LLVM 版 1.0439x；见 35"),
     (57, "AnalyzeRegisterPressure（thread）",  "thread，可选分析", "--analyze-register-pressure=1", "观察展开和调度后寄存器压力如何变化"),
     # ---- MLIR 后端：first/secondLowering 是组合流程，不是单个 Pass ---------
     (63, "firstLowering",                    "MLIR lowering 驱动", "默认",                  "affine 循环降级，并清理重复计算和无用符号"),
-    (64, "secondLowering",                   "MLIR lowering 驱动", "默认；以下 65/60/38/39/66~69 为其内部阶段", "把控制流、内存和 GPU 操作译成 LLVM dialect"),
+    (64, "secondLowering",                   "MLIR lowering 驱动", "默认；以下 65/60/38/39/66~69/79 为其内部阶段", "先 LICM，再把控制流、内存和 GPU 操作译成 LLVM dialect"),
     (65, "AmendAllocaOpAddrSpace",            "第 64 项内部", "ROCm private 地址空间为 5",      "为线程私有分配填写正确地址空间"),
     (60, "通用结构清理",                     "第 64 项内部", "默认",                         "展开 memref 步长信息、vector 循环，再清理"),
-    (38, "CoalesceWaitsAndBarriers",          "secondLowering", "--coalesce-waits=1",        "同 block 合并重复同步；无单项 GPU 计时"),
-    (39, "BarrierOptimize",                  "secondLowering", "默认，接在 38 之后",        "按跨线程内存依赖删 barrier"),
+    (38, "CoalesceWaitsAndBarriers",          "第 64 项内部", "--coalesce-waits=1 或 CP-SAT 保序模式", "同 block 合并重复同步；无单项 GPU 计时"),
+    (39, "BarrierOptimize",                  "第 64 项内部", "非 CP-SAT，接在可选的 38 之后", "按跨线程内存依赖删 barrier"),
     (66, "控制流/内存/函数转 LLVM",           "第 64 项内部，标准 Pass", "默认",              "把循环分支、内存访问和函数接口变成低层表示"),
+    (79, "LowerFriskSchedBarrier",           "第 64 项内部", "默认，函数转 LLVM 后",       "将 Frisk 调度边界转换为目标调度屏障"),
     (67, "LLVMFuncOpAddGPUAttr",              "第 64 项内部", "默认",                         "标明 GPU kernel、workgroup 大小及目标信息"),
     (68, "GPUToROCDLOrNVVM",                 "第 64 项内部", "MyTest 目标为 ROCm",            "翻译线程编号、barrier 和目标相关数学操作"),
     (69, "VectorToLLVM",                     "第 64 项内部", "项目封装的 vector lowering",    "展开动态多维向量访问，转换为 LLVM 向量操作"),
     (66, "标量转 LLVM 与转换清理",            "第 64 项内部，标准 Pass", "默认",              "转换 arith/UB/index，清理临时 cast 和无用代码"),
     # ---- LLVM IR：寄存器处理与最终导出 ------------------------------------
-    (25, "cleanupLLVMInstructions（早期）",   "LLVM",     "启发式，math!=strict，llvm-cleanup=both/early", "translateModuleToLLVMIR 后"),
-    # 启发式路径按需 prefetchGlobalPackets，再调用 anchorNextKSums。
-    (23, "optimizeRegisterLifetimes",        "LLVM",     "--register-lifetimes=1（默认）", "CP-SAT 走保序模式"),
-    # 启发式路径可选 reuseLDSFragments → prefetchMMACFragments，随后按 dma-export 模式导出 DMA。
-    (25, "cleanupLLVMInstructions（晚期）",   "LLVM",     "启发式，math!=strict，llvm-cleanup=both/late", "DMA 导出后，带 SimplifyCFG"),
-]
-# LLVM 导出末尾，启发式路径仅在 k-lds-prefetch 非零时执行 canonicalizeLLVMExport，
-# 随后再次调用 anchorNextKSums。验证模块后按 --llvm-opt 选择是否运行 default<O3>。
     (70, "translateToLLVM / FriskLLVMTranslation", "LLVM 导出入口", "默认，包括 strict/cleanup=none", "导出真正的 LLVM IR，并补齐 MMA/锚点属性契约"),
-    (25, "cleanupLLVMInstructions（early）",  "LLVM",     "math!=strict；llvm-cleanup=both/early", "两次 InstCombine；不补齐导出契约"),
+    (25, "cleanupLLVMInstructions（early）",  "LLVM",     "非 CP-SAT；math!=strict；llvm-cleanup=both/early", "两次 InstCombine；不补齐导出契约"),
     (71, "prefetchGlobalPackets",             "LLVM，可选", "--prefetch-packets=1；非 CP-SAT", "提前读取后续计算所需的显存数据包"),
     (72, "anchorNextKSums（首次）",            "LLVM", "非 CP-SAT，匹配跨轮预取结构时生效",    "保护分母求和输入，避免被下沉到跨轮预取之后"),
-    (23, "optimizeRegisterLifetimes",        "LLVM",     "--register-lifetimes=1（默认）", "32 的 sum anchor 在它之前"),
+    (23, "optimizeRegisterLifetimes",        "LLVM",     "--register-lifetimes=1（默认）", "32 的 sum anchor 在它之前；CP-SAT 走保序模式"),
     (73, "reuseLDSFragments",                 "LLVM，可选", "--lds-reuse-words=N；非 CP-SAT",  "在预算内复用已读 fragment，减少重复 LDS 读取"),
     (74, "prefetchMMACFragments",             "LLVM，可选", "--frag-prefetch=1；非 CP-SAT",    "按 frag-prefetch-words 预算提前准备 MMAC 操作数"),
     (75, "lowerAsyncDMA（最终导出）",          "LLVM 导出内部", "--dma-export 选择实现",          "发射目标 DMA 表达，并保护源地址的生命周期"),
-    (25, "cleanupLLVMInstructions（late）",   "LLVM，DMA 导出后", "math!=strict；llvm-cleanup=both/late", "SimplifyCFG + 两次 InstCombine"),
+    (25, "cleanupLLVMInstructions（late）",   "LLVM，DMA 导出后", "非 CP-SAT；math!=strict；llvm-cleanup=both/late", "SimplifyCFG + 两次 InstCombine"),
     (76, "canonicalizeLLVMExport",            "LLVM", "k-lds-prefetch!=0；非 CP-SAT",         "合并最终 DMA 导出带来的重复描述符和表达式"),
     (72, "anchorNextKSums（再次检查）",        "LLVM", "非 CP-SAT；重复调用不重复加锚点",      "导出清理之后再次保护跨轮求和顺序"),
     (77, "default<O3>",                      "LLVM，标准优化管线", "--llvm-opt=3；非 CP-SAT",   "常规 LLVM 优化后输出 .ll，尚未生成机器码"),
 ]
 # 13 后运行第 58 项 FinalizeThreadTiling：去掉 to/from_threadtile 桥接；第 14 项的
 # 布局转换外提在第 6 项内已经完成，不能再把它归给 FinalizeThreadTiling。
-# 29/31/41 任一开启时，26 之后、29 之前还会重跑 24，补足地址证明；已有锚点可复用。
-# 调度顺序为 26 → 24（按需）→ 29 → 41（可选）→ 30 → 31 → 33。
+# 启发式 fragment 子流水先由 29/31 合用一次 Pass 规划预取，再执行 11。
+# thread 调度顺序为 24 → 29（落实 fragment 的 29/31）→ 26 → 24 → 41 → 30 → 33，
+# 各项按开关执行；两次额外的 24 分别服务预取落实和 QK 交错，已有锚点可复用。
+# 31 不再是 30 之后独立运行的 thread Pass；CP-SAT 跳过这些启发式调度。
 # 33 之后先局部 lower async copy / GPU shuffle，再执行 18，使 wave setup 可见并保留结构化循环。
 # translateToLLVM 已完成 MMA/锚点契约；25 的 early 在其后、23 之前执行，
 # late 在最终 DMA 导出后带 simplifyCFG=true 执行，两轮由 --llvm-cleanup 独立选择。
@@ -349,8 +341,8 @@ PIPELINE = [
 # 第 34/35 项在 18 之后、first/secondLowering 之前依次执行，入口分别为
 # ThreadLazySoftmaxBasePass / ThreadSoftmaxCvtPackPass；各自可独立开启。
 # 第 35 项在 ThreadIR 选择转换边，ROCm lowering 落实指令和两端锚点；LLVM 不再匹配转换。
-# --llvm-opt=0 可关闭最终 O3，--llvm-opt=3 为默认。
-# --llvm-cleanup=both|early|late|none 默认 both；strict 跳过两轮清理。
+# --llvm-opt=0 可关闭最终 O3，--llvm-opt=3 为默认；CP-SAT 跳过最终 O3。
+# --llvm-cleanup=both|early|late|none 默认 both；strict 或 CP-SAT 跳过两轮清理。
 # 该选项不控制导出契约或最终 O3；strict / none 也必须得到完整 MMA/锚点属性。
 # 新增 causal 分支能力：第 6 项传递 --causal-mask=off|i32|finite（默认 off），
 # 第 13 项展开 fragment mask 时落实；直接 thread lowering 路径也支持。详见第 6/13 项对比。
