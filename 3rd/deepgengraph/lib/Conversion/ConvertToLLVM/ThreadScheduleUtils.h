@@ -10,10 +10,27 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include <cassert>
+#include <cstdint>
 
 namespace mlir::frisk::thread_schedule {
 using Ops = SmallVector<Operation *, 64>;
 constexpr StringLiteral Barrier = "llvm.amdgcn.sched.barrier";
+
+namespace barrier_mask {
+// Use leaf classes only. Setting an aggregate ALU/VMEM/DS bit would also
+// permit its protected children (including MATRIX, TRANS or LDS_DMA).
+inline constexpr uint32_t VALU = 0x002, SALU = 0x004, MATRIX = 0x008;
+inline constexpr uint32_t VMEM_READ = 0x020, VMEM_WRITE = 0x040;
+inline constexpr uint32_t DS_READ = 0x100, DS_WRITE = 0x200;
+inline constexpr uint32_t TRANS = 0x400, LDS_DMA = 0x800;
+inline constexpr uint32_t MEMORY = VMEM_READ | VMEM_WRITE | DS_READ |
+                                   DS_WRITE | LDS_DMA;
+inline constexpr uint32_t ALL = VALU | SALU | MATRIX | MEMORY | TRANS;
+constexpr uint32_t allowExcept(uint32_t protectedClasses) {
+  return ALL & ~protectedClasses;
+}
+} // namespace barrier_mask
 
 inline bool mma(Operation *op, bool allowShapeAliases = false) {
   if (!op || op->getNumOperands() != 3 || op->getNumResults() != 1) return false;
@@ -126,7 +143,8 @@ inline LogicalResult checkGuard(ModuleOp module) {
   }
   return success();
 }
-inline SchedBarrierOp guard(Operation *before, StringRef marker, uint32_t mask = 0) {
+// Require the owning scheduler to choose its allow mask explicitly.
+inline SchedBarrierOp guard(Operation *before, StringRef marker, uint32_t mask) {
   OpBuilder b(before);
   auto barrier = b.create<SchedBarrierOp>(before->getLoc(), b.getI32IntegerAttr(mask));
   barrier->setAttr(marker, b.getUnitAttr());
@@ -136,12 +154,21 @@ inline SchedBarrierOp guard(Operation *before, StringRef marker, uint32_t mask =
 // These planner-owned boundaries fix the memory/MMA schedule. A later register
 // scheduler may refine it only if it proves that every other operation,
 // including these guards, remains in the same order. Explicit guards and the
-// final softmax guards do not grant this permission. The backend still sees a
-// full barrier after all ThreadIR schedules have been composed.
+// final softmax guards do not grant this permission. Software refinement and
+// the backend instruction allow mask are separate contracts.
 inline constexpr StringLiteral MemoryMMAGuard = "frisk.memory_mma_guard";
-inline void guardMemoryAndMMA(Operation *before, StringRef marker) {
-  auto barrier = guard(before, marker);
+inline void guardMemoryAndMMA(Operation *before, StringRef marker, uint32_t mask) {
+  assert((mask & ~(barrier_mask::VALU | barrier_mask::SALU |
+                   barrier_mask::TRANS)) == 0 && "must protect memory and MMA");
+  auto barrier = guard(before, marker, mask);
   barrier->setAttr(MemoryMMAGuard, UnitAttr::get(before->getContext()));
+}
+
+inline bool isRefinableMemoryMMAGuard(Operation *op) {
+  auto barrier = dyn_cast<SchedBarrierOp>(op);
+  return barrier && op->hasAttrOfType<UnitAttr>(MemoryMMAGuard) &&
+         (barrier.getMask() & ~(barrier_mask::VALU | barrier_mask::SALU |
+                               barrier_mask::TRANS)) == 0;
 }
 
 inline bool isScheduleBarrier(Operation *op) {

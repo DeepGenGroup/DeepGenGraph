@@ -171,7 +171,7 @@ def main():
                                 str(tmp/'kernel.ll'), '-o', str(tmp/'kernel.o3.ll')], capture_output=True, text=True)
             assert p.returncode == 0, p.stderr
             optimized = (tmp/'kernel.o3.ll').read_text()
-            assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 0)') == out.count('frisk.sched_barrier')
+            assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 1030)') == out.count('frisk.sched_barrier')
             if guards:
                 assert 'memory(inaccessiblemem: readwrite)' in optimized
             cases += 1

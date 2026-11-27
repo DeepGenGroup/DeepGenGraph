@@ -20,7 +20,7 @@ def run(source, *passes, ok=True):
 
 
 def main():
-    masks = [0] + [1 << bit for bit in range(12)] + [0x006, 0x402, 0xfff]
+    masks = [0] + [1 << bit for bit in range(12)] + [0x006, 0x402, 0x404, 0x406, 0xfff]
     body = '\n'.join(f'frisk.sched_barrier {{mask = {mask} : i32, test.id = "b{i}"}}'
                      for i, mask in enumerate(masks))
     source = 'module { func.func @kernel() {\n' + body + '\nreturn\n}}'

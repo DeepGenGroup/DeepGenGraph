@@ -195,8 +195,12 @@ All selected pairs in a region are first closed by hoisting the later
 read and its pure address dependencies. Complete pairs are then hoisted
 before an independent MMAC, without delaying any load. Before committing,
 the pass checks SSA order and that no scheduling hint splits any selected
-pair. It brackets each anchor with `llvm.amdgcn.sched.barrier(0)`; these
-are compiler scheduling hints, not workgroup synchronization. It preserves
+pair. It brackets each anchor with a `frisk.sched_barrier`, lowered to
+`llvm.amdgcn.sched.barrier(mask)`. Ordinary windows protect memory and MATRIX
+with allow mask `0x406`; reduction windows also protect VALU with `0x404`.
+Finalized Fragment anchors use `0x404` because their shared marker includes
+reduction windows. These are compiler scheduling hints, not workgroup
+synchronization. It preserves
 MMAC order, floating-point flags, DMA and hardware synchronization order,
 and shared-memory capacity. Unsupported movements are skipped and reported.
 

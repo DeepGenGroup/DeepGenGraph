@@ -240,6 +240,7 @@ def main():
     finalized = run(lowered, FINALIZE)
     assert 'frisk.lds_prefetch_anchor' not in finalized
     assert 'frisk.sched_barrier' in finalized
+    assert finalized.count('mask = 1028 : i32') == finalized.count('frisk.sched_barrier')
     assert run(finalized, FINALIZE) == finalized
 
     from check_thread_fragment_schedules import paired, graph as thread_graph
@@ -289,6 +290,7 @@ def main():
         assert thread_graph(without_anchors(source)) == thread_graph(without_anchors(result))
         assert result.count('frisk.lds_pair') == 8
         assert result.count('frisk.sched_barrier') == 6
+        assert result.count('mask = 1028 : i32') == 6
         assert 'frisk.lds_prefetch_anchor' not in result
         assert run(result, FINALIZE) == result
         lines = result.splitlines()

@@ -11,6 +11,11 @@ namespace mlir::frisk {
 namespace {
 using namespace thread_schedule;
 constexpr StringLiteral Marker = "frisk.softmax_fragments";
+// Pin exp2, FP32 sums, half packing and their PV MMAs to the memory schedule.
+// Protecting only MATRIX would let TRANS/VALU collect ahead of the PV groups.
+constexpr uint32_t SoftmaxAllowMask = barrier_mask::allowExcept(
+    barrier_mask::MEMORY | barrier_mask::MATRIX |
+    barrier_mask::VALU | barrier_mask::TRANS);
 struct Packet { Operation *packed, *exp; Ops nodes; };
 
 bool matchPacket(arith::TruncFOp cast, Packet &packet) {
@@ -71,9 +76,7 @@ bool preservesFixedSchedule(ArrayRef<Operation *> original,
   auto collect = [&](ArrayRef<Operation *> ops, Ops &fixed, Ops &boundaries) {
     for (Operation *op : ops) {
       if (!moving.contains(op)) fixed.push_back(op);
-      auto barrier = dyn_cast<SchedBarrierOp>(op);
-      if (!barrier || barrier.getMask() != 0 ||
-          !op->hasAttrOfType<UnitAttr>(MemoryMMAGuard))
+      if (!isRefinableMemoryMMAGuard(op))
         boundaries.push_back(op);
     }
   };
@@ -171,7 +174,8 @@ unsigned schedule(Block &block, SoftmaxFragmentMode mode) {
       if (proposed[def] >= proposed[op]) return 0;
   Operation *end = block.getTerminator();
   for (Operation *op : order) if (op != end) op->moveBefore(end);
-  for (auto &packet : packets) guard(packet.packed->getNextNode(), Marker);
+  for (auto &packet : packets)
+    guard(packet.packed->getNextNode(), Marker, SoftmaxAllowMask);
   return packets.size();
 }
 

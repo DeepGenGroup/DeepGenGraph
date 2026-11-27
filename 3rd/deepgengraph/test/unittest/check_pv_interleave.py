@@ -198,7 +198,7 @@ def main():
         assert p.returncode == 0, p.stderr
         optimized = (tmp/'kernel.o3.ll').read_text()
         assert 'memory(inaccessiblemem: readwrite)' in optimized
-        assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 0)') == 24
+        assert optimized.count('call void @llvm.amdgcn.sched.barrier(i32 1030)') == 24
         cases += 1
         # The production flag still validates widths; the removed LLVM pass
         # must not remain as a silent fallback in the legacy exporter.

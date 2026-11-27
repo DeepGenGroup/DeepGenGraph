@@ -10,6 +10,12 @@
 namespace mlir::frisk {
 namespace {
 using namespace thread_schedule;
+// Preserve read-ahead distance in MMA ordinals and the memory epoch. Reduction
+// windows additionally pin VALU so their arithmetic cannot leave the overlap.
+constexpr uint32_t PrefetchAllowMask =
+    barrier_mask::allowExcept(barrier_mask::MEMORY | barrier_mask::MATRIX);
+constexpr uint32_t ReductionAllowMask = barrier_mask::allowExcept(
+    barrier_mask::MEMORY | barrier_mask::MATRIX | barrier_mask::VALU);
 
 bool candidate(Operation *op) {
   auto load = dyn_cast<LDSLoadOp>(op);
@@ -183,8 +189,10 @@ void finalizeFragmentSchedule(func::FuncOp f, Stats &stats) {
       op->setAttr("frisk.register_mma", UnitAttr::get(op->getContext()));
       op->setAttr("frisk.scheduled_mma", UnitAttr::get(op->getContext()));
     }
-    guardMemoryAndMMA(op, "frisk.lds_prefetch.fragment");
-    guardMemoryAndMMA(op->getNextNode(), "frisk.lds_prefetch.fragment");
+    // Fragment anchors cover both ordinary and reduction lookahead. Their
+    // shared marker does not distinguish these after unrolling, so retain VALU.
+    guardMemoryAndMMA(op, "frisk.lds_prefetch.fragment", ReductionAllowMask);
+    guardMemoryAndMMA(op->getNextNode(), "frisk.lds_prefetch.fragment", ReductionAllowMask);
     op->removeAttr(FragmentLDSAnchor);
     ++stats.anchors;
   }
@@ -261,8 +269,10 @@ void schedule(Ops region, unsigned distance, StringRef marker, Stats &stats) {
   }
   // Iterate in original MMA order for deterministic guard insertion.
   for (Operation *op : mmas) if (anchors.contains(op)) {
-    guardMemoryAndMMA(op, marker);
-    guardMemoryAndMMA(op->getNextNode(), marker);
+    uint32_t mask = marker == "frisk.lds_prefetch.reduction"
+                        ? ReductionAllowMask : PrefetchAllowMask;
+    guardMemoryAndMMA(op, marker, mask);
+    guardMemoryAndMMA(op->getNextNode(), marker, mask);
   }
   ++stats.regions; stats.pairs += pairs.size(); stats.moved += moved;
   stats.anchors += anchors.size();

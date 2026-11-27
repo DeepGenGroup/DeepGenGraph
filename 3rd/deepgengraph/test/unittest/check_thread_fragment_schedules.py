@@ -112,8 +112,16 @@ def export(source):
     low = run(source, '--test-async-to-llvm')
     p = subprocess.run([str(LLVM/'mlir-translate'), '--mlir-to-llvmir'], input=low,
                        capture_output=True, text=True, check=True)
-    subprocess.run([str(LLVM/'opt'), '-passes=default<O3>,verify', '-disable-output'],
-                   input=p.stdout, text=True, capture_output=True, check=True)
+    optimized = subprocess.run([str(LLVM/'opt'), '-S', '-passes=default<O3>,verify', '-o', '-'],
+                               input=p.stdout, text=True, capture_output=True, check=True).stdout
+    expected = []
+    for line in source.splitlines():
+        if 'frisk.sched_barrier' in line:
+            mask = re.search(r'mask = (\d+) : i32', line)
+            expected.append(int(mask[1]) if mask else 0)
+    for ir in (p.stdout, optimized):
+        assert [int(mask) for mask in re.findall(
+            r'call void @llvm.amdgcn.sched.barrier\(i32 (\d+)\)', ir)] == expected
     return p.stdout
 
 
@@ -130,6 +138,9 @@ def main():
                     source = run(paired(count, spacing, tail))
                     result = run(source, option + str(distance))
                     assert graph(result) == graph(source)
+                    expected_mask = 1028 if tail else 1030
+                    masks = re.findall(r'frisk.sched_barrier[^\n]*mask = (\d+) : i32', result)
+                    assert masks and set(masks) == {str(expected_mask)}, masks
                     pairs = defaultdict(list)
                     lines = result.splitlines()
                     for n, line in enumerate(lines):
@@ -175,6 +186,7 @@ def main():
             result = run(source, SOFT+mode)
             assert graph(result) == graph(source)
             assert result.count('frisk.sched_barrier') == count
+            assert result.count('mask = 4 : i32') == count
             assert run(result, SOFT+mode) == result
             if mode == 'pv':
                 events = re.findall(r'math.exp2|v_mmac_f32', result)
@@ -238,10 +250,13 @@ def main():
             f'--frisk-thread-interleave-mma-chains=width=2 guard-group={guards}')
         assert re.findall(r'test.id = "(\d+)"', interleaved) == ['0', '2', '1', '3']
         assert 'frisk.memory_mma_guard' in interleaved
+        assert interleaved.count('mask = 1030 : i32') == interleaved.count('frisk.sched_barrier')
         result = run(interleaved, SOFT+'pv')
         assert graph(result) == graph(interleaved)
         assert re.findall(r'math.exp2|v_mmac_f32', result) == ['math.exp2', 'v_mmac_f32'] * 4
         assert result.count('frisk.memory_mma_guard') == interleaved.count('frisk.memory_mma_guard')
+        assert result.count('mask = 1030 : i32') == interleaved.count('frisk.memory_mma_guard')
+        assert result.count('mask = 4 : i32') == 4
         assert result.index('gpu.barrier') < result.index('math.exp2')
         assert result.index('frisk.lds_load') < result.index('math.exp2')
         assert run(result, SOFT+'pv') == result
@@ -253,10 +268,23 @@ def main():
 
     for boundary in ('frisk.sched_barrier',
                      'frisk.sched_barrier {frisk.mma_interleave}',
-                     'frisk.sched_barrier {frisk.memory_mma_guard, mask = 1026 : i32}',
+                     'frisk.sched_barrier {frisk.memory_mma_guard, mask = 8 : i32}',
+                     'frisk.sched_barrier {frisk.memory_mma_guard, mask = 256 : i32}',
+                     'frisk.sched_barrier {frisk.memory_mma_guard, mask = 4095 : i32}',
                      'frisk.sched_barrier {frisk.memory_mma_guard = false}'):
         source = softmax(boundary=boundary)
         assert run(source, SOFT+'pv') == run(source)
+    # Software refinement is explicitly scoped and still protects fixed ops;
+    # it supports both old full guards and purpose-specific nonzero masks.
+    for mask in (0, 4, 1026, 1028, 1030):
+        source = run(softmax(boundary=
+            f'frisk.sched_barrier {{frisk.memory_mma_guard, mask = {mask} : i32}}'))
+        result = run(source, SOFT+'pv')
+        assert graph(result) == graph(source)
+        assert re.findall(r'math.exp2|v_mmac_f32', result) == ['math.exp2', 'v_mmac_f32'] * 4
+        assert result.count('frisk.memory_mma_guard') == 1
+        export(result)
+        cases += 1
     # Refinement still cannot cross unknown effects, even with scoped guards.
     source = softmax(boundary='frisk.sched_barrier {frisk.memory_mma_guard}\n'
                              'func.call @unknown() : () -> ()')

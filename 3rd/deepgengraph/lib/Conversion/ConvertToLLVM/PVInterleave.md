@@ -122,11 +122,29 @@ alternative widths to the original input, not already transformed output.
 
 ## Scheduling guards and lowering
 
-The module pass emits `frisk.sched_barrier` with mask 0 at the configured group
-boundaries (by default, before/after each PV MMAC). LDS prefetch and softmax
-scheduling use the same operation. Its compiler-private `frisk.schedule`
-read/write effect retains it through MLIR CSE/DCE without claiming a program
-memory access. Thread schedulers conservatively respect every mask as a boundary.
+Each scheduling pass chooses its `frisk.sched_barrier` allow mask from the
+instruction classes whose order it protects:
+
+| Producer | Protected classes | Allow mask |
+| --- | --- | --- |
+| MMA interleave | MATRIX and all memory | `0x406` (VALU, SALU, TRANS) |
+| Paired LDS, ordinary windows | MATRIX and all memory | `0x406` |
+| Paired LDS, reduction windows and finalized Fragment anchors | MATRIX, all memory, VALU | `0x404` (SALU, TRANS) |
+| Softmax fragments | MATRIX, all memory, VALU, TRANS | `0x004` (SALU) |
+
+Here all memory means VMEM_READ, VMEM_WRITE, DS_READ, DS_WRITE and LDS_DMA.
+Finalized Fragment anchors share a marker with reduction windows, so their
+guards conservatively protect VALU too. The complement is taken against leaf
+classes only (`ALL = 0xf6e`), excluding aggregate ALU, VMEM and DS bits which
+would otherwise permit protected children. Softmax protects the entire
+exp2/conversion/PV group, rather than just its final MATRIX instruction.
+
+The compiler-private `frisk.schedule` read/write effect retains barriers
+through MLIR CSE/DCE without claiming a program memory access. Explicit
+barriers remain hard boundaries regardless of mask. Generated LDS/MMA guards
+carry `frisk.memory_mma_guard`; softmax may refine these only when the mask
+protects memory and MATRIX and every fixed operation remains in order.
+This software permission is separate from the backend allow mask.
 
 `frisk-lower-sched-barrier`, also included in production `secondLowering`, emits
 `llvm.amdgcn.sched.barrier(mask)` calls with explicit

@@ -17,6 +17,10 @@
 namespace mlir::frisk {
 namespace {
 constexpr StringLiteral Marker = thread_schedule::MMAInterleaveMarker;
+// Keep accumulator groups and fixed memory/DMA ordinals. Independent address
+// setup and register math may cross; softmax owns its own producer boundaries.
+constexpr uint32_t InterleaveAllowMask = thread_schedule::barrier_mask::allowExcept(
+    thread_schedule::barrier_mask::MATRIX | thread_schedule::barrier_mask::MEMORY);
 using Ops = SmallVector<Operation *, 32>;
 
 bool isMMA(Operation *op) {
@@ -217,12 +221,12 @@ bool schedule(ArrayRef<Chain *> chains, unsigned width, ModuleOp module,
   OpBuilder builder(module.getContext());
   for (auto [index, mma] : llvm::enumerate(desired)) {
     if (guardGroup < 0) {
-      thread_schedule::guardMemoryAndMMA(mma, Marker);
+      thread_schedule::guardMemoryAndMMA(mma, Marker, InterleaveAllowMask);
       ++stats.guards;
     }
     if (guardGroup < 0 || (guardGroup > 0 &&
         ((index + 1) % guardGroup == 0 || index + 1 == desired.size()))) {
-      thread_schedule::guardMemoryAndMMA(mma->getNextNode(), Marker);
+      thread_schedule::guardMemoryAndMMA(mma->getNextNode(), Marker, InterleaveAllowMask);
       ++stats.guards;
     }
     mma->setAttr(Marker, builder.getI32IntegerAttr(width));
